@@ -20,6 +20,7 @@ import (
 	gooidc "github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
 
+	"github.com/GrandArcher/Packeteer/internal/outbound"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -42,7 +43,7 @@ type Config struct {
 	// Scopes requested besides openid (default email, profile).
 	Scopes []string `yaml:"scopes"`
 	// UsernameClaim names the claim used as the account name (default
-	// email). An email claim with email_verified false is refused.
+	// email). With email, the token must carry email_verified: true.
 	UsernameClaim string `yaml:"username_claim"`
 	// RolesClaim names the claim with the user's groups (default groups).
 	// It may be a string or a list of strings.
@@ -154,7 +155,7 @@ func New(c plugin.Config, env plugin.Env) (*Plugin, error) {
 	if err := errors.Join(errs...); err != nil {
 		return nil, err
 	}
-	p := &Plugin{cfg: cfg, secret: secret, client: &http.Client{Timeout: 15 * time.Second}}
+	p := &Plugin{cfg: cfg, secret: secret, client: &http.Client{Timeout: 15 * time.Second, CheckRedirect: outbound.SameHost}}
 	p.log = env.Logger
 	if p.log == nil {
 		p.log = slog.Default()
@@ -241,9 +242,11 @@ func (p *Plugin) identity(subject string, claims map[string]any) (plugin.SSOIden
 	if name == "" {
 		return plugin.SSOIdentity{}, fmt.Errorf("id token has no %s claim", p.cfg.UsernameClaim)
 	}
+	// An IdP may let a user set any email, so an email that the IdP does
+	// not vouch for could name another user's account.
 	if p.cfg.UsernameClaim == "email" {
-		if v, ok := claims["email_verified"].(bool); ok && !v {
-			return plugin.SSOIdentity{}, errors.New("email is not verified at the identity provider")
+		if v, _ := claims["email_verified"].(bool); !v {
+			return plugin.SSOIdentity{}, errors.New("id token email_verified is not true; the email is not verified at the identity provider (or use username_claim: sub)")
 		}
 	}
 	var groups []string

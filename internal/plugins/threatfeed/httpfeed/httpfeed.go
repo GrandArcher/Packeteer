@@ -15,6 +15,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/GrandArcher/Packeteer/internal/outbound"
 	"github.com/GrandArcher/Packeteer/internal/plugins/exporter/sinkcfg"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
@@ -67,7 +68,7 @@ func New(c plugin.Config, env plugin.Env) (plugin.ThreatFeed, error) {
 	if err != nil {
 		return nil, fmt.Errorf("url %w", err)
 	}
-	f := &feed{url: u.String(), format: strings.ToLower(strings.TrimSpace(cfg.Format)), client: &http.Client{}}
+	f := &feed{url: u.String(), format: strings.ToLower(strings.TrimSpace(cfg.Format)), client: &http.Client{CheckRedirect: outbound.SameHost}}
 	switch f.format {
 	case "":
 		f.format = FormatCIDR

@@ -19,7 +19,7 @@ notifiers:
     config:
       url: https://hooks.example.invalid/packeteer
       headers:
-        Authorization: "Bearer ${HOOK_TOKEN}"   # read from the container env
+        Authorization: "Bearer ${PACKETEER_WEBHOOK_TOKEN}"   # container env; only PACKETEER_WEBHOOK_* names expand
       min_severity: warning
       rate_limit: 30        # per minute
 announcer:

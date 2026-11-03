@@ -2,8 +2,9 @@
 // Page driver for the UI smoke test (#180). Headless Chrome cannot click,
 // so uiproxy adds this script to /troubleshooting.html. It fills the form,
 // presses Run, Remove, and Rerun, and writes the stack order it sees into
-// the page for lab/ui-smoke.sh to match. The last two steps run a hostname
-// probe and press Probe and optimize (#126).
+// the page for lab/ui-smoke.sh to match. Then it runs a hostname probe and
+// presses Probe and optimize (#126). The last step's whois has no stub, so
+// the controller itself answers: with auth off it refuses the tool (#489).
 
 function press(label, scope) {
   var b = Array.prototype.find.call((scope || document).querySelectorAll("button"), function (x) { return x.textContent === label; });
@@ -42,7 +43,8 @@ var steps = [
   },
   function () { note("fixture-after", "after: " + titles()); },
   function () { run("probe", "host.example.net"); },
-  function () { press("Probe and optimize"); }
+  function () { press("Probe and optimize"); },
+  function () { run("whois", "AS64496"); }
 ];
 
 function next() {

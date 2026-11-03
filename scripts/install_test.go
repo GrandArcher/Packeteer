@@ -23,7 +23,8 @@ run)
 	esac
 	echo 0123456789ab
 	exit 0 ;;
-logs) echo 'level=WARN msg="auth: first run: generated admin password; sign in with it, then choose a new one" user=admin password=fake-generated-password' ;;
+logs) echo 'level=WARN msg="auth: first run: generated admin password; read it from the file, sign in, then choose a new one" user=admin file=/var/lib/packeteer/first-run-admin-password' ;;
+exec) [ "$*" = "exec packeteer cat /var/lib/packeteer/first-run-admin-password" ] && printf 'user: admin\npassword: fake-generated-password\n' ;;
 esac
 `
 
@@ -53,7 +54,7 @@ func newEnv(t *testing.T, tools ...string) *env {
 			t.Fatal(err)
 		}
 	}
-	for _, name := range []string{"uname", "mkdir", "grep", "sleep", "cp", "cat"} {
+	for _, name := range []string{"uname", "mkdir", "grep", "sleep", "cp", "cat", "sed", "tail"} {
 		p, err := exec.LookPath(name)
 		if err != nil {
 			t.Fatal(err)
@@ -113,6 +114,7 @@ func TestInstallBringsUpObserveAndPointsAtTheWizard(t *testing.T) {
 		"-v " + e.dir + "/config.yaml:/etc/packeteer/config.yaml -v ", // writable: the wizard saves
 		"-v packeteer-data:/var/lib/packeteer ghcr.io/grandarcher/packeteer:edge",
 		"docker logs packeteer",
+		"docker exec packeteer cat /var/lib/packeteer/first-run-admin-password",
 	} {
 		if !strings.Contains(calls, want) {
 			t.Errorf("calls lack %q:\n%s", want, calls)

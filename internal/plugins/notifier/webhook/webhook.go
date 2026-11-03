@@ -12,13 +12,13 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"regexp"
 	"sort"
 	"strings"
 	"text/template"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/outbound"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -27,6 +27,9 @@ const TypeName = "webhook"
 
 // DefaultTimeout bounds one delivery.
 const DefaultTimeout = 5 * time.Second
+
+// EnvPrefix is the only prefix of the variables url and headers expand.
+const EnvPrefix = "PACKETEER_WEBHOOK_"
 
 // PagerDutyURL is the Events API v2 endpoint used when preset is pagerduty
 // and url is not set.
@@ -48,8 +51,8 @@ func init() { plugin.Notifiers.Register(TypeName, New) }
 type Config struct {
 	URL     string        `yaml:"url"`
 	Timeout time.Duration `yaml:"timeout"`
-	// Headers are added to each request. Values may reference ${VAR} from
-	// the environment so tokens stay out of the config file.
+	// Headers are added to each request. Values may reference
+	// ${PACKETEER_WEBHOOK_*} variables so tokens stay out of the config file.
 	Headers map[string]string `yaml:"headers"`
 	// Preset is generic (default), slack, teams, or pagerduty.
 	Preset string `yaml:"preset"`
@@ -115,9 +118,12 @@ func New(c plugin.Config, e plugin.Env) (plugin.Notifier, error) {
 	default:
 		return nil, fmt.Errorf("preset %q is invalid (want generic, slack, teams, pagerduty)", cfg.Preset)
 	}
-	raw := os.Expand(cfg.URL, getenv)
-	if raw == "" {
+	if cfg.URL == "" {
 		return nil, fmt.Errorf("url is required")
+	}
+	raw, err := outbound.Expand(cfg.URL, EnvPrefix, getenv)
+	if err != nil {
+		return nil, fmt.Errorf("url: %w", err)
 	}
 	u, err := url.Parse(raw)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
@@ -154,11 +160,15 @@ func New(c plugin.Config, e plugin.Env) (plugin.Notifier, error) {
 	}
 	h := http.Header{}
 	for k, v := range cfg.Headers {
-		h.Set(k, os.Expand(v, getenv))
+		val, err := outbound.Expand(v, EnvPrefix, getenv)
+		if err != nil {
+			return nil, fmt.Errorf("header %s: %w", k, err)
+		}
+		h.Set(k, val)
 	}
 	h.Set("Content-Type", ctype)
 	n.headers = h
-	n.client = &http.Client{Timeout: cfg.Timeout}
+	n.client = &http.Client{Timeout: cfg.Timeout, CheckRedirect: outbound.SameHost}
 	return n, nil
 }
 

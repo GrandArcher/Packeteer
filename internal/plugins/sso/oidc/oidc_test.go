@@ -182,6 +182,8 @@ func TestCodeFlow(t *testing.T) {
 		"wrong audience": func() { idp.claims = idp.baseClaims("nonce-1"); idp.claims["aud"] = "someone-else" },
 		"expired":        func() { idp.claims = idp.baseClaims("nonce-1"); idp.claims["exp"] = time.Now().Add(-time.Hour).Unix() },
 		"unverified":     func() { idp.claims = idp.baseClaims("nonce-1"); idp.claims["email_verified"] = false },
+		"no verified":    func() { idp.claims = idp.baseClaims("nonce-1"); delete(idp.claims, "email_verified") },
+		"verified text":  func() { idp.claims = idp.baseClaims("nonce-1"); idp.claims["email_verified"] = "true" },
 		"no group":       func() { idp.claims = idp.baseClaims("nonce-1"); idp.claims["groups"] = []string{"visitors"} },
 		"no email":       func() { idp.claims = idp.baseClaims("nonce-1"); delete(idp.claims, "email") },
 		"forged": func() {
@@ -228,5 +230,26 @@ func TestProviderDownAtStart(t *testing.T) {
 	}
 	if _, err := p.AuthURL(context.Background(), "s", "n", "v"); err == nil {
 		t.Fatal("auth url without discovery")
+	}
+}
+
+// With the email claim as the account name, a token that does not say
+// email_verified: true is refused, so an IdP that lets users pick an email
+// cannot hand out another user's account. Keyed by sub, the email does
+// not matter (#489).
+func TestEmailMustBeVerified(t *testing.T) {
+	idp := newIdP(t)
+	ctx := context.Background()
+	verifier := strings.Repeat("v", 64)
+	p := newPlugin(t, idp.srv.URL, "default_role: viewer\n")
+	idp.claims = idp.baseClaims("n")
+	delete(idp.claims, "email_verified")
+	if id, err := p.Exchange(ctx, "good-code", "n", verifier); err == nil || !strings.Contains(err.Error(), "email_verified is not true") {
+		t.Fatalf("token without email_verified: %+v %v", id, err)
+	}
+	bySub := newPlugin(t, idp.srv.URL, "default_role: viewer\nusername_claim: sub\n")
+	id, err := bySub.Exchange(ctx, "good-code", "n", verifier)
+	if err != nil || id.User != "u-1" || id.Subject != "u-1" {
+		t.Fatalf("keyed by sub: %+v %v", id, err)
 	}
 }

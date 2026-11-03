@@ -103,7 +103,7 @@ func TestAuthBootstrapWithSQLite(t *testing.T) {
 		if err != nil || svc == nil {
 			t.Fatalf("service: %v", err)
 		}
-		bootstrapAdmin(ctx, svc, audit, plugins, env, log)
+		bootstrapAdmin(ctx, svc, audit, besideStorage(plugins, firstRunPasswordFile), env, log)
 		return plugins, svc, audit, out
 	}
 	plugins, svc, audit, out := start()
@@ -172,7 +172,7 @@ func firstRunStore(t *testing.T, logs io.Writer, env func(string) string) (dir s
 		if err != nil {
 			t.Fatal(err)
 		}
-		bootstrapAdmin(ctx, svc, newAuditor(plugins, nil, log), plugins, env, log)
+		bootstrapAdmin(ctx, svc, newAuditor(plugins, nil, log), besideStorage(plugins, firstRunPasswordFile), env, log)
 		return plugins, svc
 	}
 }
@@ -206,8 +206,12 @@ func TestFirstRunGeneratesAdminPassword(t *testing.T) {
 	if len(pw) < 20 || !auth.VerifyPassword(u.PasswordHash, pw) {
 		t.Fatalf("file %q does not hold the admin password", body)
 	}
-	if strings.Count(logs.String(), pw) != 1 || !strings.Contains(logs.String(), "generated admin password") {
-		t.Fatalf("password must be logged exactly once:\n%s", logs.String())
+	// A log shipper must never see the password: the log names the file (#489).
+	if strings.Contains(logs.String(), pw) || !strings.Contains(logs.String(), "generated admin password") || !strings.Contains(logs.String(), "file="+path) {
+		t.Fatalf("the log must name the file and never hold the password:\n%s", logs.String())
+	}
+	if left, _ := filepath.Glob(filepath.Join(dir, ".*")); len(left) != 0 {
+		t.Fatalf("staged files left: %v", left)
 	}
 
 	// A restart before the change creates nothing new and does not log it again.
@@ -308,7 +312,7 @@ func TestFirstRunPasswordFileSwept(t *testing.T) {
 	dir, start := firstRunStore(t, &logs, envOf(map[string]string{AdminPassEnv: "operator-chosen-password"}))
 	ctx := context.Background()
 	path := filepath.Join(dir, firstRunPasswordFile)
-	if err := writeFirstRunPassword(path, "gone", "old-generated-password"); err != nil {
+	if err := os.WriteFile(path, []byte("user: gone\npassword: old-generated-password\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	plugins, _ := start()
@@ -321,7 +325,7 @@ func TestFirstRunPasswordFileSwept(t *testing.T) {
 	if err := store.PutUser(ctx, plugin.User{Name: "pending", Role: plugin.RoleAdmin, Source: plugin.UserLocal, PasswordHash: "x", MustChange: true}); err != nil {
 		t.Fatal(err)
 	}
-	if err := writeFirstRunPassword(path, "pending", "generated-password-1"); err != nil {
+	if err := os.WriteFile(path, []byte("user: pending\npassword: generated-password-1\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	_ = plugins.Stop(ctx)
@@ -351,12 +355,42 @@ func TestFirstRunAdminCreatedConcurrently(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bootstrapAdmin(ctx, svc, auth.NewAuditor(nil, nil, log), nil, noEnv, log)
+	dir := t.TempDir()
+	bootstrapAdmin(ctx, svc, auth.NewAuditor(nil, nil, log), filepath.Join(dir, firstRunPasswordFile), noEnv, log)
+	if left, _ := os.ReadDir(dir); len(left) != 0 {
+		t.Fatalf("the losing start left a password file: %v", left)
+	}
 	if !strings.Contains(logs.String(), "admin already exists; no password generated") || strings.Contains(logs.String(), AdminPassEnv) || strings.Contains(logs.String(), "generated admin password") {
 		t.Fatalf("log:\n%s", logs.String())
 	}
 	if u, _, _ := st.User(ctx, "admin"); u.MustChange || u.PasswordHash != "x" {
 		t.Fatalf("existing admin changed: %+v", u)
+	}
+}
+
+// A generated password that cannot be written to its file creates no
+// admin, since the log no longer carries it and nobody could sign in. A
+// later start with a writable directory creates it (#489).
+func TestFirstRunNeedsThePasswordFile(t *testing.T) {
+	ctx := context.Background()
+	for name, file := range map[string]string{
+		"no storage directory": "",
+		"unwritable directory": filepath.Join(t.TempDir(), "missing", firstRunPasswordFile),
+	} {
+		st := authtest.New()
+		var logs bytes.Buffer
+		log := slog.New(slog.NewTextHandler(&logs, nil))
+		svc, err := auth.New(auth.Options{Users: st, Logger: log})
+		if err != nil {
+			t.Fatal(err)
+		}
+		bootstrapAdmin(ctx, svc, auth.NewAuditor(nil, nil, log), file, noEnv, log)
+		if users, _ := st.Users(ctx); len(users) != 0 {
+			t.Errorf("%s: users created: %+v", name, users)
+		}
+		if !strings.Contains(logs.String(), "auth: no admin created") || !strings.Contains(logs.String(), AdminPassEnv) {
+			t.Errorf("%s: log:\n%s", name, logs.String())
+		}
 	}
 }
 
@@ -378,7 +412,7 @@ func TestFirstRunSSONoUsers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bootstrapAdmin(ctx, svc, auth.NewAuditor(nil, nil, log), nil, noEnv, log)
+	bootstrapAdmin(ctx, svc, auth.NewAuditor(nil, nil, log), "", noEnv, log)
 	if users, _ := st.Users(ctx); len(users) != 0 {
 		t.Fatalf("users created: %+v", users)
 	}

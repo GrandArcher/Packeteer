@@ -96,7 +96,11 @@ if [ -n "${PACKETEER_ADMIN_PASSWORD:-}" ]; then
 	echo "Sign in:  $admin, with the password you set in PACKETEER_ADMIN_PASSWORD."
 else
 	echo "Sign in:  $admin, with the generated password below (you choose a new one at first sign-in)."
-	docker logs packeteer 2>&1 | grep 'generated admin password' || true
+	# The log names the 0600 file that holds the password, never the password.
+	pwfile=$(docker logs packeteer 2>&1 | sed -n 's/.*generated admin password.*[" ]file[=":]*\([^ "]*\).*/\1/p' | tail -n 1)
+	if [ -n "$pwfile" ]; then
+		docker exec packeteer cat "$pwfile" || true
+	fi
 fi
 echo "Next:     the wizard asks for your AS number, router, and providers; the preflight checks"
 echo "          there decide when injection can be turned on. Stop with: docker stop -t 30 packeteer"

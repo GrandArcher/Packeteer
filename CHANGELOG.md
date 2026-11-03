@@ -7,10 +7,13 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 ### Security
 
 - `packeteer-policy` requires https (http only to loopback) and `-community`, checks each route (NO_EXPORT, communities, `-allow`); GR off in the examples; feed token backoff, connection cap (#488).
+- Webhook and `otlp` `${VAR}` expand only `PACKETEER_WEBHOOK_*`/`PACKETEER_OTLP_*`; outbound clients refuse cross-host redirects (RDAP: https only, Accept only) (#489).
+- First-run admin password is no longer logged, only its 0600 file; troubleshoot POSTs need auth; OIDC requires `email_verified: true` with the email claim (#489).
 
 ### Upgrade notes
 
 - `packeteer-policy` exits with code 2 without `-community` (your `packeteer_community`) or with a non-loopback `http` `-url`; add `-community`, and `-allow` with your allowlist (#488).
+- Rename webhook and `otlp` variables to `PACKETEER_WEBHOOK_*`/`PACKETEER_OTLP_*` (others fail at start); OIDC without `email_verified`: `username_claim: sub` (#489).
 
 ## [0.9.0] - 2026-11-02
 

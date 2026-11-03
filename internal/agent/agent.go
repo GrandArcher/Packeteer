@@ -29,6 +29,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/GrandArcher/Packeteer/internal/agentwire"
+	"github.com/GrandArcher/Packeteer/internal/outbound"
 	"github.com/GrandArcher/Packeteer/internal/sockmark"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
@@ -175,7 +176,7 @@ func New(cfg Config, prober plugin.Prober, log *slog.Logger) (*Agent, error) {
 		return nil, fmt.Errorf("ca_file %s: no PEM certificates", cfg.CAFile)
 	}
 	a.client = &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{
-		MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{cert}, RootCAs: pool, ServerName: cfg.ServerName}}}
+		MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{cert}, RootCAs: pool, ServerName: cfg.ServerName}}, CheckRedirect: outbound.SameHost}
 	if prober == nil {
 		typ := cfg.Prober.Type
 		if typ == "" {

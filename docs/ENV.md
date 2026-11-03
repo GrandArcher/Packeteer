@@ -25,6 +25,8 @@ Set these on the container (`-e NAME`). Secrets belong here, never in the config
 
 Plugins read secrets from variables whose names you choose in the config (`community_env`, `password_env`, `client_secret_env`, `routing_key_env`, ...). The names used in the docs and examples are `PACKETEER_SNMP_COMMUNITY`, `PACKETEER_SNMP_USER`, `PACKETEER_SNMP_AUTH`, `PACKETEER_SNMP_PRIV`, `PACKETEER_SMTP_USER`, `PACKETEER_SMTP_PASSWORD`, and `PACKETEER_OIDC_CLIENT_SECRET`.
 
+A webhook `url` or `headers` value expands only `${PACKETEER_WEBHOOK_*}` variables, and an `otlp` exporter `headers` value only `${PACKETEER_OTLP_*}` variables (#489). The examples use `PACKETEER_WEBHOOK_TOKEN` and `PACKETEER_WEBHOOK_SLACK_URL`.
+
 ## Exec plugins
 
 An `exec` plugin process gets `PATH`, `PACKETEER_PLUGIN_KIND`, and its configured `env`, and nothing else. See [PLUGINS.md](PLUGINS.md).

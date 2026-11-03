@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/outbound"
 	"github.com/GrandArcher/Packeteer/internal/rpki"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
@@ -87,7 +88,7 @@ func New(c plugin.Config, env plugin.Env) (plugin.RPKI, error) {
 	if env.Logger == nil {
 		env.Logger = slog.Default()
 	}
-	return &Client{name: env.Name, cfg: cfg, http: &http.Client{Timeout: cfg.Timeout}, log: env.Logger, cache: rpki.NewVRPs()}, nil
+	return &Client{name: env.Name, cfg: cfg, http: &http.Client{Timeout: cfg.Timeout, CheckRedirect: outbound.SameHost}, log: env.Logger, cache: rpki.NewVRPs()}, nil
 }
 
 // Start begins polling. It does not block.

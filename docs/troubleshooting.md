@@ -81,7 +81,7 @@ Other refusals name the key or the plugin at fault, for example an `exec` plugin
 - **Connection refused.** `http.listen` defaults to `127.0.0.1:8080`: the host's loopback, because of `--network host`. Browse from the host itself, through an SSH tunnel (`ssh -L 8080:127.0.0.1:8080 host`), or set `http.listen` to an address on the host (sign-in is on by default; keep it on). `PACKETEER_HTTP_LISTEN=off` turns it off; check the environment.
 - **Docker Desktop (macOS, Windows).** Host networking there is the Docker VM's network, not your machine's. Packeteer needs a Linux host.
 - **Port in use.** The log has `http server` with `address already in use`. Something else has 8080; set `http.listen` or `PACKETEER_HTTP_LISTEN` to another port.
-- **401 or 403.** Sign-in is on by default (`/api/me` says which kind). Use the admin password: the generated one is in the first start's log (`docker logs packeteer 2>&1 | grep 'generated admin password'`) and must be changed at first sign-in; until then every call but the password change is `403` with `password_change_required`. Otherwise `http.allow_from` does not include your address.
+- **401 or 403.** Sign-in is on by default (`/api/me` says which kind). Use the admin password: the generated one is in the file the first start's log names (`docker exec packeteer cat /var/lib/packeteer/first-run-admin-password`) and must be changed at first sign-in; until then every call but the password change is `403` with `password_change_required`. Otherwise `http.allow_from` does not include your address.
 - **"Cannot reach the controller"** on the page: the browser lost the API. The page keeps the last data, marked stale, until it reconnects.
 
 ## Nothing to probe

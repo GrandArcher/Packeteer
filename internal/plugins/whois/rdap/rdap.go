@@ -6,7 +6,6 @@ package rdap
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/outbound"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -27,7 +27,6 @@ const (
 	DefaultBaseURL  = "https://rdap.org"
 	DefaultTimeout  = 5 * time.Second
 	DefaultMaxBytes = 256 << 10
-	maxRedirects    = 3
 )
 
 func init() { plugin.Whoises.Register(TypeName, New) }
@@ -74,19 +73,9 @@ func New(c plugin.Config, _ plugin.Env) (plugin.Whois, error) {
 		return nil, fmt.Errorf("max_bytes %d must be between 1024 and %d", cfg.MaxBytes, 4<<20)
 	}
 	u.Path = strings.TrimRight(u.Path, "/")
-	secure := u.Scheme == "https"
-	cl := &http.Client{
-		Timeout: cfg.Timeout,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= maxRedirects {
-				return errors.New("too many redirects")
-			}
-			if secure && req.URL.Scheme != "https" {
-				return errors.New("refusing redirect from https to " + req.URL.Scheme)
-			}
-			return nil
-		},
-	}
+	// rdap.org answers with a redirect to the registry that holds the
+	// object, which is another host.
+	cl := &http.Client{Timeout: cfg.Timeout, CheckRedirect: outbound.AnyHTTPSHost}
 	return &Client{base: u, maxBytes: int64(cfg.MaxBytes), http: cl}, nil
 }
 

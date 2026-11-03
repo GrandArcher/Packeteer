@@ -133,7 +133,7 @@ A resolving kind passes `min_severity` when the problem it clears would. When `r
 
 ## Secrets
 
-Secrets come from the container environment, never from the config file: `routing_key_env`, `username_env`, `password_env`, `community_env`, `auth_env`, and `priv_env` name a variable, and webhook `url` and `headers` expand `${VAR}`.
+Secrets come from the container environment, never from the config file: `routing_key_env`, `username_env`, `password_env`, `community_env`, `auth_env`, and `priv_env` name a variable, and webhook `url` and `headers` expand `${PACKETEER_WEBHOOK_*}` variables (no other names).
 
 ```sh
 docker run --network host --cap-add NET_RAW --cap-add NET_ADMIN \
@@ -155,7 +155,7 @@ Use `webhook` with a `template`. For a gateway that takes a form post:
     config:
       url: https://sms.example.invalid/send
       headers:
-        Authorization: "Bearer ${SMS_TOKEN}"
+        Authorization: "Bearer ${PACKETEER_WEBHOOK_SMS_TOKEN}"
       content_type: application/x-www-form-urlencoded
       template: 'to=%2B15550100&body={{urlquery .Kind}}%20{{urlquery .Message}}'
       min_severity: critical
