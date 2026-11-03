@@ -32,7 +32,7 @@ external_policy:
   ttl: 90s                            # default and minimum: three probe intervals
 ```
 
-Keys: [CONFIG.md](CONFIG.md#external_policy). The token is read from the environment variable `token_env` names and must be at least 16 characters; without it Packeteer refuses to start. Every request needs `Authorization: Bearer <token>`. The feed is served over TLS only and is read-only.
+Keys: [CONFIG.md](CONFIG.md#external_policy). The token is read from the environment variable `token_env` names and must be at least 16 characters; without it Packeteer refuses to start. Every request needs `Authorization: Bearer <token>`. The feed is served over TLS only and is read-only. After a wrong token an address (an IPv6 /64) gets `429` with `Retry-After` for 1 s, doubling with each wrong token in a row up to 1 min; its token is not compared until then, and a right token clears it. The listener holds at most 128 connections and closes idle ones after 1 min. A long poll and the stream have no read or write timeout.
 
 `enabled` and `ttl` reload online (SIGHUP or the config editor). Turning the feed off publishes an empty set that is already expired, so consumers drop every route at once. `listen`, `cert_file`, `key_file`, `token_env`, and adding or removing the block need a restart.
 
@@ -74,22 +74,27 @@ A consumer must drop every route when `expires_in_ms` runs out without a newer d
 - SIGKILL, a frozen process, or a lost network path: no round renews the feed, so the routes go at most `ttl` after the last round.
 - A decision loop that stops running while the process lives: the documents keep being served, but with no time left once `ttl` passes.
 
-The consumer is the one that enforces this on your daemon. If it dies, nothing removes the routes it applied, so run it under your daemon's supervisor.
+The consumer is the one that enforces this on your daemon. If it dies, nothing removes the routes it applied (in render mode the file stays on disk) until it starts again and applies the empty set, so run it under your daemon's supervisor.
 
 ## Reference consumer
 
-`packeteer-policy` ships in the image (`docker run ... --entrypoint packeteer-policy ghcr.io/grandarcher/packeteer`). It long-polls the JSON document and applies each change at once. It applies the empty set before the first good document, keeps the last good set while the feed is unreachable until the expiry (a fetch never waits past it), then applies the empty set, and applies the empty set when stopped.
+`packeteer-policy` ships in the image (`docker run ... --entrypoint packeteer-policy ghcr.io/grandarcher/packeteer`). It long-polls the JSON document and applies each change at once. It applies the empty set before it first reads the feed, so a file left by an earlier run is emptied. It keeps the last good set while the feed is unreachable until the expiry (a fetch never waits past it), then applies the empty set, and applies the empty set when stopped. A reload that runs longer than 30 s is killed and retried at the next poll.
+
+It does not trust the feed. It drops a route, with a warning, unless the prefix is masked and inside `-allow`, the next hop is an address of the prefix's family, the communities include `-community` and NO_EXPORT, and every other community is a plain `asn:value` or `global:data1:data2` that is not `0:x` or `65535:x`. A template sees only `.Prefix`, `.NextHop`, `.LocalPref`, `.Communities`, and `.ASPath`; provider, cause, and reason are not passed on.
 
 ```sh
 export PACKETEER_POLICY_TOKEN=...
 # BIRD 2 or 3: render static routes and reconfigure.
 packeteer-policy -url https://192.0.2.10:9443 -ca-file /etc/packeteer-policy/ca.pem \
+  -community 64512:666 -allow 198.51.100.0/24 \
   -template bird.conf.tmpl -out /var/lib/packeteer-policy/routes.conf -reload "birdc configure"
 ```
 
 | Flag | Meaning |
 |---|---|
-| `-url` | Feed base URL. |
+| `-url` | Feed base URL. `https`; `http` only to a loopback host. Redirects are not followed. |
+| `-community` | Required: `packeteer_community`. |
+| `-allow` | Comma-separated prefixes; a route outside them is dropped. Default: any prefix. Set it to your `allowlist.prefixes`. |
 | `-ca-file` | PEM CA for the feed's certificate. Default: the system roots. |
 | `-token-env` | Variable that holds the token (default `PACKETEER_POLICY_TOKEN`). |
 | `-template`, `-out`, `-reload` | Render mode: execute the Go template with `.Routes`, replace `-out` in one rename, then run `-reload` (split on spaces, no shell). A failed reload is retried at the next poll. |
@@ -97,11 +102,11 @@ packeteer-policy -url https://192.0.2.10:9443 -ca-file /etc/packeteer-policy/ca.
 
 Examples in [examples/external-policy](../examples/external-policy):
 
-- `bird.conf.tmpl`: one static protocol per family; include the rendered file at the top level of `bird.conf`. A static route has preference 200, so it wins over the BGP paths. Lab-proven with BIRD 2 and 3.
-- `openbgpd.conf.tmpl`: `network ... set { nexthop ... }` lines for `include` in `bgpd.conf`, reloaded with `bgpctl reload`. Rendering is tested; OpenBGPD itself is not in the lab.
-- `exabgp.conf`: an ExaBGP 4 `process` running `packeteer-policy -exabgp`. Output is tested; ExaBGP itself is not in the lab.
+- `bird.conf.tmpl`: one static protocol per family and a `packeteer_feed_session` BGP template with graceful restart and long-lived graceful restart off; include the rendered file at the top level of `bird.conf`, before the protocols, and build the session to the edge `from packeteer_feed_session`. A static route has preference 200, so it wins over the BGP paths. Lab-proven with BIRD 2 and 3.
+- `openbgpd.conf.tmpl`: `network ... set { nexthop ... }` lines for `include` in `bgpd.conf`, reloaded with `bgpctl reload`. Set `announce restart no` on the neighbor to the edge. Rendering is tested; OpenBGPD itself is not in the lab.
+- `exabgp.conf`: an ExaBGP 4 `process` running `packeteer-policy -exabgp`, with `graceful-restart disable` on the neighbor. Output is tested; ExaBGP itself is not in the lab.
 
-Keep the daemon's own safety: export the applied routes to no eBGP neighbor, and honour NO_EXPORT.
+Keep the daemon's own safety: export the applied routes to no eBGP neighbor, and honour NO_EXPORT. Keep graceful restart and long-lived graceful restart off on the session that carries them to the edge, so they go when the daemon or its session does.
 
 ## Rollback
 

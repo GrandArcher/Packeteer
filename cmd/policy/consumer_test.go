@@ -12,6 +12,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -40,6 +41,8 @@ func (r *recorder) apply(_ context.Context, routes []extpolicy.Route) error {
 
 func (r *recorder) last() []extpolicy.Route { return r.sets[len(r.sets)-1] }
 
+var labCheck = routeCheck{community: "64512:666"}
+
 var (
 	route4 = extpolicy.Route{Prefix: netip.MustParsePrefix("198.51.100.0/24"), Provider: "transit-b", NextHop: netip.MustParseAddr("192.0.2.22"),
 		LocalPref: 250, Communities: []string{"64512:666", "64512:1:2", extpolicy.NoExport}, Cause: "performance"}
@@ -57,7 +60,7 @@ func TestConsumerKeepsUntilExpiry(t *testing.T) {
 	out := &recorder{}
 	c := &consumer{
 		fetch: func(context.Context, uint64, bool) (extpolicy.Document, error) { return doc, fetchErr },
-		out:   out, log: quiet(), now: func() time.Time { return now },
+		out:   out, check: labCheck, log: quiet(), now: func() time.Time { return now },
 	}
 	ctx := context.Background()
 	fetchErr = errors.New("connection refused")
@@ -115,7 +118,7 @@ func TestConsumerRunDropsOnStop(t *testing.T) {
 			}
 			return extpolicy.Document{ExpiresInMS: 60_000, HeartbeatMS: 1000, Routes: []extpolicy.Route{route4}}, nil
 		},
-		out: out, log: quiet(), now: time.Now,
+		out: out, check: labCheck, log: quiet(), now: time.Now,
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -146,7 +149,7 @@ func TestConsumerDropsAtExpiryWhileFetchHangs(t *testing.T) {
 			}
 			return extpolicy.Document{ExpiresInMS: 300, HeartbeatMS: 10_000, Routes: []extpolicy.Route{route4}}, nil
 		},
-		out: out, log: quiet(), now: time.Now,
+		out: out, check: labCheck, log: quiet(), now: time.Now,
 	}
 	ctx := context.Background()
 	_ = c.step(ctx)
@@ -305,9 +308,6 @@ func TestFetchFromServer(t *testing.T) {
 	if len(doc.Routes) != 1 || doc.Routes[0].Reason != "faster" || doc.Routes[0].Communities[1] != extpolicy.NoExport {
 		t.Fatalf("document %+v", doc)
 	}
-	if _, err := httpFetch(client, "https://"+srv.Addr(), "wrong-token-0123456789")(ctx, 0, false); err == nil || !strings.Contains(err.Error(), "401") {
-		t.Errorf("wrong token: %v", err)
-	}
 	// A long poll answers at the change, well before the 10s heartbeat.
 	go func() {
 		time.Sleep(200 * time.Millisecond)
@@ -319,6 +319,9 @@ func TestFetchFromServer(t *testing.T) {
 	if err != nil || len(next.Routes) != 0 || next.Revision == doc.Revision || time.Since(start) > 3*time.Second {
 		t.Fatalf("long poll: %+v %v after %s", next, err, time.Since(start))
 	}
+	if _, err := httpFetch(client, "https://"+srv.Addr(), "wrong-token-0123456789")(ctx, 0, false); err == nil || !strings.Contains(err.Error(), "401") {
+		t.Errorf("wrong token: %v", err)
+	}
 }
 
 func TestRunUsage(t *testing.T) {
@@ -328,17 +331,191 @@ func TestRunUsage(t *testing.T) {
 		}
 		return ""
 	}
-	for _, args := range [][]string{
-		{},
-		{"-url", "https://192.0.2.10:9443"},
-		{"-url", "https://192.0.2.10:9443", "-exabgp", "-template", "x", "-out", "y"},
-		{"-url", "https://192.0.2.10:9443", "-template", "x"},
+	feed := []string{"-url", "https://192.0.2.10:9443", "-community", "64512:666"}
+	missing := filepath.Join(t.TempDir(), "missing.tmpl")
+	render := []string{"-template", missing, "-out", filepath.Join(t.TempDir(), "routes.conf")}
+	for _, c := range []struct {
+		args []string
+		code int
+		msg  string
+	}{
+		{nil, 2, "need -url"},
+		{feed, 2, "need -url"},
+		{append(slices.Clone(feed), "-exabgp", "-template", "x", "-out", "y"), 2, "need -url"},
+		{append(slices.Clone(feed), "-template", "x"), 2, "need -url"},
+		{append([]string{"-url", "https://192.0.2.10:9443"}, render...), 2, "-community"},
+		// The token would cross the network in clear.
+		{append([]string{"-url", "http://192.0.2.10:9443", "-community", "64512:666"}, render...), 2, "must be https"},
+		{append([]string{"-url", "192.0.2.10:9443", "-community", "64512:666"}, render...), 2, "must be https"},
+		{append(slices.Clone(feed), "-allow", "198.51.100.1/24", "-exabgp"), 2, "-allow"},
+		{append(slices.Clone(feed[:2]), "-community", "65535:65281", "-exabgp"), 2, "NO_EXPORT"},
+		{append(slices.Clone(feed[:2]), "-community", "64512", "-exabgp"), 2, "-community"},
+		// Past the checks: the missing template is what fails.
+		{append(slices.Clone(feed), render...), 1, "missing.tmpl"},
+		{append([]string{"-url", "http://127.0.0.1:9443", "-community", "64512:666", "-allow", "198.51.100.0/24,2001:db8::/32"}, render...), 1, "missing.tmpl"},
+		{append([]string{"-url", "http://localhost:9443", "-community", "64512:666"}, render...), 1, "missing.tmpl"},
 	} {
-		if code := run(args, env, io.Discard, io.Discard); code != 2 {
-			t.Errorf("%v: exit %d, want 2", args, code)
+		var stderr bytes.Buffer
+		if code := run(c.args, env, io.Discard, &stderr); code != c.code || !strings.Contains(stderr.String(), c.msg) {
+			t.Errorf("%v: exit %d %q, want %d and %q", c.args, code, stderr.String(), c.code, c.msg)
 		}
 	}
-	if code := run([]string{"-url", "https://192.0.2.10:9443", "-exabgp"}, func(string) string { return "" }, io.Discard, io.Discard); code != 2 {
+	if code := run(append(slices.Clone(feed), "-exabgp"), func(string) string { return "" }, io.Discard, io.Discard); code != 2 {
 		t.Errorf("no token: exit %d, want 2", code)
+	}
+}
+
+func TestParseCheck(t *testing.T) {
+	rc, err := parseCheck("64512:0666", " 198.51.100.0/24, 2001:db8::/32")
+	if err != nil || rc.community != "64512:666" || len(rc.allow) != 2 || rc.allow[1] != netip.MustParsePrefix("2001:db8::/32") {
+		t.Fatalf("%+v %v", rc, err)
+	}
+	if rc, err := parseCheck("64512:1:2", ""); err != nil || rc.allow != nil {
+		t.Fatalf("no -allow: %+v %v", rc, err)
+	}
+	for _, allow := range []string{"198.51.100.0", "198.51.100.1/24", "198.51.100.0/24,"} {
+		if _, err := parseCheck("64512:666", allow); err == nil {
+			t.Errorf("-allow %q accepted", allow)
+		}
+	}
+}
+
+// Each route is checked before it reaches the daemon; a route that fails
+// is dropped and the rest are applied.
+func TestRouteCheck(t *testing.T) {
+	allow := routeCheck{community: "64512:666", allow: []netip.Prefix{netip.MustParsePrefix("198.51.100.0/24"), netip.MustParsePrefix("2001:db8::/32")}}
+	with := func(f func(*extpolicy.Route)) extpolicy.Route {
+		r := route4
+		r.Communities = slices.Clone(r.Communities)
+		f(&r)
+		return r
+	}
+	got, err := allow.route(with(func(r *extpolicy.Route) {
+		r.Reason = "x\n}\nprotocol static evil {"
+		r.Communities = []string{"64512:666", "064512:01", extpolicy.NoExport}
+	}))
+	want := extpolicy.Route{Prefix: route4.Prefix, NextHop: route4.NextHop, LocalPref: 250, Communities: []string{"64512:666", "64512:1", extpolicy.NoExport}}
+	if err != nil || !sameOnDaemon(got, want) || got.Provider != "" || got.Cause != "" || got.Reason != "" {
+		t.Fatalf("good route: %+v %v, want %+v with no free text", got, err, want)
+	}
+	if _, err := allow.route(route6); err != nil {
+		t.Errorf("IPv6 route inside -allow: %v", err)
+	}
+	for name, c := range map[string]struct {
+		r   extpolicy.Route
+		err string
+	}{
+		"no NO_EXPORT":      {with(func(r *extpolicy.Route) { r.Communities = []string{"64512:666", "64512:1:2"} }), "NO_EXPORT"},
+		"no packeteer":      {with(func(r *extpolicy.Route) { r.Communities = []string{"64512:667", extpolicy.NoExport} }), "packeteer_community"},
+		"newline":           {with(func(r *extpolicy.Route) { r.Communities[1] = "64512:1\nannounce route 192.0.2.0/24 next-hop self" }), "community"},
+		"well-known":        {with(func(r *extpolicy.Route) { r.Communities[1] = "65535:666" }), "reserved"},
+		"unmasked":          {with(func(r *extpolicy.Route) { r.Prefix = netip.MustParsePrefix("198.51.100.7/24") }), "masked"},
+		"no prefix":         {with(func(r *extpolicy.Route) { r.Prefix = netip.Prefix{} }), "masked"},
+		"outside -allow":    {with(func(r *extpolicy.Route) { r.Prefix = netip.MustParsePrefix("203.0.113.0/24") }), "-allow"},
+		"wider than -allow": {with(func(r *extpolicy.Route) { r.Prefix = netip.MustParsePrefix("198.51.0.0/16") }), "-allow"},
+		"zone": {with(func(r *extpolicy.Route) {
+			r.Prefix, r.NextHop = route6.Prefix, netip.MustParseAddr("fe80::1%x;\nprotocol")
+		}), "next hop"},
+		"family":               {with(func(r *extpolicy.Route) { r.NextHop = netip.MustParseAddr("2001:db8::22") }), "next hop"},
+		"unspecified next hop": {with(func(r *extpolicy.Route) { r.NextHop = netip.IPv4Unspecified() }), "next hop"},
+		"no next hop":          {with(func(r *extpolicy.Route) { r.NextHop = netip.Addr{} }), "next hop"},
+	} {
+		if _, err := allow.route(c.r); err == nil || !strings.Contains(err.Error(), c.err) {
+			t.Errorf("%s: %v, want %q", name, err, c.err)
+		}
+	}
+
+	out := &recorder{}
+	noExport := with(func(r *extpolicy.Route) {
+		r.Prefix = netip.MustParsePrefix("198.51.100.128/25")
+		r.Communities = []string{"64512:666"}
+	})
+	c := &consumer{
+		fetch: func(context.Context, uint64, bool) (extpolicy.Document, error) {
+			return extpolicy.Document{ExpiresInMS: 10_000, Routes: []extpolicy.Route{noExport, route4}}, nil
+		},
+		out: out, check: allow, log: quiet(), now: time.Now,
+	}
+	if err := c.step(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.last()) != 1 || out.last()[0].Prefix != route4.Prefix {
+		t.Fatalf("applied %+v, want only %s: the route without NO_EXPORT is dropped", out.last(), route4.Prefix)
+	}
+}
+
+// The expiry guard in render mode: the file left by a previous run is
+// rendered empty before the feed is read, and a feed that goes stale is
+// rendered empty at its expiry.
+func TestRenderExpiryGuard(t *testing.T) {
+	dir := t.TempDir()
+	out := filepath.Join(dir, "routes.conf")
+	r, err := newRenderer(filepath.Join("..", "..", "examples", "external-policy", "bird.conf.tmpl"), out, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.apply(context.Background(), []extpolicy.Route{route4}); err != nil {
+		t.Fatal(err)
+	}
+	routes := func() int {
+		t.Helper()
+		b, err := os.ReadFile(out)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.Count(string(b), "\troute ")
+	}
+	if routes() != 1 {
+		t.Fatal("setup: the previous run's route is not in the file")
+	}
+	now := time.Unix(1_800_000_000, 0)
+	reached := false
+	fetchErr := errors.New("connection refused")
+	c := &consumer{
+		fetch: func(context.Context, uint64, bool) (extpolicy.Document, error) {
+			reached = true
+			if routes() != 0 {
+				t.Error("the feed was read before the stale file was rendered empty")
+			}
+			return extpolicy.Document{ExpiresInMS: 5000, Routes: []extpolicy.Route{route4}}, fetchErr
+		},
+		out: r, check: labCheck, log: quiet(), now: func() time.Time { return now },
+	}
+	ctx := context.Background()
+	_ = c.step(ctx)
+	if !reached || routes() != 0 {
+		t.Fatalf("start with the feed down: %d routes rendered", routes())
+	}
+	fetchErr = nil
+	_ = c.step(ctx)
+	if routes() != 1 {
+		t.Fatal("the feed's route was not rendered")
+	}
+	c.fetch = func(context.Context, uint64, bool) (extpolicy.Document, error) {
+		return extpolicy.Document{}, errors.New("timeout")
+	}
+	now = now.Add(4 * time.Second)
+	_ = c.step(ctx)
+	if routes() != 1 {
+		t.Fatal("dropped before the expiry")
+	}
+	now = now.Add(time.Second)
+	_ = c.step(ctx)
+	if routes() != 0 {
+		t.Fatalf("a stale feed left %d routes in the file after its expiry", routes())
+	}
+}
+
+// A hung reload ends at the timeout, so the loop goes on to the expiry.
+func TestRenderReloadTimeout(t *testing.T) {
+	dir := t.TempDir()
+	r, err := newRenderer(filepath.Join("..", "..", "examples", "external-policy", "bird.conf.tmpl"), filepath.Join(dir, "routes.conf"), "sleep 30")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.reloadTimeout = 100 * time.Millisecond
+	start := time.Now()
+	if err := r.apply(context.Background(), nil); err == nil || time.Since(start) > 5*time.Second {
+		t.Fatalf("hung reload: %v after %s", err, time.Since(start))
 	}
 }

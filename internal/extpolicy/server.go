@@ -11,13 +11,18 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
+	"golang.org/x/net/netutil"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/structpb"
+
+	"github.com/GrandArcher/Packeteer/internal/auth"
 )
 
 // Paths and names a consumer uses.
@@ -33,6 +38,15 @@ const (
 	WatchMethod = "Watch"
 	// MinTokenLen is the shortest bearer token the server accepts.
 	MinTokenLen = 16
+)
+
+// Listener limits. A consumer holds one connection, so the cap is far above
+// any real deployment. Requests have no read or write timeout: a long poll
+// and the stream are held open on purpose, and only an authorized request
+// gets that far.
+const (
+	maxConns    = 128
+	idleTimeout = time.Minute
 )
 
 // ServerConfig is the listener of the feed.
@@ -54,6 +68,7 @@ type Server struct {
 	grpc *grpc.Server
 	srv  *http.Server
 	ln   net.Listener
+	bad  *backoff
 }
 
 // NewServer checks cfg and loads the certificate.
@@ -68,12 +83,13 @@ func NewServer(feed *Feed, cfg ServerConfig, log *slog.Logger) (*Server, error) 
 	if err != nil {
 		return nil, fmt.Errorf("external_policy: cert_file/key_file: %w", err)
 	}
-	s := &Server{feed: feed, log: log, cfg: cfg, hash: sha256.Sum256([]byte(cfg.Token))}
+	s := &Server{feed: feed, log: log, cfg: cfg, hash: sha256.Sum256([]byte(cfg.Token)), bad: newBackoff(time.Now)}
 	s.grpc = grpc.NewServer()
 	s.grpc.RegisterService(&serviceDesc, s)
 	s.srv = &http.Server{
 		Handler:           s.handler(),
 		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       idleTimeout,
 		TLSConfig:         &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{cert}, NextProtos: []string{"h2", "http/1.1"}},
 		ErrorLog:          slog.NewLogLogger(log.Handler(), slog.LevelDebug),
 	}
@@ -86,9 +102,9 @@ func (s *Server) Start() error {
 	if err != nil {
 		return fmt.Errorf("external_policy listen %s: %w", s.cfg.Listen, err)
 	}
-	s.ln = ln
+	s.ln = netutil.LimitListener(ln, maxConns)
 	go func() {
-		if err := s.srv.ServeTLS(ln, "", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := s.srv.ServeTLS(s.ln, "", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			s.log.Error("external policy feed stopped", "err", err)
 		}
 	}()
@@ -117,11 +133,23 @@ func (s *Server) Shutdown(ctx context.Context) error {
 
 func (s *Server) handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ip := auth.RemoteIP(r)
+		// While an address backs off its token is not even compared, so
+		// guessing runs no faster than the backoff allows.
+		if wait := s.bad.wait(ip); wait > 0 {
+			w.Header().Set("Retry-After", strconv.Itoa(int((wait+time.Second-1)/time.Second)))
+			http.Error(w, "too many failed tokens", http.StatusTooManyRequests)
+			return
+		}
 		if !s.authorized(r) {
+			if s.bad.fail(ip) {
+				s.log.Warn("external policy feed: wrong bearer token; backing off", "remote", ip)
+			}
 			w.Header().Set("WWW-Authenticate", `Bearer realm="packeteer"`)
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
+		s.bad.ok(ip)
 		if r.ProtoMajor == 2 && strings.HasPrefix(r.Header.Get("Content-Type"), "application/grpc") {
 			s.grpc.ServeHTTP(w, r)
 			return
@@ -235,4 +263,90 @@ func documentStruct(d Document) (*structpb.Struct, error) {
 		return nil, err
 	}
 	return structpb.NewStruct(m)
+}
+
+// Token-failure backoff: after the nth wrong token in a row an address is
+// refused for backoffBase << (n-1), at most backoffMax. A right token
+// clears it. An address with no failure for backoffForget is forgotten.
+const (
+	backoffBase   = time.Second
+	backoffMax    = time.Minute
+	backoffForget = 10 * time.Minute
+	// maxBackoffKeys bounds the table; past it a new address is not
+	// tracked until old entries are forgotten.
+	maxBackoffKeys = 4096
+)
+
+type backoff struct {
+	mu    sync.Mutex
+	now   func() time.Time
+	fails map[netip.Prefix]*failState
+}
+
+type failState struct {
+	n     int
+	last  time.Time
+	until time.Time
+}
+
+func newBackoff(now func() time.Time) *backoff {
+	return &backoff{now: now, fails: map[netip.Prefix]*failState{}}
+}
+
+// backoffKey is the address, or its /64 for IPv6, where one host usually
+// has the whole /64.
+func backoffKey(ip netip.Addr) netip.Prefix {
+	bits := 32
+	if !ip.Is4() {
+		bits = 64
+	}
+	p, _ := ip.Prefix(bits)
+	return p
+}
+
+// wait is how long ip is still refused.
+func (b *backoff) wait(ip netip.Addr) time.Duration {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if f := b.fails[backoffKey(ip)]; f != nil {
+		return max(f.until.Sub(b.now()), 0)
+	}
+	return 0
+}
+
+// fail counts a wrong token from ip. It reports whether ip was not backing
+// off before, so the caller logs an address once, not on every guess.
+func (b *backoff) fail(ip netip.Addr) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	now, k := b.now(), backoffKey(ip)
+	f := b.fails[k]
+	if f != nil && now.Sub(f.last) >= backoffForget {
+		f = nil
+	}
+	if f == nil {
+		if len(b.fails) >= maxBackoffKeys {
+			for key, old := range b.fails {
+				if now.Sub(old.last) >= backoffForget {
+					delete(b.fails, key)
+				}
+			}
+			if len(b.fails) >= maxBackoffKeys {
+				return false
+			}
+		}
+		f = &failState{}
+		b.fails[k] = f
+	}
+	f.n++
+	f.last = now
+	f.until = now.Add(min(backoffBase<<min(f.n-1, 16), backoffMax))
+	return f.n == 1
+}
+
+// ok clears ip after a right token.
+func (b *backoff) ok(ip netip.Addr) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	delete(b.fails, backoffKey(ip))
 }

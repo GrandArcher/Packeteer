@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,6 +18,7 @@ import (
 	"text/template"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/config"
 	"github.com/GrandArcher/Packeteer/internal/extpolicy"
 )
 
@@ -37,6 +40,7 @@ type consumer struct {
 	// differs from rev or after a heartbeat.
 	fetch func(ctx context.Context, rev uint64, wait bool) (extpolicy.Document, error)
 	out   applier
+	check routeCheck
 	log   *slog.Logger
 	now   func() time.Time
 
@@ -79,7 +83,7 @@ func (c *consumer) step(ctx context.Context) error {
 	case doc.ExpiresInMS <= 0:
 		want, c.deadline = nil, now
 	default:
-		want, c.deadline = doc.Routes, now.Add(time.Duration(doc.ExpiresInMS)*time.Millisecond)
+		want, c.deadline = c.valid(doc.Routes), now.Add(time.Duration(doc.ExpiresInMS)*time.Millisecond)
 	}
 	if err == nil {
 		c.rev, c.haveRev = doc.Revision, true
@@ -92,6 +96,69 @@ func (c *consumer) step(ctx context.Context) error {
 	}
 	c.put(ctx, want)
 	return err
+}
+
+// valid is the routes that pass the check, as the daemon gets them.
+func (c *consumer) valid(routes []extpolicy.Route) []extpolicy.Route {
+	out := make([]extpolicy.Route, 0, len(routes))
+	for _, r := range routes {
+		v, err := c.check.route(r)
+		if err != nil {
+			c.log.Warn("dropped a route from the feed", "prefix", r.Prefix, "err", err)
+			continue
+		}
+		out = append(out, v)
+	}
+	return out
+}
+
+// routeCheck is what each route must pass before it reaches the daemon. The
+// feed is not trusted: whoever can change it must not be able to write a
+// config directive or an API command, announce outside -allow, or announce
+// a route without packeteer_community and NO_EXPORT.
+type routeCheck struct {
+	community string         // packeteer_community, canonical
+	allow     []netip.Prefix // empty: any prefix
+}
+
+// route is r as the daemon gets it, or why it is dropped. Provider, cause,
+// and reason are free text the daemon does not need, so they never reach
+// a template.
+func (rc routeCheck) route(r extpolicy.Route) (extpolicy.Route, error) {
+	p, nh := r.Prefix, r.NextHop
+	switch {
+	case !p.IsValid() || p != p.Masked():
+		return extpolicy.Route{}, errors.New("prefix is not masked")
+	case len(rc.allow) > 0 && !slices.ContainsFunc(rc.allow, func(a netip.Prefix) bool { return a.Bits() <= p.Bits() && a.Contains(p.Addr()) }):
+		return extpolicy.Route{}, errors.New("prefix is outside -allow")
+	// A zone is free text after '%' that netip accepts.
+	case !nh.IsValid() || nh.Zone() != "" || nh.IsUnspecified() || nh.Is4() != p.Addr().Is4():
+		return extpolicy.Route{}, fmt.Errorf("next hop %q is not an address of the prefix's family", nh.String())
+	}
+	comms := make([]string, 0, len(r.Communities))
+	var tagged, noExport bool
+	for _, c := range r.Communities {
+		switch c {
+		case rc.community:
+			tagged = true
+		case extpolicy.NoExport:
+			noExport = true
+		default:
+			text, err := config.ExtraCommunityText(c, rc.community)
+			if err != nil {
+				return extpolicy.Route{}, fmt.Errorf("community %q: %w", c, err)
+			}
+			c = text
+		}
+		comms = append(comms, c)
+	}
+	if !tagged {
+		return extpolicy.Route{}, fmt.Errorf("no packeteer_community %s", rc.community)
+	}
+	if !noExport {
+		return extpolicy.Route{}, errors.New("no NO_EXPORT")
+	}
+	return extpolicy.Route{Prefix: p, NextHop: nh, LocalPref: r.LocalPref, Communities: comms, ASPath: slices.Clone(r.ASPath)}, nil
 }
 
 // put applies want unless it is already on the daemon.
@@ -180,6 +247,9 @@ type renderer struct {
 	tmpl   *template.Template
 	out    string
 	reload []string
+	// reloadTimeout ends a hung reload, so the consumer goes on to drop
+	// the routes at the expiry instead of waiting on it.
+	reloadTimeout time.Duration
 }
 
 // templateFuncs are what the shipped templates use.
@@ -190,7 +260,7 @@ func newRenderer(tmplPath, out, reload string) (*renderer, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &renderer{tmpl: t, out: out, reload: strings.Fields(reload)}, nil
+	return &renderer{tmpl: t, out: out, reload: strings.Fields(reload), reloadTimeout: 30 * time.Second}, nil
 }
 
 func (r *renderer) apply(ctx context.Context, routes []extpolicy.Route) error {
@@ -215,7 +285,12 @@ func (r *renderer) apply(ctx context.Context, routes []extpolicy.Route) error {
 	if len(r.reload) == 0 {
 		return nil
 	}
-	if out, err := exec.CommandContext(ctx, r.reload[0], r.reload[1:]...).CombinedOutput(); err != nil {
+	ctx, cancel := context.WithTimeout(ctx, r.reloadTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, r.reload[0], r.reload[1:]...)
+	// A child the reload left behind must not hold its output open.
+	cmd.WaitDelay = time.Second
+	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("reload %q: %w: %s", strings.Join(r.reload, " "), err, strings.TrimSpace(string(out)))
 	}
 	return nil
