@@ -15,8 +15,10 @@ import (
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
-// speakerPaths counts the paths the speaker holds for prefix. The router
-// does not advertise it, so every one of them is local.
+// speakerPaths counts the paths in the speaker's global table for prefix.
+// The inbound import policy keeps the router's copy of an inbound prefix
+// out of that table (it stays filtered in the Adj-RIB-In), so every path
+// counted here is local.
 func speakerPaths(t *testing.T, srv *server.BgpServer, prefix string) int {
 	t.Helper()
 	n := 0
