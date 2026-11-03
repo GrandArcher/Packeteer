@@ -1328,6 +1328,8 @@ Off unless this source is listed. NetFlow v5, NetFlow v9, IPFIX, and sFlow v5. R
 | `aggregate_v6` | 48 | 1-128. |
 | `exclude` | none | CIDRs to ignore, no host bits, no duplicates. |
 
+NetFlow v9 and IPFIX templates are kept in memory per exporter address and observation domain (capped) and are not written out.
+
 A destination inside an `exchanges[].lans` prefix is ignored the same way as `exclude` (#145): it is not aggregated, and it is not the candidate host. That includes an address no learned route covers, which would otherwise become `aggregate_v4` or `aggregate_v6`. Those bytes are not in the window, the volume, or the anomaly counters.
 
 With `--network host`, `listen` binds host UDP ports. Do not publish them. Each time bucket keeps at most `max_prefixes` prefixes (20000 by default). Those exact cells are what become probe targets and what the commit scorer reads as volume. It also counts bytes per destination prefix and IP protocol since it started (at most `max_prefixes` keys; a key idle for an hour is forgotten), which [`anomaly`](#anomaly) reads for its baselines. Each bucket also keeps a fixed HyperLogLog (4096 registers, 4 KiB) of every prefix offered to it, including ones the exact map refused (#125). A 5-minute window is about 30 buckets, about 120 KiB.
@@ -1377,6 +1379,8 @@ When no sub-range could be measured, the prefix addresses are probed as before. 
 Sub-ranges of one prefix are probed one after another, like the prefix addresses, so a large `max_subranges` toward silent addresses takes longer per prefix; keep it small enough that a round still finishes inside its deadline (about three `probe.interval`s). The same holds for `max_total`: across the list, sub-ranges can mean up to four times the probe work of the prefix addresses alone at `max_subranges: 16`, plus a retry each when retries are on.
 
 A round that runs past the staleness window fails safe (stale data withdraws an improvement), but lower `max_total` or `max_subranges`, or raise `probe.rate_limit_pps`, if `/api/probes` shows results going stale. When two sources send sub-ranges for the same prefix, the first source in `sources` order wins and the later list is ignored. A prefix that only the decision state still keeps in the probe set (an active improvement no source lists any more) is measured on its addresses, not on its last sub-ranges.
+
+When more than one source sends sub-ranges for the same prefix, the first source that sent them wins and later lists are ignored; a pin from any source removes them. A sub-range whose probe errors counts as full loss for that provider.
 
 `/api/decisions` lists the sub-ranges on the decision (`subranges`: prefix, weight, each provider's score, and `best`), and sets `heterogeneous: true` when two of them have different best providers. The dashboard prefix card shows a "heterogeneous" badge and the sub-range table. Sub-ranges are measured only and never announced: the decision still steers only the learned prefix, and the allowlist, learned-RIB check, community and NO_EXPORT, `max_improvements`, hold time, and withdraw rules are unchanged. Announcing a sub-range is the separate, opt-in `synthesize` design (#122), which this block does not turn on. Rollback: remove `subranges` and restart.
 

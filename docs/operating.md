@@ -1,6 +1,6 @@
-# Operating Packeteer: probing options, suggest and inject, rollback
+# Operating Packeteer: probing options, suggest and inject, rollback, upgrade
 
-The [README](../README.md) covers install and observe. This page is the rest of the run: the optional probing knobs, the move from observe to suggest to inject, and how to roll back.
+The [README](../README.md) covers install and observe. This page is the rest of the run: the optional probing knobs, the move from observe to suggest to inject, how to roll back, and what changes when you upgrade.
 
 ## Probing options
 
@@ -89,3 +89,17 @@ Other withdraws, while the container is still running:
 - the router withdraws a prefix it was still advertising after the improvement had been up for a few seconds
 
 When Packeteer's route is best, a normal iBGP session stops sending the native path back. That hide is not a withdraw. The improvement stays until flip-back or `improvement_ttl`. See [docs/routers.md](routers.md).
+
+## Upgrade from 0.8 to 0.9
+
+Pull the new image and recreate the container; the config and the `packeteer-data` volume carry over. Run `-check` with your config on the new image first. No config key was removed or renamed, the default stays `mode: observe`, and Packeteer withdraws its routes when the old container stops (`docker stop -t 30`).
+
+What can change without a new key:
+
+- `http.config_editor` is unset by default instead of `false`. The editor and setup wizard open for an admin only while first-run setup is pending (every provider `source_ip` in 192.0.2.0/24). A real config keeps them off; `false` forces them off (#416).
+- The `icmp` prober sends each run as one train at `packet_interval` and waits `timeout` after the last send, so a slow reply that was loss may now count as a reply (#224).
+- A provider that never answers holds at most its share of the probe workers, and no performance move is made for a prefix until one round measures every provider (#381).
+- An `rpki` source is fresh while its data time is inside `staleness`, not its last fetch, so a server serving old data falls through to the next source (#200).
+- Some dashboard labels changed and Overview has no Mode tile (#349, #351). Scripts should read the API.
+
+Everything else is a block that is off until you add it: `synthesize`, `verify`, `atlas`, `ring_lg`, `exporters`, `threat_feeds`, `inventory`, `registry`, `external_policy`, `irr`, `probe.reorder`, and the `agent` prober. Their secrets are environment variables only ([ENV.md](ENV.md)). To go back to 0.8, run the old image with the config from before the upgrade; a 0.8 binary refuses the new keys, so remove any block you added.
