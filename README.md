@@ -322,7 +322,7 @@ Symptoms, log lines, and fixes: [docs/troubleshooting.md](docs/troubleshooting.m
 
 ## Features
 
-Status on main for the 0.9.0 release (not tagged yet), capability rows per milestone and how many are done, from the summary in [docs/FEATURES.md](docs/FEATURES.md#summary):
+Status on main for the 0.9.0 release, capability rows per milestone and how many are done, from the summary in [docs/FEATURES.md](docs/FEATURES.md#summary):
 
 | Milestone | Rows | Done |
 |---|---|---|
@@ -341,7 +341,7 @@ v0.1 is the outbound loop: probes, static and flow targets, an iBGP RIB, scoring
 
 v0.8 is about Internet exchanges and shared measurements: IXP observe-only mode with IX-F import, fabric probes, Birdseye route-server history and signals, fabric incident correlation, member pages, and multi-site health; RPKI origin labels; probe multiplexing with a PBR generator and a probe-path check; a shared IX port; PeeringDB lookup; BMP exchange peer monitoring; events from measured provider health; settings forms for most blocks of the config (the raw YAML covers the rest); and the opt-in herd with its hub. Some rows are partial: the shared IX port, potential peers, exchange autoconfig, the settings form, and herd (phase 1 and the hub; the hub has unit and integration tests only, not lab-proven). The rows say what is missing. No row is field-proven yet (#54), and none of it relaxes the safety rules above.
 
-v0.9 (this release, not tagged yet) is about evidence, explanations, and plugins: the Why? panel and confidence on every decision, steer verification, RPKI and IRR per provider path, registry hygiene, NetBox and Peering Manager inventory, exporters, an SNMP agent, gRPC plugins, probe agents, an external policy feed, BMP alone, MED and overload protection, and a refreshed UI (plain language, phone layout, keyboard and screen reader access, provider latency and loss). The opt-in `synthesize` block is lab only. Three v0.9 rows are partial (the eBPF data path, registry hygiene, and onboarding, which does not read the router over a management API) and herd keeps its v0.8 gaps. Nothing is field-proven (#54). The shipped config and every example stay `mode: observe`.
+v0.9 (this release) is about evidence, explanations, and plugins: the Why? panel and confidence on every decision, steer verification, RPKI and IRR per provider path, registry hygiene, NetBox and Peering Manager inventory, exporters, an SNMP agent, gRPC plugins, probe agents, an external policy feed, BMP alone, MED and overload protection, and a refreshed UI (plain language, phone layout, keyboard and screen reader access, provider latency and loss). The opt-in `synthesize` block is lab only. Three v0.9 rows are partial (the eBPF data path, registry hygiene, and onboarding, which does not read the router over a management API) and herd keeps its v0.8 gaps. Nothing is field-proven (#54). The shipped config and every example stay `mode: observe`.
 
 ## Upgrades
 
