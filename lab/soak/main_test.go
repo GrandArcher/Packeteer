@@ -385,7 +385,7 @@ func TestBudgetFileProfilesAndGeneratedConfig(t *testing.T) {
 func TestReportFailsOverBudget(t *testing.T) {
 	b := Budgets{RSSPeakMB: 100, MinMeasured: 10}
 	r := Result{Profile: "x", RSSPeakMB: 90, Measured: 20, Failures: []string{}}
-	if text, ok := report(r, b); !ok || !strings.Contains(text, "| peak RSS | 90 MiB | ≤ 100 MiB | ok |") {
+	if text, ok := report(r, b); !ok || !strings.Contains(text, "| peak RSS | 90 MiB | <= 100 MiB | ok |") {
 		t.Fatalf("ok=%v\n%s", ok, text)
 	}
 	r.RSSPeakMB = 120
@@ -564,7 +564,7 @@ func TestRiseLastThirdShapes(t *testing.T) {
 func TestReportFailsWhenStillRising(t *testing.T) {
 	b := Budgets{RSSSlopeMB: 320}
 	r := Result{Profile: "x", RSSSlopeMB: 100, Failures: []string{}}
-	if text, ok := report(r, b); !ok || !strings.Contains(text, "| RSS still rising, last third | 100 MiB | ≤ 320 MiB | ok |") {
+	if text, ok := report(r, b); !ok || !strings.Contains(text, "| RSS still rising, last third | 100 MiB | <= 320 MiB | ok |") {
 		t.Fatalf("ok=%v\n%s", ok, text)
 	}
 	r.RSSSlopeMB = 400

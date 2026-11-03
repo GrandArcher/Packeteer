@@ -23,8 +23,8 @@ func TestParse(t *testing.T) {
 	if err != nil || len(c) != 1 || c[0] != 64512<<16|666 {
 		t.Fatalf("parseCommunities = %v, %v", c, err)
 	}
-	if _, err := parseCommunities("70000:1"); err == nil {
-		t.Error("parseCommunities accepted 70000:1")
+	if _, err := parseCommunities("65536:1"); err == nil {
+		t.Error("parseCommunities accepted 65536:1")
 	}
 }
 

@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # ---- build stage: cross-compiles for the target platform without QEMU ----
-FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS build
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine@sha256:a2012b4a1d1f9f7e9f44e0d39b805a901e856b1dd80b4e6ee4338db547050308 AS build
 ARG TARGETOS
 ARG TARGETARCH
 ARG VERSION=dev
@@ -25,7 +25,7 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
 # ---- runtime stage ----
 # Alpine (not distroless) so exec plugins written as shell scripts work in the
 # stock image. The image ships only the documentation-prefix example config.
-FROM alpine:3.24
+FROM alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a
 RUN apk add --no-cache ca-certificates git \
  && mkdir -p /etc/packeteer/plugins /var/lib/packeteer
 COPY --from=build /out/packeteer /usr/local/bin/packeteer
@@ -42,7 +42,7 @@ COPY config.example.yaml /etc/packeteer/config.example.yaml
 
 # Runs as root inside the container: raw ICMP sockets and BGP port 179 need
 # CAP_NET_RAW / CAP_NET_BIND_SERVICE. Docker grants only the capabilities you
-# pass with --cap-add (plus its defaults); see README "Security notes".
+# pass with --cap-add (plus its defaults); see docs/THREAT_MODEL.md.
 ENV PACKETEER_CONFIG=/etc/packeteer/config.yaml
 
 # Report history (storage: sqlite) lives here. Mount a volume on it

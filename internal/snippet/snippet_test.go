@@ -198,7 +198,7 @@ func TestForConfigRefusals(t *testing.T) {
 	cases := map[string]func(*config.Config){
 		"no bgp.neighbors":       func(c *config.Config) { c.BGP.Neighbors = nil },
 		"packeteer_community":    func(c *config.Config) { c.PacketeerCommunity = "" },
-		"packeteer_community: ":  func(c *config.Config) { c.PacketeerCommunity = "70000:1" },
+		"packeteer_community: ":  func(c *config.Config) { c.PacketeerCommunity = "65536:1" },
 		"needs Packeteer's addr": func(c *config.Config) { c.RouterID = "" },
 		"bgp.neighbors address":  func(c *config.Config) { c.BGP.Neighbors[0].Address = "edge" },
 	}

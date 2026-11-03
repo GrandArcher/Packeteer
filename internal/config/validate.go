@@ -888,8 +888,8 @@ func validProviderGroup(s string) bool {
 }
 
 // CommunityText parses s as a standard community ("asn:value", each half
-// 0–65535) or a large community ("global:data1:data2", each part
-// 0–4294967295, RFC 8092) and returns the canonical decimal text.
+// 0-65535) or a large community ("global:data1:data2", each part
+// 0-4294967295, RFC 8092) and returns the canonical decimal text.
 func CommunityText(s string) (string, error) {
 	parts := strings.Split(s, ":")
 	nums := make([]uint64, len(parts))

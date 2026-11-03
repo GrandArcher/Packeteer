@@ -20,10 +20,17 @@ Set these on the container (`-e NAME`). Secrets belong here, never in the config
 | `PACKETEER_GEOIP_USER`, `PACKETEER_GEOIP_KEY` | Basic-authentication account for the `geoip` country database download (#135; for MaxMind, the account ID and the license key). Set both or neither. Sent only over https or to a loopback address, never logged or returned. |
 | `PACKETEER_POLICY_TOKEN` | Bearer token of the `external_policy` feed (#232) unless `token_env` names another variable. At least 16 characters; compared in constant time and never logged. `packeteer-policy` reads the same variable by default. See [external-policy.md](external-policy.md). |
 | `PACKETEER_ATLAS_API_KEY` | Your RIPE Atlas API key for the `atlas` block (#213). Sent only in the `Authorization` header to the Atlas API, never logged, never in the URL, and never in `GET /api/atlas`, the System page, or an error. Unset means the integration makes no request. |
+| `PACKETEER_NETBOX_TOKEN`, `PACKETEER_PEERING_MANAGER_TOKEN` | API token of the `inventory` type `netbox` or `peeringmanager`. Read only by `packeteer config plan`, `diff`, and `apply`; sent only as an `Authorization` header to `base_url`. See [inventory.md](inventory.md). |
 
 ## Referenced from config
 
-Plugins read secrets from variables whose names you choose in the config (`community_env`, `password_env`, `client_secret_env`, `routing_key_env`, ...). The names used in the docs and examples are `PACKETEER_SNMP_COMMUNITY`, `PACKETEER_SNMP_USER`, `PACKETEER_SNMP_AUTH`, `PACKETEER_SNMP_PRIV`, `PACKETEER_SMTP_USER`, `PACKETEER_SMTP_PASSWORD`, and `PACKETEER_OIDC_CLIENT_SECRET`.
+Plugins read secrets from variables whose names you choose in the config (`community_env`, `password_env`, `client_secret_env`, `routing_key_env`, ...). The names used in the docs and examples are `PACKETEER_SNMP_COMMUNITY`, `PACKETEER_SNMP_USER`, `PACKETEER_SNMP_AUTH`, `PACKETEER_SNMP_PRIV`, `PACKETEER_SMTP_USER`, `PACKETEER_SMTP_PASSWORD`, `PACKETEER_OIDC_CLIENT_SECRET`, `PACKETEER_TRAP_COMMUNITY` (`snmptrap` notifier), `PAGERDUTY_ROUTING_KEY` (`webhook` preset `pagerduty`), `INFLUX_TOKEN` (`influxdb` exporter), and `PACKETEER_FEED_TOKEN` (`threat_feeds` source). The config holds the variable name; the value stays in the environment.
+
+## Probe agent
+
+| Variable | Effect |
+|---|---|
+| `PACKETEER_AGENT_CONFIG` | Config path of `packeteer-agent` when `-config` is not given. Default `/etc/packeteer/agent.yaml`. See [agents.md](agents.md#agent-config). |
 
 ## Exec plugins
 

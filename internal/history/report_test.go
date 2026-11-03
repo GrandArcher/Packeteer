@@ -80,7 +80,7 @@ func TestSummary(t *testing.T) {
 		Probes: 30, FailedProbes: 2, Prefixes: 3,
 		// Active at now: 2 and 4 (no savings) and 3 (200).
 		EstSavingsRate: 200,
-		// 3: 200 × 4h / 730; 0: 73 × 1h / 730.
+		// 3: 200 x 4h / 730; 0: 73 x 1h / 730.
 		EstSavingsAccrued: round(200*4.0/730 + 73*1.0/730),
 	}
 	if s != want {

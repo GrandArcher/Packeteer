@@ -8,10 +8,10 @@ This takes a Linux host with Docker to a verified first injection without hand-w
 
 ```
 sh scripts/install.sh
-PACKETEER_VERSION=0.9.0 PACKETEER_DIR=/srv/packeteer sh scripts/install.sh
+PACKETEER_VERSION=edge PACKETEER_DIR=/srv/packeteer sh scripts/install.sh
 ```
 
-An existing `config.yaml` is kept. An existing container named `packeteer`, running or stopped, stops the script. Nothing in it turns inject on. `PACKETEER_ADMIN_PASSWORD` sets the first admin password; otherwise the generated one is printed ([auth.md](auth.md#first-run)). The first sign-in opens the setup wizard ([ui.md](ui.md#setup-wizard)).
+With no `PACKETEER_VERSION` it installs the last release, 0.9.0, with the config from that tag; `edge` is the build from `main`. An existing `config.yaml` is kept. An existing container named `packeteer`, running or stopped, stops the script. Nothing in it turns inject on. `PACKETEER_ADMIN_PASSWORD` sets the first admin password; otherwise the generated one is printed ([auth.md](auth.md#first-run)). The first sign-in opens the setup wizard ([ui.md](ui.md#setup-wizard)).
 
 ## Preflight checks
 

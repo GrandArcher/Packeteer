@@ -111,7 +111,7 @@ func TestSamplesSurviveRestart(t *testing.T) {
 	s := openDB(t, path)
 	c := mustNew(t, persistYAML, testEnv())
 	c.UseSampleStore(s)
-	// 2026-10-07 is inside billing day 1 (Oct 1–Nov 1) and day 15 (Sep 15–Oct 15).
+	// 2026-10-07 is inside billing day 1 (Oct 1-Nov 1) and day 15 (Sep 15-Oct 15).
 	now := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
 	atClock(c, now)
 	for i := 0; i < 20; i++ {

@@ -58,7 +58,7 @@ const (
 	// DefaultProbeMinReplies is how many replies a host needs before it
 	// can define the score. 1 is any reply, which is the historical rule.
 	DefaultProbeMinReplies = 1
-	// MaxProbeDispersionMS is the largest RTT spread (max−min), in
+	// MaxProbeDispersionMS is the largest RTT spread (max-min), in
 	// milliseconds, an operator may require of a qualified host.
 	MaxProbeDispersionMS = 600000
 
@@ -91,7 +91,7 @@ type Config struct {
 	ASN      uint32 `yaml:"asn"`
 	RouterID string `yaml:"router_id"`
 	// PacketeerCommunity tags every injected route. It is a standard
-	// community ("asn:value", each half 0–65535) or a large community
+	// community ("asn:value", each half 0-65535) or a large community
 	// ("global:data1:data2", RFC 8092). The export policy matches only
 	// this community.
 	PacketeerCommunity string `yaml:"packeteer_community"`

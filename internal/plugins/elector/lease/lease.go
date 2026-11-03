@@ -64,7 +64,7 @@ type Config struct {
 	// ID names this instance (default: $PACKETEER_HA_ID, then the
 	// hostname). The two instances must use different IDs.
 	ID string `yaml:"id"`
-	// TTL is the lease time (default 10s, 2s–5m). The active instance
+	// TTL is the lease time (default 10s, 2s-5m). The active instance
 	// stops announcing TTL/2 after its last successful renewal.
 	TTL time.Duration `yaml:"ttl"`
 	// Renew is the renewal and standby poll interval (default TTL/5, at

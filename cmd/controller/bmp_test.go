@@ -131,7 +131,7 @@ func TestOwnCommunity(t *testing.T) {
 	if got, large, err := ownCommunity(""); err != nil || got != 0 || large != "" {
 		t.Fatalf("empty = %d %q, %v", got, large, err)
 	}
-	if _, _, err := ownCommunity("70000:1"); err == nil {
+	if _, _, err := ownCommunity("65536:1"); err == nil {
 		t.Fatal("out-of-range community accepted")
 	}
 	if got, large, err := ownCommunity("4200000000:1:666"); err != nil || got != 0 || large != "4200000000:1:666" {

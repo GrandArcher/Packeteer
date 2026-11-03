@@ -422,9 +422,9 @@ func report(r Result, b Budgets) (string, bool) {
 	for _, c := range checks(r, b) {
 		limit, mark := "-", "report"
 		if c.Checked() {
-			op := "≤"
+			op := "<="
 			if c.Min {
-				op = "≥"
+				op = ">="
 			}
 			limit = op + " " + num(c.Limit) + unit(c.Unit)
 			mark = "ok"

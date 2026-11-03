@@ -4,6 +4,10 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ## [Unreleased]
 
+### Changed
+
+- Audit hygiene: ENV.md and threat model gaps, release pins in quickstart, Compose and install.sh, ASCII gate on source, documentation test data, errcheck on, image and action pins (#494).
+
 ## [0.9.0] - 2026-11-02
 
 Lab-proven additions for evidence, explanations, registries, exporters, and plugins: RPKI and IRR per provider path, decision explanations, an SNMP agent, gRPC plugins, probe agents, an external policy feed, BMP alone, and a refreshed UI, none field-proven (#54).

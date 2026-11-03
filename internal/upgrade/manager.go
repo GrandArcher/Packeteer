@@ -452,7 +452,7 @@ func (m *Manager) apply(ctx context.Context, req Request) (Result, error) {
 	defer os.Remove(tmp.Name())
 	h := sha256.New()
 	if err := m.cl.stream(ctx, rel.assets[asset], maxBinary, io.MultiWriter(tmp, h)); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return Result{}, fmt.Errorf("%w: %v", ErrFetch, err)
 	}
 	if err := tmp.Close(); err != nil {
@@ -594,7 +594,7 @@ func defaultTrial(ctx context.Context, path, version, configPath string, environ
 func tail(s string) string {
 	const n = 600
 	if len(s) > n {
-		return "…" + s[len(s)-n:]
+		return "..." + s[len(s)-n:]
 	}
 	return s
 }

@@ -67,7 +67,7 @@ func geoipSetup(cfg *config.Config, f *geoip.Fetcher) func() httpapi.GeoIPState 
 			if fh, err := os.Open(p); err != nil {
 				st.Unreadable = append(st.Unreadable, p)
 			} else {
-				fh.Close()
+				_ = fh.Close()
 			}
 		}
 		if f != nil {

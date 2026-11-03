@@ -168,7 +168,7 @@ func TestCommunitiesRejectedAtAnnounce(t *testing.T) {
 		}(), "at most 16"},
 		{"four-byte two-part", func() Config {
 			cfg := testCfg()
-			cfg.Community = "70000:1"
+			cfg.Community = "65536:1"
 			return cfg
 		}(), "0-65535"},
 	}

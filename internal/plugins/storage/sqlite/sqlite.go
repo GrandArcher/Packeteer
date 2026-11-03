@@ -564,7 +564,7 @@ FROM improvements WHERE start_ms < ? AND (end_ms = 0 OR end_ms >= ?) ORDER BY st
 		var hb, ha int
 		if err := imps.Scan(&r.ID, &prefix, &r.Provider, &r.Native, &r.Cause, &r.Reason, &r.Mode, &start, &end, &r.EndReason,
 			&hb, &r.BeforeLoss, &r.BeforeRTT, &ha, &r.AfterLoss, &r.AfterRTT, &r.CostDelta, &r.EstSavings, &r.VolumeMbps, &asn, &r.Country, &r.Explain); err != nil {
-			imps.Close()
+			_ = imps.Close()
 			return out, err
 		}
 		p, err := netip.ParsePrefix(prefix)
@@ -576,10 +576,10 @@ FROM improvements WHERE start_ms < ? AND (end_ms = 0 OR end_ms >= ?) ORDER BY st
 		out.Improvements = append(out.Improvements, r)
 	}
 	if err := imps.Err(); err != nil {
-		imps.Close()
+		_ = imps.Close()
 		return out, err
 	}
-	imps.Close()
+	_ = imps.Close()
 	if out.Mitigations, err = readMitigations(ctx, db, q); err != nil {
 		return out, err
 	}
@@ -600,7 +600,7 @@ FROM probe_daily WHERE day >= ? AND day < ? ORDER BY day, prefix, provider`, q.F
 		var day int64
 		var prefix string
 		if err := rows.Scan(&day, &prefix, &k.Provider, &k.Probes, &k.Failed, &k.Measured, &k.LossSum, &k.RTTSumMs, &k.JitterSum); err != nil {
-			rows.Close()
+			_ = rows.Close()
 			return out, err
 		}
 		p, err := netip.ParsePrefix(prefix)
@@ -611,10 +611,10 @@ FROM probe_daily WHERE day >= ? AND day < ? ORDER BY day, prefix, provider`, q.F
 		out.Buckets = append(out.Buckets, k)
 	}
 	if err := rows.Err(); err != nil {
-		rows.Close()
+		_ = rows.Close()
 		return out, err
 	}
-	rows.Close()
+	_ = rows.Close()
 
 	if out.RPKIRoutes, err = readRPKIRoutes(ctx, db, q); err != nil {
 		return out, err

@@ -98,7 +98,7 @@ func TestHideInternal(t *testing.T) {
 			t.Errorf("%s hidden", s)
 		}
 	}
-	for _, n := range []uint32{64496, 64511, 65536, 3356} {
+	for _, n := range []uint32{64496, 64511, 65536, 65551} {
 		if len(on.ASN(n)) == 0 {
 			t.Errorf("AS%d hidden", n)
 		}

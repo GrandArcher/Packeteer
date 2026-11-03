@@ -223,7 +223,7 @@ targets:
 	// First destination walks TTL 1 (gateway) then TTL 2 (near) then gap.
 	// The fake is shared, so the second destination sees the same topology.
 	// Both therefore resolve to the near hop, which is the point of the
-	// second case below — split by swapping the script between calls.
+	// second case below - split by swapping the script between calls.
 	near := replies("203.0.113.50", "203.0.113.50", "203.0.113.50")
 	gw := replies("192.0.2.1", "192.0.2.1", "192.0.2.1")
 	fake.hops[1] = gw
