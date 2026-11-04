@@ -79,11 +79,11 @@ func TestReflects(t *testing.T) {
 }
 
 func TestParseAllow(t *testing.T) {
-	got, err := parseAllow(" 192.0.2.0/24, 2001:db8::1 ,::ffff:198.51.100.7,")
+	got, err := parseAllow(" 192.0.2.0/24, 2001:db8::1 ,::ffff:198.51.100.7,::ffff:203.0.113.0/120")
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24"), netip.MustParsePrefix("2001:db8::1/128"), netip.MustParsePrefix("198.51.100.7/32")}
+	want := []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24"), netip.MustParsePrefix("2001:db8::1/128"), netip.MustParsePrefix("198.51.100.7/32"), netip.MustParsePrefix("203.0.113.0/24")}
 	if len(got) != len(want) {
 		t.Fatalf("got %v, want %v", got, want)
 	}

@@ -26,6 +26,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/GrandArcher/Packeteer/internal/netpfx"
 	"github.com/GrandArcher/Packeteer/internal/twamp"
 )
 
@@ -93,15 +94,11 @@ func parseAllow(list string) ([]netip.Prefix, error) {
 		if f == "" {
 			continue
 		}
-		p, err := netip.ParsePrefix(f)
-		if err != nil {
-			a, aerr := netip.ParseAddr(f)
-			if aerr != nil {
-				return nil, fmt.Errorf("-allow-from %q is not an address or prefix", f)
-			}
-			p = netip.PrefixFrom(a.Unmap(), a.Unmap().BitLen())
+		p, ok := netpfx.ParsePrefixOrAddr(f)
+		if !ok {
+			return nil, fmt.Errorf("-allow-from %q is not an address or prefix", f)
 		}
-		out = append(out, p.Masked())
+		out = append(out, p)
 	}
 	return out, nil
 }

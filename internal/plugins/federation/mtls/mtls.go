@@ -248,6 +248,9 @@ func (f *Federation) clientTLS(serverName string) *tls.Config {
 	}
 }
 
+// serverReadTimeout is a variable so a test can shorten it.
+var serverReadTimeout = 30 * time.Second
+
 // Start listens (when configured) and begins polling peers.
 func (f *Federation) Start(context.Context) error {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -267,7 +270,7 @@ func (f *Federation) Start(context.Context) error {
 			ReadHeaderTimeout: 5 * time.Second,
 			// Bounds the settings body read, which a peer with a valid
 			// certificate could otherwise trickle indefinitely.
-			ReadTimeout:  30 * time.Second,
+			ReadTimeout:  serverReadTimeout,
 			WriteTimeout: 30 * time.Second,
 			IdleTimeout:  2 * time.Minute,
 			ErrorLog:     slog.NewLogLogger(f.log.Handler(), slog.LevelDebug),

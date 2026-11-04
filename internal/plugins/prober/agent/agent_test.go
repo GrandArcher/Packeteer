@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math/big"
 	"net/http"
 	"net/netip"
 	"os"
@@ -71,7 +72,25 @@ type lab struct {
 	hub  *Prober
 	url  string
 	crl  string
-	logs *bytes.Buffer
+	logs *syncBuf
+}
+
+// syncBuf is a log sink the agent's goroutines write while a test reads.
+type syncBuf struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuf) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuf) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
 }
 
 // newLab starts a controller side that allows the named agents.
@@ -98,7 +117,7 @@ agents:
 	if err != nil {
 		t.Fatal(err)
 	}
-	logs := &bytes.Buffer{}
+	logs := &syncBuf{}
 	pl, err := New(cfg, plugin.Env{Logger: slog.New(slog.NewTextHandler(logs, nil))})
 	if err != nil {
 		t.Fatal(err)
@@ -335,6 +354,29 @@ func TestOlderCRLCannotUnrevokeAnAgent(t *testing.T) {
 	// A newer list replaces it.
 	l.ca.WriteCRL(t, l.crl, 4)
 	waitFor(t, "newer CRL applied", func() bool { return !l.hub.revoked(issuer, serial) })
+}
+
+// A reload from a file that leaves one CA out keeps that CA's number, so an
+// older list from it is still refused on a later reload.
+func TestReloadKeepsNumbersOfIssuersLeftOut(t *testing.T) {
+	ca := pkitest.New(t)
+	_, cas, err := loadCAs(ca.CAFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	crl := filepath.Join(ca.Dir, "agents.crl")
+	ca.WriteCRL(t, crl, 5)
+	left := big.NewInt(7)
+	p := &Prober{cfg: Config{CRLFile: crl}, cas: cas, crlNumbers: map[string]*big.Int{"left-out-issuer": left}}
+	if err := p.reloadCRL(); err != nil {
+		t.Fatal(err)
+	}
+	if got := p.crlNumbers["left-out-issuer"]; got == nil || got.Cmp(left) != 0 {
+		t.Fatalf("number for the issuer missing from the file = %v, want 7", got)
+	}
+	if len(p.crlNumbers) != 2 {
+		t.Fatalf("numbers = %v, want the new issuer's too", p.crlNumbers)
+	}
 }
 
 func TestStaleCRLWarnsOnceAndStaysInForce(t *testing.T) {

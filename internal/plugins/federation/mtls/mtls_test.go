@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"math/big"
 	"net"
 	"net/http"
@@ -291,16 +292,38 @@ func TestRefusesUnknownClientAndWrongInstance(t *testing.T) {
 	}
 }
 
-// A peer holding a settings body open must hit a read deadline.
+// A peer that sends part of a settings body and stalls must be cut off at
+// the read deadline instead of holding the connection open.
 func TestServerBoundsBodyRead(t *testing.T) {
-	p := newPKI(t)
-	b := instance(t, p, "pop-b", map[string]any{"listen": "127.0.0.1:0", "allow_clients": []string{"pop-a"}})
-	if err := b.Start(context.Background()); err != nil {
+	old := serverReadTimeout
+	serverReadTimeout = 300 * time.Millisecond
+	defer func() { serverReadTimeout = old }()
+	a, b := pushPair(t, []string{"pop-a"})
+	b.SetSettingsHandler(func(context.Context, string, plugin.SettingsPush) plugin.SettingsResult {
+		t.Error("handler ran for a body that never finished")
+		return plugin.SettingsResult{Status: plugin.SettingsApplied}
+	})
+	conn, err := tls.Dial("tcp", b.Addr().String(), a.clientTLS("pop-b"))
+	if err != nil {
 		t.Fatal(err)
 	}
-	defer stop(t, b)
-	if b.srv.ReadTimeout <= 0 || b.srv.ReadTimeout > time.Minute || b.srv.ReadHeaderTimeout <= 0 {
-		t.Fatalf("read deadlines: body %s, header %s", b.srv.ReadTimeout, b.srv.ReadHeaderTimeout)
+	defer conn.Close()
+	if _, err := conn.Write([]byte("POST " + SettingsPath + " HTTP/1.1\r\nHost: pop-b\r\nContent-Type: application/json\r\nContent-Length: 1000\r\n\r\n{\"sections\":")); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	_ = conn.SetReadDeadline(start.Add(5 * time.Second))
+	buf := make([]byte, 4096)
+	n, err := conn.Read(buf)
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		t.Fatal("the server kept a stalled body open past its read deadline")
+	}
+	if n > 0 && !strings.Contains(string(buf[:n]), "400") {
+		t.Fatalf("response = %q, want a 400 for the cut-off body", buf[:n])
+	}
+	if d := time.Since(start); d > 3*time.Second {
+		t.Fatalf("cut off after %s", d)
 	}
 }
 

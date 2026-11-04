@@ -24,6 +24,7 @@ import (
 
 	"github.com/gosnmp/gosnmp"
 
+	"github.com/GrandArcher/Packeteer/internal/netpfx"
 	"github.com/GrandArcher/Packeteer/internal/plugins/snmpcfg"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
@@ -159,15 +160,11 @@ func New(c plugin.Config, e plugin.Env) (plugin.Exporter, error) {
 		return nil, fmt.Errorf("the v3 keys need username_env")
 	}
 	for _, s := range cfg.AllowFrom {
-		p, err := netip.ParsePrefix(s)
-		if err != nil {
-			ip, ipErr := netip.ParseAddr(s)
-			if ipErr != nil {
-				return nil, fmt.Errorf("allow_from %q is not an address or a prefix", s)
-			}
-			p = netip.PrefixFrom(ip, ip.BitLen())
+		p, ok := netpfx.ParsePrefixOrAddr(s)
+		if !ok {
+			return nil, fmt.Errorf("allow_from %q is not an address or a prefix", s)
 		}
-		a.allow = append(a.allow, p.Masked())
+		a.allow = append(a.allow, p)
 	}
 	quiet := gosnmp.NewLogger(nil)
 	a.ours = &gosnmp.GoSNMP{Version: gosnmp.Version3, Logger: quiet}

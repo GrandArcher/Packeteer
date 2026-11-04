@@ -118,6 +118,13 @@ func (p *Prober) reloadCRL() error {
 	if lists == 0 {
 		return fmt.Errorf("crl_file %s: no PEM X509 CRL", p.cfg.CRLFile)
 	}
+	// A file that leaves a CA out must not forget that CA's number, or an
+	// older list from it would be accepted on a later reload.
+	for issuer, n := range p.crlNumbers {
+		if numbers[issuer] == nil {
+			numbers[issuer] = n
+		}
+	}
 	p.crlNumbers, p.crlNext, p.crlWarned = numbers, next, false
 	p.crl.Store(&revoked)
 	p.crlStat.Store(&fileStamp{mod: fi.ModTime(), size: fi.Size()})
