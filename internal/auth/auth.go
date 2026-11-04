@@ -166,8 +166,8 @@ type Service struct {
 	pwCache  map[string]cached
 	fails    *Throttle
 
-	// hashSem holds one slot per password hash in progress. A PBKDF2
-	// check costs about as much CPU as a decision round, and failures are
+	// hashSem holds one slot per password hash in progress. A check is
+	// 600,000 PBKDF2-HMAC-SHA256 iterations on one core, and failures are
 	// counted per user name, so without a cap a client naming many users
 	// could keep every core busy (#493).
 	hashSem  chan struct{}

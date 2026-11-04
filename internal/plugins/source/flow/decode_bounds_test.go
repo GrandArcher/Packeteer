@@ -219,3 +219,33 @@ func TestFullTableExpiresStaleDomains(t *testing.T) {
 		t.Fatal("new domain not stored")
 	}
 }
+
+// TestFullTableSweepsOncePerExpiry: with a full table of fresh domains, a
+// datagram of thousands of new template sets is refused without a table
+// scan per set: one sweep finds nothing to drop and the next waits until
+// the oldest domain can expire.
+func TestFullTableSweepsOncePerExpiry(t *testing.T) {
+	t0 := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+	d := &decoder{}
+	for dom := uint32(0); dom < maxTemplates; dom++ {
+		if _, err := d.decodeIPFIX(boundsExporter, t0, buildIPFIX(dom, sampledTemplate(), sampledData())); err != nil {
+			t.Fatalf("domain %d: %v", dom, err)
+		}
+	}
+	sets := make([][]byte, 4000) // 64000 bytes, under the 16-bit IPFIX length
+	for i := range sets {
+		sets[i] = tmplSetIPFIX(uint16(256+i), [][2]uint16{{ieInBytes, 4}, {ieDstV4, 4}})
+	}
+	pkt := buildIPFIX(maxTemplates+1, sets...)
+	start := time.Now()
+	if _, err := d.decodeIPFIX(boundsExporter, t0.Add(time.Minute), pkt); !errors.Is(err, errTableFull) {
+		t.Fatalf("err %v, want errTableFull", err)
+	}
+	if took := time.Since(start); took > 100*time.Millisecond {
+		t.Fatalf("refusing %d sets took %v", len(sets), took)
+	}
+	if !d.sweepAt.Equal(t0.Add(templateTTL)) {
+		t.Fatalf("next sweep at %v, want %v", d.sweepAt, t0.Add(templateTTL))
+	}
+	checkDecoder(t, d)
+}

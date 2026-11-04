@@ -109,6 +109,10 @@ type decoder struct {
 	ntmpl int // templates across all domains
 	// at is the arrival time of the datagram being decoded, set under mu.
 	at time.Time
+	// sweepAt is the earliest time a domain held at the last sweep can
+	// expire. A full table is swept again only from then on, so a datagram
+	// of many template sets costs one scan, not one per set.
+	sweepAt time.Time
 }
 
 // obsPool reuses the observation slice for one datagram. Observations
@@ -401,7 +405,7 @@ func (d *decoder) store(k domainKey, id uint16, t tmpl) error {
 			return nil
 		}
 	}
-	if d.ntmpl >= maxTemplates {
+	if d.ntmpl >= maxTemplates && !d.at.Before(d.sweepAt) {
 		d.expire()
 		ds = d.doms[k]
 	}
@@ -419,16 +423,22 @@ func (d *decoder) store(k domainKey, id uint16, t tmpl) error {
 }
 
 // expire drops every domain whose templates were not refreshed within
-// templateTTL, with its sampling rate. It runs only on a full table, so a
-// sender that filled the table holds it for at most templateTTL after it
-// stops (#493).
+// templateTTL, with its sampling rate, and sets sweepAt. It runs only on a
+// full table, so a sender that filled the table holds it for at most
+// templateTTL after it stops (#493).
 func (d *decoder) expire() {
+	var oldest time.Time
 	for k, ds := range d.doms {
 		if d.at.Sub(ds.seen) >= templateTTL {
 			d.ntmpl -= len(ds.tmpl)
 			delete(d.doms, k)
+			continue
+		}
+		if oldest.IsZero() || ds.seen.Before(oldest) {
+			oldest = ds.seen
 		}
 	}
+	d.sweepAt = oldest.Add(templateTTL)
 }
 
 func usable(fields []fieldSpec) bool {
