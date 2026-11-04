@@ -99,7 +99,7 @@ func TestStreamBecomesSightings(t *testing.T) {
 	if !src.Healthy() {
 		t.Fatal("not healthy with the stream open")
 	}
-	if header != `{"path":64500,"require":"announcements","type":"UPDATE"}` {
+	if header != `{"path":64500,"require":"announcements","socketOptions":{"includeRaw":true},"type":"UPDATE"}` {
 		t.Fatalf("subscription %s", header)
 	}
 	if query != "client=lab-test&format=json" {

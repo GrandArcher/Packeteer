@@ -264,7 +264,7 @@ func TestSinkNeverBlocksAndCountsDrops(t *testing.T) {
 func TestHeldSetIsBounded(t *testing.T) {
 	r := newRig(t)
 	for i := range maxHeld + 5 {
-		p := netip.PrefixFrom(netip.AddrFrom4([4]byte{10, byte(i >> 8), byte(i), 0}), 24)
+		p := netip.PrefixFrom(netip.AddrFrom16([16]byte{0x20, 0x01, 0x0d, 0xb8, 0, 0, byte(i >> 8), byte(i)}), 64)
 		r.feed(plugin.LeakSighting{Prefix: p, Communities: []uint32{community}})
 	}
 	if got := len(r.w.Status().Leaks); got != maxHeld {
@@ -293,7 +293,7 @@ func TestRunEvaluatesQueue(t *testing.T) {
 func TestFullHeldSetStillWithdrawsAnInjectedRoute(t *testing.T) {
 	r := newRig(t, "203.0.113.0/24")
 	for i := range maxHeld {
-		p := netip.PrefixFrom(netip.AddrFrom4([4]byte{10, byte(i >> 8), byte(i), 0}), 24)
+		p := netip.PrefixFrom(netip.AddrFrom16([16]byte{0x20, 0x01, 0x0d, 0xb8, 0, 0, byte(i >> 8), byte(i)}), 64)
 		r.feed(plugin.LeakSighting{Prefix: p, Communities: []uint32{community}})
 	}
 	r.feed(sight("203.0.113.0/24", nil, community))
@@ -485,7 +485,7 @@ func TestUnconfirmedAlertRepeatsAndIsBounded(t *testing.T) {
 		t.Fatalf("alert not repeated after %v: %d events", alertRepeat, len(r.events))
 	}
 	for i := range maxAlerted + 5 {
-		q := netip.PrefixFrom(netip.AddrFrom4([4]byte{10, byte(i >> 8), byte(i), 0}), 24)
+		q := netip.PrefixFrom(netip.AddrFrom16([16]byte{0x20, 0x01, 0x0d, 0xb8, 0, 0, byte(i >> 8), byte(i)}), 64)
 		r.feed(plugin.LeakSighting{Prefix: q, Communities: []uint32{community}, PublicCollector: true})
 	}
 	r.w.mu.RLock()
@@ -503,6 +503,7 @@ func TestNextToPeer(t *testing.T) {
 	}{
 		{[]uint32{localASN}, true},
 		{[]uint32{64511, localASN}, true},
+		{[]uint32{localASN, localASN, 64511}, true},
 		{[]uint32{64511, 64511, 64511, localASN}, true},
 		{[]uint32{64511, 64510, localASN}, false},
 		{[]uint32{64511, 64511, 64510, localASN}, false},

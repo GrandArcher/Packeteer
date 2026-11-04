@@ -55,6 +55,20 @@ func TestIXPKeyEventDedup(t *testing.T) {
 	}
 }
 
+func TestLeakUnconfirmedHasOwnDedupKey(t *testing.T) {
+	now := time.Unix(100, 0)
+	f := map[string]string{"prefix": "203.0.113.0/24", "action": "unconfirmed"}
+	unconfirmed := NewEvent(EventLeakUnconfirmed, now, "x", f)
+	detected := NewEvent(EventLeakDetected, now, "x", map[string]string{"prefix": "203.0.113.0/24", "action": "held"})
+	cleared := NewEvent(EventLeakCleared, now, "x", map[string]string{"prefix": "203.0.113.0/24"})
+	if detected.DedupKey() != cleared.DedupKey() || detected.DedupKey() != "packeteer/leak/prefix=203.0.113.0/24" {
+		t.Fatalf("detected %q cleared %q", detected.DedupKey(), cleared.DedupKey())
+	}
+	if unconfirmed.DedupKey() != "packeteer/leak/prefix=203.0.113.0/24/action=unconfirmed" {
+		t.Fatalf("unconfirmed %q", unconfirmed.DedupKey())
+	}
+}
+
 func TestEventCatalogCopy(t *testing.T) {
 	c := EventCatalog()
 	c[0].Kind = "changed"

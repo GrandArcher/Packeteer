@@ -168,9 +168,10 @@ func (s *Source) loop(ctx context.Context) {
 }
 
 // subscription is the X-RIS-Subscribe header: announcements whose AS path
-// contains the local ASN.
+// contains the local ASN. includeRaw asks for the hex BGP message, the only
+// place large communities appear.
 func (s *Source) subscription() string {
-	b, _ := json.Marshal(map[string]any{"type": "UPDATE", "require": "announcements", "path": s.asn})
+	b, _ := json.Marshal(map[string]any{"type": "UPDATE", "require": "announcements", "path": s.asn, "socketOptions": map[string]any{"includeRaw": true}})
 	return string(b)
 }
 

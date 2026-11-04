@@ -217,8 +217,9 @@ func (w *Watcher) reason(s plugin.LeakSighting) string {
 
 // nextToPeer reports whether asn is the collector's peer or the AS that
 // sent the route to it: one of the first two distinct ASNs of the path,
-// so prepending does not hide it. A third party can still forge that, but
-// only from a session with a collector, not by poisoning a path anywhere.
+// so prepending does not hide it. This narrows forgery, it does not stop
+// it: a neighbor of a collector peer that does not enforce first-AS can
+// start a path with asn, and AS_SET members are flattened into the path.
 func nextToPeer(path []uint32, asn uint32) bool {
 	distinct := 0
 	for i, a := range path {
