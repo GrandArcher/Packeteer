@@ -45,7 +45,10 @@ const (
 	sflowHeaderIPv6      = 12
 )
 
-var errNeedMore = errors.New("short record")
+var (
+	errNeedMore  = errors.New("short record")
+	errTableFull = errors.New("template table full")
+)
 
 type observation struct {
 	dst   netip.Addr
@@ -75,26 +78,27 @@ type tmpl struct {
 	fields []fieldSpec
 }
 
-type tmplKey struct {
-	exp     netip.Addr
-	version uint16
-	domain  uint32
-	id      uint16
-}
-
-type rateKey struct {
+type domainKey struct {
 	exp     netip.Addr
 	version uint16
 	domain  uint32
 }
 
-// decoder holds NetFlow v9 / IPFIX templates and a sampling rate learned from
-// options data. Templates are keyed by exporter, version, and observation
-// domain. They are not flow records.
+// domainState holds one exporter domain's templates and the sampling rate
+// learned from its data. It is deleted with its last template, so a rate
+// never outlives the templates that set it and maxTemplates also caps the
+// number of domains.
+type domainState struct {
+	tmpl map[uint16]tmpl
+	rate uint64
+}
+
+// decoder holds NetFlow v9 / IPFIX templates and sampling rates per
+// exporter, version, and observation domain. They are not flow records.
 type decoder struct {
 	mu    sync.Mutex
-	tmpl  map[tmplKey]tmpl
-	rates map[rateKey]uint64
+	doms  map[domainKey]*domainState
+	ntmpl int // templates across all domains
 }
 
 // obsPool reuses the observation slice for one datagram. Observations
@@ -140,9 +144,8 @@ func (d *decoder) decode(exporter netip.Addr, payload []byte) ([]observation, er
 }
 
 func (d *decoder) init() {
-	if d.tmpl == nil {
-		d.tmpl = map[tmplKey]tmpl{}
-		d.rates = map[rateKey]uint64{}
+	if d.doms == nil {
+		d.doms = map[domainKey]*domainState{}
 	}
 }
 
@@ -233,9 +236,20 @@ func (d *decoder) walkSets(exp netip.Addr, version uint16, domain uint32, body [
 			err = d.takeIPFIXOptions(exp, domain, set)
 		case id >= 256:
 			obs, err = d.takeData(exp, version, domain, id, set, obs)
+			if err != nil {
+				errs = append(errs, err)
+			}
+			continue
 		}
+		// A malformed template set ends the datagram: the sets after it come
+		// from the same unauthenticated sender, and one packet may hold
+		// thousands of them. A full table is not malformed, and data for the
+		// templates already held still counts.
 		if err != nil {
 			errs = append(errs, err)
+			if !errors.Is(err, errTableFull) {
+				break
+			}
 		}
 	}
 	return obs, errors.Join(errs...)
@@ -260,7 +274,7 @@ func (d *decoder) takeTemplates(exp netip.Addr, version uint16, domain uint32, b
 		if err != nil {
 			return err
 		}
-		if err := d.store(tmplKey{exp, version, domain, id}, tmpl{fields: fields}); err != nil {
+		if err := d.store(domainKey{exp, version, domain}, id, tmpl{fields: fields}); err != nil {
 			return err
 		}
 	}
@@ -286,7 +300,7 @@ func (d *decoder) takeV9Options(exp netip.Addr, domain uint32, body []byte) erro
 			return err
 		}
 		body = rest
-		if err := d.store(tmplKey{exp, 9, domain, id}, tmpl{fields: fields}); err != nil {
+		if err := d.store(domainKey{exp, 9, domain}, id, tmpl{fields: fields}); err != nil {
 			return err
 		}
 	}
@@ -311,7 +325,7 @@ func (d *decoder) takeIPFIXOptions(exp netip.Addr, domain uint32, body []byte) e
 			return err
 		}
 		body = rest
-		if err := d.store(tmplKey{exp, 10, domain, id}, tmpl{fields: fields}); err != nil {
+		if err := d.store(domainKey{exp, 10, domain}, id, tmpl{fields: fields}); err != nil {
 			return err
 		}
 	}
@@ -335,6 +349,11 @@ func readV9Fields(body []byte, n int) ([]fieldSpec, []byte, error) {
 }
 
 func readIPFIXFields(body []byte, n int) ([]fieldSpec, []byte, error) {
+	// Each field spec takes at least 4 bytes. Checking before make keeps a
+	// wire count of 65535 in a short set from allocating.
+	if len(body) < n*4 {
+		return nil, body, errors.New("ipfix: short template")
+	}
 	fields := make([]fieldSpec, 0, n)
 	for i := 0; i < n; i++ {
 		if len(body) < 4 {
@@ -357,14 +376,26 @@ func readIPFIXFields(body []byte, n int) ([]fieldSpec, []byte, error) {
 	return fields, body, nil
 }
 
-func (d *decoder) store(k tmplKey, t tmpl) error {
+func (d *decoder) store(k domainKey, id uint16, t tmpl) error {
 	if !usable(t.fields) {
 		return nil
 	}
-	if _, ok := d.tmpl[k]; !ok && len(d.tmpl) >= maxTemplates {
-		return errors.New("template table full")
+	ds := d.doms[k]
+	if ds != nil {
+		if _, ok := ds.tmpl[id]; ok {
+			ds.tmpl[id] = t
+			return nil
+		}
 	}
-	d.tmpl[k] = t
+	if d.ntmpl >= maxTemplates {
+		return errTableFull
+	}
+	if ds == nil {
+		ds = &domainState{tmpl: map[uint16]tmpl{}}
+		d.doms[k] = ds
+	}
+	ds.tmpl[id] = t
+	d.ntmpl++
 	return nil
 }
 
@@ -383,15 +414,24 @@ func usable(fields []fieldSpec) bool {
 // withdraw removes one template. An id below 256 withdraws every template for
 // that exporter and domain (IPFIX uses template id 2 or 3 for this; v9 uses 0).
 func (d *decoder) withdraw(exp netip.Addr, version uint16, domain uint32, id uint16) {
-	if id < 256 {
-		for k := range d.tmpl {
-			if k.exp == exp && k.version == version && k.domain == domain {
-				delete(d.tmpl, k)
-			}
-		}
+	k := domainKey{exp, version, domain}
+	ds := d.doms[k]
+	if ds == nil {
 		return
 	}
-	delete(d.tmpl, tmplKey{exp, version, domain, id})
+	if id < 256 {
+		d.ntmpl -= len(ds.tmpl)
+		delete(d.doms, k)
+		return
+	}
+	if _, ok := ds.tmpl[id]; !ok {
+		return
+	}
+	delete(ds.tmpl, id)
+	d.ntmpl--
+	if len(ds.tmpl) == 0 {
+		delete(d.doms, k)
+	}
 }
 
 type gotRec struct {
@@ -409,11 +449,15 @@ type gotRec struct {
 }
 
 func (d *decoder) takeData(exp netip.Addr, version uint16, domain uint32, id uint16, body []byte, obs []observation) ([]observation, error) {
-	t, ok := d.tmpl[tmplKey{exp, version, domain, id}]
+	ds := d.doms[domainKey{exp, version, domain}]
+	var t tmpl
+	var ok bool
+	if ds != nil {
+		t, ok = ds.tmpl[id]
+	}
 	if !ok {
 		return obs, fmt.Errorf("template %d not found", id)
 	}
-	rk := rateKey{exp, version, domain}
 	for len(body) > 0 {
 		rec, rest, err := nextRecord(body, t.fields)
 		if errors.Is(err, errNeedMore) {
@@ -427,7 +471,7 @@ func (d *decoder) takeData(exp netip.Addr, version uint16, domain uint32, id uin
 		}
 		body = rest
 		if rec.rate > 0 {
-			d.rates[rk] = rec.rate
+			ds.rate = rec.rate
 		}
 		octets, keep := octetsOf(rec)
 		if !keep {
@@ -435,7 +479,7 @@ func (d *decoder) takeData(exp netip.Addr, version uint16, domain uint32, id uin
 		}
 		rate := rec.rate
 		if rate == 0 {
-			rate = d.rates[rk]
+			rate = ds.rate
 		}
 		obs = append(obs, observation{
 			dst:       rec.dst,

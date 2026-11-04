@@ -1329,7 +1329,7 @@ Off unless this source is listed. NetFlow v5, NetFlow v9, IPFIX, and sFlow v5. R
 | `aggregate_v6` | 48 | 1-128. |
 | `exclude` | none | CIDRs to ignore, no host bits, no duplicates. |
 
-NetFlow v9 and IPFIX templates are kept in memory per exporter address and observation domain (capped) and are not written out.
+NetFlow v9 and IPFIX templates are kept in memory per exporter address and observation domain, at most 4096 in all, and are not written out. A learned sampling rate is dropped with the last template of its domain. A malformed template set ends parsing of that datagram; one refused by a full table does not (#502).
 
 A destination inside an `exchanges[].lans` prefix is ignored the same way as `exclude` (#145): it is not aggregated, and it is not the candidate host. That includes an address no learned route covers, which would otherwise become `aggregate_v4` or `aggregate_v6`. Those bytes are not in the window, the volume, or the anomaly counters.
 
