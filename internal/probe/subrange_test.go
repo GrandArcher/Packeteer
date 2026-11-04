@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/netip"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -211,5 +212,96 @@ func TestRetainedDropsSubranges(t *testing.T) {
 	r := rememberedTarget(normalizeTarget(plugin.Target{Prefix: wide, Host: host1, Candidate: true, Subranges: twoSubranges(2, 1)}))
 	if len(r.Subranges) != 0 || r.Host != host1 || !r.Candidate {
 		t.Fatalf("remembered = %+v", r)
+	}
+}
+
+func manySubranges(n int) []plugin.Subrange {
+	out := make([]plugin.Subrange, n)
+	for i := range out {
+		a := netip.AddrFrom4([4]byte{198, 51, 100, byte(i*16 + 1)})
+		out[i] = plugin.Subrange{Prefix: netip.PrefixFrom(a, 28).Masked(), Host: a, Weight: 1}
+	}
+	return out
+}
+
+func TestSubrangeJobStopsAtSilentProvider(t *testing.T) {
+	subs := manySubranges(8)
+	run := func(t *testing.T, fn func(context.Context, plugin.ProbeRequest) (plugin.ProbeResult, error), down bool) (*fakeProber, Result) {
+		t.Helper()
+		pr := &fakeProber{fn: fn}
+		o := opts()
+		o.Packets = 1
+		e, err := New([]Provider{provA}, []NamedProber{{Name: "p", Prober: pr}}, nil, o)
+		if err != nil {
+			t.Fatal(err)
+		}
+		j := job{provider: provA, target: plugin.Target{Prefix: wide, Subranges: subs}, subs: subs}
+		res, isDown, ok := e.probeSubranges(context.Background(), j, func(string) bool { return down })
+		if isDown || !ok {
+			t.Fatalf("down=%v ok=%v", isDown, ok)
+		}
+		return pr, res
+	}
+
+	t.Run("provider looks down", func(t *testing.T) {
+		pr, res := run(t, noReplies, true)
+		if got := int(pr.calls.Load()); got != silentHostLimit {
+			t.Fatalf("probed %d sub-range hosts, want %d", got, silentHostLimit)
+		}
+		if len(res.Subranges) != silentHostLimit || res.Stats.LossPct != 100 {
+			t.Fatalf("result = %+v", res)
+		}
+	})
+	t.Run("healthy provider probes every sub-range", func(t *testing.T) {
+		pr, res := run(t, noReplies, false)
+		if got := int(pr.calls.Load()); got != len(subs) {
+			t.Fatalf("probed %d sub-range hosts, want %d", got, len(subs))
+		}
+		if len(res.Subranges) != len(subs) {
+			t.Fatalf("sub-ranges = %d", len(res.Subranges))
+		}
+	})
+	t.Run("an answer keeps the job going", func(t *testing.T) {
+		var n atomic.Int32
+		fn := func(ctx context.Context, req plugin.ProbeRequest) (plugin.ProbeResult, error) {
+			if n.Add(1) == 2 {
+				return allReplies(ctx, req)
+			}
+			return noReplies(ctx, req)
+		}
+		pr, res := run(t, fn, true)
+		if got := int(pr.calls.Load()); got != len(subs) {
+			t.Fatalf("probed %d sub-range hosts, want %d", got, len(subs))
+		}
+		if res.Stats.Received == 0 {
+			t.Fatalf("result = %+v", res)
+		}
+	})
+}
+
+// TestSortJobsUsesReloadedInterval checks that job order ranks against the
+// interval in force after a timing reload, not the one at start.
+func TestSortJobsUsesReloadedInterval(t *testing.T) {
+	long := netip.MustParseAddr("198.51.100.1")
+	plain := netip.MustParseAddr("203.0.113.1")
+	pr := &hostProber{}
+	o := opts()
+	o.Workers = 1
+	o.Packets = 1
+	o.Interval = time.Second
+	e, err := New([]Provider{provA}, []NamedProber{{Name: "h", Prober: pr}}, src(
+		plugin.Target{Prefix: netip.PrefixFrom(plain, 32), Host: plain},
+		plugin.Target{Prefix: netip.PrefixFrom(long, 32), Host: long, Interval: 5 * time.Second},
+	), o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tm := e.TimingNow()
+	tm.Interval = time.Minute
+	e.SetTiming(tm)
+	e.RunOnce(context.Background())
+	// Under the new base the 5s target is the shorter interval (VIP tier).
+	if len(pr.seen) != 2 || pr.seen[0] != long {
+		t.Fatalf("probe order = %v, want %s first", pr.seen, long)
 	}
 }
