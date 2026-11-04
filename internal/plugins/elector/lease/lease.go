@@ -593,9 +593,18 @@ func writeAtomic(path string, data []byte, durable bool) error {
 	if !durable {
 		return nil
 	}
-	if d, err := os.Open(dir); err == nil {
-		_ = d.Sync()
-		_ = d.Close()
+	// Without the directory fsync the rename can be lost on a crash, and
+	// the other instance would read the previous holder's record.
+	d, err := os.Open(dir)
+	if err != nil {
+		return fmt.Errorf("sync lease directory: %w", err)
+	}
+	serr := d.Sync()
+	if cerr := d.Close(); serr == nil {
+		serr = cerr
+	}
+	if serr != nil {
+		return fmt.Errorf("sync lease directory: %w", serr)
 	}
 	return nil
 }

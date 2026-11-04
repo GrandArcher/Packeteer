@@ -364,6 +364,20 @@ func WriteFileAtomic(path string, data []byte, mode os.FileMode) error {
 		return err
 	}
 	ok = true
+	// The rename is durable only once the directory is synced; without it
+	// a crash can bring back the old config after the editor reported the
+	// change saved.
+	d, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return fmt.Errorf("sync config directory: %w", err)
+	}
+	serr := d.Sync()
+	if cerr := d.Close(); serr == nil {
+		serr = cerr
+	}
+	if serr != nil {
+		return fmt.Errorf("sync config directory: %w", serr)
+	}
 	return nil
 }
 
