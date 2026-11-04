@@ -12,12 +12,14 @@ import (
 	"io"
 	"log/slog"
 	mrand "math/rand/v2"
+	"net"
 	"net/http"
 	"net/netip"
 	"slices"
 	"strconv"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/config"
@@ -104,6 +106,10 @@ type Puller struct {
 	peers []*peer
 
 	offset atomic.Int64
+	// hubDial checks each address a hub peer is dialed at; configured
+	// peers are the operator's choice and are not checked. Tests that run
+	// hub peers on loopback clear it.
+	hubDial func(network, address string, c syscall.RawConn) error
 }
 
 // PinnedKeys returns the pinned public keys of the configured peers by key
@@ -131,7 +137,7 @@ func NewPuller(o PullerOptions) (*Puller, error) {
 	if o.Jitter == nil {
 		o.Jitter = mrand.Float64
 	}
-	p := &Puller{o: o, lim: o.Cfg.Limits, guard: newGuard(o.Log, o.Event)}
+	p := &Puller{o: o, lim: o.Cfg.Limits, guard: newGuard(o.Log, o.Event), hubDial: refuseUnroutable}
 	for _, cp := range o.Cfg.Peers {
 		raw, err := config.ParseHerdKey(cp.Key)
 		if err != nil {
@@ -158,6 +164,9 @@ func (p *Puller) newPeer(url string, pub ed25519.PublicKey, source string, wantA
 		TLSHandshakeTimeout:   p.lim.PullTimeout,
 		ResponseHeaderTimeout: p.lim.PullTimeout,
 		IdleConnTimeout:       p.lim.IdleTimeout,
+	}
+	if source != SourceConfig && p.hubDial != nil {
+		tr.DialContext = (&net.Dialer{Timeout: p.lim.PullTimeout, Control: p.hubDial}).DialContext
 	}
 	return &peer{
 		url: url, id: id, pub: pub, wantASN: wantASN, since: map[uint32]time.Time{}, resume: map[uint32]resume{},

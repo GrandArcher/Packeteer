@@ -68,7 +68,7 @@ func repeat(f uint8, n int) []uint8 {
 func TestSFlowDecodesTCPFlags(t *testing.T) {
 	dec := func(b []byte) observation {
 		t.Helper()
-		obs, err := (&decoder{}).decode(netip.MustParseAddr("192.0.2.8"), b)
+		obs, err := (&decoder{}).decode(netip.MustParseAddr("192.0.2.8"), time.Time{}, b)
 		if err != nil || len(obs) != 1 {
 			t.Fatalf("decode = %v, %v", obs, err)
 		}
@@ -105,7 +105,7 @@ func TestSFlowNoFlagsWithoutATCPHeader(t *testing.T) {
 		t.Helper()
 		r := sflowTCPHeader(sBad, sLocal, tcpRST)
 		mut(r[8:])
-		obs, err := (&decoder{}).decode(netip.MustParseAddr("192.0.2.8"), sflowDatagram(flowSampleBody(100, r)))
+		obs, err := (&decoder{}).decode(netip.MustParseAddr("192.0.2.8"), time.Time{}, sflowDatagram(flowSampleBody(100, r)))
 		if err != nil || len(obs) != 1 {
 			t.Fatalf("decode = %v, %v", obs, err)
 		}

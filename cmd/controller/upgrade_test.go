@@ -34,7 +34,7 @@ func upgradeServer(t *testing.T) (url, pub string) {
 	}
 	bin := "#!/bin/sh\ncase \"$1\" in -version) echo 'packeteer 0.6.0';; esac\n"
 	sum := sha256.Sum256([]byte(bin))
-	sums := hex.EncodeToString(sum[:]) + "  packeteer-linux-amd64\n" + hex.EncodeToString(sum[:]) + "  packeteer-linux-arm64\n"
+	sums := upgrade.VersionLine("0.6.0") + "\n" + hex.EncodeToString(sum[:]) + "  packeteer-linux-amd64\n" + hex.EncodeToString(sum[:]) + "  packeteer-linux-arm64\n"
 	sig, _ := upgrade.Sign(priv, []byte(sums))
 	var srv *httptest.Server
 	mux := http.NewServeMux()

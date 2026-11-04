@@ -597,23 +597,94 @@ func TestThrottleSparesValidSessionAndToken(t *testing.T) {
 func TestFailTableBounded(t *testing.T) {
 	s, _, c := newSvc(t, nil)
 	ip := netip.MustParseAddr("192.0.2.9")
-	s.fail(newFailKey("first", ip), c.now())
+	th := s.fails
+	th.Fail("first", ip, c.now())
 	c.add(time.Second)
 	for i := 1; i < maxFailKeys; i++ {
-		s.fail(newFailKey(fmt.Sprintf("u%d", i), ip), c.now())
+		th.Fail(fmt.Sprintf("u%d", i), ip, c.now())
 	}
-	s.fail(newFailKey("last", ip), c.now())
-	if len(s.fails) != maxFailKeys {
-		t.Fatalf("table holds %d", len(s.fails))
+	th.Fail("last", ip, c.now())
+	if len(th.fails) != maxFailKeys {
+		t.Fatalf("table holds %d", len(th.fails))
 	}
-	if _, ok := s.fails[newFailKey("first", ip)]; ok {
+	if _, ok := th.fails[newFailKey("first", ip)]; ok {
 		t.Fatal("oldest count kept")
 	}
-	if _, ok := s.fails[newFailKey("last", ip)]; !ok {
+	if _, ok := th.fails[newFailKey("last", ip)]; !ok {
 		t.Fatal("new count dropped")
 	}
 	if k := newFailKey("bad name\n", ip); k.user != "" {
 		t.Fatalf("invalid name keyed: %q", k.user)
+	}
+}
+
+// TestThrottlePerSlash64: every address in one IPv6 /64 shares a count, so
+// rotating the interface identifier does not reset it; the next /64 and an
+// IPv4 neighbour keep their own (#493).
+func TestThrottlePerSlash64(t *testing.T) {
+	s, _, _ := newSvc(t, nil)
+	ctx := context.Background()
+	if _, err := s.CreateUser(ctx, "noc", plugin.RoleOperator, "operator-password"); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < failLimit; i++ {
+		remote := fmt.Sprintf("[2001:db8:0:1::%x]:40000", i+1)
+		if _, err := s.Authenticate(req(remote, basic("noc", "guess-guess-guess"))); !errors.Is(err, ErrBadCredentials) {
+			t.Fatalf("failure %d from %s: %v", i, remote, err)
+		}
+	}
+	if _, err := s.Authenticate(req("[2001:db8:0:1:ffff::9]:40000", basic("noc", "operator-password"))); !errors.Is(err, ErrThrottled) {
+		t.Fatalf("new address in the same /64 not throttled: %v", err)
+	}
+	if p, err := s.Authenticate(req("[2001:db8:0:2::1]:40000", basic("noc", "operator-password"))); err != nil || p.User != "noc" {
+		t.Fatalf("next /64 refused: %+v %v", p, err)
+	}
+	for i := 0; i < failLimit; i++ {
+		_, _ = s.Authenticate(req("192.0.2.10:40000", basic("noc", "guess-guess-guess")))
+	}
+	if p, err := s.Authenticate(req("192.0.2.11:40000", basic("noc", "operator-password"))); err != nil || p.User != "noc" {
+		t.Fatalf("IPv4 neighbour shares a count: %+v %v", p, err)
+	}
+}
+
+// TestHashSlotsCapConcurrency: with every hashing slot taken, a password
+// check waits hashWait and fails with ErrBusy instead of hashing, and it
+// counts no failure. A cached password needs no slot; a free slot lets
+// the next check run.
+func TestHashSlotsCapConcurrency(t *testing.T) {
+	s, _, _ := newSvc(t, nil)
+	ctx := context.Background()
+	if _, err := s.CreateUser(ctx, "noc", plugin.RoleOperator, "operator-password"); err != nil {
+		t.Fatal(err)
+	}
+	s.hashWait = 20 * time.Millisecond
+	const remote = "192.0.2.12:40000"
+	if p, err := s.Authenticate(req(remote, basic("noc", "operator-password"))); err != nil || p.User != "noc" {
+		t.Fatalf("warm-up refused: %+v %v", p, err)
+	}
+	for range maxHashing {
+		s.hashSem <- struct{}{}
+	}
+	for _, mod := range []func(*http.Request){basic("noc", "guess-guess-guess"), basic("nobody", "guess-guess-guess")} {
+		if _, err := s.Authenticate(req(remote, mod)); !errors.Is(err, ErrBusy) {
+			t.Fatalf("full slots: %v, want ErrBusy", err)
+		}
+	}
+	if _, _, err := signIn(s, remote, "noc", "wrong-password-1", nil); !errors.Is(err, ErrBusy) {
+		t.Fatalf("sign-in with full slots: %v, want ErrBusy", err)
+	}
+	if s.fails.Throttled("noc", netip.MustParseAddr("192.0.2.12"), s.now()) || len(s.fails.fails) != 0 {
+		t.Fatalf("a refused check counted a failure: %d keys", len(s.fails.fails))
+	}
+	if p, err := s.Authenticate(req(remote, basic("noc", "operator-password"))); err != nil || p.User != "noc" {
+		t.Fatalf("cached password needs a slot: %+v %v", p, err)
+	}
+	<-s.hashSem
+	if _, err := s.Authenticate(req(remote, basic("noc", "guess-guess-guess"))); !errors.Is(err, ErrBadCredentials) {
+		t.Fatalf("free slot: %v, want ErrBadCredentials", err)
+	}
+	if len(s.hashSem) != maxHashing-1 {
+		t.Fatalf("slot not released: %d held", len(s.hashSem))
 	}
 }
 

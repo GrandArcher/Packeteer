@@ -255,6 +255,7 @@ scorer:
 #       listen:
 #         - "0.0.0.0:2055"            # NetFlow v5/v9 and IPFIX
 #         - "0.0.0.0:6343"            # sFlow
+#       exporters: [192.0.2.1]        # routers allowed to send; other sources are dropped. Empty accepts any
 #       # ebpf:                     # optional unsampled collector on this host: counts every packet leaving the interface. docs/ebpf.md
 #       #   interface: eth0
 #       #   max_entries: 65536

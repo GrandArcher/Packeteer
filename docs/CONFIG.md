@@ -1006,7 +1006,7 @@ Releases from v0.6.0 on are signed with this Ed25519 public key (not a secret):
 xbP7Os7YIqfBhu36+E+WK0xvTizFyPROA1QCAseqEkA=
 ```
 
-Each release carries `SHA256SUMS` (the SHA-256 of every binary) and `SHA256SUMS.sig`, a base64 Ed25519 signature over `SHA256SUMS`. The upgrade checks the signature against `upgrade.public_key`, then the binary against its `SHA256SUMS` entry. The same key is listed in each release's notes; compare it with this page before you pin it.
+Each release carries `SHA256SUMS` (a `# packeteer <version>` line, then the SHA-256 of every binary) and `SHA256SUMS.sig`, a base64 Ed25519 signature over `SHA256SUMS`. The upgrade checks the signature against `upgrade.public_key`, that the version line names the release being installed (#493), then the binary against its `SHA256SUMS` entry. The same key is listed in each release's notes; compare it with this page before you pin it.
 
 Key rotation: a new key is announced in the release notes and this page at least one release before it is used. During the change, update `upgrade.public_key`; a release signed with a key you have not pinned is refused and nothing changes. If a key is ever compromised, the notes say so, the old key must be removed, and releases signed with it are not trusted.
 
@@ -1316,6 +1316,7 @@ Off unless this source is listed. NetFlow v5, NetFlow v9, IPFIX, and sFlow v5. R
 | Key | Default | Bounds |
 |---|---|---|
 | `listen` | none | One `host:port` or a list. Host is an IP address or empty. Duplicate addresses are errors. Required unless `ebpf` is set. |
+| `exporters` | any source | Addresses or CIDRs allowed to send to `listen` (#493). A datagram from any other source is dropped before decoding and counted in `packeteer_truncated_total{limit="exporters"}`. Empty accepts every source and logs a warning at start. |
 | `ebpf.interface` | none | Turns on the eBPF flow collector (#229, [ebpf.md](ebpf.md)): every packet leaving this Ethernet interface is counted in the kernel, unsampled. Needs Linux 6.6, `BPF` and `NET_ADMIN`. If it cannot load, the source logs a warning and keeps `listen`. |
 | `ebpf` `max_entries` | 65536 | 1024-4194304. Kernel flow table size (source, destination, protocol). The least recently used flow is evicted past it. |
 | `window` | `5m` | `1s`-`24h`. |

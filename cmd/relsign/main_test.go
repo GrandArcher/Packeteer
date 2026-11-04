@@ -38,7 +38,10 @@ func TestSignThenVerify(t *testing.T) {
 		return ""
 	}
 	out.Reset()
-	if err := run([]string{"sign", dir, amd, arm}, env, &out); err != nil {
+	if err := run([]string{"sign", dir, amd, arm}, env, &out); err == nil {
+		t.Fatal("signed without the version argument")
+	}
+	if err := run([]string{"sign", "v1.0.0", dir, amd, arm}, env, &out); err != nil {
 		t.Fatal(err)
 	}
 	sums, _ := os.ReadFile(filepath.Join(dir, "SHA256SUMS"))
@@ -46,13 +49,13 @@ func TestSignThenVerify(t *testing.T) {
 	if err := upgrade.VerifySignature(pub, sums, sig); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(sums), "  packeteer-linux-amd64\n") || strings.Contains(string(sums), dir) {
+	if !strings.HasPrefix(string(sums), "# packeteer 1.0.0\n") || !strings.Contains(string(sums), "  packeteer-linux-amd64\n") || strings.Contains(string(sums), dir) {
 		t.Fatalf("sums = %q", sums)
 	}
 	if out.Len() != 0 {
 		t.Fatalf("sign wrote %q, want nothing", out.String())
 	}
-	if err := run([]string{"sign", dir, amd}, func(string) string { return "" }, &out); err == nil {
+	if err := run([]string{"sign", "1.0.0", dir, amd}, func(string) string { return "" }, &out); err == nil {
 		t.Fatal("signed without a key")
 	}
 }

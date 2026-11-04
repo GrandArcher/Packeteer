@@ -94,16 +94,38 @@ type Report struct {
 }
 
 // CSV writes the report as comma-separated values with a header row.
+// Cells carry operator text and external names, so a cell a spreadsheet
+// would run as a formula is written as text (#493).
 func (r Report) CSV(w io.Writer) error {
 	cw := csv.NewWriter(w)
 	if err := cw.Write(r.head); err != nil {
 		return err
 	}
-	if err := cw.WriteAll(r.lines); err != nil {
-		return err
+	row := make([]string, 0, len(r.head))
+	for _, line := range r.lines {
+		row = row[:0]
+		for _, c := range line {
+			row = append(row, csvCell(c))
+		}
+		if err := cw.Write(row); err != nil {
+			return err
+		}
 	}
 	cw.Flush()
 	return cw.Error()
+}
+
+// csvCell prefixes ' to a cell that starts with = + - @, a tab, or a
+// carriage return, which a spreadsheet reads as a formula. A number,
+// negative or not, is left as it is.
+func csvCell(s string) string {
+	if s == "" || !strings.ContainsRune("=+-@\t\r", rune(s[0])) {
+		return s
+	}
+	if _, err := strconv.ParseFloat(s, 64); err == nil {
+		return s
+	}
+	return "'" + s
 }
 
 // Build aggregates h into the named report. It is pure: the same history

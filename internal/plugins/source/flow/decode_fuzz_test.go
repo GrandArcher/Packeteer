@@ -3,14 +3,15 @@ package flow
 import (
 	"net/netip"
 	"testing"
+	"time"
 )
 
 // fuzzDecode feeds one input twice to a fresh decoder, so templates from the
 // first pass meet data in the second, and checks what bounds its memory.
-func fuzzDecode(t *testing.T, p []byte, dec func(*decoder, netip.Addr, []byte) ([]observation, error)) {
+func fuzzDecode(t *testing.T, p []byte, dec func(*decoder, netip.Addr, time.Time, []byte) ([]observation, error)) {
 	d := &decoder{}
 	for i := 0; i < 2; i++ {
-		obs, _ := dec(d, boundsExporter, p)
+		obs, _ := dec(d, boundsExporter, time.Time{}, p)
 		if len(obs) > len(p) {
 			t.Fatalf("%d observations from %d bytes", len(obs), len(p))
 		}
@@ -53,7 +54,7 @@ func FuzzDecodeV5(f *testing.F) {
 	f.Add(buildV5(0x4000|100, []v5rec{{netip.MustParseAddr("192.0.2.9"), ^uint32(0)}}))
 	f.Add(buildV5(0, []v5rec{{netip.MustParseAddr("198.51.100.7"), 1500}})[:60])
 	f.Fuzz(func(t *testing.T, p []byte) {
-		fuzzDecode(t, p, func(_ *decoder, _ netip.Addr, p []byte) ([]observation, error) { return decodeV5(p) })
+		fuzzDecode(t, p, func(_ *decoder, _ netip.Addr, _ time.Time, p []byte) ([]observation, error) { return decodeV5(p) })
 	})
 }
 
@@ -64,6 +65,6 @@ func FuzzSFlow(f *testing.F) {
 	f.Add(buildSFlowEthernet(dst, 600))
 	f.Add(sflowPackets(256, src, dst, 0x02, 0x10, 0x04))
 	f.Fuzz(func(t *testing.T, p []byte) {
-		fuzzDecode(t, p, func(_ *decoder, _ netip.Addr, p []byte) ([]observation, error) { return decodeSFlow(p) })
+		fuzzDecode(t, p, func(_ *decoder, _ netip.Addr, _ time.Time, p []byte) ([]observation, error) { return decodeSFlow(p) })
 	})
 }

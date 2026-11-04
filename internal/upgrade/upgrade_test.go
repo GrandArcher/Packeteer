@@ -96,6 +96,9 @@ type fakeRelease struct {
 	badSum  bool
 	notes   map[string]string
 	missing map[string]bool // tag -> no signature asset
+	// signedFor replaces the version line of a tag's SHA256SUMS; "-"
+	// leaves the line out.
+	signedFor map[string]string
 }
 
 const goodScript = "#!/bin/sh\ncase \"$1\" in -version) echo \"packeteer %s\";; -check) exit ${CHECK_EXIT:-0};; esac\n"
@@ -108,7 +111,7 @@ func newFake(t *testing.T, versions ...string) *fakeRelease {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f := &fakeRelease{pub: pub, priv: priv, bins: map[string]string{}, notes: map[string]string{}, missing: map[string]bool{}}
+	f := &fakeRelease{pub: pub, priv: priv, bins: map[string]string{}, notes: map[string]string{}, missing: map[string]bool{}, signedFor: map[string]string{}}
 	for _, v := range versions {
 		f.bins[v] = script(Normalize(v))
 	}
@@ -138,7 +141,14 @@ func newFake(t *testing.T, versions ...string) *fakeRelease {
 		if f.badSum {
 			hexsum = strings.Repeat("0", 64)
 		}
-		sums := fmt.Sprintf("%s  packeteer-linux-amd64\n%s  packeteer-linux-arm64\n", hexsum, hexsum)
+		sums := fmt.Sprintf("%s\n%s  packeteer-linux-amd64\n%s  packeteer-linux-arm64\n", VersionLine(tag), hexsum, hexsum)
+		switch v := f.signedFor[tag]; v {
+		case "":
+		case "-":
+			sums = strings.SplitN(sums, "\n", 2)[1]
+		default:
+			sums = strings.Replace(sums, VersionLine(tag), VersionLine(v), 1)
+		}
 		switch name {
 		case "packeteer-linux-amd64", "packeteer-linux-arm64":
 			io.WriteString(w, bin)
@@ -325,6 +335,9 @@ func TestApplyAbortsWithNoChange(t *testing.T) {
 		{"bad checksum", func(f *fakeRelease) { f.badSum = true }, ErrVerify},
 		{"no signature asset", func(f *fakeRelease) { f.missing["v0.6.0"] = true }, ErrNotInstall},
 		{"wrong version binary", func(f *fakeRelease) { f.bins["v0.6.0"] = script("0.9.9") }, ErrTrial},
+		{"checksums signed for another release", func(f *fakeRelease) { f.signedFor["v0.6.0"] = "0.6.1" }, ErrVerify},
+		{"checksums name no version", func(f *fakeRelease) { f.signedFor["v0.6.0"] = "-" }, ErrVerify},
+		{"binary prints a longer version", func(f *fakeRelease) { f.bins["v0.6.0"] = script("0.6.00") }, ErrTrial},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newFake(t, "v0.6.0")
@@ -349,6 +362,44 @@ func TestApplyAbortsWithNoChange(t *testing.T) {
 				t.Fatal("failure not reported")
 			}
 		})
+	}
+}
+
+// The start check matches the version exactly: a 0.9.10 binary does not
+// pass for v0.9.1 (#493).
+func TestTrialVersionIsExact(t *testing.T) {
+	f := newFake(t, "v0.9.1")
+	f.bins["v0.9.1"] = script("0.9.10")
+	r := newRig(t, f, "0.5.0")
+	r.noHA()
+	r.m.opt.Trial = func(ctx context.Context, path, version string) error {
+		return defaultTrial(ctx, path, version, "/etc/packeteer/config.yaml", nil)
+	}
+	if _, err := r.m.Apply(context.Background(), Request{Tag: "v0.9.1", Confirm: true}); !errors.Is(err, ErrTrial) || !strings.Contains(err.Error(), "want packeteer 0.9.1") {
+		t.Fatalf("0.9.10 binary for v0.9.1: %v", err)
+	}
+	f.bins["v0.9.1"] = script("0.9.1")
+	if _, err := r.m.Apply(context.Background(), Request{Tag: "v0.9.1", Confirm: true}); err != nil {
+		t.Fatalf("matching binary: %v", err)
+	}
+}
+
+func TestSumsVersion(t *testing.T) {
+	for _, tc := range []struct {
+		sums, want string
+	}{
+		{"# packeteer 1.0.0\n" + strings.Repeat("a", 64) + "  packeteer-linux-amd64\n", "1.0.0"},
+		{"# packeteer 1.0.0\r\n", "1.0.0"},
+		{strings.Repeat("a", 64) + "  packeteer-linux-amd64\n", ""},
+		{"# packeteer 1.0.0\n# packeteer 1.0.1\n", ""},
+	} {
+		got, err := sumsVersion([]byte(tc.sums))
+		if got != tc.want || (tc.want == "") != (err != nil) {
+			t.Errorf("%q: %q %v, want %q", tc.sums, got, err, tc.want)
+		}
+	}
+	if VersionLine("v1.2.3") != "# packeteer 1.2.3" {
+		t.Fatalf("VersionLine = %q", VersionLine("v1.2.3"))
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"net/netip"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -1124,5 +1125,80 @@ func TestPassiveSketchCountsPastCap(t *testing.T) {
 	}
 	if n := one.tracked(now); n < 1 || n > 3 {
 		t.Fatalf("one prefix tracked as %d", n)
+	}
+}
+
+// TestExportersAllowlist: a datagram from a source outside exporters is
+// dropped before it is decoded and counted; a listed source is decoded
+// (#493).
+func TestExportersAllowlist(t *testing.T) {
+	send := func(t *testing.T, s *Source) {
+		t.Helper()
+		ctx, cancel := context.WithCancel(context.Background())
+		t.Cleanup(cancel)
+		if err := s.Start(ctx); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			stop, c := context.WithTimeout(context.Background(), 2*time.Second)
+			defer c()
+			_ = s.Stop(stop)
+		})
+		dst, err := net.ResolveUDPAddr("udp", s.conns[0].LocalAddr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		conn, err := net.DialUDP("udp", nil, dst)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer conn.Close()
+		if _, err := conn.Write(recordedNetFlowV5); err != nil {
+			t.Fatal(err)
+		}
+	}
+	spoofed := mustSource(t, "listen: 127.0.0.1:0\nexporters: [192.0.2.1, 2001:db8::/64]\n")
+	send(t, spoofed)
+	deadline := time.Now().Add(2 * time.Second)
+	for spoofed.Truncated()["exporters"] != 1 {
+		if time.Now().After(deadline) {
+			t.Fatalf("datagram from an unlisted source not refused: %v", spoofed.Truncated())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if ts, _ := spoofed.Targets(context.Background()); len(ts) != 0 {
+		t.Fatalf("refused datagram counted: %+v", ts)
+	}
+	listed := mustSource(t, "listen: 127.0.0.1:0\nexporters: [127.0.0.0/8]\n")
+	send(t, listed)
+	for {
+		ts, _ := listed.Targets(context.Background())
+		if len(ts) == 1 && ts[0].Prefix.String() == "203.0.113.0/24" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("datagram from a listed source not decoded: %+v", ts)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if n := listed.Truncated()["exporters"]; n != 0 {
+		t.Fatalf("listed source refused %d times", n)
+	}
+}
+
+func TestExportersConfig(t *testing.T) {
+	s := mustSource(t, "listen: 127.0.0.1:0\nexporters: ['::ffff:192.0.2.1', 198.51.100.0/28, 2001:db8::1]\n")
+	want := []netip.Prefix{netip.MustParsePrefix("192.0.2.1/32"), netip.MustParsePrefix("198.51.100.0/28"), netip.MustParsePrefix("2001:db8::1/128")}
+	if !slices.Equal(s.exporters, want) {
+		t.Fatalf("exporters = %v, want %v", s.exporters, want)
+	}
+	for _, bad := range []string{"[router1]", "[198.51.100.1/28]", "[192.0.2.1, 192.0.2.1/32]"} {
+		c, err := plugin.ConfigFromYAML("listen: 127.0.0.1:0\nexporters: " + bad + "\n")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := New(c, plugin.Env{}); err == nil || !strings.Contains(err.Error(), "exporters[") {
+			t.Errorf("exporters %s: %v", bad, err)
+		}
 	}
 }

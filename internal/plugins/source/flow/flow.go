@@ -118,7 +118,12 @@ var (
 
 // Config is the flow source's config block.
 type Config struct {
-	Listen     listenList    `yaml:"listen"`
+	Listen listenList `yaml:"listen"`
+	// Exporters lists the addresses or CIDRs allowed to send flow
+	// datagrams (#493). A datagram from any other source is dropped
+	// before it is decoded, so it cannot add templates, sampling rates, or
+	// volumes. Empty accepts every source.
+	Exporters  []string      `yaml:"exporters"`
 	Window     time.Duration `yaml:"window"`
 	TopN       int           `yaml:"top_n"`
 	MaxTargets int           `yaml:"max_targets"`
@@ -246,6 +251,7 @@ type Source struct {
 	agg4         int
 	agg6         int
 	exclude      []netip.Prefix
+	exporters    []netip.Prefix
 	now          func() time.Time
 
 	mu     sync.RWMutex
@@ -285,6 +291,8 @@ type Source struct {
 	// queueFull counts datagrams whose records the workers could not
 	// take because the queue was full.
 	queueFull atomic.Uint64
+	// refused counts datagrams from a source not in exporters.
+	refused atomic.Uint64
 }
 
 // New is the plugin factory. It does not open sockets.
@@ -372,6 +380,10 @@ func New(c plugin.Config, env plugin.Env) (plugin.TargetSource, error) {
 	if err != nil {
 		return nil, err
 	}
+	exporters, err := parseExporters(cfg.Exporters)
+	if err != nil {
+		return nil, err
+	}
 	if cfg.MaxTargets > cfg.MaxPrefixes {
 		return nil, fmt.Errorf("max_targets (top_n when unset) %d exceeds max_prefixes %d: the window cannot hold that many targets", cfg.MaxTargets, cfg.MaxPrefixes)
 	}
@@ -411,6 +423,7 @@ func New(c plugin.Config, env plugin.Env) (plugin.TargetSource, error) {
 		agg4:         cfg.AggregateV4,
 		agg6:         cfg.AggregateV6,
 		exclude:      excl,
+		exporters:    exporters,
 		now:          time.Now,
 		dec:          &decoder{},
 		win:          win,
@@ -603,6 +616,19 @@ func parseExclude(in []string) ([]netip.Prefix, error) {
 	return out, nil
 }
 
+// parseExporters reads the exporters allowlist: addresses or CIDRs.
+func parseExporters(in []string) ([]netip.Prefix, error) {
+	nets := make([]string, len(in))
+	for i, s := range in {
+		if a, err := netip.ParseAddr(s); err == nil {
+			a = a.Unmap().WithZone("")
+			s = netip.PrefixFrom(a, a.BitLen()).String()
+		}
+		nets[i] = s
+	}
+	return passive.ParseNets("exporters", nets)
+}
+
 // SetExchangeLANs installs the peering LANs (#145). A destination inside
 // one is not counted and cannot become a probe target, including when no
 // learned route covers it and it would otherwise fall back to the
@@ -706,6 +732,9 @@ func (s *Source) Start(ctx context.Context) error {
 		s.wg.Add(1)
 		go s.worker(q)
 	}
+	if len(conns) > 0 && len(s.exporters) == 0 {
+		s.log.Warn("flow: no exporters allowlist; datagrams from any source are decoded. List your routers in exporters")
+	}
 	var readers sync.WaitGroup
 	for _, c := range conns {
 		s.log.Info("flow listening", "addr", c.LocalAddr().String())
@@ -802,9 +831,13 @@ func (s *Source) readLoop(ctx context.Context, c *net.UDPConn, q chan<- batch, r
 		if n == 0 || addr == nil {
 			continue
 		}
-		at := s.now()
 		exporter := udpAddr(addr)
-		obs, err := s.dec.decode(exporter, buf[:n])
+		if len(s.exporters) > 0 && !passive.Contains(s.exporters, exporter) {
+			s.refused.Add(1)
+			continue
+		}
+		at := s.now()
+		obs, err := s.dec.decode(exporter, at, buf[:n])
 		if err != nil {
 			s.log.Debug("flow decode", "exporter", exporter.String(), "err", err)
 		}
@@ -929,13 +962,14 @@ func (s *Source) Tracked() int {
 // Truncated is how many prefix cells the window buckets dropped at
 // max_prefixes since start (refused or evicted), problem window included.
 // The workers entry is datagrams dropped because the worker queue was full
-// (#385).
+// (#385); the exporters entry is datagrams refused because their source is
+// not in exporters (#493).
 func (s *Source) Truncated() map[string]uint64 {
 	n := s.win.truncatedTotal()
 	if s.prob != nil {
 		n += s.prob.win.Truncated()
 	}
-	return map[string]uint64{"max_prefixes": n, "workers": s.queueFull.Load()}
+	return map[string]uint64{"max_prefixes": n, "workers": s.queueFull.Load(), "exporters": s.refused.Load()}
 }
 
 // Volumes implements plugin.VolumeSource. Mbps is bytes over the configured

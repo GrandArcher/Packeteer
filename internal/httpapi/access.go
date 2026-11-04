@@ -298,7 +298,7 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request, rt route) (au
 	p, err := s.auth.Authenticate(r)
 	switch {
 	case err == nil:
-	case errors.Is(err, auth.ErrThrottled):
+	case errors.Is(err, auth.ErrThrottled), errors.Is(err, auth.ErrBusy):
 		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": err.Error()})
 		return p, false
 	case errors.Is(err, auth.ErrUnavailable):
@@ -397,7 +397,10 @@ func (s *Server) needAuth(w http.ResponseWriter) bool {
 	return true
 }
 
-func writeAuthError(w http.ResponseWriter, err error) {
+// writeAuthError answers a refused account or token request. A store or
+// internal failure is logged and answered with a generic message, so its
+// detail does not reach the client (#493).
+func (s *Server) writeAuthError(w http.ResponseWriter, err error) {
 	status := http.StatusInternalServerError
 	switch {
 	case errors.Is(err, auth.ErrInvalid):
@@ -408,10 +411,17 @@ func writeAuthError(w http.ResponseWriter, err error) {
 		status = http.StatusNotFound
 	case errors.Is(err, auth.ErrForbidden):
 		status = http.StatusForbidden
-	case errors.Is(err, auth.ErrThrottled):
+	case errors.Is(err, auth.ErrThrottled), errors.Is(err, auth.ErrBusy):
 		status = http.StatusTooManyRequests
 	case errors.Is(err, auth.ErrUnavailable):
-		status = http.StatusServiceUnavailable
+		s.log.Error("http auth: user store", "err", err)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "user store unavailable"})
+		return
+	}
+	if status == http.StatusInternalServerError {
+		s.log.Error("http auth", "err", err)
+		writeJSON(w, status, map[string]string{"error": "internal error"})
+		return
 	}
 	writeJSON(w, status, map[string]string{"error": err.Error()})
 }
@@ -462,7 +472,7 @@ func (s *Server) handleAccountPassword(w http.ResponseWriter, r *http.Request) {
 	p := principalFrom(r.Context())
 	noteAudit(r, p.User, "password")
 	if err := s.auth.ChangePassword(w, r, p, req.Current, req.New); err != nil {
-		writeAuthError(w, err)
+		s.writeAuthError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -482,7 +492,7 @@ func (s *Server) handleUsers(w http.ResponseWriter, r *http.Request) {
 	}
 	us, err := s.auth.Users(r.Context())
 	if err != nil {
-		writeAuthError(w, err)
+		s.writeAuthError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"users": us})
@@ -499,7 +509,7 @@ func (s *Server) handleUserCreate(w http.ResponseWriter, r *http.Request) {
 	noteAudit(r, req.Name, "role="+string(req.Role))
 	u, err := s.auth.CreateUser(r.Context(), req.Name, req.Role, req.Password)
 	if err != nil {
-		writeAuthError(w, err)
+		s.writeAuthError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, u)
@@ -527,7 +537,7 @@ func (s *Server) handleUserUpdate(w http.ResponseWriter, r *http.Request) {
 	noteAudit(r, name, strings.Join(changed, " "))
 	u, err := s.auth.UpdateUser(r.Context(), name, up)
 	if err != nil {
-		writeAuthError(w, err)
+		s.writeAuthError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, u)
@@ -538,7 +548,7 @@ func (s *Server) handleUserDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.auth.DeleteUser(r.Context(), r.PathValue("name")); err != nil {
-		writeAuthError(w, err)
+		s.writeAuthError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -558,7 +568,7 @@ func (s *Server) handleTokens(w http.ResponseWriter, r *http.Request) {
 	}
 	ts, err := s.auth.Tokens(r.Context(), principalFrom(r.Context()))
 	if err != nil {
-		writeAuthError(w, err)
+		s.writeAuthError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"tokens": ts})
@@ -583,7 +593,7 @@ func (s *Server) handleTokenCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	t, secret, err := s.auth.CreateToken(r.Context(), principalFrom(r.Context()), req.Name, req.Role, ttl)
 	if err != nil {
-		writeAuthError(w, err)
+		s.writeAuthError(w, err)
 		return
 	}
 	// The secret is never written to the audit log.
@@ -600,7 +610,7 @@ func (s *Server) handleTokenRevoke(w http.ResponseWriter, r *http.Request) {
 	}
 	t, err := s.auth.RevokeToken(r.Context(), principalFrom(r.Context()), r.PathValue("id"))
 	if err != nil {
-		writeAuthError(w, err)
+		s.writeAuthError(w, err)
 		return
 	}
 	noteAudit(r, t.ID, "user="+t.User+" name="+t.Name)
@@ -678,7 +688,7 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.log.Warn("sso sign-in refused", "user", who, "err", err)
 		s.record(r, auth.Principal{User: who, Method: auth.MethodSSO}, "auth.login", who, err.Error(), http.StatusUnauthorized)
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "sign-in refused: " + err.Error()})
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "sign-in refused"})
 		return
 	}
 	s.record(r, p, "auth.login", p.User, "", http.StatusFound)
@@ -724,7 +734,7 @@ func (s *Server) handleSignin(w http.ResponseWriter, r *http.Request) {
 	case err == nil:
 		s.record(r, p, "auth.login", p.User, "", http.StatusOK)
 		writeJSON(w, http.StatusOK, map[string]any{"user": p.User, "role": p.Role, "must_change": p.MustChange})
-	case errors.Is(err, auth.ErrThrottled):
+	case errors.Is(err, auth.ErrThrottled), errors.Is(err, auth.ErrBusy):
 		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": err.Error()})
 	case errors.Is(err, auth.ErrBadCredentials):
 		target := ""
