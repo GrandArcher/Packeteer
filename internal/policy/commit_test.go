@@ -461,6 +461,13 @@ func TestCommitSwitchToPerformancePassesTheCapacityGate(t *testing.T) {
 			t.Fatalf("pA changed: %+v", ch)
 		}
 	}
+	i, _ := findDecision(out.Decisions, pA)
+	ex := buildExplain(out.Decisions[i], out.facts[i], c, len(next.Improvements))
+	if ex.BlockedBy != GateOverload || ex.Outcome != OutcomeKept || !strings.HasPrefix(ex.Counterfactual, "would move to b once its interface") {
+		t.Fatalf("blocked by %q outcome %q counterfactual %q, want %s kept", ex.BlockedBy, ex.Outcome, ex.Counterfactual, GateOverload)
+	}
+	wantGate(t, ex, GateOverload, GateFail, "b would reach 89%")
+	wantGate(t, ex, GateThresholds, GateSkip, "the interface capacity limit refused the switch")
 
 	// The refusal does not pin the steer: a planner that lets go of it
 	// still withdraws it.
