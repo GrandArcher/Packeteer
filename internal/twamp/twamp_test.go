@@ -242,3 +242,34 @@ func TestServeWildcardRepliesFromDestination(t *testing.T) {
 		t.Fatalf("reply %+v, err %v", rp, err)
 	}
 }
+
+func TestReflectorAllowFrom(t *testing.T) {
+	pkt := SenderPacket{Seq: 1, Timestamp: time.Now(), ErrorEstimate: UnsyncedErrorEstimate, Padding: MinSenderPadding}.Marshal()
+	now := time.Now()
+	in := netip.MustParseAddrPort("192.0.2.10:5000")
+	out := netip.MustParseAddrPort("198.51.100.10:5000")
+	mapped := netip.MustParseAddrPort("[::ffff:192.0.2.10]:5000")
+	v6 := netip.MustParseAddrPort("[2001:db8::1]:5000")
+
+	open := NewReflector(0)
+	if _, ok := open.Reply(out, UnknownTTL, pkt, now); !ok {
+		t.Fatal("a reflector with no allow list must answer any sender")
+	}
+
+	r := NewReflector(0)
+	r.AllowFrom([]netip.Prefix{netip.MustParsePrefix("192.0.2.0/24"), netip.MustParsePrefix("2001:db8::/32")})
+	for _, tc := range []struct {
+		name string
+		from netip.AddrPort
+		want bool
+	}{{"inside v4", in, true}, {"v4-mapped inside", mapped, true}, {"inside v6", v6, true}, {"outside", out, false}} {
+		reply, ok := r.Reply(tc.from, UnknownTTL, pkt, now)
+		if ok != tc.want || (ok && len(reply) < ReflectorMinLen) {
+			t.Errorf("%s: ok = %v, want %v", tc.name, ok, tc.want)
+		}
+	}
+	// A refused sender takes no session slot.
+	if _, held := r.sessions[out]; held || len(r.sessions) != 3 {
+		t.Errorf("sessions = %d, refused sender held a slot: %v", len(r.sessions), held)
+	}
+}

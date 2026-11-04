@@ -104,7 +104,7 @@ curl -u noc1:... -H 'Content-Type: application/json' http://127.0.0.1:8080/api/t
 curl -H 'Authorization: Bearer pkt_...' http://127.0.0.1:8080/metrics
 ```
 
-The secret is shown once and stored only as a SHA-256 hash. A token's role defaults to, and may not exceed, its user's role, and it follows the user: demote the user and the token is demoted. Tokens expire (`auth.token_ttl`, default 90 days, at most one year) and are capped at 20 per user. A token cannot create tokens, so a leaked token cannot outlive its own expiry. `GET /api/tokens` lists your tokens (an admin sees all); `DELETE /api/tokens/<id>` revokes one.
+The secret is shown once and stored only as a SHA-256 hash. A token's role defaults to, and may not exceed, its user's role, and it follows the user: demote the user and the token is demoted. Tokens expire (`auth.token_ttl`, default 90 days, at most one year) and are capped at 20 per user. A token minted from an SSO session lasts at most 7 days (the default is the shorter of `auth.token_ttl` and 7 days), because the IdP is consulted only at sign-in: removing a user at the IdP needs a local disable (`PATCH` with `disabled`) to end their tokens at once. A token cannot create tokens, so a leaked token cannot outlive its own expiry. `GET /api/tokens` lists your tokens (an admin sees all); `DELETE /api/tokens/<id>` revokes one.
 
 ## Single sign-on (OIDC)
 

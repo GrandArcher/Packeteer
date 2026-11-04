@@ -291,6 +291,50 @@ func TestRefusesUnknownClientAndWrongInstance(t *testing.T) {
 	}
 }
 
+// A peer holding a settings body open must hit a read deadline.
+func TestServerBoundsBodyRead(t *testing.T) {
+	p := newPKI(t)
+	b := instance(t, p, "pop-b", map[string]any{"listen": "127.0.0.1:0", "allow_clients": []string{"pop-a"}})
+	if err := b.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer stop(t, b)
+	if b.srv.ReadTimeout <= 0 || b.srv.ReadTimeout > time.Minute || b.srv.ReadHeaderTimeout <= 0 {
+		t.Fatalf("read deadlines: body %s, header %s", b.srv.ReadTimeout, b.srv.ReadHeaderTimeout)
+	}
+}
+
+// A peer pinned to a domain is refused when its snapshot claims another.
+func TestPeerDomainPin(t *testing.T) {
+	p := newPKI(t)
+	b := instance(t, p, "pop-b", map[string]any{"listen": "127.0.0.1:0", "allow_clients": []string{"pop-a"}})
+	if err := b.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer stop(t, b)
+	b.Publish(snap("pop-b", "pop-c"))
+	url := "https://" + b.Addr().String()
+
+	pinned := instance(t, p, "pop-a", map[string]any{"peers": []map[string]any{{"name": "pop-b", "url": url, "server_name": "pop-b", "domain": "pop-b"}}})
+	if err := pinned.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer stop(t, pinned)
+	got := waitPeer(t, pinned, func(s plugin.PeerState) bool { return s.Error != "" })
+	if got.Fresh || !strings.Contains(got.Error, `claims domain "pop-c", peer is pinned to "pop-b"`) {
+		t.Fatalf("pinned peer = %+v", got)
+	}
+
+	matching := instance(t, p, "pop-a", map[string]any{"peers": []map[string]any{{"name": "pop-b", "url": url, "server_name": "pop-b", "domain": "pop-c"}}})
+	if err := matching.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer stop(t, matching)
+	if got := waitPeer(t, matching, func(s plugin.PeerState) bool { return s.Fresh }); got.Snapshot.Domain != "pop-c" {
+		t.Fatalf("matching pin: %+v", got)
+	}
+}
+
 func TestConfigErrors(t *testing.T) {
 	p := newPKI(t)
 	cert, key := p.ca.issue(t, p.dir, "pop-a")
@@ -308,6 +352,7 @@ func TestConfigErrors(t *testing.T) {
 		{"http url", "peers", []map[string]any{{"name": "pop-b", "url": "http://192.0.2.20:9443"}}, "must be https://host:port"},
 		{"url path", "peers", []map[string]any{{"name": "pop-b", "url": "https://192.0.2.20:9443/x"}}, "must be https://host:port"},
 		{"dup peer", "peers", []map[string]any{{"name": "pop-b", "url": "https://192.0.2.20:9443"}, {"name": "pop-b", "url": "https://192.0.2.21:9443"}}, "duplicate name"},
+		{"bad domain", "peers", []map[string]any{{"name": "pop-b", "url": "https://192.0.2.20:9443", "domain": "-x"}}, "domain"},
 		{"bad name", "peers", []map[string]any{{"name": "-b", "url": "https://192.0.2.20:9443"}}, "name"},
 		{"no peers or listen", "peers", []map[string]any{}, "need listen, peers, or both"},
 		{"poll too fast", "poll_interval", "10ms", "poll_interval"},

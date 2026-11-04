@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"net/netip"
+	"slices"
 	"sync"
 	"time"
 
@@ -26,6 +27,7 @@ const (
 // at zero (RFC 5357 section 4.2.1).
 type Reflector struct {
 	maxSessions int
+	allow       []netip.Prefix
 	mu          sync.Mutex
 	sessions    map[netip.AddrPort]*session
 }
@@ -44,12 +46,30 @@ func NewReflector(maxSessions int) *Reflector {
 	return &Reflector{maxSessions: maxSessions, sessions: map[netip.AddrPort]*session{}}
 }
 
+// AllowFrom limits the reflector to senders inside prefixes; a packet
+// from any other address gets no reply. With none set every sender is
+// answered, and a 41-byte reply to a 14-byte request makes the host a small
+// amplifier for spoofed sources, so set it on any reachable host. Call it
+// before Serve.
+func (r *Reflector) AllowFrom(prefixes []netip.Prefix) { r.allow = prefixes }
+
+func (r *Reflector) allowed(a netip.Addr) bool {
+	if len(r.allow) == 0 {
+		return true
+	}
+	a = a.Unmap()
+	return slices.ContainsFunc(r.allow, func(p netip.Prefix) bool { return p.Contains(a) })
+}
+
 // Reply builds the reflected packet for in, received from the sender at
 // from at time now with the IP TTL or hop limit ttl (UnknownTTL when not
-// read). The reply is the same length as the sender's packet, and at
+// read). A sender outside AllowFrom gets no reply. The reply is the same length as the sender's packet, and at
 // least ReflectorMinLen. ok is false for a packet that is not a
 // Session-Sender packet, which gets no reply.
 func (r *Reflector) Reply(from netip.AddrPort, ttl uint8, in []byte, now time.Time) (out []byte, ok bool) {
+	if !r.allowed(from.Addr()) {
+		return nil, false
+	}
 	sp, err := ParseSender(in)
 	if err != nil {
 		return nil, false

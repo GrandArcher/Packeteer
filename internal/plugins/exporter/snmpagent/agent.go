@@ -37,6 +37,8 @@ const (
 	maxVarbinds = 64
 	// oidUnknownEngineIDs is usmStatsUnknownEngineIDs.0 (RFC 3414).
 	oidUnknownEngineIDs = ".1.3.6.1.6.3.15.1.1.4.0"
+	// oidNotInTimeWindows is usmStatsNotInTimeWindows.0 (RFC 3414).
+	oidNotInTimeWindows = ".1.3.6.1.6.3.15.1.1.2.0"
 	// bootsEpoch makes the engine boots counter the seconds since
 	// 2020-01-01, so it grows across restarts without a state file
 	// (RFC 3414 wants a counter that does). It fits the 31 bits RFC 3411
@@ -89,6 +91,7 @@ type Agent struct {
 	// ours decodes with the agent's user, open with no keys.
 	ours, open     *gosnmp.GoSNMP
 	unknownEngines atomic.Uint32
+	notInWindow    atomic.Uint32
 
 	mu   sync.Mutex
 	conn net.PacketConn
@@ -387,6 +390,10 @@ func (a *Agent) reply(msg []byte) (out []byte) {
 	if !a.authentic(p) {
 		return nil
 	}
+	if sp, ok := p.SecurityParameters.(*gosnmp.UsmSecurityParameters); ok && p.Version == gosnmp.Version3 &&
+		p.MsgFlags&gosnmp.AuthNoPriv != 0 && !a.inTimeWindow(sp, now) {
+		return a.notInTimeWindow(p, now)
+	}
 	switch {
 	case len(p.Variables) > maxVarbinds:
 		p.Variables, p.Error, p.ErrorIndex = nil, gosnmp.TooBig, 0
@@ -437,6 +444,44 @@ func (a *Agent) discovery(p *gosnmp.SnmpPacket, now time.Time) []byte {
 	p.MsgFlags = gosnmp.NoAuthNoPriv
 	p.Error, p.ErrorIndex = gosnmp.NoError, 0
 	p.Variables = []gosnmp.SnmpPDU{{Name: oidUnknownEngineIDs, Type: gosnmp.Counter32, Value: a.unknownEngines.Add(1)}}
+	out, err := p.MarshalMsg()
+	if err != nil {
+		return nil
+	}
+	return out
+}
+
+// timeWindow is the clock difference an authenticated request may show
+// (RFC 3414 section 2.2.3).
+const timeWindow = 150
+
+// inTimeWindow is RFC 3414 section 3.2 step 7 for an authenticated
+// request: the engine boots must match and the engine time must be within
+// 150 seconds of this engine's. gosnmp checks neither, so a captured
+// request would otherwise be accepted again for as long as the agent runs.
+func (a *Agent) inTimeWindow(sp *gosnmp.UsmSecurityParameters, now time.Time) bool {
+	if sp.AuthoritativeEngineBoots != a.boots {
+		return false
+	}
+	have := int64(max(0, now.Sub(a.started)/time.Second))
+	diff := int64(sp.AuthoritativeEngineTime) - have
+	return diff >= -timeWindow && diff <= timeWindow
+}
+
+// notInTimeWindow answers an authenticated request outside the window with
+// the Report of RFC 3414 section 3.2 step 7b: authenticated, not
+// encrypted, carrying the current boots and time so the manager can
+// resynchronize and send the request again. A request that fails
+// authentication never gets here and is still dropped silently.
+func (a *Agent) notInTimeWindow(p *gosnmp.SnmpPacket, now time.Time) []byte {
+	a.stamp(p, now)
+	p.PDUType = gosnmp.Report
+	p.MsgFlags = gosnmp.AuthNoPriv
+	p.Error, p.ErrorIndex = gosnmp.NoError, 0
+	p.Variables = []gosnmp.SnmpPDU{{Name: oidNotInTimeWindows, Type: gosnmp.Counter32, Value: a.notInWindow.Add(1)}}
+	if err := a.usm.InitPacket(p); err != nil {
+		return nil
+	}
 	out, err := p.MarshalMsg()
 	if err != nil {
 		return nil

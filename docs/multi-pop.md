@@ -63,6 +63,7 @@ federation:
     peers:
       - name: pop-b
         url: https://192.0.2.20:9443
+        domain: pop-b      # the domain this peer may claim
 ```
 
 Each POP lists the other POPs' providers it may use, and gives each one a `next_hop` that its own edge routers can reach. Provider names must be the same in every POP.

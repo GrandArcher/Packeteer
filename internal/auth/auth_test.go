@@ -157,6 +157,30 @@ func TestStoreDown(t *testing.T) {
 	}
 }
 
+func TestSSOTokenLifetimeCap(t *testing.T) {
+	s, _, _ := newSvc(t, nil)
+	ctx := context.Background()
+	_, _ = s.CreateUser(ctx, "sso-user", plugin.RoleOperator, "operator-password")
+	sso := Principal{User: "sso-user", Role: plugin.RoleOperator, Method: MethodSSO}
+	pw := Principal{User: "sso-user", Role: plugin.RoleOperator, Method: MethodPassword}
+
+	if _, _, err := s.CreateToken(ctx, sso, "long", "", MaxSSOTokenTTL+time.Hour); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("SSO token over the cap: %v", err)
+	}
+	tv, _, err := s.CreateToken(ctx, sso, "default", "", 0)
+	if err != nil || tv.Expires.Sub(tv.Created) != MaxSSOTokenTTL {
+		t.Fatalf("SSO default must fall to the cap: %+v %v", tv, err)
+	}
+	tv, _, err = s.CreateToken(ctx, sso, "short", "", time.Hour)
+	if err != nil || tv.Expires.Sub(tv.Created) != time.Hour {
+		t.Fatalf("SSO short token: %+v %v", tv, err)
+	}
+	tv, _, err = s.CreateToken(ctx, pw, "local", "", 30*24*time.Hour)
+	if err != nil || tv.Expires.Sub(tv.Created) != 30*24*time.Hour {
+		t.Fatalf("a password session keeps the full range: %+v %v", tv, err)
+	}
+}
+
 func TestTokens(t *testing.T) {
 	s, _, c := newSvc(t, nil)
 	ctx := context.Background()

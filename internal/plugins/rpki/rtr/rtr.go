@@ -480,6 +480,11 @@ func decodePrefix(pdu []byte) (netip.Prefix, uint8, uint32, bool, error) {
 	if prefixLen > addr.BitLen() {
 		return netip.Prefix{}, 0, 0, false, fmt.Errorf("rtr: prefix length %d exceeds %d", prefixLen, addr.BitLen())
 	}
+	// RFC 8210 5.5: the max length lies between the prefix length and the
+	// address length. Anything else would make every covered route Invalid.
+	if maxLen := int(pdu[10]); maxLen < prefixLen || maxLen > addr.BitLen() {
+		return netip.Prefix{}, 0, 0, false, fmt.Errorf("rtr: max length %d does not fit prefix length %d of a %d-bit address", maxLen, prefixLen, addr.BitLen())
+	}
 	return netip.PrefixFrom(addr, prefixLen).Masked(), pdu[10], binary.BigEndian.Uint32(pdu[want-4 : want]), pdu[8]&1 == 1, nil
 }
 

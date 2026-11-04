@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -983,5 +984,31 @@ func TestSSHWriteStallClosesClient(t *testing.T) {
 	case <-st.closed:
 	default:
 		t.Fatal("the client was not closed")
+	}
+}
+
+func TestDecodePrefixChecksMaxLength(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		pdu  []byte
+		ok   bool
+	}{
+		{"v4 equal", ipv4PDU(t, "192.0.2.0/24", 24, 64496, true), true},
+		{"v4 longer", ipv4PDU(t, "192.0.2.0/24", 32, 64496, true), true},
+		{"v4 below prefix length", ipv4PDU(t, "192.0.2.0/24", 20, 64496, true), false},
+		{"v4 above 32", ipv4PDU(t, "192.0.2.0/24", 33, 64496, true), false},
+		{"v6 equal", ipv6PDU(t, "2001:db8::/32", 32, 64496, true), true},
+		{"v6 above 128", ipv6PDU(t, "2001:db8::/32", 129, 64496, true), false},
+		{"v6 below prefix length", ipv6PDU(t, "2001:db8::/32", 16, 64496, false), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, _, _, err := decodePrefix(tc.pdu)
+			if (err == nil) != tc.ok {
+				t.Fatalf("err = %v, want ok=%v", err, tc.ok)
+			}
+			if err != nil && !strings.Contains(err.Error(), "max length") {
+				t.Fatalf("err = %v", err)
+			}
+		})
 	}
 }

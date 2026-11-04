@@ -391,7 +391,7 @@ auth:
 |---|---|---|
 | `enabled` | `true` | Unset, it is `true` and `storage` defaults to `sqlite` when the HTTP server runs and `PACKETEER_HTTP_USER` is not set (#328). An explicit `true` requires `storage` (a plugin that keeps users, e.g. `sqlite`) and refuses to start with `PACKETEER_HTTP_USER` set. An explicit `false` keeps the single basic-auth account, or no sign-in at all: the rollback. It logs a warning at start and the UI shows a banner. |
 | `session_ttl` | `12h` | Lifetime of a session from the sign-in page or SSO, `5m`-`168h`. Sessions are in memory; a restart signs everyone out. |
-| `token_ttl` | `2160h` | API token lifetime when the request names none, `1h`-`8760h`. A request may ask for up to `8760h`. |
+| `token_ttl` | `2160h` | API token lifetime when the request names none, `1h`-`8760h`. A request may ask for up to `8760h`; a token minted from an SSO session is capped at `168h`. |
 | `sso` | none | Single sign-on plugin entry (`type: oidc`). Needs `enabled: true`. |
 
 Roles: `viewer` reads everything a dashboard or API client reads (and manages its own API tokens), `operator` also opens and closes maintenance windows, adds and removes mitigation rules, and runs the troubleshooting tools, `admin` also manages users and reads the audit log. `/healthz`, `/readyz`, the sign-in page and endpoints, and the SSO endpoints are public. The first admin comes from `PACKETEER_ADMIN_USER` and `PACKETEER_ADMIN_PASSWORD`; without a password, the first start generates one ([auth.md](auth.md#first-run)). Auth never changes what is announced: allowlist, learned-RIB check, community, NO_EXPORT, `max_improvements`, hold time, and withdraw-on-failure are the same for every role.
@@ -1145,7 +1145,7 @@ The controller side of the probe agents (#230, [agents.md](agents.md)). It serve
 | `listen` | required | `host:port` agents connect to. |
 | `cert_file`, `key_file` | required | PEM certificate and key the controller presents. |
 | `ca_file` | required | PEM CA that signs the controller's and every agent's certificate. |
-| `crl_file` | none | PEM CRL signed by a CA in `ca_file`. Read at start (an unreadable or unsigned list is an error) and again within a second of a change. A listed agent is refused and not used. |
+| `crl_file` | none | PEM CRL signed by a CA in `ca_file`. Read at start (an unreadable or unsigned list is an error) and again within a second of a change. A listed agent is refused and not used. A reload with a lower CRL Number than the loaded list from the same issuer is refused. |
 | `agents` | required | Agents that may connect, 1-256: `name` (the certificate CN or a DNS SAN, unique) and `max_pps` (packets per second sent to that agent, 1-100000, default 100). |
 | `poll_wait` | `5s` | How long an idle agent's poll is held, 100ms-30s. It is the agent's heartbeat. |
 | `max_age` | 3 x `poll_wait` | How long an agent stays usable after it last called, longer than `poll_wait`, at most 10m. |
@@ -1619,7 +1619,7 @@ curl -u "$USER:$PASS" -X DELETE http://127.0.0.1:8080/api/maintenance/api-1
 | `snmpagent` | `listen` | required | UDP `ip:port` of the read-only SNMP agent, for example `127.0.0.1:161`. Takes the `metrics` stream only, so it needs `http.listen`. See [monitoring.md](monitoring.md). |
 | | `community_env` | none | Turns on v2c: the environment variable holding the community. |
 | | `username_env` | none | Turns on v3: the environment variable holding the USM user. At least one of `community_env` and `username_env` is required. |
-| | `security_level`, `auth_protocol`, `auth_env`, `priv_protocol`, `priv_env` | `authPriv`, `SHA`, none, `AES`, none | v3 keys, as for the [`snmptrap` notifier](#notifier-snmptrap), except that `priv_protocol: DES` is refused. Passphrases are at least 8 characters. A request that asks for a lower level than `security_level` is not answered. |
+| | `security_level`, `auth_protocol`, `auth_env`, `priv_protocol`, `priv_env` | `authPriv`, `SHA`, none, `AES`, none | v3 keys, as for the [`snmptrap` notifier](#notifier-snmptrap), except that `priv_protocol: DES` is refused. Passphrases are at least 8 characters. A request that asks for a lower level than `security_level` is not answered. An authenticated request whose engine boots differ, or whose engine time is more than 150 seconds from the agent's, is answered only with a `usmStatsNotInTimeWindows` Report (RFC 3414 section 3.2), so a replayed capture gets no data and a manager that is behind resynchronizes. |
 | | `engine_id` | fixed | v3 only: the agent's engine ID, 5-32 bytes of hex. The default is the same on every install (`0x80007ed904` and `packeteer`), so set a different one on each instance an NMS polls, an HA pair included. |
 | | `enterprise_oid` | `1.3.6.1.4.1.8072.9999.9999.7717` | Base OID, as for `snmptrap`. Change it together with the `packeteer` assignment in the MIB. |
 | | `allow_from` | any | Addresses or prefixes that are answered. |
@@ -1930,10 +1930,11 @@ The built-in instance-to-instance transport (#30). Each instance serves its snap
 | `cert_file` | required | PEM certificate this instance presents, as server and as client. |
 | `key_file` | required | Its PEM private key. |
 | `ca_file` | required | PEM CA that signs every instance's certificate. A certificate from another CA is refused. |
-| `peers` | empty | Other instances: `name`, `url`, optional `server_name`. At most 64. |
+| `peers` | empty | Other instances: `name`, `url`, optional `server_name`, optional `domain`. At most 64. |
 | `name` | required | The peer's `instance`. A snapshot that names another instance is refused. |
 | `url` | required | `https://host:port`, no path. |
 | `server_name` | peer `name` | Name checked on the peer's server certificate. |
+| `domain` | any | Peer entry: pins the routing domain the peer may claim. A snapshot naming another domain is refused. Set it to the domain of that POP. A path with fewer than one packet sent, loss outside 0-100, or a negative or over-one-minute RTT or jitter is dropped whatever the pin. |
 | `allow_clients` | peer names | Certificate names (CN or DNS SAN) allowed to read this snapshot. Others get 403. |
 | `poll_interval` | `2s` | How often each peer is fetched, 100ms-1m. |
 | `timeout` | `poll_interval` | Bound on one fetch. At most `poll_interval`. |
