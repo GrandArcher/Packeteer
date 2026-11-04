@@ -39,7 +39,7 @@ func newMitControl(t *testing.T) mitControl {
 	t.Helper()
 	c, err := mitigation.New(mitigation.Config{
 		Mode: config.ModeObserve, Allowlist: []netip.Prefix{netip.MustParsePrefix("203.0.113.0/24")},
-		MaxRules: 1, DefaultTTL: time.Hour, MaxTTL: 2 * time.Hour,
+		MaxRules: 1, DefaultTTL: time.Hour, MaxTTL: 2 * time.Hour, HideWindow: 5 * time.Minute,
 	}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -126,7 +126,7 @@ func TestMitigationEndpoints(t *testing.T) {
 func TestMitigationFlowSpecRequest(t *testing.T) {
 	c, err := mitigation.New(mitigation.Config{
 		Mode: config.ModeObserve, Allowlist: []netip.Prefix{netip.MustParsePrefix("203.0.113.0/24")},
-		MaxRules: 4, DefaultTTL: time.Hour, MaxTTL: 2 * time.Hour,
+		MaxRules: 4, DefaultTTL: time.Hour, MaxTTL: 2 * time.Hour, HideWindow: 5 * time.Minute,
 	}, nil, nil)
 	if err != nil {
 		t.Fatal(err)

@@ -11,12 +11,12 @@ Packeteer can watch flow data for traffic floods and, when you tell it to, answe
 
 ## Safety
 
-- **Through mitigation only.** The detector never announces. A matched rule is a request to the mitigation controller, which applies its own `mode` (`observe` is a dry run), allowlist, `max_rules`, TTL, `packeteer_community`, the marker, and NO_EXPORT, and announces only while the exact prefix is in the learned RIB. Rule prefixes must be inside `mitigation.allowlist` at startup.
+- **Through mitigation only.** The detector never announces. A matched rule is a request to the mitigation controller, which applies its own `mode` (`observe` is a dry run), allowlist, `max_rules`, TTL, `packeteer_community`, the marker, and NO_EXPORT, and announces only when the exact prefix is in the learned RIB (a route on the wire is withdrawn once its prefix is missing for `mitigation.hide_window`). Rule prefixes must be inside `mitigation.allowlist` at startup.
 - **Exact learned prefix.** The flow source maps each destination to its covering prefix in the RIB view. The detector adds a rule only when that prefix is an exact prefix in the learned RIB (otherwise it waits: `anomaly.held`). An aggregate the flow source made up is never announced.
 - **Rate limit and cap.** `max_actions_per_hour` (default 6) caps rules added in any rolling hour; `max_active` (default 4, at most `mitigation.max_rules`) caps rules the detector holds at once. `mitigation.max_rules` still caps every mitigation route.
 - **Operators win.** The detector never replaces a rule someone else holds for the same key (`refused`), and a rule that expired or was deleted is not added again for the same anomaly.
 - **No stale intent.** The rule is removed when its anomaly clears, and it expires on its TTL in any case. When the flow source fails three rounds in a row every anomaly clears, its rule is removed, and the baselines are learned again. Baselines, anomalies, and rules live in memory only: a restart holds nothing and learns again.
-- **Withdraw on failure.** Detector rules are ordinary mitigation rules: SIGTERM withdraws them while the session is up, RIB session loss withdraws them, and a crash drops them with the session (no graceful restart).
+- **Withdraw on failure.** Detector rules are ordinary mitigation rules: SIGTERM withdraws them while the session is up, RIB session loss and the [hide window](mitigation.md#safety) withdraw them, and a crash drops them with the session (no graceful restart).
 - **HA.** A standby detects but adds no rule.
 - In-process only. There is no `exec` detector.
 

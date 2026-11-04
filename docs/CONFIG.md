@@ -705,10 +705,11 @@ Threat mitigation (#28, lab-proven only, not on a public edge): RTBH, BGP redire
 | Key | Default | Meaning |
 |---|---|---|
 | `mode` | `observe` | `observe` accepts and lists rules as a dry run and announces nothing. `inject` announces them; it also needs top-level `mode: inject`. Setting `observe` and restarting withdraws every mitigation route (rollback). |
-| `allowlist` | none | Required. The mitigation allowlist, separate from `allowlist.prefixes`: a rule's prefix must be inside one of these. A default route is rejected. A rule is announced only while the exact prefix is in the learned RIB. |
+| `allowlist` | none | Required. The mitigation allowlist, separate from `allowlist.prefixes`: a rule's prefix must be inside one of these. A default route is rejected. A rule is announced only when the exact prefix is in the learned RIB. |
 | `max_rules` | `10` | Cap on mitigation routes held at once, announced or waiting. 1-1000. An RTBH, redirect, or FlowSpec rule counts once; a FlowSpec rule with `source_countries` counts once per source network. The announcer enforces the same cap on its routes (RTBH, redirect, and FlowSpec together). Mitigation routes do not count toward `max_improvements`. |
 | `default_ttl` | `1h` (or `max_ttl` when shorter) | Lifetime of a rule whose request names no `ttl`. At least 1s, at most `max_ttl`. |
 | `max_ttl` | `24h` | Longest `ttl` a request may ask for. 1s-168h. Every rule expires. |
+| `hide_window` | `5m` | How long a route on the wire is kept while its prefix is missing from a ready RIB, 1m-168h. The edge stops sending a prefix once the mitigation route wins, so a short gap is kept; after `hide_window` the route is withdrawn and the rule waits for the prefix ([mitigation.md](mitigation.md#safety)). |
 | `local_pref` | top-level `local_pref` | Local preference on mitigation routes. Keep it above the edge's native routes. |
 | `geoip_db` | none | Absolute path to a MaxMind-format country database you mount (for example `GeoLite2-Country.mmdb`). FlowSpec rules with `source_countries` need it; each country is expanded to its networks (merged where adjacent) when the rule is added. None is shipped; [`geoip`](#geoip) can download one. Unreadable at startup: Packeteer refuses to start. |
 | `announcer` | none | `inject`: required. In-process only: `type: gobgp` (see [Mitigation announcer `gobgp`](#mitigation-announcer-gobgp)). In `observe` it is optional and only supplies the catalog (redirect targets). |

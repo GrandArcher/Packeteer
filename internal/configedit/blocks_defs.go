@@ -225,6 +225,7 @@ var blockDefs = []Block{
 			field("max_rules", "Rule cap", "Mitigation routes held at once, announced or waiting.", KindInt).rng(1, 1000).dflt("10"),
 			field("default_ttl", "Default lifetime", "Lifetime of a rule that names none.", KindDuration).rng(1, week).dflt("1h").adv(),
 			field("max_ttl", "Longest lifetime", "Longest lifetime a request may ask for.", KindDuration).rng(1, week).dflt("24h").adv(),
+			field("hide_window", "Hide window", "How long a route on the wire stays while its prefix is missing from the learned RIB.", KindDuration).rng(60, week).dflt("5m").adv(),
 			field("local_pref", "Local preference", "On mitigation routes. Empty uses the main one.", KindInt).rng(0, u32Max).adv(),
 			field("geoip_db", "GeoIP database", "Absolute path of a country database mounted in the container, for source-country rules.", KindString).check("abspath").adv(),
 		},
