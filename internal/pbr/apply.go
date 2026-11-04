@@ -2,6 +2,7 @@ package pbr
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/netip"
 	"os/exec"
@@ -38,6 +39,9 @@ type Step struct {
 	// earlier and no provider needs now.
 	Remove bool
 	Args   []string
+	// Undo is the command that reverses Args; Apply runs it when a later
+	// step fails.
+	Undo []string
 }
 
 // String is the command line, as the diff shows it.
@@ -78,7 +82,8 @@ func managed(prio, table int) bool {
 }
 
 // parseRules reads `ip rule show`. A line it cannot read is skipped: an
-// unreadable rule is never one of ours to delete.
+// unreadable rule is never one of ours to delete. Table names are only
+// readable when ip printed numbers (-N); see showRules.
 func parseRules(out string) []rule {
 	var rules []rule
 	for _, line := range strings.Split(out, "\n") {
@@ -112,7 +117,11 @@ func parseRules(out string) []rule {
 			case "lookup", "table":
 				if i+1 < len(f) {
 					i++
-					r.table, _ = strconv.Atoi(f[i])
+					n, err := strconv.Atoi(f[i])
+					if err != nil {
+						other = true // a table name, when ip had no -N: not readable as ours
+					}
+					r.table = n
 				}
 			default:
 				// Any other selector (iif, to, tos, ...) is not a rule this package wrote.
@@ -144,11 +153,22 @@ type host struct {
 	tables map[int]string // default next hop by table
 }
 
+// showRules runs `ip rule show` with numeric table ids, so a table the
+// operator named in rt_tables still matches a rule Packeteer wrote. An ip
+// that does not take -N is asked again without it.
+func showRules(ctx context.Context, run Exec, fam []string) (string, error) {
+	out, err := run(ctx, append(slices.Clone(fam), "-N", "rule", "show")...)
+	if err == nil {
+		return out, nil
+	}
+	return run(ctx, append(slices.Clone(fam), "rule", "show")...)
+}
+
 func readHost(ctx context.Context, run Exec, v4, v6 bool) (map[bool]*host, error) {
 	have := map[bool]*host{}
 	for _, six := range []bool{false, true} {
 		fam := famArgs(six)
-		out, err := run(ctx, append(slices.Clone(fam), "rule", "show")...)
+		out, err := showRules(ctx, run, fam)
 		if err != nil {
 			if (six && !v6) || (!six && !v4) {
 				continue // a family nothing uses may be absent from the kernel
@@ -188,6 +208,11 @@ func desired(entries []Entry) (rules map[bool][]rule, routes map[bool]map[int]st
 	return rules, routes
 }
 
+// routeArgs is `ip route <verb> default via <via> table <table>`.
+func routeArgs(fam []string, verb, via string, table int) []string {
+	return append(slices.Clone(fam), "route", verb, "default", "via", via, "table", strconv.Itoa(table))
+}
+
 // Plan lists the ip commands that make the host match entries, and removes
 // what an earlier run set up for a provider that is gone. A DSCP-only
 // provider needs an nftables rule, which this package does not apply.
@@ -216,11 +241,32 @@ func Plan(ctx context.Context, run Exec, entries []Entry) ([]Step, error) {
 		if h == nil {
 			h = &host{tables: map[int]string{}}
 		}
-		// Delete first, so a rule moved to another priority never overlaps
-		// with its old copy.
+		// Add before delete: a rule is never removed before the rules that
+		// replace it are in. A rule moved to another priority, or a provider
+		// renumbered by a removal, briefly has both. A table that gets a new
+		// next hop is shared with the old rules that point at it until they
+		// go, which is why Apply rolls back a failed run.
+		for _, e := range entries {
+			if e.Source.Is6() != six {
+				continue
+			}
+			table := tableBase + e.N
+			if h.tables[table] != e.NextHop.String() {
+				undo := routeArgs(fam, "del", e.NextHop.String(), table)
+				if prev := h.tables[table]; prev != "" {
+					undo = routeArgs(fam, "replace", prev, table)
+				}
+				steps = append(steps, Step{Args: routeArgs(fam, "replace", e.NextHop.String(), table), Undo: undo})
+			}
+		}
+		for _, r := range wantRules[six] {
+			if !slices.Contains(h.rules, r) {
+				steps = append(steps, Step{Args: r.args("add", fam), Undo: r.args("del", fam)})
+			}
+		}
 		for _, r := range h.rules {
 			if !slices.Contains(wantRules[six], r) {
-				steps = append(steps, Step{Remove: true, Args: r.args("del", fam)})
+				steps = append(steps, Step{Remove: true, Args: r.args("del", fam), Undo: r.args("add", fam)})
 			}
 		}
 		var stale []int
@@ -232,35 +278,39 @@ func Plan(ctx context.Context, run Exec, entries []Entry) ([]Step, error) {
 		slices.Sort(stale)
 		for _, table := range stale {
 			if via := h.tables[table]; via != "" {
-				steps = append(steps, Step{Remove: true, Args: append(slices.Clone(fam), "route", "del", "default", "via", via, "table", strconv.Itoa(table))})
-			}
-		}
-		for _, e := range entries {
-			if e.Source.Is6() != six {
-				continue
-			}
-			table := tableBase + e.N
-			if h.tables[table] != e.NextHop.String() {
-				steps = append(steps, Step{Args: append(slices.Clone(fam), "route", "replace", "default", "via", e.NextHop.String(), "table", strconv.Itoa(table))})
-			}
-		}
-		for _, r := range wantRules[six] {
-			if !slices.Contains(h.rules, r) {
-				steps = append(steps, Step{Args: r.args("add", fam)})
+				steps = append(steps, Step{Remove: true, Args: routeArgs(fam, "del", via, table), Undo: routeArgs(fam, "replace", via, table)})
 			}
 		}
 	}
 	return steps, nil
 }
 
-// Apply runs the steps in order and stops at the first failure.
+// Apply runs the steps in order. When one fails it undoes the steps that
+// already ran, newest first, so the host is back where it started rather
+// than half changed; an undo that fails is reported with the error.
 func Apply(ctx context.Context, run Exec, steps []Step) error {
-	for _, s := range steps {
+	for i, s := range steps {
 		if _, err := run(ctx, s.Args...); err != nil {
-			return err
+			return errors.Join(err, rollback(ctx, run, steps[:i]))
 		}
 	}
 	return nil
+}
+
+// rollback runs the Undo of each done step, newest first. It ignores a
+// cancelled ctx: the undo is what keeps the host consistent.
+func rollback(ctx context.Context, run Exec, done []Step) error {
+	ctx = context.WithoutCancel(ctx)
+	var errs []error
+	for i := len(done) - 1; i >= 0; i-- {
+		if done[i].Undo == nil {
+			continue
+		}
+		if _, err := run(ctx, done[i].Undo...); err != nil {
+			errs = append(errs, fmt.Errorf("rollback: %w", err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // Verify asks the kernel which way a packet from each entry's source (with

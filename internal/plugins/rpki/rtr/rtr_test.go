@@ -20,12 +20,12 @@ func contextWithTimeout(d time.Duration) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), d)
 }
 
-func mustPrefix(t *testing.T, s string) netip.Prefix {
+func mustPrefix(t testing.TB, s string) netip.Prefix {
 	t.Helper()
 	return netip.MustParsePrefix(s)
 }
 
-func ipv4PDU(t *testing.T, prefix string, maxLen uint8, asn uint32, announce bool) []byte {
+func ipv4PDU(t testing.TB, prefix string, maxLen uint8, asn uint32, announce bool) []byte {
 	t.Helper()
 	p := mustPrefix(t, prefix)
 	b := make([]byte, 20)
@@ -41,7 +41,7 @@ func ipv4PDU(t *testing.T, prefix string, maxLen uint8, asn uint32, announce boo
 	return b
 }
 
-func ipv6PDU(t *testing.T, prefix string, maxLen uint8, asn uint32, announce bool) []byte {
+func ipv6PDU(t testing.TB, prefix string, maxLen uint8, asn uint32, announce bool) []byte {
 	t.Helper()
 	p := mustPrefix(t, prefix)
 	b := make([]byte, 32)

@@ -513,12 +513,12 @@ func TestConfigValidation(t *testing.T) {
 		want string
 	}{
 		{"no servers", map[string]any{}, "servers is required"},
-		{"bad name", map[string]any{"servers": []map[string]any{{"name": "-x", "url": "http://192.0.2.1", "asn": 1}}}, "name is invalid"},
+		{"bad name", map[string]any{"servers": []map[string]any{{"name": "-x", "url": "http://192.0.2.1", "asn": 64496}}}, "name is invalid"},
 		{"duplicate", map[string]any{"servers": []map[string]any{good, good}}, "duplicated"},
 		{"no asn", map[string]any{"servers": []map[string]any{{"name": "a", "url": "http://192.0.2.1"}}}, "asn is required"},
-		{"userinfo", map[string]any{"servers": []map[string]any{{"name": "a", "url": "http://u:p@192.0.2.1", "asn": 1}}}, "no userinfo"},
-		{"query", map[string]any{"servers": []map[string]any{{"name": "a", "url": "http://192.0.2.1/?apikey=x", "asn": 1}}}, "no userinfo, query"},
-		{"scheme", map[string]any{"servers": []map[string]any{{"name": "a", "url": "ftp://192.0.2.1", "asn": 1}}}, "http or https"},
+		{"userinfo", map[string]any{"servers": []map[string]any{{"name": "a", "url": "http://u:p@192.0.2.1", "asn": 64496}}}, "no userinfo"},
+		{"query", map[string]any{"servers": []map[string]any{{"name": "a", "url": "http://192.0.2.1/?apikey=x", "asn": 64496}}}, "no userinfo, query"},
+		{"scheme", map[string]any{"servers": []map[string]any{{"name": "a", "url": "ftp://192.0.2.1", "asn": 64496}}}, "http or https"},
 		{"interval", map[string]any{"servers": []map[string]any{good}, "interval": "10s"}, "interval"},
 		{"timeout", map[string]any{"servers": []map[string]any{good}, "timeout": "10m"}, "timeout"},
 		{"workers", map[string]any{"servers": []map[string]any{good}, "workers": 99}, "workers"},

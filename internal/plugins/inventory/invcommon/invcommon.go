@@ -37,7 +37,9 @@ const (
 )
 
 // Common is the config block both plugins decode. Tag is required so that
-// the plugin never imports every record of a large system of record.
+// the plugin never keeps every record of a large system of record. NetBox
+// filters by it on the server; Peering Manager has no documented filter, so
+// that plugin reads every autonomous system and filters here.
 type Common struct {
 	BaseURL string        `yaml:"base_url"`
 	Tag     string        `yaml:"tag"`

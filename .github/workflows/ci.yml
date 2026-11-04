@@ -32,6 +32,15 @@ jobs:
         run: |
           go test -run '^$' -fuzz '^FuzzDecodeIPFIX$' -fuzztime 15s ./internal/plugins/source/flow/
           go test -run '^$' -fuzz '^FuzzDecodeV9$' -fuzztime 15s ./internal/plugins/source/flow/
+      - name: fuzz the other wire parsers (#510; NetFlow v5, sFlow, BMP, RTR, SNMP BER, TWAMP, pcap)
+        run: |
+          go test -run '^$' -fuzz '^FuzzDecodeV5$' -fuzztime 10s ./internal/plugins/source/flow/
+          go test -run '^$' -fuzz '^FuzzSFlow$' -fuzztime 10s ./internal/plugins/source/flow/
+          go test -run '^$' -fuzz '^FuzzBMPStream$' -fuzztime 10s ./internal/plugins/ribsource/bmp/
+          go test -run '^$' -fuzz '^FuzzRTRStream$' -fuzztime 10s ./internal/plugins/rpki/rtr/
+          go test -run '^$' -fuzz '^FuzzBER$' -fuzztime 10s ./internal/plugins/exporter/snmpagent/
+          go test -run '^$' -fuzz '^FuzzParse$' -fuzztime 10s ./internal/twamp/
+          go test -run '^$' -fuzz '^FuzzPcap$' -fuzztime 10s ./internal/plugins/source/span/
       - name: upgrade e2e (#196; binary install, bad signature and checksum, upgrade in place, rollback, observe)
         run: MODE=bin bash lab/e2e-upgrade.sh
       - name: icmp prober with raw sockets (root)

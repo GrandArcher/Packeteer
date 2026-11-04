@@ -103,7 +103,7 @@ func (s *Server) handlePreflightConfirm(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 	case err != nil:
 		s.log.Error("preflight confirm", "err", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "the confirmation failed"})
 	default:
 		noteAudit(r, "preflight", "confirmed "+req.ID)
 		writeJSON(w, http.StatusOK, rep)
@@ -200,7 +200,7 @@ func (s *Server) preflightGate(w http.ResponseWriter, r *http.Request, enablesIn
 		})
 	default:
 		s.log.Error("preflight gate", "err", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "the preflight gate failed: " + err.Error()})
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "the preflight gate failed"})
 	}
 	return false
 }

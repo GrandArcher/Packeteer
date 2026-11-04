@@ -3,6 +3,7 @@ package pbr
 import (
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -18,12 +19,29 @@ type fakeHost struct {
 	rules  []string            // "2001:\tfrom 192.0.2.11 lookup 1001"
 	routes map[string]string   // "4 1001" or "6 1001" -> next hop
 	log    []string            // every changing command, in order
-	fail   map[string]struct{} // commands (joined) that fail
+	fail   map[string]struct{} // commands (joined, without -N) that fail
+	// noNumeric makes `ip -N` an error, as an ip without that option does.
+	noNumeric bool
+	// names print a table id as its rt_tables name unless -N is given.
+	names map[string]string
 }
 
 func newHost() *fakeHost { return &fakeHost{routes: map[string]string{}, fail: map[string]struct{}{}} }
 
 func (h *fakeHost) exec(_ context.Context, args ...string) (string, error) {
+	numeric := false
+	var plain []string
+	for _, a := range args {
+		if a == "-N" {
+			if h.noNumeric {
+				return "", fmt.Errorf("ip: invalid option -- N")
+			}
+			numeric = true
+			continue
+		}
+		plain = append(plain, a)
+	}
+	args = plain
 	line := strings.Join(args, " ")
 	if _, bad := h.fail[line]; bad {
 		return "", fmt.Errorf("ip %s: RTNETLINK answers: File exists", line)
@@ -38,6 +56,9 @@ func (h *fakeHost) exec(_ context.Context, args ...string) (string, error) {
 		var b strings.Builder
 		for _, r := range h.rules {
 			if isSix(strings.Fields(r)[2]) == (fam == "6") {
+				if name := h.names[r[strings.LastIndex(r, " ")+1:]]; name != "" && !numeric {
+					r = r[:strings.LastIndex(r, " ")+1] + name
+				}
 				b.WriteString(r + "\n")
 			}
 		}
@@ -49,17 +70,19 @@ func (h *fakeHost) exec(_ context.Context, args ...string) (string, error) {
 		return "", nil
 	case args[0] == "rule" && args[1] == "add":
 		h.log = append(h.log, line)
-		prio := args[slices.Index(args, "priority")+1]
-		sel := "from " + args[3]
-		if i := slices.Index(args, "fwmark"); i >= 0 {
-			m, _ := strconv.Atoi(args[i+1])
-			sel += fmt.Sprintf(" fwmark %#x", m)
+		add := ruleLine(args)
+		if slices.Contains(h.rules, add) {
+			return "", fmt.Errorf("ip %s: RTNETLINK answers: File exists", line)
 		}
-		h.rules = append(h.rules, prio+":\t"+sel+" lookup "+args[slices.Index(args, "lookup")+1])
+		h.rules = append(h.rules, add)
 	case args[0] == "rule" && args[1] == "del":
 		h.log = append(h.log, line)
-		prio := args[slices.Index(args, "priority")+1] + ":"
-		h.rules = slices.DeleteFunc(h.rules, func(r string) bool { return strings.HasPrefix(r, prio) })
+		want := ruleLine(args)
+		n := len(h.rules)
+		h.rules = slices.DeleteFunc(h.rules, func(r string) bool { return r == want })
+		if len(h.rules) == n {
+			return "", fmt.Errorf("ip %s: RTNETLINK answers: No such file or directory", line)
+		}
 	case args[0] == "route" && args[1] == "replace":
 		h.log = append(h.log, line)
 		h.routes[fam+" "+args[len(args)-1]] = args[4]
@@ -78,6 +101,16 @@ func (h *fakeHost) exec(_ context.Context, args ...string) (string, error) {
 		return args[2] + " dev eth0\n", nil
 	}
 	return "", nil
+}
+
+// ruleLine is how ip rule show prints the rule an `ip rule add|del` names.
+func ruleLine(args []string) string {
+	sel := "from " + args[3]
+	if i := slices.Index(args, "fwmark"); i >= 0 {
+		m, _ := strconv.Atoi(args[i+1])
+		sel += fmt.Sprintf(" fwmark %#x", m)
+	}
+	return args[slices.Index(args, "priority")+1] + ":\t" + sel + " lookup " + args[slices.Index(args, "lookup")+1]
 }
 
 func entries(t *testing.T, providers string) []Entry {
@@ -225,15 +258,16 @@ func TestPlanRefusals(t *testing.T) {
 	}
 }
 
-func TestApplyStopsAtTheFirstFailure(t *testing.T) {
+func TestApplyUndoesWhatRanBeforeTheFailure(t *testing.T) {
 	h := newHost()
 	h.fail["route replace default via 192.0.2.2 table 1002"] = struct{}{}
 	err := Apply(context.Background(), h.exec, mustPlan(t, h, entries(t, twoProviders)))
 	if err == nil || !strings.Contains(err.Error(), "File exists") {
 		t.Fatalf("apply = %v", err)
 	}
-	if len(h.log) != 1 || len(h.rules) != 0 {
-		t.Fatalf("ran %v after the failure, rules %v", h.log, h.rules)
+	want := []string{"route replace default via 192.0.2.1 table 1001", "route del default via 192.0.2.1 table 1001"}
+	if !slices.Equal(h.log, want) || len(h.rules) != 0 || len(h.routes) != 0 {
+		t.Fatalf("ran %v after the failure (want the first step and its undo), rules %v, routes %v", h.log, h.rules, h.routes)
 	}
 }
 
@@ -260,13 +294,180 @@ func TestParseRulesKeepsOnlyRulesItCanReadBack(t *testing.T) {
 	for _, r := range got {
 		seen = append(seen, fmt.Sprintf("%d %s %d %d", r.prio, r.from, r.mark, r.table))
 	}
-	// "lookup local" has no numeric table, and a rule with an iif selector is
-	// not one this package wrote.
-	want := []string{"0 all 0 0", "2001 192.0.2.11 7 1001"}
+	// "lookup local" is a table name, and a rule with an iif selector is not
+	// one this package wrote.
+	want := []string{"2001 192.0.2.11 7 1001"}
 	if !slices.Equal(seen, want) {
 		t.Fatalf("rules = %v, want %v", seen, want)
 	}
 	if managed(0, 0) || !managed(2001, 1001) || managed(2001, 5000) || managed(1001, 1001) {
 		t.Fatal("managed ranges are wrong")
+	}
+}
+
+// without is the entries minus the one at index i, numbered as Entries does.
+func without(es []Entry, i int) []Entry {
+	out := slices.Delete(slices.Clone(es), i, i+1)
+	for j := range out {
+		out[j].N = j + 1
+	}
+	return out
+}
+
+func rest(es []Entry) []Entry { return without(es, 0) }
+
+const threeProviders = `
+  - {name: transit-a, source_ip: 192.0.2.11, next_hop: 192.0.2.1}
+  - {name: transit-b, source_ip: 192.0.2.12, next_hop: 192.0.2.2, fwmark: 7}
+  - {name: transit-c, source_ip: 192.0.2.13, next_hop: 192.0.2.3}
+`
+
+// Removing the first provider renumbers the rest. The new rules go in before
+// the old ones come out, and the stale table is cleaned last.
+func TestPlanAddsBeforeItDeletes(t *testing.T) {
+	h := newHost()
+	es := entries(t, twoProviders)
+	if err := Apply(context.Background(), h.exec, mustPlan(t, h, es)); err != nil {
+		t.Fatal(err)
+	}
+	got := plan(t, h, rest(es))
+	want := []string{
+		"+ ip route replace default via 192.0.2.2 table 1001",
+		"+ ip rule add from 192.0.2.12 fwmark 7 lookup 1001 priority 2001",
+		"- ip rule del from 192.0.2.11 lookup 1001 priority 2001",
+		"- ip rule del from 192.0.2.12 fwmark 7 lookup 1002 priority 2002",
+		"- ip route del default via 192.0.2.2 table 1002",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("plan =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	if err := Apply(context.Background(), h.exec, mustPlan(t, h, rest(es))); err != nil {
+		t.Fatal(err)
+	}
+	if got := plan(t, h, rest(es)); len(got) != 0 {
+		t.Fatalf("plan after the renumbering = %v", got)
+	}
+	if errs := Verify(context.Background(), h.exec, rest(es)); len(errs) != 0 {
+		t.Fatalf("verify = %v", errs)
+	}
+}
+
+// Removing provider a gives table 1002 a new next hop while b's old rule
+// still points at it. A failure after that step puts everything back, so b is
+// never left measured through c's path.
+func TestFailedApplyRollsBack(t *testing.T) {
+	h := newHost()
+	es := entries(t, threeProviders)
+	if err := Apply(context.Background(), h.exec, mustPlan(t, h, es)); err != nil {
+		t.Fatal(err)
+	}
+	rules, routes := slices.Clone(h.rules), maps.Clone(h.routes)
+	kept := rest(es)
+	h.fail["rule add from 192.0.2.12 fwmark 7 lookup 1001 priority 2001"] = struct{}{}
+	err := Apply(context.Background(), h.exec, mustPlan(t, h, kept))
+	if err == nil || !strings.Contains(err.Error(), "File exists") || strings.Contains(err.Error(), "rollback") {
+		t.Fatalf("apply = %v", err)
+	}
+	slices.Sort(rules)
+	slices.Sort(h.rules)
+	if !slices.Equal(h.rules, rules) || !maps.Equal(h.routes, routes) {
+		t.Fatalf("host not restored: rules %q routes %v, want %q %v", h.rules, h.routes, rules, routes)
+	}
+	if errs := Verify(context.Background(), h.exec, es); len(errs) != 0 {
+		t.Fatalf("a provider lost its path: %v", errs)
+	}
+	delete(h.fail, "rule add from 192.0.2.12 fwmark 7 lookup 1001 priority 2001")
+	if err := Apply(context.Background(), h.exec, mustPlan(t, h, kept)); err != nil {
+		t.Fatal(err)
+	}
+	if got := plan(t, h, kept); len(got) != 0 {
+		t.Fatalf("plan after the rerun = %v", got)
+	}
+}
+
+// A failure at the last step, the stale route delete, undoes the rule adds
+// and deletes before it.
+func TestFailedLastStepUndoesRuleChanges(t *testing.T) {
+	h := newHost()
+	es := entries(t, threeProviders)
+	if err := Apply(context.Background(), h.exec, mustPlan(t, h, es)); err != nil {
+		t.Fatal(err)
+	}
+	rules, routes := slices.Clone(h.rules), maps.Clone(h.routes)
+	kept := rest(es)
+	h.fail["route del default via 192.0.2.3 table 1003"] = struct{}{}
+	if err := Apply(context.Background(), h.exec, mustPlan(t, h, kept)); err == nil {
+		t.Fatal("apply did not fail")
+	}
+	slices.Sort(rules)
+	slices.Sort(h.rules)
+	if !slices.Equal(h.rules, rules) || !maps.Equal(h.routes, routes) {
+		t.Fatalf("host not restored: rules %q routes %v, want %q %v", h.rules, h.routes, rules, routes)
+	}
+}
+
+// An undo that fails is reported next to the error that started it.
+func TestFailedRollbackIsReported(t *testing.T) {
+	h := newHost()
+	h.fail["route del default via 192.0.2.1 table 1001"] = struct{}{}
+	h.fail["route replace default via 192.0.2.2 table 1002"] = struct{}{}
+	err := Apply(context.Background(), h.exec, mustPlan(t, h, entries(t, twoProviders)))
+	if err == nil || !strings.Contains(err.Error(), "rollback: ") || !strings.Contains(err.Error(), "File exists") {
+		t.Fatalf("apply = %v", err)
+	}
+}
+
+// A table the operator named in rt_tables is still Packeteer's: with -N the
+// rule reads back and the plan is empty, where it used to re-add the rule.
+func TestPlanReadsRulesWhoseTableHasAName(t *testing.T) {
+	h := newHost()
+	h.names = map[string]string{"1001": "transit_a", "1002": "transit_b"}
+	es := entries(t, twoProviders)
+	if err := Apply(context.Background(), h.exec, mustPlan(t, h, es)); err != nil {
+		t.Fatal(err)
+	}
+	if out, _ := h.exec(context.Background(), "rule", "show"); !strings.Contains(out, "lookup transit_a") {
+		t.Fatalf("the fake host prints no names: %q", out)
+	}
+	if got := plan(t, h, es); len(got) != 0 {
+		t.Fatalf("plan = %v, want nothing to do", got)
+	}
+	if got := plan(t, h, es[:1]); len(got) != 2 || !strings.HasPrefix(got[0], "- ip rule del from 192.0.2.12") {
+		t.Fatalf("plan to remove transit-b = %v", got)
+	}
+}
+
+// An ip that refuses -N is read without it.
+func TestPlanFallsBackWhenIPRefusesNumeric(t *testing.T) {
+	h := newHost()
+	h.noNumeric = true
+	es := entries(t, twoProviders)
+	if err := Apply(context.Background(), h.exec, mustPlan(t, h, es)); err != nil {
+		t.Fatal(err)
+	}
+	if got := plan(t, h, es); len(got) != 0 {
+		t.Fatalf("plan = %v, want nothing to do", got)
+	}
+	h.fail["rule show"] = struct{}{}
+	if _, err := Plan(context.Background(), h.exec, es); err == nil {
+		t.Fatal("planned without reading the host")
+	}
+}
+
+func TestPlanThreeProvidersRemoveTheMiddleOne(t *testing.T) {
+	h := newHost()
+	es := entries(t, threeProviders)
+	if err := Apply(context.Background(), h.exec, mustPlan(t, h, es)); err != nil {
+		t.Fatal(err)
+	}
+	kept := without(es, 1)
+	if err := Apply(context.Background(), h.exec, mustPlan(t, h, kept)); err != nil {
+		t.Fatal(err)
+	}
+	if got := plan(t, h, kept); len(got) != 0 {
+		t.Fatalf("plan = %v", got)
+	}
+	if errs := Verify(context.Background(), h.exec, kept); len(errs) != 0 {
+		t.Fatalf("verify = %v", errs)
 	}
 }

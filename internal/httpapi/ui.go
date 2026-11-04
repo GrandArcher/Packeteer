@@ -112,7 +112,7 @@ func (s *Server) handleSetupSkip(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.firstRun.Complete(); err != nil {
 		s.log.Warn("first-run setup: cannot remove the pending file; setup shows again after a restart", "err", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "setup is skipped for now, but the pending file cannot be removed, so it shows again after a restart: " + err.Error()})
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "setup is skipped for now, but the pending file cannot be removed, so it shows again after a restart"})
 		return
 	}
 	noteAudit(r, "setup", "first-run setup skipped")
@@ -265,7 +265,7 @@ func (s *Server) handleConfigSave(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnprocessableEntity, body)
 	default:
 		s.log.Error("config editor write", "err", err)
-		body["error"] = "cannot write the config file (is it mounted read-only?): " + err.Error()
+		body["error"] = "cannot write the config file (is it mounted read-only?)"
 		writeJSON(w, http.StatusInternalServerError, body)
 	}
 }
@@ -717,6 +717,6 @@ func (s *Server) handleSubscriptionSend(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
 	default:
 		s.log.Warn("report subscription send now", "name", r.PathValue("name"), "err", err)
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "send failed: " + err.Error()})
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "send failed"})
 	}
 }

@@ -24,7 +24,7 @@ fmt-check:
 	@unformatted="$$(gofmt -l .)"; if [ -n "$$unformatted" ]; then echo "gofmt needed on:"; echo "$$unformatted"; exit 1; fi
 
 test: build vet fmt-check
-	go test ./...
+	scripts/test-summary.sh
 
 race:
 	go test -race ./...

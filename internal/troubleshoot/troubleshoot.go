@@ -478,28 +478,37 @@ func (t *Tools) waitPacket(ctx context.Context, target netip.Addr) error {
 	return t.opt.PacketLimiter.WaitN(ctx, 1)
 }
 
+// probeOne walks the prober chain as the probe engine does (runChain): the
+// first prober with a reply wins, the first zero-reply result is kept as the
+// fallback, and a lost probe source ends the walk with that error.
 func (t *Tools) probeOne(ctx context.Context, p probe.Provider, target netip.Addr) probe.Result {
 	res := probe.Result{Provider: p.Name, Prefix: netip.PrefixFrom(target, target.BitLen()), Target: target}
 	req := p.Request(target, t.opt.Packets, t.opt.Timeout)
 	var errs []error
+	var fallback *probe.Result
 	for _, pr := range t.opt.Probers {
 		pctx, cancel := context.WithTimeout(ctx, time.Duration(t.opt.Packets)*t.opt.Timeout+time.Second)
 		raw, err := pr.Prober.Probe(pctx, req)
 		cancel()
 		if err != nil {
-			errs = append(errs, fmt.Errorf("%s: %w", pr.Name, err))
 			if errors.Is(err, plugin.ErrSourceUnavailable) {
-				break
+				res.Err, res.Time = fmt.Sprintf("%s: %v", pr.Name, err), t.opt.Now()
+				return res
 			}
+			errs = append(errs, fmt.Errorf("%s: %w", pr.Name, err))
 			continue
 		}
-		res.Prober, res.Stats, res.Time = pr.Name, probe.Compute(raw), t.opt.Now()
-		if res.Stats.Received > 0 {
-			return res
+		r := res
+		r.Prober, r.Stats, r.Time = pr.Name, probe.Compute(raw), t.opt.Now()
+		if r.Stats.Received > 0 {
+			return r
+		}
+		if fallback == nil {
+			fallback = &r
 		}
 	}
-	if res.Prober != "" {
-		return res
+	if fallback != nil {
+		return *fallback
 	}
 	res.Err, res.Time = errors.Join(errs...).Error(), t.opt.Now()
 	return res

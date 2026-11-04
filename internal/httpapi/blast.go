@@ -97,7 +97,7 @@ func (s *Server) blastReply(w http.ResponseWriter, err error) bool {
 		writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error(), "code": "no_round"})
 	default:
 		s.log.Error("blast preview", "err", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "the preview failed: " + err.Error()})
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "the preview failed"})
 	}
 	return false
 }

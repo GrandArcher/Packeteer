@@ -70,8 +70,7 @@ func TestWhatIfEndpoint(t *testing.T) {
 	if rec, _ := e.do(t, "POST", "/api/whatif", plugin.RoleAdmin, body); rec.Code == http.StatusInternalServerError {
 		t.Fatalf("a client disconnect is a server error: %d %s", rec.Code, rec.Body)
 	}
-	f.err = errors.New("disk")
-	if rec, _ := e.do(t, "POST", "/api/whatif", plugin.RoleAdmin, body); rec.Code != http.StatusInternalServerError {
-		t.Fatalf("other error: %d", rec.Code)
-	}
+	f.err = errors.New(leakyDetail)
+	rec, _ = e.do(t, "POST", "/api/whatif", plugin.RoleAdmin, body)
+	noDetail(t, "what-if", rec.Code, http.StatusInternalServerError, rec.Body.String())
 }

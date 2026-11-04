@@ -40,16 +40,15 @@ func TestMaxPrefixesTruncationCounted(t *testing.T) {
 		octets uint32
 	}
 	// Two cells fill the bucket. Equal bytes never displace one, so the
-	// other two prefixes are refused.
-	s.ingest(t0, exp, v5proto(rec{"198.51.100.10", 17, 100}, rec{"203.0.113.10", 17, 100},
-		rec{"192.0.2.77", 17, 100}, rec{"198.18.0.9", 17, 100}))
-	if got := s.Truncated()["max_prefixes"]; got != 2 {
-		t.Fatalf("truncated = %d, want 2 refused", got)
+	// third prefix is refused.
+	s.ingest(t0, exp, v5proto(rec{"198.51.100.10", 17, 100}, rec{"203.0.113.10", 17, 100}, rec{"192.0.2.77", 17, 100}))
+	if got := s.Truncated()["max_prefixes"]; got != 1 {
+		t.Fatalf("truncated = %d, want 1 refused", got)
 	}
 	// A larger prefix takes a cell by evicting one: the eviction counts too.
 	s.ingest(t0, exp, v5proto(rec{"192.0.2.77", 17, 5000}))
-	if got := s.Truncated()["max_prefixes"]; got != 3 {
-		t.Fatalf("truncated = %d, want 3 (2 refused + 1 evicted)", got)
+	if got := s.Truncated()["max_prefixes"]; got != 2 {
+		t.Fatalf("truncated = %d, want 2 (1 refused + 1 evicted)", got)
 	}
 	if top := s.win.top(t0, 1, 0); len(top) != 1 || top[0].prefix != netip.MustParsePrefix("192.0.2.0/24") {
 		t.Fatalf("the larger prefix did not take a cell: %+v", top)

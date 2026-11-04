@@ -3,6 +3,7 @@ package troubleshoot
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/netip"
 	"slices"
 	"strings"
@@ -443,5 +444,55 @@ func TestOptimizeUnavailableCases(t *testing.T) {
 	}
 	if len(q.got) != 0 {
 		t.Fatalf("queued %v", q.got)
+	}
+}
+
+// scriptedProber answers every probe with one fixed outcome.
+type scriptedProber struct {
+	plugin.Base
+	replies int
+	err     error
+}
+
+func (s scriptedProber) Probe(_ context.Context, r plugin.ProbeRequest) (plugin.ProbeResult, error) {
+	if s.err != nil {
+		return plugin.ProbeResult{}, s.err
+	}
+	res := plugin.ProbeResult{Sent: r.Count}
+	for i := 0; i < s.replies; i++ {
+		res.RTTs = append(res.RTTs, 10*time.Millisecond)
+	}
+	return res, nil
+}
+
+// probeOne follows the probe engine's chain: the first prober that gets a
+// reply wins, the first silent one is kept when none does, and a lost probe
+// source is an error, not a quiet result.
+func TestProbeOneFollowsTheEngineChain(t *testing.T) {
+	chain := func(ps ...probe.NamedProber) probe.Result {
+		tl := New(Options{Enabled: true, Providers: provs, Probers: ps, Packets: 4, Timeout: 10 * time.Millisecond})
+		return tl.probeOne(context.Background(), provs[0], addr("198.51.100.7"))
+	}
+	silentA := probe.NamedProber{Name: "silent-a", Prober: scriptedProber{}}
+	silentB := probe.NamedProber{Name: "silent-b", Prober: scriptedProber{}}
+	answers := probe.NamedProber{Name: "answers", Prober: scriptedProber{replies: 4}}
+	lost := probe.NamedProber{Name: "lost", Prober: scriptedProber{err: fmt.Errorf("raw socket: %w", plugin.ErrSourceUnavailable)}}
+	broken := probe.NamedProber{Name: "broken", Prober: scriptedProber{err: errors.New("timeout")}}
+
+	if r := chain(silentA, silentB); r.Prober != "silent-a" || r.Stats.Received != 0 || r.Err != "" {
+		t.Fatalf("two silent probers = %+v, want the first", r)
+	}
+	if r := chain(silentA, answers); r.Prober != "answers" || r.Stats.Received != 4 {
+		t.Fatalf("silent then answering = %+v", r)
+	}
+	r := chain(silentA, lost, answers)
+	if r.Prober != "" || !strings.Contains(r.Err, "lost: raw socket") {
+		t.Fatalf("a lost source after a silent prober = %+v, want the error", r)
+	}
+	if r := chain(broken, silentB); r.Prober != "silent-b" || r.Err != "" {
+		t.Fatalf("failed then silent = %+v", r)
+	}
+	if r := chain(broken); !strings.Contains(r.Err, "broken: timeout") {
+		t.Fatalf("only a failing prober = %+v", r)
 	}
 }
