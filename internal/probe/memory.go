@@ -1,7 +1,9 @@
 package probe
 
 import (
+	"cmp"
 	"net/netip"
+	"slices"
 
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
@@ -176,29 +178,32 @@ func (e *Engine) finishProberRound() {
 }
 
 // evictProberMemLocked drops the least recently probed named hosts until
-// the set fits the cap. The caller holds e.mu. Hosts with no name do not
+// the set fits the cap, in one pass over the map. Ties on the stamp go to
+// the lower address. The caller holds e.mu. Hosts with no name do not
 // count: they are removed at the end of the round.
 func (e *Engine) evictProberMemLocked() {
-	for {
-		named := 0
-		var old netip.Addr
-		var oldTick uint64
-		found := false
-		for h, slot := range e.proberMem {
-			if slot.name == "" {
-				continue
-			}
-			named++
-			if !found || slot.tick < oldTick || (slot.tick == oldTick && h.Compare(old) < 0) {
-				found = true
-				old = h
-				oldTick = slot.tick
-			}
+	type named struct {
+		host netip.Addr
+		tick uint64
+	}
+	var all []named
+	for h, slot := range e.proberMem {
+		if slot.name != "" {
+			all = append(all, named{h, slot.tick})
 		}
-		if named <= e.opt.ProberMemory || !found {
-			return
+	}
+	excess := len(all) - e.opt.ProberMemory
+	if excess <= 0 {
+		return
+	}
+	slices.SortFunc(all, func(a, b named) int {
+		if c := cmp.Compare(a.tick, b.tick); c != 0 {
+			return c
 		}
-		delete(e.proberMem, old)
+		return a.host.Compare(b.host)
+	})
+	for _, n := range all[:excess] {
+		delete(e.proberMem, n.host)
 	}
 }
 
