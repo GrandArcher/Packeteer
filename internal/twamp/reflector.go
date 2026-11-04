@@ -63,9 +63,9 @@ func (r *Reflector) allowed(a netip.Addr) bool {
 
 // Reply builds the reflected packet for in, received from the sender at
 // from at time now with the IP TTL or hop limit ttl (UnknownTTL when not
-// read). A sender outside AllowFrom gets no reply. The reply is the same length as the sender's packet, and at
-// least ReflectorMinLen. ok is false for a packet that is not a
-// Session-Sender packet, which gets no reply.
+// read). A sender outside AllowFrom gets no reply. The reply is the same
+// length as the sender's packet, and at least ReflectorMinLen. ok is false
+// for a packet that is not a Session-Sender packet, which gets no reply.
 func (r *Reflector) Reply(from netip.AddrPort, ttl uint8, in []byte, now time.Time) (out []byte, ok bool) {
 	if !r.allowed(from.Addr()) {
 		return nil, false

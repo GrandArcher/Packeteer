@@ -249,8 +249,9 @@ func (a *asn) UnmarshalJSON(b []byte) error {
 // payload whose prefix does not parse, or whose max length is shorter
 // than the prefix or longer than the address, fails the whole document,
 // so a broken file never replaces a good cache. The document is read as a
-// token stream and the payloads are counted as they arrive, so a hostile
-// body costs at most MaxVRPs entries, not a copy of the whole body.
+// token stream and the payloads are counted as they arrive, so at most
+// MaxVRPs entries are held, not a copy of the whole body. One oversized
+// value (metadata or a single payload) is still bounded only by maxBody.
 func parse(r io.Reader) (*rpki.VRPs, time.Time, error) {
 	dec := json.NewDecoder(r)
 	if err := expectDelim(dec, '{'); err != nil {
