@@ -10,6 +10,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 - Audit hygiene: ENV.md and threat model gaps, release pins in quickstart, Compose and install.sh, ASCII gate on source, documentation test data, errcheck on, image and action pins (#494).
 ### Security
 
+- Auth lockout counts failed passwords per user and address and never refuses a valid session or token; the herd per-address table evicts instead of refusing (#506).
 - The config editor refuses a new `*_env` name outside its plugin's prefix (`PACKETEER_SNMP_*`, ...); `influxdb` and a feed with a token need https, http only to loopback (#504).
 - Flow decoder: IPFIX templates check their length before allocating, a bad template set ends the datagram, and sampling rates go with their last template; v9/IPFIX fuzz tests (#502).
 - A RIS Live leak sighting withdraws or holds only an injected prefix with the local ASN next to the RIS peer, else emits `leak.unconfirmed`; large communities are read from RIS (#505).

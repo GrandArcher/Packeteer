@@ -368,8 +368,15 @@ func TestAuthThrottleAndStoreDown(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		e.do("GET", "/api/providers", "", "", func(r *http.Request) { r.SetBasicAuth("viewer-user", "wrong-password!") })
 	}
-	if rec := e.do("GET", "/api/providers", e.tokens[plugin.RoleViewer], ""); rec.Code != http.StatusTooManyRequests {
+	if rec := e.do("GET", "/api/providers", "", "", func(r *http.Request) { r.SetBasicAuth("viewer-user", "viewer-user-password") }); rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("throttle: %d", rec.Code)
+	}
+	// The same address keeps its valid token and the other users (#506).
+	if rec := e.do("GET", "/api/providers", e.tokens[plugin.RoleViewer], ""); rec.Code != http.StatusOK {
+		t.Fatalf("token after failed passwords: %d", rec.Code)
+	}
+	if rec := e.do("GET", "/api/providers", "", "", func(r *http.Request) { r.SetBasicAuth("operator-user", "operator-user-password") }); rec.Code != http.StatusOK {
+		t.Fatalf("other user after failed passwords: %d", rec.Code)
 	}
 	e2 := newRBAC(t, nil)
 	e2.store.Fail = true

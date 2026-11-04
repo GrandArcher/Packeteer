@@ -280,6 +280,7 @@ func (s *Server) handshake(c net.Conn) {
 		return
 	}
 	_ = c.SetDeadline(time.Time{})
+	s.byIP.markPinned(remoteIP(c.RemoteAddr()))
 	id := KeyID(tc.ConnectionState().PeerCertificates[0].PublicKey.(ed25519.PublicKey))
 	s.mu.Lock()
 	over := s.perID[id] >= s.lim.MaxConnsPerPeer
