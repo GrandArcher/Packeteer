@@ -9,7 +9,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 - Probe/RIB at 100k targets: bounded probe outcome channel, `probe.provider_inflight` cap, looking glass via `Find`, RIB copies rebuilt at most every 5 s, improvement counter, nightly bench (#491).
 - Prober memory evicts in one sort-based pass instead of a scan per host; sub-range jobs stop after two silent hosts of a down provider; job order uses the reloaded interval (#507).
 - Audit hygiene: ENV.md and threat model gaps, release pins in quickstart, Compose and install.sh, ASCII gate on source, documentation test data, errcheck on, image and action pins (#494).
-- History requeue capped at maxPending per row kind; lease and config editor writes check the directory fsync; failed source TrafficMix/Volumes reads warn and count in `packeteer_source_read_errors_total` (#492).
+- History requeue capped per row kind; lease and config writes check the directory fsync; failed TrafficMix/Volumes reads warn and count in `packeteer_source_read_errors_total` (#492).
 - `-pbr linux -apply` adds before it removes, rolls back a failed run, reads named tables; `make test` lists skipped tests; fuzz targets for v5, sFlow, BMP, RTR, BER, TWAMP, pcap run in CI (#510).
 ### Security
 
