@@ -11,6 +11,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 - Flow decoder: IPFIX templates check their length before allocating, a bad template set ends the datagram, and sampling rates go with their last template; v9/IPFIX fuzz tests (#502).
 - A RIS Live leak sighting withdraws or holds only an injected prefix with the local ASN next to the RIS peer; else `leak.unconfirmed`. Large communities read from RIS (#505).
+- A RIS Live leak sighting withdraws or holds only an injected prefix with the local ASN next to the RIS peer, else emits `leak.unconfirmed`; large communities are read from RIS (#505).
 - The config editor refuses any `upgrade.*` change and checks exec/grpc plugins against the running config after a reload, not the start-time one (#501).
 - `packeteer-policy` requires https (http only to loopback) and `-community`, checks each route (NO_EXPORT, communities, `-allow`); GR off in the examples; feed token backoff, connection cap (#488).
 - Webhook/`otlp` `${VAR}` expand only `PACKETEER_WEBHOOK_*`/`PACKETEER_OTLP_*`; webhook, exporter, feed, RPKI, OIDC, RIS Live, agent refuse cross-host redirects (RDAP: https, Accept only) (#489).

@@ -312,9 +312,9 @@ func (s *Source) handle(line []byte) {
 // announced the route, so only attribute headers are walked, not the full
 // GoBGP parser (GO-2026-4736, #490). A malformed message yields none.
 func largeCommunities(raw string) []string {
-	const header, update, attrLarge, extLen = 19, 2, 32, 0x10
+	const header, msgUpdate, attrLarge, extLen = 19, 2, 32, 0x10
 	b, err := hex.DecodeString(raw)
-	if err != nil || len(b) < header+4 || b[header-1] != update || int(binary.BigEndian.Uint16(b[16:])) != len(b) {
+	if err != nil || len(b) < header+4 || b[header-1] != msgUpdate || int(binary.BigEndian.Uint16(b[16:])) != len(b) {
 		return nil
 	}
 	b = b[header:]
