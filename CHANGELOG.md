@@ -7,6 +7,24 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 ### Changed
 
 - Audit hygiene: ENV.md and threat model gaps, release pins in quickstart, Compose and install.sh, ASCII gate on source, documentation test data, errcheck on, image and action pins (#494).
+### Security
+
+- `packeteer-policy` requires https (http only to loopback) and `-community`, checks each route (NO_EXPORT, communities, `-allow`); GR off in the examples; feed token backoff, connection cap (#488).
+
+### Upgrade notes
+
+- `packeteer-policy` exits with code 2 without `-community` (your `packeteer_community`) or with a non-loopback `http` `-url`; add `-community`, and `-allow` with your allowlist (#488).
+- Remove `0.0.0.0/0` or `::/0` from `allowlist.prefixes`; a config with one no longer loads (#486).
+
+### Changed
+
+- `allowlist.prefixes` rejects `0.0.0.0/0` and `::/0` (a config with one no longer loads) and logs a warning for an entry shorter than /8 (#486).
+
+### Fixed
+
+- A mitigation rule waits until an inbound steer on its prefix is withdrawn, so the steer's withdraw cannot remove the mitigation route (#486).
+- Outbound `WithdrawAll` removes only outbound routes, by UUID; inbound steer and mitigation routes stay with their controllers (#486).
+- The outbound allowlist is checked before the unchanged-route shortcut, so a reload that shrinks it withdraws an unchanged improvement (#486).
 
 ## [0.9.0] - 2026-11-02
 

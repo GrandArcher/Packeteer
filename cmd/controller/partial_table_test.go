@@ -16,9 +16,9 @@ import (
 // TestDaemonPartialTableSteersLearnedPrefixesOnly runs the controller in
 // inject against a simulated edge that has no full table (#206): it sends
 // one prefix and a default route. The learned prefix is steered; the
-// default route (allowlisted here, so only its own rule holds it) and a
-// prefix only the default route covers are measured and never announced;
-// shutdown withdraws the steer.
+// default route (refused by its own rule before the allowlist, which may
+// not hold /0, #486) and a prefix only the default route covers are
+// measured and never announced; shutdown withdraws the steer.
 func TestDaemonPartialTableSteersLearnedPrefixesOnly(t *testing.T) {
 	edge := newMSEdge(t)
 	edge.advertise("198.51.100.0/24", "0.0.0.0/0")
@@ -35,7 +35,7 @@ auth: {enabled: false}
 providers:
   - {name: transit-a, source_ip: 192.0.2.11, next_hop: 192.0.2.1}
   - {name: transit-b, source_ip: 192.0.2.12, next_hop: 192.0.2.2}
-allowlist: {prefixes: ["0.0.0.0/0"]}
+allowlist: {prefixes: ["198.51.100.0/24", "203.0.113.0/24"]}
 probe: {interval: 1s, timeout: 200ms, packets: 1}
 sources:
   - type: static

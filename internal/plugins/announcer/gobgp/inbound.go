@@ -293,8 +293,10 @@ func (a *InboundAnnouncer) withdrawLocked(ctx context.Context, p netip.Prefix) e
 	if a.srv == nil {
 		return errors.New("inbound announcer: not bound to the iBGP speaker")
 	}
-	// Delete by path, not UUID: the gobgp announcer's WithdrawAll may
-	// already have removed every local path, and this must still succeed.
+	// Delete by path, not UUID: it succeeds when the path is already
+	// gone. It removes whatever local path-ID 0 path the speaker holds
+	// for p, so the controllers never put two Packeteer paths on one
+	// prefix (#486): mitigation waits until outbound and inbound release it.
 	if err := a.srv.DeletePath(ctx, &api.DeletePathRequest{Family: familyOf(p), Path: path}); err != nil {
 		return fmt.Errorf("inbound announcer: withdraw %s: %w", p, err)
 	}

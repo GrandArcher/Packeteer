@@ -229,17 +229,27 @@ func TestMitigationAnnounceWithdrawAndCrash(t *testing.T) {
 		return !mit && o
 	})
 
-	// The gobgp announcer's WithdrawAll removes every local path; the
-	// mitigation WithdrawAll afterwards must not fail.
+	// The gobgp announcer's WithdrawAll leaves the mitigation route
+	// (#486); the mitigation WithdrawAll removes it.
 	if err := m.Announce(ctx, bh); err != nil {
 		t.Fatal(err)
 	}
 	if err := out.WithdrawAll(ctx); err != nil {
 		t.Fatal(err)
 	}
+	eventually(t, "blackhole kept by the outbound withdraw all", func() bool {
+		paths := collect(t, r.srv, v4Family)
+		_, mit := fromUs(paths, victim.String())
+		_, o := fromUs(paths, imp.String())
+		return mit && !o
+	})
 	if err := m.WithdrawAll(ctx); err != nil {
 		t.Fatalf("mitigation withdraw after outbound withdraw all: %v", err)
 	}
+	eventually(t, "blackhole withdrawn", func() bool {
+		_, ok := fromUs(collect(t, r.srv, v4Family), victim.String())
+		return !ok
+	})
 
 	// Crash: the session drops with no withdraw. With no graceful restart
 	// the router forgets the blackhole route.

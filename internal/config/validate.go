@@ -291,6 +291,10 @@ func (c *Config) validateAllowlist(add func(string, ...any)) {
 			add("allowlist.prefixes[%d]: %q has host bits set (did you mean %s?)", i, s, p.Masked())
 			continue
 		}
+		if p.Bits() == 0 {
+			add("allowlist.prefixes[%d]: %s would allow every prefix", i, p)
+			continue
+		}
 		if seen[p] {
 			add("allowlist.prefixes[%d]: duplicate prefix %s", i, p)
 		}
@@ -302,6 +306,22 @@ func (c *Config) validateAllowlist(add func(string, ...any)) {
 			}
 		}
 	}
+}
+
+// broadAllowlistBits is the prefix length below which an allowlist entry
+// draws a warning.
+const broadAllowlistBits = 8
+
+// AllowlistWarnings lists allowlist.prefixes entries shorter than /8. They
+// load, but they allow far more than an operator's own space.
+func (c *Config) AllowlistWarnings() []string {
+	var out []string
+	for _, s := range c.Allowlist.Prefixes {
+		if p, err := netip.ParsePrefix(s); err == nil && p.Bits() < broadAllowlistBits {
+			out = append(out, fmt.Sprintf("allowlist.prefixes: %s is shorter than /%d and allows a large part of the address space", p, broadAllowlistBits))
+		}
+	}
+	return out
 }
 
 // validateProbe checks probe timing and packet settings.
