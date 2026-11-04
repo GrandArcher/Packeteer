@@ -13,7 +13,6 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 - Report, what-if, blast, preflight, config-write and send-now errors return a generic message; the detail (paths, SQL text) stays in the log (#510).
 - Auth lockout counts failed passwords per user and address and never refuses a valid session or token; the herd per-address table evicts instead of refusing (#506).
-- BMP stations bind `127.0.0.1` without `listen`; a panic handling a message ends only that router's session; a partly decoded peer up drops the peer; GO-2026-4736 exposure documented (#490).
 - BMP stations bind `127.0.0.1` without `listen`; a decoder panic ends only that router's session; a partly decoded peer up drops the peer; GO-2026-4736 exposure documented (#490).
 - The config editor refuses a new `*_env` name outside its plugin's prefix (`PACKETEER_SNMP_*`, ...); `influxdb` and a feed with a token need https, http only to loopback (#504).
 - Flow decoder: IPFIX templates check their length before allocating, a bad template set ends the datagram, and sampling rates go with their last template; v9/IPFIX fuzz tests (#502).
