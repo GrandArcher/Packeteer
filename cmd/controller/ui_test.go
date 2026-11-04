@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/config"
 	"github.com/GrandArcher/Packeteer/internal/configedit"
@@ -436,13 +438,13 @@ func TestCheckEnvNamesPlaces(t *testing.T) {
 		uiBase + feed + "  token_env: PACKETEER_ADMIN_PASSWORD\n": `external_policy: token_env "PACKETEER_ADMIN_PASSWORD"`,
 		uiBase + feed + "  token_env: PACKETEER_POLICY_FEED\n":    "",
 		uiBase + feed: "",
-		uiBase + "exporters:\n  - type: kafka\n    config: {brokers: [192.0.2.50:9093], sasl: {username_env: PACKETEER_KAFKA_USER, password_env: PACKETEER_HTTP_PASSWORD}}\n": `exporters/kafka: password_env "PACKETEER_HTTP_PASSWORD"`,
-		uiBase + "notifiers:\n  - type: smtp\n    config:\n      x: &m {password_env: PACKETEER_ADMIN_PASSWORD}\n      <<: *m\n":                                              `notifiers/smtp: password_env "PACKETEER_ADMIN_PASSWORD"`,
-		uiBase + "notifiers:\n  - type: smtp\n    config: {? &k password_env : PACKETEER_SMTP_PASSWORD, *k : PACKETEER_ADMIN_PASSWORD}\n":                                     `notifiers/smtp: password_env "PACKETEER_ADMIN_PASSWORD"`,
-		uiBase + "notifiers:\n  - type: smtp\n    config: {password_env: !!binary UEFDS0VURUVSX0FETUlOX1BBU1NXT1JE}\n":                                                        `notifiers/smtp: password_env "PACKETEER_ADMIN_PASSWORD"`,
-		uiBase + "storage: {type: sqlite}\nauth:\n  enabled: true\n  sso:\n    type: oidc\n    config: {client_secret_env: PACKETEER_ADMIN_PASSWORD}\n":                       `auth.sso/oidc: client_secret_env "PACKETEER_ADMIN_PASSWORD"`,
-		uiBase + "storage: {type: sqlite}\nauth:\n  enabled: true\n  sso:\n    type: oidc\n    config: {client_secret_env: PACKETEER_OIDC_CLIENT_SECRET}\n":                   "",
-		uiBase + "probers:\n  - type: icmp\n    config: {token_env: PACKETEER_PROBE_TOKEN}\n":                                                                                 `probers/icmp: token_env "PACKETEER_PROBE_TOKEN" cannot be set through the config editor; use a name the running config already uses there`,
+		uiBase + "exporters:\n  - type: kafka\n    config: {brokers: [192.0.2.50:9093], tls: true, sasl: plain, username_env: PACKETEER_KAFKA_USER, password_env: PACKETEER_HTTP_PASSWORD}\n": `exporters/kafka: password_env "PACKETEER_HTTP_PASSWORD"`,
+		uiBase + "notifiers:\n  - type: smtp\n    config:\n      x: &m {password_env: PACKETEER_ADMIN_PASSWORD}\n      <<: *m\n":                                                              `notifiers/smtp: password_env "PACKETEER_ADMIN_PASSWORD"`,
+		uiBase + "notifiers:\n  - type: smtp\n    config: {? &k password_env : PACKETEER_SMTP_PASSWORD, *k : PACKETEER_ADMIN_PASSWORD}\n":                                                     `notifiers/smtp: password_env "PACKETEER_ADMIN_PASSWORD"`,
+		uiBase + "notifiers:\n  - type: smtp\n    config: {password_env: !!binary UEFDS0VURUVSX0FETUlOX1BBU1NXT1JE}\n":                                                                        `notifiers/smtp: password_env "PACKETEER_ADMIN_PASSWORD"`,
+		uiBase + "storage: {type: sqlite}\nauth:\n  enabled: true\n  sso:\n    type: oidc\n    config: {client_secret_env: PACKETEER_ADMIN_PASSWORD}\n":                                       `auth.sso/oidc: client_secret_env "PACKETEER_ADMIN_PASSWORD"`,
+		uiBase + "storage: {type: sqlite}\nauth:\n  enabled: true\n  sso:\n    type: oidc\n    config: {client_secret_env: PACKETEER_OIDC_CLIENT_SECRET}\n":                                   "",
+		uiBase + "probers:\n  - type: icmp\n    config: {token_env: PACKETEER_PROBE_TOKEN}\n":                                                                                                 `probers/icmp: token_env "PACKETEER_PROBE_TOKEN" cannot be set through the config editor; use a name the running config already uses there`,
 	} {
 		err := checkEnvNames(running, parse(text))
 		switch {
@@ -468,5 +470,42 @@ func TestCheckEnvNamesPlaces(t *testing.T) {
 	legacy := parse(uiBase + "probers:\n  - type: icmp\n    config: {token_env: LEGACY_TOKEN}\n")
 	if err := checkEnvNames(legacy, legacy); err != nil {
 		t.Fatalf("the running config against itself: %v", err)
+	}
+}
+
+// A plugin config holds the file's nodes with aliases unresolved. A
+// self-referencing anchor or nested aliases must not hang or crash the
+// candidate check, and a name behind them is still read.
+func TestCheckEnvNamesAliasLoops(t *testing.T) {
+	bomb := "      l0: &l0 [x, x, x, x, x, x, x, x, x, x]\n"
+	for i := 1; i <= 9; i++ {
+		ref := fmt.Sprintf("*l%d", i-1)
+		bomb += fmt.Sprintf("      l%d: &l%d [%s]\n", i, i, strings.TrimSuffix(strings.Repeat(ref+", ", 10), ", "))
+	}
+	ed, _ := editorFor(t, uiBase)
+	running, err := config.Parse([]byte(uiBase))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, c := range map[string]struct{ text, want string }{
+		"self":  {uiBase + "notifiers:\n  - type: smtp\n    config: &c {x: *c, password_env: PACKETEER_ADMIN_PASSWORD}\n", `notifiers/smtp: password_env "PACKETEER_ADMIN_PASSWORD"`},
+		"bomb":  {uiBase + "notifiers:\n  - type: smtp\n    config:\n" + bomb + "      password_env: PACKETEER_ADMIN_PASSWORD\n", `notifiers/smtp: password_env "PACKETEER_ADMIN_PASSWORD"`},
+		"clean": {uiBase + "notifiers:\n  - type: smtp\n    config:\n" + bomb, ""},
+	} {
+		next, err := config.Parse([]byte(c.text))
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		start := time.Now()
+		err = checkEnvNames(running, next)
+		if d := time.Since(start); d > time.Second {
+			t.Errorf("%s: took %s", name, d)
+		}
+		if (c.want == "") != (err == nil) || (err != nil && !strings.Contains(err.Error(), c.want)) {
+			t.Errorf("%s: err = %v, want %q", name, err, c.want)
+		}
+		if res := ed.Check([]byte(c.text)); c.want != "" && (res.Valid || !strings.Contains(strings.Join(res.Errors, "\n"), c.want)) {
+			t.Errorf("%s: editor check %+v", name, res)
+		}
 	}
 }

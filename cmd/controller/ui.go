@@ -223,8 +223,16 @@ func envKeys(cfg *config.Config) []envKey {
 	specs, envs := walkConfig(cfg)
 	for _, sp := range specs {
 		place := sp.field + "/" + sp.spec.Type
+		// The node is the file's text, aliases unresolved: each node is
+		// walked once, or a self-referencing anchor recurses forever and
+		// nested aliases cost exponential time.
+		seen := map[*yaml.Node]bool{}
 		var walk func(n *yaml.Node)
 		walk = func(n *yaml.Node) {
+			if n == nil || seen[n] {
+				return
+			}
+			seen[n] = true
 			switch n.Kind {
 			case yaml.MappingNode:
 				// Keys and values are decoded as the plugin's decoder reads
@@ -244,9 +252,7 @@ func envKeys(cfg *config.Config) []envKey {
 					walk(c)
 				}
 			case yaml.AliasNode:
-				if n.Alias != nil {
-					walk(n.Alias)
-				}
+				walk(n.Alias)
 			}
 		}
 		walk(&sp.spec.Config)
