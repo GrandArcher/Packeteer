@@ -46,7 +46,9 @@ probers:
       max_age: 3s
       agents:
         - name: agent-a
+          site: dc-a
         - name: agent-b
+          site: dc-b
 http:
   listen: 0.0.0.0:8080
 auth:

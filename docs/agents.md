@@ -15,7 +15,7 @@ The agent has no BGP, no injection, and no UI, and it listens on no port. It cal
 
 ## Safety
 
-- An agent not listed in `agents`, a certificate from another CA, and a certificate on the CRL are refused (403, or no TLS session). The check runs on every request, so a revoked agent is refused on an open connection, and the CRL file is re-read within a second of a change.
+- An agent not listed in `agents`, a certificate from another CA, and a certificate on the CRL are refused (403, or no TLS session). Each listed agent is bound to its `site`: a poll that declares another site is refused (403) and logged, so a certificate for one site cannot take another site's probes (#492). The check runs on every request, so a revoked agent is refused on an open connection, and the CRL file is re-read within a second of a change.
 - An agent is usable only while it has called within `max_age` and its certificate is not revoked. A hung-up poll makes it unusable at once. Probes waiting on a stale agent fail.
 - When no agent at a provider's site is usable, the provider fails closed like a probe source that cannot be bound: it is marked down, a decision never uses it, and an improvement steering to it is retired and withdrawn. Its earlier results age out as stale. Other sites are not affected.
 - An agent that reports it cannot use its declared source address (`source_unavailable`) fails the provider closed too.
@@ -43,8 +43,10 @@ probers:
       crl_file: /etc/packeteer/certs/agents.crl   # optional
       agents:
         - name: agent-a        # certificate CN or DNS SAN
+          site: dc-a           # the only site this agent may declare
           max_pps: 100
         - name: agent-b
+          site: dc-b
 ```
 
 Keys are in [CONFIG.md](CONFIG.md#prober-agent). A provider with a `site` needs a `probers` entry of type `agent`, and the agent prober is used only for such providers; a provider without a site needs one of the usual probers too; a config with such a provider and only `agent` probers is rejected. A site provider is probed toward targets of its `next_hop` address family, so the agent's `source_ip` for it must be that family (use one provider per family for dual stack). `path_check`, `probe.reorder`, and `probe.indirect` do not apply to a provider with a site, because they start from the controller host.

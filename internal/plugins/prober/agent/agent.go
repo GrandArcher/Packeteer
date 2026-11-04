@@ -75,6 +75,9 @@ type Config struct {
 type Agent struct {
 	// Name is the certificate name (CN or DNS SAN) the agent presents.
 	Name string `yaml:"name"`
+	// Site is the one site the agent may declare. A poll that names
+	// another site is refused.
+	Site string `yaml:"site"`
 	// MaxPPS caps the probe packets per second sent to this agent
 	// (default 100).
 	MaxPPS int `yaml:"max_pps"`
@@ -96,7 +99,6 @@ type task struct {
 type agentState struct {
 	spec      Agent
 	lim       *rate.Limiter
-	site      string
 	providers map[string]bool
 	issuer    string // identifies the certificate last seen, for revocation
 	serial    string
@@ -179,6 +181,9 @@ func New(c plugin.Config, env plugin.Env) (plugin.Prober, error) {
 		}
 		if p.agents[a.Name] != nil {
 			return nil, fmt.Errorf("agents[%d]: duplicate name %q", i, a.Name)
+		}
+		if !agentwire.NameRE.MatchString(a.Site) {
+			return nil, fmt.Errorf("agents[%d] (%s): site %q is required and must be 1-64 characters of letters, digits, '_', '.' or '-'", i, a.Name, a.Site)
 		}
 		if a.MaxPPS == 0 {
 			a.MaxPPS = DefaultMaxPPS
@@ -325,13 +330,10 @@ func (p *Prober) Probe(ctx context.Context, req plugin.ProbeRequest) (plugin.Pro
 		}
 		p.mu.Lock()
 		a := p.agents[t.agent]
-		// The agent may have reconnected at another site while the task
-		// waited for its rate-limit slot; failLocked only covers tasks
-		// already queued, so the site is checked again here.
-		if !p.freshLocked(a, p.now()) || a.site != t.site {
+		if !p.freshLocked(a, p.now()) {
 			p.mu.Unlock()
 			release()
-			return plugin.ProbeResult{}, fmt.Errorf("agent %s went away or changed site", t.agent)
+			return plugin.ProbeResult{}, fmt.Errorf("agent %s went away", t.agent)
 		}
 		p.enqueueLocked(a, t)
 		p.mu.Unlock()
@@ -356,7 +358,7 @@ func (p *Prober) reserve(ctx context.Context, req plugin.ProbeRequest) (t *task,
 	now := p.now()
 	var cands []candidate
 	for _, a := range p.agents {
-		if a.site != req.Site || !a.providers[req.Provider] || !p.freshLocked(a, now) {
+		if a.spec.Site != req.Site || !a.providers[req.Provider] || !p.freshLocked(a, now) {
 			continue
 		}
 		r := a.lim.ReserveN(now, req.Count)
@@ -384,7 +386,7 @@ func (p *Prober) reserve(ctx context.Context, req plugin.ProbeRequest) (t *task,
 		return nil, 0, nil, fmt.Errorf("probe agents at site %s are at their rate limit", req.Site)
 	}
 	p.nextID++
-	t = &task{site: best.a.site, agent: best.a.spec.Name, done: make(chan outcome, 1), wire: agentwire.Task{
+	t = &task{site: best.a.spec.Site, agent: best.a.spec.Name, done: make(chan outcome, 1), wire: agentwire.Task{
 		ID: p.nextID, Provider: req.Provider, Target: req.Target.String(), Count: req.Count, TimeoutMS: req.Timeout.Milliseconds()}}
 	best.a.served++
 	if best.delay == 0 {
@@ -453,7 +455,7 @@ func (p *Prober) reap(ctx context.Context) {
 			}
 			a.up = false
 			p.failLocked(a, fmt.Errorf("agent %s is stale", a.spec.Name))
-			p.log.Warn("probe agent stale; its data is not used", "agent", a.spec.Name, "site", a.site)
+			p.log.Warn("probe agent stale; its data is not used", "agent", a.spec.Name, "site", a.spec.Site)
 		}
 		p.mu.Unlock()
 	}

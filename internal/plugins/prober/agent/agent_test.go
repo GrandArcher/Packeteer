@@ -93,16 +93,18 @@ func (s *syncBuf) String() string {
 	return s.b.String()
 }
 
-// newLab starts a controller side that allows the named agents.
-func newLab(t *testing.T, maxPPS int, names ...string) *lab {
+// newLab starts a controller side that allows the agents, each given as
+// name@site.
+func newLab(t *testing.T, maxPPS int, agentSites ...string) *lab {
 	t.Helper()
 	ca := pkitest.New(t)
 	srv := ca.Issue(t, "controller")
 	crl := filepath.Join(ca.Dir, "agents.crl")
 	ca.WriteCRL(t, crl, 1)
 	var agents strings.Builder
-	for _, n := range names {
-		fmt.Fprintf(&agents, "    - name: %s\n      max_pps: %d\n", n, maxPPS)
+	for _, as := range agentSites {
+		name, site, _ := strings.Cut(as, "@")
+		fmt.Fprintf(&agents, "    - name: %s\n      site: %s\n      max_pps: %d\n", name, site, maxPPS)
 	}
 	cfg, err := plugin.ConfigFromYAML(fmt.Sprintf(`
 listen: 127.0.0.1:0
@@ -205,7 +207,7 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 }
 
 func TestProbesGoToTheSiteAndAreAttributed(t *testing.T) {
-	l := newLab(t, 0, "agent-a", "agent-b")
+	l := newLab(t, 0, "agent-a@site-a", "agent-b@site-b")
 	pa, pb := &fakeProber{rtt: 10 * time.Millisecond}, &fakeProber{rtt: 30 * time.Millisecond}
 	l.startAgent("agent-a", "site-a", pa, map[string]string{"carrier-a": "192.0.2.11"})
 	l.startAgent("agent-b", "site-b", pb, map[string]string{"carrier-b": "192.0.2.12"})
@@ -231,7 +233,7 @@ func TestProbesGoToTheSiteAndAreAttributed(t *testing.T) {
 }
 
 func TestProbesSpreadAcrossAgentsOfASite(t *testing.T) {
-	l := newLab(t, 0, "agent-a", "agent-b")
+	l := newLab(t, 0, "agent-a@site-a", "agent-b@site-a")
 	pa, pb := &fakeProber{}, &fakeProber{}
 	l.startAgent("agent-a", "site-a", pa, map[string]string{"carrier-a": "192.0.2.11"})
 	l.startAgent("agent-b", "site-a", pb, map[string]string{"carrier-a": "192.0.2.21"})
@@ -254,7 +256,7 @@ func TestProbesSpreadAcrossAgentsOfASite(t *testing.T) {
 }
 
 func TestKilledAgentFailsItsProviderClosedAndRecovers(t *testing.T) {
-	l := newLab(t, 0, "agent-a", "agent-b")
+	l := newLab(t, 0, "agent-a@site-a", "agent-b@site-b")
 	prov := map[string]string{"carrier-a": "192.0.2.11"}
 	stop := l.startAgent("agent-a", "site-a", &fakeProber{}, prov)
 	l.startAgent("agent-b", "site-b", &fakeProber{}, map[string]string{"carrier-b": "192.0.2.12"})
@@ -277,7 +279,7 @@ func TestKilledAgentFailsItsProviderClosedAndRecovers(t *testing.T) {
 }
 
 func TestProbeInFlightFailsWhenItsAgentDies(t *testing.T) {
-	l := newLab(t, 0, "agent-a")
+	l := newLab(t, 0, "agent-a@site-a")
 	p := &fakeProber{block: make(chan struct{}), in: make(chan struct{}, 1)}
 	stop := l.startAgent("agent-a", "site-a", p, map[string]string{"carrier-a": "192.0.2.11"})
 	waitFor(t, "agent online", func() bool {
@@ -303,7 +305,7 @@ func TestProbeInFlightFailsWhenItsAgentDies(t *testing.T) {
 }
 
 func TestRevokedCertificateIsRefusedAtStart(t *testing.T) {
-	l := newLab(t, 0, "agent-ok", "agent-bad")
+	l := newLab(t, 0, "agent-ok@site-a", "agent-bad@site-a")
 	bad := l.ca.Issue(t, "agent-bad")
 	l.ca.WriteCRL(t, l.crl, 2, bad)
 	waitFor(t, "CRL loaded", func() bool { return l.hub.revoked(rawIssuer(t, bad), bad.Serial.Text(16)) })
@@ -326,7 +328,7 @@ func TestRevokedCertificateIsRefusedAtStart(t *testing.T) {
 }
 
 func TestRevokingARunningAgentStopsUsingIt(t *testing.T) {
-	l := newLab(t, 0, "agent-a")
+	l := newLab(t, 0, "agent-a@site-a")
 	leaf := l.ca.Issue(t, "agent-a")
 	l.startAgentWith(leaf, "site-a", &fakeProber{}, map[string]string{"carrier-a": "192.0.2.11"})
 	probeWhenUp(t, l.hub, req("carrier-a", "site-a"))
@@ -338,7 +340,7 @@ func TestRevokingARunningAgentStopsUsingIt(t *testing.T) {
 }
 
 func TestOlderCRLCannotUnrevokeAnAgent(t *testing.T) {
-	l := newLab(t, 0, "agent-a")
+	l := newLab(t, 0, "agent-a@site-a")
 	leaf := l.ca.Issue(t, "agent-a")
 	issuer, serial := rawIssuer(t, leaf), leaf.Serial.Text(16)
 	l.ca.WriteCRL(t, l.crl, 3, leaf)
@@ -439,7 +441,7 @@ func postAs(t *testing.T, l *lab, leaf pkitest.Leaf, path string, body []byte) i
 }
 
 func TestUnlistedAndForeignCertificatesAreRefused(t *testing.T) {
-	l := newLab(t, 0, "agent-ok")
+	l := newLab(t, 0, "agent-ok@site-a")
 	prov := map[string]string{"carrier-a": "192.0.2.11"}
 	pStranger, pForeign := &fakeProber{}, &fakeProber{}
 	l.startAgent("stranger", "site-a", pStranger, prov) // valid certificate, not in agents
@@ -457,7 +459,7 @@ func TestUnlistedAndForeignCertificatesAreRefused(t *testing.T) {
 }
 
 func TestRateLimitIsPerAgent(t *testing.T) {
-	l := newLab(t, 10, "agent-a", "agent-b")
+	l := newLab(t, 10, "agent-a@site-a", "agent-b@site-a")
 	pa, pb := &fakeProber{}, &fakeProber{}
 	l.startAgent("agent-a", "site-a", pa, map[string]string{"carrier-a": "192.0.2.11"})
 	l.startAgent("agent-b", "site-a", pb, map[string]string{"carrier-a": "192.0.2.21"})
@@ -487,45 +489,47 @@ func TestRateLimitIsPerAgent(t *testing.T) {
 	}
 }
 
-// A probe waiting for its rate-limit slot must not be queued once the
-// agent has reconnected at another site: the answer would be measured
-// from the wrong place and tagged with the old site.
-func TestDelayedProbeIsNotQueuedAfterASiteChange(t *testing.T) {
-	l := newLab(t, 10, "agent-a")
+// An agent is bound to its configured site (#492): a valid certificate
+// that claims another site is refused at every poll, gets none of that
+// site's tasks, and its provider stays unavailable there.
+func TestAgentSiteMismatchIsRefused(t *testing.T) {
+	l := newLab(t, 0, "agent-a@site-a")
 	leaf := l.ca.Issue(t, "agent-a")
-	prov := map[string]string{"carrier-a": "192.0.2.11"}
-	stopA := l.startAgentWith(leaf, "site-a", &fakeProber{}, prov)
-	full := req("carrier-a", "site-a")
-	full.Count = 50
-	probeWhenUp(t, l.hub, full)
-	probeWhenUp(t, l.hub, full) // the 100-packet burst is gone; the next probe waits about 2s
-
-	errc := make(chan error, 1)
-	go func() {
-		wait := req("carrier-a", "site-a")
-		wait.Count = 20
-		_, err := probe(t, l.hub, wait)
-		errc <- err
-	}()
-	time.Sleep(300 * time.Millisecond)
-	stopA()
+	body, _ := json.Marshal(agentwire.PollRequest{Site: "site-b", Providers: []string{"carrier-b"}, Free: 1})
+	if got := postAs(t, l, leaf, agentwire.PollPath, body); got != http.StatusForbidden {
+		t.Fatalf("poll as site-b: status %d, want 403", got)
+	}
 	pb := &fakeProber{}
-	l.startAgentWith(leaf, "site-b", pb, prov)
-	select {
-	case err := <-errc:
-		if err == nil || !strings.Contains(err.Error(), "changed site") {
-			t.Fatalf("err = %v, want the delayed probe refused after the site change", err)
+	stop := l.startAgentWith(leaf, "site-b", pb, map[string]string{"carrier-b": "192.0.2.12"})
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := probe(t, l.hub, req("carrier-b", "site-b")); !errors.Is(err, plugin.ErrSourceUnavailable) {
+			t.Fatalf("probe at the claimed site: %v, want ErrSourceUnavailable", err)
 		}
-	case <-time.After(6 * time.Second):
-		t.Fatal("the delayed probe never finished")
+		time.Sleep(50 * time.Millisecond)
 	}
 	if n := len(pb.requests()); n != 0 {
-		t.Fatalf("the agent at site-b ran %d probes meant for site-a", n)
+		t.Fatalf("the agent claiming site-b ran %d probes", n)
+	}
+	l.hub.mu.Lock()
+	up := l.hub.agents["agent-a"].up
+	l.hub.mu.Unlock()
+	if up {
+		t.Fatal("a refused agent is marked online")
+	}
+	if !strings.Contains(l.logs.String(), "probe agent refused: site mismatch") {
+		t.Fatalf("no refusal logged:\n%s", l.logs.String())
+	}
+	stop()
+	// The same certificate at its configured site is served.
+	l.startAgentWith(leaf, "site-a", &fakeProber{}, map[string]string{"carrier-a": "192.0.2.11"})
+	if r := probeWhenUp(t, l.hub, req("carrier-a", "site-a")); r.Agent != "agent-a" || r.Site != "site-a" {
+		t.Fatalf("result = %+v", r)
 	}
 }
 
 func TestAnotherAgentsAnswerIsIgnored(t *testing.T) {
-	l := newLab(t, 0, "agent-a", "agent-b")
+	l := newLab(t, 0, "agent-a@site-a", "agent-b@site-b")
 	pa := &fakeProber{block: make(chan struct{}), in: make(chan struct{}, 1)}
 	l.startAgent("agent-a", "site-a", pa, map[string]string{"carrier-a": "192.0.2.11"})
 	l.startAgent("agent-b", "site-b", &fakeProber{}, map[string]string{"carrier-b": "192.0.2.12"})
@@ -568,7 +572,7 @@ func TestAnotherAgentsAnswerIsIgnored(t *testing.T) {
 }
 
 func TestProbeRejectsRequestsTheAgentsCannotRun(t *testing.T) {
-	l := newLab(t, 0, "agent-a")
+	l := newLab(t, 0, "agent-a@site-a")
 	for name, r := range map[string]plugin.ProbeRequest{
 		"no site":      {Provider: "p", Target: netip.MustParseAddr("198.51.100.7"), Count: 3, Timeout: time.Second},
 		"count":        {Provider: "p", Site: "s", Count: agentwire.MaxCount + 1, Timeout: time.Second},
@@ -612,15 +616,17 @@ func TestNewRejectsBadConfig(t *testing.T) {
 	other := pkitest.New(t)
 	badCRL := filepath.Join(ca.Dir, "bad.crl")
 	other.WriteCRL(t, badCRL, 1)
-	base := fmt.Sprintf("listen: 127.0.0.1:0\ncert_file: %s\nkey_file: %s\nca_file: %s\nagents:\n  - name: agent-a\n", srv.CertFile, srv.KeyFile, ca.CAFile)
+	base := fmt.Sprintf("listen: 127.0.0.1:0\ncert_file: %s\nkey_file: %s\nca_file: %s\nagents:\n  - name: agent-a\n    site: site-a\n", srv.CertFile, srv.KeyFile, ca.CAFile)
 	if _, err := New(mustCfg(t, base), plugin.Env{}); err != nil {
 		t.Fatalf("base config: %v", err)
 	}
 	for name, tc := range map[string]struct{ yaml, want string }{
-		"no agents":     {strings.Replace(base, "agents:\n  - name: agent-a\n", "", 1), "agents"},
-		"duplicate":     {base + "  - name: agent-a\n", "duplicate"},
+		"no agents":     {strings.Replace(base, "agents:\n  - name: agent-a\n    site: site-a\n", "", 1), "agents"},
+		"duplicate":     {base + "  - name: agent-a\n    site: site-a\n", "duplicate"},
 		"bad name":      {strings.Replace(base, "agent-a", "bad name", 1), "name"},
-		"max_pps":       {base + "    max_pps: 0\n  - name: b\n    max_pps: 1000000\n", "max_pps"},
+		"no site":       {strings.Replace(base, "    site: site-a\n", "", 1), "site \"\" is required"},
+		"bad site":      {strings.Replace(base, "site: site-a", "site: bad site", 1), "site \"bad site\""},
+		"max_pps":       {base + "    max_pps: 0\n  - name: b\n    site: site-a\n    max_pps: 1000000\n", "max_pps"},
 		"listen":        {strings.Replace(base, "127.0.0.1:0", "nowhere", 1), "listen"},
 		"poll_wait":     {base + "poll_wait: 1ms\n", "poll_wait"},
 		"max_age":       {base + "poll_wait: 1s\nmax_age: 1s\n", "max_age"},
@@ -645,7 +651,7 @@ func mustCfg(t *testing.T, y string) plugin.Config {
 }
 
 func TestPollRejectsBadFree(t *testing.T) {
-	l := newLab(t, 0, "agent-a")
+	l := newLab(t, 0, "agent-a@site-a")
 	leaf := l.ca.Issue(t, "agent-a")
 	for _, free := range []int{-1, 0, agentwire.MaxTasksPerPoll + 1} {
 		body, _ := json.Marshal(agentwire.PollRequest{Site: "site-a", Providers: []string{"carrier-a"}, Free: free})
