@@ -481,7 +481,9 @@ func (v *View) AddNeighbors(ctx context.Context, nbrs []Neighbor) error {
 		v.mu.RUnlock()
 		if dropped {
 			for _, n := range nbrs {
-				_ = v.srv.DisablePeer(ctx, &api.DisablePeerRequest{Address: n.Address.String()})
+				if err := v.srv.DisablePeer(ctx, &api.DisablePeerRequest{Address: n.Address.String(), Communication: dropMessage}); err != nil {
+					errs = append(errs, fmt.Errorf("rib: shut down session to %s: %w", n.Address, err))
+				}
 			}
 			errs = append(errs, errors.New("rib: the sessions were dropped after a failed HA withdraw; adding neighbors needs a restart"))
 		}
@@ -530,8 +532,11 @@ func (v *View) DropSessions(ctx context.Context) error {
 	v.mu.Lock()
 	v.dropped = true
 	v.mu.Unlock()
-	return v.quiesceSessions(ctx, "packeteer: HA standby could not withdraw its routes")
+	return v.quiesceSessions(ctx, dropMessage)
 }
+
+// dropMessage is the shutdown communication DropSessions sends.
+const dropMessage = "packeteer: HA standby could not withdraw its routes"
 
 // quiesceSessions admin-downs every peer, sending why in the shutdown
 // NOTIFICATION, and waits for established sessions to leave that state.
