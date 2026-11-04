@@ -115,14 +115,16 @@ func (l *limiterSet) markPinned(key string) {
 	}
 }
 
-// evict makes room for one key. Entries idle past a minute hold a full
-// bucket, so dropping them changes nothing. Otherwise the least recently
+// evict makes room for one key. Entries idle past the time a bucket takes
+// to refill (max(perMin, maxCost) / perMin minutes) hold a full bucket, so
+// dropping them changes nothing. Otherwise the least recently
 // seen entry goes, preferring one without a pinned handshake. A new key is
 // never refused for want of room: many source addresses must not lock out
 // a pinned peer that connects from a new one (#506).
 func (l *limiterSet) evict(now time.Time) {
+	refill := time.Duration(float64(max(l.perMin, maxCost)) / float64(l.perMin) * float64(time.Minute))
 	for k, e := range l.m {
-		if now.Sub(e.seen) > time.Minute {
+		if now.Sub(e.seen) > refill {
 			delete(l.m, k)
 		}
 	}

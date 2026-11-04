@@ -811,6 +811,13 @@ func TestChangePassword(t *testing.T) {
 	if err := s.ChangePassword(w, post(ip), p, "another-long-password", "yet-another-long-pw"); !errors.Is(err, ErrThrottled) {
 		t.Fatalf("lockout: %v", err)
 	}
+	// The count is per user: another user from the same address still can.
+	if _, err := s.createUser(ctx, "other", plugin.RoleViewer, "other-user-password", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ChangePassword(w, post(ip), Principal{User: "other"}, "wrong-current-pw", "yet-another-long-pw"); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("other user from the locked address: %v", err)
+	}
 
 	// An admin setting a password for a must-change user lifts the flag too.
 	if _, err := s.createUser(ctx, "second", plugin.RoleViewer, "temporary-password", true); err != nil {

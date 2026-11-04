@@ -69,3 +69,31 @@ func TestEvictKeepsPinnedAddress(t *testing.T) {
 		t.Fatalf("idle entries kept: %d", len(l.m))
 	}
 }
+
+// TestEvictIdleFollowsRefillTime: at one request a minute a spent bucket
+// takes four minutes to refill, so an address idle for a minute keeps its
+// debt when the table is full.
+func TestEvictIdleFollowsRefillTime(t *testing.T) {
+	l := newLimiterSet(1)
+	for i := range maxLimiterKeys - 1 {
+		l.reserve(fmt.Sprintf("2001:db8::%x", i+1), 1, t0.Add(time.Duration(i)*time.Millisecond))
+	}
+	if ok, _ := l.reserve("192.0.2.1", maxCost, t0.Add(time.Second)); !ok {
+		t.Fatal("full bucket refused")
+	}
+	if ok, _ := l.reserve("198.51.100.1", 1, t0.Add(90*time.Second)); !ok {
+		t.Fatal("new address refused")
+	}
+	if _, ok := l.m["192.0.2.1"]; !ok {
+		t.Fatal("spent bucket dropped before it refilled")
+	}
+	if ok, _ := l.reserve("192.0.2.1", maxCost, t0.Add(90*time.Second)); ok {
+		t.Fatal("spent bucket was reset")
+	}
+	if ok, _ := l.reserve("198.51.100.2", 1, t0.Add(6*time.Minute)); !ok {
+		t.Fatal("new address refused after idle")
+	}
+	if _, ok := l.m["192.0.2.1"]; ok {
+		t.Fatal("refilled bucket kept")
+	}
+}
