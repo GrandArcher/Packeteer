@@ -535,7 +535,7 @@ lookup:
 
 `config.exchanges` (required, at most 32) lists the exchanges: `name` (a letter or digit, then letters, digits, `.`, `_`, or `-`, at most 64 characters; use the same name as in [`exchanges`](#exchanges)), `ix_id` (the PeeringDB `ix` id, positive, unique), and optional `ixf_url` (one IX-F 1.0 member document for that exchange, an http or https URL with no userinfo or query; it is fetched without the API key). `base_url` (default `https://www.peeringdb.com`; https is required when a key is set, and a URL that holds the key is refused). `refresh` (default 24h, 1h-24h), `timeout` (default 30s, 1s-2m), `max_bytes` (per response, default 8 MiB, 1024 to 32 MiB). The API key is `PACKETEER_PEERINGDB_API_KEY`, sent only as `Authorization: Api-Key ...` to `base_url`; it is optional and without it PeeringDB rate-limits the anonymous requests. Redirects are not followed.
 
-Each refresh reads `ix` for the configured ids, `netixlan` for those exchanges, then `net` and `org` for the networks on them, and each IX-F document. The requests are at least 3 seconds apart (2 seconds with a key). PeeringDB rows are capped at 20000 networks and 20000 attachments; a refresh over a cap or with a malformed response is refused as a whole and the last good cache stays. A failed IX-F document is recorded on its exchange (`ixf_error`) and does not clear the PeeringDB rows. After three refresh intervals without a success the served lists are empty and `stale` is true. `GET /api/lookup` reads the cache (`?asn=` keeps one network and its attachments). The metrics are `packeteer_lookup_networks`, `packeteer_lookup_memberships`, `packeteer_lookup_up`, and `packeteer_lookup_age_seconds`.
+Each refresh reads `ix` for the configured ids, `netixlan` for those exchanges, then `net` and `org` for the networks on them, and each IX-F document. The requests are at least 3 seconds apart (2 seconds with a key). PeeringDB rows are capped at 20000 networks and 20000 attachments; a refresh over a cap or with a malformed response is refused as a whole and the last good cache stays. An IX-F connection counts when its state is `active`, `connected`, or `operational`, or when it has none. A failed IX-F document is recorded on its exchange (`ixf_error`) and does not clear the PeeringDB rows. After three refresh intervals without a success the served lists are empty and `stale` is true. `GET /api/lookup` reads the cache (`?asn=` keeps one network and its attachments). The metrics are `packeteer_lookup_networks`, `packeteer_lookup_memberships`, `packeteer_lookup_up`, and `packeteer_lookup_age_seconds`.
 
 Adding, changing, or removing `lookup` needs a restart. Rollback: remove `lookup` and restart. Nothing was announced.
 
@@ -1672,7 +1672,7 @@ One plain-text email per event. The relay credentials are environment variables;
 
 Plus the [filter keys](#notifier-filters-every-notifier). Messages carry `X-Packeteer-Event` and `X-Packeteer-Severity` headers for mail rules. CR and LF are stripped from header values.
 
-An `smtp` notifier also sends [`report_subscriptions`](#report_subscriptions): one multipart email per report with a text summary and the CSV attached (for `timeseries`, also an HTML part with inline PNG charts), headers `X-Packeteer-Report` and `X-Packeteer-Subscription`. The filter keys do not apply to reports; a subscription's `to` replaces the notifier's `to`.
+An `smtp` notifier also sends [`report_subscriptions`](#report_subscriptions): one multipart email per report with a text summary and the CSV attached, holding every row up to the 10000-row cap (the text says "N of M" when the cap cut the report) (for `timeseries`, also an HTML part with inline PNG charts), headers `X-Packeteer-Report` and `X-Packeteer-Subscription`. The filter keys do not apply to reports; a subscription's `to` replaces the notifier's `to`.
 
 ### Notifier `snmptrap`
 
@@ -1806,7 +1806,7 @@ Each host:
 | `priv_env` | with privacy | Environment variable that holds the privacy passphrase (at least 8 characters). |
 | `context_name` | empty | SNMP context. v3 only. Not a credential. |
 
-v2c accepts `community_env` only. v3 rejects `community_env`. `noAuthNoPriv` rejects auth and privacy keys.
+v2c accepts `community_env` only. v3 rejects `community_env`. `noAuthNoPriv` rejects auth and privacy keys. Every value read from the environment (community, user, passphrase) is at most 255 characters and holds no CR, LF, or NUL; the `snmptrap` notifier and the `snmpagent` exporter apply the same rule.
 
 Each provider:
 
@@ -2050,7 +2050,7 @@ Queries one whois server on TCP (port 43) per lookup: route/route6 objects for e
 | `timeout` | `10s` | One TCP connection: the dial, then the query and answer (up to about twice this in wall time). Each connection of a `ripe` as-set expansion gets its own. 1s-1m. |
 | `rate_per_minute` | `60` | Connections opened per minute. 1-600. |
 
-The tests replay answers in the shape seen from rr.ntt.net (IRRd 4) and the RIPE database (`internal/plugins/irr/whois/testdata`) against in-process servers; no test queries a live IRR.
+An RPSL attribute joined from continuation lines may be at most 64 KB; a longer one fails that lookup (the path stays `unknown`). The tests replay answers in the shape seen from rr.ntt.net (IRRd 4) and the RIPE database (`internal/plugins/irr/whois/testdata`) against in-process servers; no test queries a live IRR.
 
 ### IRR source `file`
 

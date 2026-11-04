@@ -269,7 +269,11 @@ func Run(ctx context.Context, store plugin.RoundStore, from, to time.Time, sides
 		ts[i] = newTracker(s)
 	}
 	var res Result
+	// A page starts at the last round already replayed, which the store
+	// returns again, so a store that keeps finer than millisecond times
+	// loses no round between pages.
 	cursor := from
+	var after time.Time
 	for {
 		if err := ctx.Err(); err != nil {
 			return Result{}, err
@@ -282,6 +286,10 @@ func Run(ctx context.Context, store plugin.RoundStore, from, to time.Time, sides
 			if err := ctx.Err(); err != nil {
 				return Result{}, err
 			}
+			if !r.At.After(after) {
+				continue
+			}
+			after = r.At
 			now, in, err := Decode(r.Input)
 			if err != nil {
 				return Result{}, fmt.Errorf("round at %s: %w", r.At.UTC().Format(time.RFC3339), err)
@@ -298,7 +306,7 @@ func Run(ctx context.Context, store plugin.RoundStore, from, to time.Time, sides
 		if len(page) < pageSize {
 			break
 		}
-		cursor = page[len(page)-1].At.Add(time.Millisecond)
+		cursor = after
 	}
 	if res.Rounds == 0 {
 		return Result{}, ErrNoRounds

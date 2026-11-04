@@ -2,6 +2,7 @@ package policy
 
 import (
 	"net/netip"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -187,5 +188,57 @@ func TestSynthesizeSkipsPinnedOrIgnoredCoveringPrefix(t *testing.T) {
 		if _, ok := st.Improvements[synLo]; ok {
 			t.Fatalf("%s: sub-range improved", v.Action)
 		}
+	}
+}
+
+// planSpy records the prefixes the commit planner is shown and answers
+// with a move for each prefix in moves.
+type planSpy struct {
+	plugin.Base
+	moves []plugin.PlanMove
+	seen  *[]netip.Prefix
+}
+
+func (p planSpy) Score(s plugin.PathStats) float64 {
+	return s.LossPct*100 + float64(s.RTTAvg)/float64(time.Millisecond)
+}
+
+func (p planSpy) Plan(in plugin.PlanInput) []plugin.PlanMove {
+	for _, pp := range in.Prefixes {
+		*p.seen = append(*p.seen, pp.Prefix)
+	}
+	return p.moves
+}
+
+// FAB-33b: a synthesized sub-range has a flow volume of its own when it is
+// as long as the flow source's prefixes, but the commit and cost planner
+// must not move it. The move would carry no Covering, so the announcer
+// refuses the route while Decide holds a cap slot for it.
+func TestSynthesizedSubrangeIsNotOfferedToTheCommitPlanner(t *testing.T) {
+	native := map[netip.Prefix]string{pA: "a"}
+	input := synthInput(t0, native)
+	input.Usage = []plugin.Usage{billable("a", 100, 150), billable("b", 100, 20)}
+	input.VolumeMbps = map[netip.Prefix]float64{pA: 60, synHi: 60}
+	var seen []netip.Prefix
+	// synHi is native-best, so it would reach the planner as commitOK.
+	mv := plugin.PlanMove{Prefix: synHi, Provider: "b", Reason: "stub", ReliefMbps: 60}
+	st, out := Decide(NewState(), input, commitCfg(), planSpy{moves: []plugin.PlanMove{mv}, seen: &seen}, t0)
+	// synLo may be shown: a performance steer is locked context, not a
+	// prefix the planner can move.
+	if slices.Contains(seen, synHi) {
+		t.Fatalf("planner was shown the native-best sub-range: %v", seen)
+	}
+	if !slices.Contains(seen, pA) {
+		t.Fatalf("the learned covering prefix must still be planned: %v", seen)
+	}
+	if imp, ok := st.Improvements[synHi]; ok {
+		t.Fatalf("planner move held a slot for a sub-range: %+v", imp)
+	}
+	if d := decision(t, out, synHi); d.Action != ActionNone || d.Covering != pA {
+		t.Fatalf("sub-range decision = %+v", d)
+	}
+	// The performance path still steers a sub-range (with Covering).
+	if imp := st.Improvements[synLo]; imp.Covering != pA || imp.Provider != "b" {
+		t.Fatalf("performance sub-range steer lost: %+v", st.Improvements)
 	}
 }

@@ -259,13 +259,10 @@ func decodeIXF(body []byte) ([]rawIXF, error) {
 	return out, nil
 }
 
+// ixfActive keeps a connection with no state: a member lookup is not a
+// probe, and a missing state is not a sign the port is down.
 func ixfActive(state string) bool {
-	switch state {
-	case "", "active", "connected":
-		return true
-	default:
-		return false
-	}
+	return state == "" || plugin.IXFStateUp(state)
 }
 
 // cleanAddr reports the address to store. An empty string is valid and

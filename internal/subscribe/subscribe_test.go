@@ -3,6 +3,8 @@ package subscribe
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/netip"
 	"strings"
 	"sync"
 	"testing"
@@ -187,5 +189,61 @@ func TestRunStopsWithContext(t *testing.T) {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("Run did not stop")
+	}
+}
+
+// FAB-31: a subscription report is not cut to the dashboard's default row
+// limit, and the mail says so when the hard cap still cuts it.
+func TestBuildCarriesEveryRowNotTheDefaultLimit(t *testing.T) {
+	to := time.Date(2026, 9, 30, 6, 0, 0, 0, time.UTC)
+	var h plugin.History
+	for i := range 150 {
+		h.Improvements = append(h.Improvements, plugin.ImprovementRecord{
+			ID: fmt.Sprintf("imp-%d", i), Prefix: netip.PrefixFrom(netip.AddrFrom4([4]byte{198, 51, 100, byte(i)}), 32),
+			Provider: "transit-b", Native: "transit-a", Start: to.Add(-time.Hour), Mode: "observe",
+		})
+	}
+	s := sub("daily", config.ScheduleDaily)
+	s.Report = history.ReportImprovements
+	src := &fakeSource{h: h}
+	m, err := Build(context.Background(), src, s, to)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if src.queries[0].Limit != history.MaxLimit {
+		t.Fatalf("query limit = %d, want %d", src.queries[0].Limit, history.MaxLimit)
+	}
+	if rows := strings.Count(string(m.Attachments[0].Data), "\n") - 1; rows != 150 {
+		t.Fatalf("CSV rows = %d, want 150", rows)
+	}
+	if !strings.Contains(m.Text, "Rows: 150 (CSV attached)") {
+		t.Fatalf("text = %q", m.Text)
+	}
+}
+
+type cappedSource struct{}
+
+func (cappedSource) Report(ctx context.Context, q history.Query) (history.Report, error) {
+	q.Limit = 2
+	var h plugin.History
+	to := q.To
+	for i := range 5 {
+		h.Improvements = append(h.Improvements, plugin.ImprovementRecord{
+			ID: fmt.Sprintf("imp-%d", i), Prefix: netip.MustParsePrefix("192.0.2.0/24"),
+			Provider: "transit-b", Native: "transit-a", Start: to.Add(-time.Hour), Mode: "observe",
+		})
+	}
+	return history.Build(h, q)
+}
+
+func TestBuildSaysWhenTheRowLimitCutTheReport(t *testing.T) {
+	s := sub("daily", config.ScheduleDaily)
+	s.Report = history.ReportImprovements
+	m, err := Build(context.Background(), cappedSource{}, s, time.Date(2026, 9, 30, 6, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(m.Text, "Rows: 2 of 5") {
+		t.Fatalf("text = %q", m.Text)
 	}
 }

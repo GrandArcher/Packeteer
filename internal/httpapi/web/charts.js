@@ -338,7 +338,8 @@ function renderCommitGraphs(root, data) {
 var CAUSE_KEYS = [
   {key: "performance", label: "Performance", cls: "cause-performance"},
   {key: "commit", label: "Commit", cls: "cause-commit"},
-  {key: "cost", label: "Cost", cls: "cause-cost"}
+  {key: "cost", label: "Cost", cls: "cause-cost"},
+  {key: "static", label: "Static", cls: "cause-static"}
 ];
 
 // renderCauses draws one stacked bar per day with improvements, then the
@@ -401,14 +402,14 @@ function renderCauses(root, data) {
   det.appendChild(el("summary", "", "Data (" + rows.length + (rows.length === 1 ? " day)" : " days)")));
   var table = el("table");
   var hr = el("tr");
-  ["Day", "Performance", "Commit", "Cost", "Total"].forEach(function (h) { hr.appendChild(el("th", "", h)); });
+  ["Day"].concat(CAUSE_KEYS.map(function (c) { return c.label; }), ["Total"]).forEach(function (h) { hr.appendChild(el("th", "", h)); });
   var thead = el("thead");
   thead.appendChild(hr);
   table.appendChild(thead);
   var tb = el("tbody");
   rows.forEach(function (r) {
     var tr = el("tr");
-    [r.day, r.performance, r.commit, r.cost, r.total].forEach(function (v) { tr.appendChild(el("td", "", v)); });
+    [r.day].concat(CAUSE_KEYS.map(function (c) { return r[c.key] || 0; }), [r.total]).forEach(function (v) { tr.appendChild(el("td", "", v)); });
     tb.appendChild(tr);
   });
   table.appendChild(tb);

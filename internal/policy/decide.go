@@ -178,7 +178,17 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 
 	gate = newLoadGate(st, in, cfg, now)
 	var wants []pending
+	// commitOK is the prefixes the commit and cost planner may move: in the
+	// learned RIB view. A synthesized sub-range is not (#122): it is in
+	// Native only so the performance path can decide it, and a planner
+	// move would carry no Covering, so it would hold a cap slot for a
+	// route the announcer refuses.
 	commitOK := map[netip.Prefix]bool{}
+	markCommit := func(p netip.Prefix) {
+		if !cover[p].IsValid() {
+			commitOK[p] = true
+		}
+	}
 	decIdx := map[netip.Prefix]*Decision{}
 	var holds []commitHold
 	prefixes := make([]netip.Prefix, 0, len(byPrefix))
@@ -525,7 +535,7 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 			if medKeep != "" {
 				d.Reason = medKeep
 			}
-			commitOK[p] = true
+			markCommit(p)
 			continue
 		}
 		if until, cool := st.Cooldown[p]; cool {
@@ -540,7 +550,7 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 			// Cost precedence: the planner may replace this move with a
 			// cheaper path inside the floor. A native path already inside
 			// the floor is kept.
-			commitOK[p] = true
+			markCommit(p)
 			if maxLoss, maxRTT := cp.Floor(); inFloor(cands, cfg.Excluded, d.Native, maxLoss, maxRTT) {
 				d.Recommended, d.Reason, d.Cause = d.Native, "native path inside performance floor (cost precedence)", plugin.CauseCost
 				continue

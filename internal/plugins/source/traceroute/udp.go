@@ -4,12 +4,12 @@ package traceroute
 
 import (
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"net/netip"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/sockerr"
 	"github.com/GrandArcher/Packeteer/internal/sockmark"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 	"golang.org/x/sys/unix"
@@ -115,7 +115,7 @@ func (udpHopper) Probe(ctx context.Context, src, dst netip.Addr, ttl, port int, 
 		}
 		_, oobn, _, _, rerr := unix.Recvmsg(fd, buf, oob, unix.MSG_ERRQUEUE|unix.MSG_DONTWAIT)
 		if rerr == nil && oobn > 0 {
-			from, typ, ok := parseExtErr(oob[:oobn])
+			from, typ, ok := sockerr.Parse(oob[:oobn])
 			if !ok || !from.IsValid() {
 				continue
 			}
@@ -128,9 +128,14 @@ func (udpHopper) Probe(ctx context.Context, src, dst netip.Addr, ttl, port int, 
 		if rerr != nil && !again(rerr) {
 			return netip.Addr{}, false, rerr
 		}
-		nn, _, _, _, rerr := unix.Recvmsg(fd, buf, nil, unix.MSG_DONTWAIT)
-		if rerr == nil && nn >= 0 {
-			return dst, true, nil
+		_, peer, rerr := unix.Recvfrom(fd, buf, unix.MSG_DONTWAIT)
+		if rerr == nil {
+			// The socket is unconnected, so any host can write to the
+			// ephemeral port. Only the destination ends the trace.
+			if fromDestination(peer, dst, port) {
+				return dst, true, nil
+			}
+			continue
 		}
 		if rerr != nil && !again(rerr) {
 			return netip.Addr{}, false, rerr
@@ -138,6 +143,21 @@ func (udpHopper) Probe(ctx context.Context, src, dst netip.Addr, ttl, port int, 
 		// Poll woke up but neither queue had a datagram. Don't spin.
 		time.Sleep(2 * time.Millisecond)
 	}
+}
+
+// fromDestination reports whether a datagram came from dst:port.
+func fromDestination(peer unix.Sockaddr, dst netip.Addr, port int) bool {
+	var from netip.Addr
+	var fromPort int
+	switch sa := peer.(type) {
+	case *unix.SockaddrInet4:
+		from, fromPort = netip.AddrFrom4(sa.Addr), sa.Port
+	case *unix.SockaddrInet6:
+		from, fromPort = netip.AddrFrom16(sa.Addr), sa.Port
+	default:
+		return false
+	}
+	return from.Unmap() == dst.Unmap() && fromPort == port
 }
 
 func again(err error) bool {
@@ -184,51 +204,4 @@ func classify(v6 bool, typ byte) (hop, reached bool) {
 func classifyHop(v6 bool, typ byte) bool {
 	hop, _ := classify(v6, typ)
 	return hop
-}
-
-// parseExtErr reads one IP_RECVERR / IPV6_RECVERR control message.
-// The kernel lays out sock_extended_err (16 bytes) and then the
-// offender sockaddr. ok is false when the message is not ICMP.
-func parseExtErr(oob []byte) (from netip.Addr, icmpType byte, ok bool) {
-	msgs, err := unix.ParseSocketControlMessage(oob)
-	if err != nil {
-		return netip.Addr{}, 0, false
-	}
-	for _, m := range msgs {
-		if int(m.Header.Type) != unix.IP_RECVERR && int(m.Header.Type) != unix.IPV6_RECVERR {
-			continue
-		}
-		return parseExtErrData(m.Data)
-	}
-	return netip.Addr{}, 0, false
-}
-
-func parseExtErrData(data []byte) (from netip.Addr, icmpType byte, ok bool) {
-	// sock_extended_err is 16 bytes. The offender sockaddr follows.
-	if len(data) < 16+8 {
-		return netip.Addr{}, 0, false
-	}
-	origin := data[4]
-	if origin != unix.SO_EE_ORIGIN_ICMP && origin != unix.SO_EE_ORIGIN_ICMP6 {
-		return netip.Addr{}, 0, false
-	}
-	icmpType = data[5]
-	sa := data[16:]
-	family := binary.LittleEndian.Uint16(sa[:2])
-	switch family {
-	case unix.AF_INET:
-		if len(sa) < 8 {
-			return netip.Addr{}, 0, false
-		}
-		addr, ok := netip.AddrFromSlice(sa[4:8])
-		return addr, icmpType, ok
-	case unix.AF_INET6:
-		if len(sa) < 24 {
-			return netip.Addr{}, 0, false
-		}
-		addr, ok := netip.AddrFromSlice(sa[8:24])
-		return addr, icmpType, ok
-	default:
-		return netip.Addr{}, 0, false
-	}
 }

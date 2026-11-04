@@ -217,9 +217,11 @@ button.small { margin-left: 6px; padding: 3px 8px; border: 1px solid var(--line)
 .cause-bar.cause-performance { fill: #1f5fa8; }
 .cause-bar.cause-commit { fill: var(--diff); }
 .cause-bar.cause-cost { fill: var(--up); }
+.cause-bar.cause-static { fill: var(--muted); }
 .ts-key.cause-performance { color: #1f5fa8; }
 .ts-key.cause-commit { color: var(--diff); }
 .ts-key.cause-cost { color: var(--up); }
+.ts-key.cause-static { color: var(--muted); }
 .widgets-list li { margin: 4px 0; }
 
 /* Dashboard clarity, first run, and error states (#49). */

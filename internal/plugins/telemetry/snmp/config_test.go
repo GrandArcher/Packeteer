@@ -91,8 +91,10 @@ func TestConfigRejects(t *testing.T) {
 	}{
 		{"unknown field", "interval: 30s\nbogus: 1\n", env, "bogus"},
 		{"literal community", "hosts:\n  - name: e\n    address: 192.0.2.254\n    version: 2c\n    community: " + secret + "\nproviders:\n  - name: transit-a\n    host: e\n    interface: ether1\n    commit_mbps: 1\n    billing_day: 1\n    percentile: separate\n", env, "field community not found"},
-		{"empty env", baseYAML, map[string]string{}, "empty or unset"},
+		{"empty env", baseYAML, map[string]string{}, "is not set"},
 		{"community in the value position", strings.Replace(baseYAML, "PACKETEER_SNMP_COMMUNITY", secret, 1), env, "must be an environment variable name"},
+		{"community with a newline", baseYAML, map[string]string{"PACKETEER_SNMP_COMMUNITY": "lab\nvalue"}, "newline or NUL"},
+		{"community over 255 characters", baseYAML, map[string]string{"PACKETEER_SNMP_COMMUNITY": strings.Repeat("x", 256)}, "longer than 255"},
 		{"bad percentile", strings.Replace(baseYAML, "greater_separate", "average", 1), env, "percentile"},
 		{"billing day", strings.Replace(baseYAML, "billing_day: 1", "billing_day: 31", 1), env, "billing_day"},
 		{"commit", strings.Replace(baseYAML, "commit_mbps: 1000", "commit_mbps: -1", 1), env, "commit_mbps"},

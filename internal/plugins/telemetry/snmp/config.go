@@ -4,11 +4,11 @@ import (
 	"fmt"
 	"math"
 	"net/netip"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/plugins/snmpcfg"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -25,8 +25,6 @@ const (
 	defaultMaxSamples = 100000
 	maxMaxSamples     = 1000000
 	maxIfIndex        = 2147483647
-	maxSecretLen      = 255
-	maxUserLen        = 32
 	minPassphrase     = 8
 )
 
@@ -75,8 +73,6 @@ type Binding struct {
 	BillingDay   int     `yaml:"billing_day"`
 	Percentile   string  `yaml:"percentile"`
 }
-
-var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 type hostSpec struct {
 	name      string
@@ -225,7 +221,7 @@ func compileHost(h Host, getenv func(string) string) (hostSpec, error) {
 		if h.UsernameEnv != "" || h.SecurityLevel != "" || h.AuthProtocol != "" || h.AuthEnv != "" || h.PrivProtocol != "" || h.PrivEnv != "" || h.ContextName != "" {
 			return hostSpec{}, fmt.Errorf("version 2c uses community_env only")
 		}
-		community, err := envSecret(getenv, h.CommunityEnv, "community_env", 1)
+		community, err := snmpcfg.Secret(getenv, "community_env", h.CommunityEnv, 1)
 		if err != nil {
 			return hostSpec{}, err
 		}
@@ -234,12 +230,12 @@ func compileHost(h Host, getenv func(string) string) (hostSpec, error) {
 		if h.CommunityEnv != "" {
 			return hostSpec{}, fmt.Errorf("community_env is only used with version 2c")
 		}
-		user, err := envSecret(getenv, h.UsernameEnv, "username_env", 1)
+		user, err := snmpcfg.Secret(getenv, "username_env", h.UsernameEnv, 1)
 		if err != nil {
 			return hostSpec{}, err
 		}
-		if len(user) > maxUserLen {
-			return hostSpec{}, fmt.Errorf("username_env %q is longer than %d characters", h.UsernameEnv, maxUserLen)
+		if len(user) > snmpcfg.MaxUser {
+			return hostSpec{}, fmt.Errorf("username_env %q is longer than %d characters", h.UsernameEnv, snmpcfg.MaxUser)
 		}
 		level, err := canonLevel(h.SecurityLevel)
 		if err != nil {
@@ -248,8 +244,8 @@ func compileHost(h Host, getenv func(string) string) (hostSpec, error) {
 		spec.username = user
 		spec.level = level
 		spec.context = h.ContextName
-		if len(spec.context) > maxSecretLen {
-			return hostSpec{}, fmt.Errorf("context_name is longer than %d characters", maxSecretLen)
+		if len(spec.context) > snmpcfg.MaxSecret {
+			return hostSpec{}, fmt.Errorf("context_name is longer than %d characters", snmpcfg.MaxSecret)
 		}
 		needsAuth := level == "authNoPriv" || level == "authPriv"
 		needsPriv := level == "authPriv"
@@ -261,7 +257,7 @@ func compileHost(h Host, getenv func(string) string) (hostSpec, error) {
 			if err != nil {
 				return hostSpec{}, err
 			}
-			pass, err := envSecret(getenv, h.AuthEnv, "auth_env", minPassphrase)
+			pass, err := snmpcfg.Secret(getenv, "auth_env", h.AuthEnv, minPassphrase)
 			if err != nil {
 				return hostSpec{}, err
 			}
@@ -276,7 +272,7 @@ func compileHost(h Host, getenv func(string) string) (hostSpec, error) {
 			if err != nil {
 				return hostSpec{}, err
 			}
-			pass, err := envSecret(getenv, h.PrivEnv, "priv_env", minPassphrase)
+			pass, err := snmpcfg.Secret(getenv, "priv_env", h.PrivEnv, minPassphrase)
 			if err != nil {
 				return hostSpec{}, err
 			}
@@ -335,26 +331,6 @@ func parseMode(s string) (plugin.PercentileMode, error) {
 	default:
 		return "", fmt.Errorf("percentile %q is invalid (want separate, greater, or greater_separate)", s)
 	}
-}
-
-func envSecret(getenv func(string) string, key, label string, min int) (string, error) {
-	if !envName.MatchString(key) {
-		return "", fmt.Errorf("%s %q must be an environment variable name", label, key)
-	}
-	v := getenv(key)
-	if v == "" {
-		return "", fmt.Errorf("%s %q is empty or unset", label, key)
-	}
-	if strings.ContainsAny(v, "\r\n\x00") {
-		return "", fmt.Errorf("%s %q contains a newline or NUL", label, key)
-	}
-	if len(v) > maxSecretLen {
-		return "", fmt.Errorf("%s %q is longer than %d characters", label, key, maxSecretLen)
-	}
-	if len(v) < min {
-		return "", fmt.Errorf("%s %q must be at least %d characters", label, key, min)
-	}
-	return v, nil
 }
 
 func validAddress(s string) error {

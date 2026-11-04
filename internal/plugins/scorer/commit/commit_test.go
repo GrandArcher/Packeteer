@@ -77,6 +77,11 @@ func TestScoreMatchesWeightedLoss(t *testing.T) {
 func TestConfigRejects(t *testing.T) {
 	cases := []struct{ y, want string }{
 		{"loss_weight: -1", "must not be negative"},
+		{"loss_weight: .nan", "must be a finite number"},
+		{"rtt_weight: .inf", "must be a finite number"},
+		{"reorder_weight: .nan", "must be a finite number"},
+		{"balance_slack: .nan", "balance_slack"},
+		{"min_mbps: .nan", "must be a finite number"},
 		{"loss_weight: 0\nrtt_weight: 0\njitter_weight: 0", "at least one weight"},
 		{"balance: round-robin", "balance"},
 		{"balance_slack: 1.5", "balance_slack"},

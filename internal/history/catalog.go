@@ -95,7 +95,7 @@ var Reports = []Def{
 	{Name: ReportSummary, Category: CategoryOverview, Filters: noCause,
 		Summary: "Totals: improvements by cause, active now, average loss and latency before and after, probes, estimated savings.",
 		Columns: []Column{
-			num("improvements", "Improvements", ""), num("performance", "Performance", ""), num("commit", "Commit", ""), num("cost", "Cost", ""),
+			num("improvements", "Improvements", ""), num("performance", "Performance", ""), num("commit", "Commit", ""), num("cost", "Cost", ""), num("static", "Static", ""),
 			num("active", "Active now", ""), num("steered_hours", "Steered", "h"),
 			num("before_loss_pct", "Loss before", "%"), num("after_loss_pct", "Loss after", "%"),
 			num("before_rtt_ms", "RTT before", "ms"), num("after_rtt_ms", "RTT after", "ms"),
@@ -119,9 +119,9 @@ var Reports = []Def{
 			num("prefixes", "Prefixes", ""), num("volume_mbps", "Moved", "Mbps"), num("steered_hours", "Steered", "h"),
 		}},
 	{Name: ReportCauses, Category: CategoryImprovements, Filters: Filters,
-		Summary: "Improvements started per UTC day, by cause (performance, commit, cost).",
+		Summary: "Improvements started per UTC day, by cause (performance, commit, cost, static).",
 		Columns: []Column{
-			txt("day", "Day (UTC)"), num("performance", "Performance", ""), num("commit", "Commit", ""), num("cost", "Cost", ""), num("total", "Total", ""),
+			txt("day", "Day (UTC)"), num("performance", "Performance", ""), num("commit", "Commit", ""), num("cost", "Cost", ""), num("static", "Static", ""), num("total", "Total", ""),
 		}},
 	{Name: ReportPerformance, Category: CategoryPerformance, Filters: Filters,
 		Summary: "Loss and latency before (native) and after (chosen provider), by cause.",

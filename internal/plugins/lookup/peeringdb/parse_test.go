@@ -43,6 +43,7 @@ func TestDecodeIXF(t *testing.T) {
  {"state":"active","vlan_list":[{"ipv4":{"address":"192.0.2.10","routeserver":true},"ipv6":{"address":"bad","routeserver":true}}]},
  {"state":"connected","vlan_list":[{"ipv6":{"address":"2001:db8::10"}}]},
  {"state":"inactive","vlan_list":[{"ipv4":{"address":"192.0.2.99"}}]},
+ {"state":"operational","vlan_list":[{"ipv4":{"address":"192.0.2.88"}}]},
  {"vlan_list":[{"ipv4":{"address":"192.0.2.77"}}]},
  {"state":"active","vlan_list":[{"ipv4":{"address":"127.0.0.1"}}]}]},
 {"asnum":0,"name":"No ASN","connection_list":[{"state":"active","vlan_list":[{"ipv4":{"address":"192.0.2.50"}}]}]}]}`))
@@ -54,6 +55,7 @@ func TestDecodeIXF(t *testing.T) {
 	want := []rawIXF{
 		{asn: 64496, v4: "192.0.2.10", rs: true},
 		{asn: 64496, v6: "2001:db8::10"},
+		{asn: 64496, v4: "192.0.2.88"},
 		{asn: 64496, v4: "192.0.2.77"},
 	}
 	if len(rows) != len(want) {

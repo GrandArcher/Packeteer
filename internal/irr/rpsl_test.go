@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
@@ -102,5 +103,34 @@ func TestExpand(t *testing.T) {
 	fail := errors.New("down")
 	if _, err := Expand("AS-A", func(string) ([]uint32, []string, bool, error) { return nil, nil, false, fail }); !errors.Is(err, fail) {
 		t.Fatalf("lookup error = %v", err)
+	}
+}
+
+// FAB-26: continuation lines are joined in linear time and one attribute
+// is bounded, so a hostile answer of "+x" lines cannot stall the checker.
+func TestParseRPSLContinuationIsLinearAndBounded(t *testing.T) {
+	const lines = 5000
+	body := "as-set: AS-EXAMPLE\nmembers: AS64496\n" + strings.Repeat("+ AS64497\n", lines) + "source: RADB\n"
+	start := time.Now()
+	objs := parseAll(t, body)
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("parse took %s", d)
+	}
+	got := objs[0].Get("members")
+	if want := "AS64496" + strings.Repeat(" AS64497", lines); got != want {
+		t.Fatalf("members = %d bytes, want %d", len(got), len(want))
+	}
+	if objs[0].Get("source") != "RADB" {
+		t.Fatalf("the attribute after a long value was lost: %+v", objs[0])
+	}
+
+	hostile := "as-set: AS-EXAMPLE\nmembers: AS64496\n" + strings.Repeat("+x\n", maxValue)
+	start = time.Now()
+	err := ParseRPSL(strings.NewReader(hostile), func(Object) error { return nil })
+	if err == nil || !strings.Contains(err.Error(), "longer than") {
+		t.Fatalf("an attribute over %d bytes parsed: %v", maxValue, err)
+	}
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("hostile parse took %s", d)
 	}
 }

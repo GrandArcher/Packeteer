@@ -119,8 +119,8 @@ func New(c plugin.Config, _ plugin.Env) (plugin.Scorer, error) {
 		if pair.in == nil {
 			continue
 		}
-		if *pair.in < 0 {
-			return nil, fmt.Errorf("%s %v must not be negative", name, *pair.in)
+		if err := weights.CheckNonNegative(name, *pair.in); err != nil {
+			return nil, err
 		}
 		*pair.out = *pair.in
 	}
@@ -141,7 +141,7 @@ func New(c plugin.Config, _ plugin.Env) (plugin.Scorer, error) {
 		return nil, fmt.Errorf("balance %q is invalid (want off, equal, or proportional)", cfg.Balance)
 	}
 	if cfg.BalanceSlack != nil {
-		if *cfg.BalanceSlack < 0 || *cfg.BalanceSlack > 1 {
+		if !(*cfg.BalanceSlack >= 0 && *cfg.BalanceSlack <= 1) { // also rejects NaN
 			return nil, fmt.Errorf("balance_slack %v must be between 0 and 1", *cfg.BalanceSlack)
 		}
 		s.slack = *cfg.BalanceSlack
@@ -152,8 +152,8 @@ func New(c plugin.Config, _ plugin.Env) (plugin.Scorer, error) {
 	if cfg.MaxAge > 0 {
 		s.maxAge = cfg.MaxAge
 	}
-	if cfg.MinMbps < 0 {
-		return nil, fmt.Errorf("min_mbps %v must not be negative", cfg.MinMbps)
+	if err := weights.CheckNonNegative("min_mbps", cfg.MinMbps); err != nil {
+		return nil, err
 	}
 	s.minMbps = cfg.MinMbps
 	s.lossOverride = cfg.LossOverride

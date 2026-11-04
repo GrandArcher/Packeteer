@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/sockerr"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 	"golang.org/x/sys/unix"
 )
@@ -42,7 +43,7 @@ func TestParseExtErrOffender(t *testing.T) {
 	data[5] = 3
 	binary.LittleEndian.PutUint16(data[16:18], unix.AF_INET)
 	copy(data[20:24], []byte{203, 0, 113, 9})
-	from, typ, ok := parseExtErrData(data)
+	from, typ, ok := sockerr.ParseData(data)
 	if !ok || typ != 3 || from.String() != "203.0.113.9" {
 		t.Fatalf("from=%s typ=%d ok=%v", from, typ, ok)
 	}
