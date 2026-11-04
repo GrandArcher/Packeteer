@@ -61,8 +61,8 @@ const maxCost = 4
 
 const maxLimiterKeys = 4096
 
-// limiterSet is a token bucket per key, refilled over a minute. A bucket
-// holds one minute of budget, so a client may spend it at once and then waits.
+// limiterSet is a token bucket per key, refilled at perMin a minute. A bucket
+// holds max(perMin, maxCost) tokens, so a client may spend it at once and then waits.
 type limiterSet struct {
 	mu     sync.Mutex
 	perMin int
