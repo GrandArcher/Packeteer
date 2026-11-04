@@ -339,10 +339,15 @@ func buildExplain(d Decision, f explainFacts, cfg Config, capUsed int) Explain {
 	g[GateIRR] = irrGate(d, cur, haveCur, cfg)
 	g[GateAllowlist] = allowlistGate(d, cfg)
 
+	retired := d.Action == ActionRetire
+	overloadStopped := !retired && strings.HasPrefix(d.Reason, overloadRefused)
 	switch {
 	case static:
 		g[GateThresholds] = Gate{Name: GateThresholds, Status: GateSkip, Detail: "a static policy pin does not use the thresholds"}
 		g[GateEvidence] = Gate{Name: GateEvidence, Status: GateSkip, Detail: "a static policy pin does not use the evidence rule"}
+	case switching && overloadStopped:
+		g[GateThresholds] = Gate{Name: GateThresholds, Status: GateSkip, Detail: f.challenger + " beat the native path on the thresholds; the interface capacity limit refused the switch"}
+		g[GateEvidence] = Gate{Name: GateEvidence, Status: GateSkip, Detail: "the evidence rule allows the switch to " + f.challenger}
 	case switching:
 		g[GateThresholds] = Gate{Name: GateThresholds, Status: GateSkip, Detail: f.challenger + " beat the native path on the thresholds; the " + d.Cause + " steer stays until the switch is confirmed"}
 		g[GateEvidence] = Gate{Name: GateEvidence, Status: GateSkip, Detail: "the evidence rule allows the switch to " + f.challenger}
@@ -357,11 +362,9 @@ func buildExplain(d Decision, f explainFacts, cfg Config, capUsed int) Explain {
 		g[GateThresholds] = thresholdsGate(cur, ch, haveCur, haveCh, cfg)
 		g[GateEvidence] = evidenceGate(d, f, cur, ch, haveCur, haveCh, pairBetter, cfg)
 	}
-	retired := d.Action == ActionRetire
 	// The evidence gate fails only on a move the rule refused, which never
 	// reached confirm_rounds or the cap.
 	evidenceStopped := g[GateEvidence].Status == GateFail
-	overloadStopped := !retired && strings.HasPrefix(d.Reason, overloadRefused)
 	medStopped := strings.HasPrefix(d.Reason, medRefused)
 	reached := moved || (pairBetter && !static && !plan && !evidenceStopped && !medStopped)
 	if overloadStopped {
@@ -741,7 +744,8 @@ func allowlistGate(d Decision, cfg Config) Gate {
 // current path's measurement, then the comparison and what a gate removed
 // from it, then the move's own gates. A recommended static pin skips the
 // comparison and stops only at the cooldown, the allowlist, or the cap; a
-// static pin or planned keep stops only at confirm_rounds or hold_time.
+// static pin or planned keep stops only at confirm_rounds, hold_time, or,
+// for a performance switch off a planned steer, the capacity limit.
 func blockedBy(g map[string]Gate, f explainFacts, d Decision, pairBetter, pinStopped, steerKeep, usableCur bool) string {
 	failed := func(names ...string) string {
 		for _, n := range names {
@@ -759,7 +763,7 @@ func blockedBy(g map[string]Gate, f explainFacts, d Decision, pairBetter, pinSto
 	case steerKeep:
 		// An excluded or removed provider that would otherwise win does
 		// not hold back a pin or a planned steer that stays where it is.
-		return failed(GateConfirm, GateHoldTime)
+		return failed(GateConfirm, GateHoldTime, GateOverload)
 	case pinStopped:
 		return failed(GateHoldTime, GateAllowlist, GateCap)
 	case f.ignore || (d.Cause == plugin.CauseStatic && g[GatePolicy].Status == GateFail):
