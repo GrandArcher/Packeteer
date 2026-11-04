@@ -405,3 +405,60 @@ func TestMoreSpecificReservedAndNested(t *testing.T) {
 	}
 	onlyLearned(t, ann, rib)
 }
+
+// The improvement counter behind the max_improvements check must equal a
+// recount of the slots after every kind of change (#491).
+func TestImprovementCounterMatchesRecount(t *testing.T) {
+	ctx := context.Background()
+	rib := learned("198.51.100.0/24", "198.51.100.0/25", "198.51.100.128/25", "203.0.113.0/24")
+	ann := &fakeAnn{}
+	c, err := New(msCfg(100, nil), ann, rib, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := func(step string, want int) {
+		t.Helper()
+		n := 0
+		for _, s := range c.active {
+			if !s.moreSpecific() {
+				n++
+			}
+		}
+		if n != want || c.improvements != want || c.Active() != want {
+			t.Fatalf("%s: recount %d, counter %d, Active %d, want %d", step, n, c.improvements, c.Active(), want)
+		}
+	}
+	check("empty", 0)
+	if err := c.Sync(ctx, []policy.Improvement{imp("198.51.100.0/24", "b")}); err != nil {
+		t.Fatal(err)
+	}
+	check("/24 with two more-specifics", 1)
+	if c.Routes() != 3 {
+		t.Fatalf("routes = %d, want 3", c.Routes())
+	}
+	if err := c.Sync(ctx, []policy.Improvement{imp("198.51.100.0/24", "b"), imp("203.0.113.0/24", "b")}); err != nil {
+		t.Fatal(err)
+	}
+	check("second improvement", 2)
+	// A learned more-specific becomes an improvement of its own.
+	if err := c.Sync(ctx, []policy.Improvement{imp("198.51.100.0/24", "b"), imp("198.51.100.0/25", "b"), imp("203.0.113.0/24", "b")}); err != nil {
+		t.Fatal(err)
+	}
+	check("more-specific promoted", 3)
+	if err := c.WithdrawPrefix(ctx, pfx("198.51.100.0/24")); err != nil {
+		t.Fatal(err)
+	}
+	check("withdrawn /24 and its children", 2)
+	if err := c.Sync(ctx, nil); err != nil {
+		t.Fatal(err)
+	}
+	check("empty sync", 0)
+	if err := c.Sync(ctx, []policy.Improvement{imp("203.0.113.0/24", "b")}); err != nil {
+		t.Fatal(err)
+	}
+	check("one again", 1)
+	if err := c.WithdrawAll(ctx); err != nil {
+		t.Fatal(err)
+	}
+	check("withdraw all", 0)
+}

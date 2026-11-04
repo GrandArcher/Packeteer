@@ -128,6 +128,7 @@ func newEngine(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, on
 		Timeout:              cfg.Probe.Timeout,
 		Packets:              cfg.Probe.Packets,
 		Workers:              cfg.Probe.Workers,
+		ProviderInflight:     cfg.Probe.ProviderInflight,
 		PerTargetConcurrency: cfg.Probe.PerTargetConcurrency,
 		RoundTimeout:         maxResultAge(cfg),
 		RetryLossPct:         cfg.Probe.RetryLossPct,

@@ -28,6 +28,7 @@ import (
 	"log/slog"
 	"net"
 	"net/netip"
+	"runtime/debug"
 	"slices"
 	"strconv"
 	"sync"
@@ -58,7 +59,8 @@ const (
 
 // Config is the plugin config.
 type Config struct {
-	// Listen is host:port for the station (default ":11019").
+	// Listen is host:port for the station (default "127.0.0.1:11019").
+	// BMP has no authentication, so binding every interface is opt-in.
 	Listen string `yaml:"listen"`
 	// Routers lists the router addresses allowed to connect. Required.
 	Routers []string `yaml:"routers"`
@@ -114,7 +116,7 @@ func New(c plugin.Config, env plugin.Env) (plugin.RIBSource, error) {
 		s.log = slog.Default()
 	}
 	if s.listen == "" {
-		s.listen = ":" + strconv.Itoa(DefaultPort)
+		s.listen = loopbackListen(DefaultPort)
 	}
 	if err := checkListen(s.listen); err != nil {
 		return nil, err
@@ -144,6 +146,11 @@ func New(c plugin.Config, env plugin.Env) (plugin.RIBSource, error) {
 	}
 	s.idle = cfg.IdleTimeout
 	return s, nil
+}
+
+// loopbackListen is the default listen address for port.
+func loopbackListen(port int) string {
+	return net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
 }
 
 // checkListen validates a host:port listen address.
@@ -315,7 +322,10 @@ func (s *Station) serve(router netip.Addr, sess *session) {
 		r = &idleReader{conn: sess.conn, idle: s.idle}
 	}
 	err := readMessages(r, func(msg []byte) error {
-		evs, stop := d.message(msg)
+		evs, stop, err := s.decode(d, router, msg)
+		if err != nil {
+			return err
+		}
 		for _, ev := range evs {
 			s.emit(ev)
 		}
@@ -331,6 +341,22 @@ func (s *Station) serve(router netip.Addr, sess *session) {
 		return
 	}
 	s.log.Info("bmp session down", "router", router)
+}
+
+// decode runs the decoder on one message. A panic in it ends only this
+// session, whose decoder state is dropped with it (RIBRouterDown follows, as
+// for a read error). The sink is never called under this recover: a panic
+// there may leave the RIB view locked, and the process must die and withdraw
+// its routes rather than run on a frozen view.
+func (s *Station) decode(d *decoder, router netip.Addr, msg []byte) (evs []plugin.RIBEvent, stop bool, err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			s.log.Error("bmp: panic decoding a message; dropping router", "router", router, "panic", p, "stack", string(debug.Stack()))
+			evs, stop, err = nil, false, fmt.Errorf("bmp: panic decoding a message: %v", p)
+		}
+	}()
+	evs, stop = d.message(msg)
+	return evs, stop, nil
 }
 
 // idleReader sets a read deadline before every read, so a session with no
@@ -415,7 +441,11 @@ func (d *decoder) options(h gobmp.BMPPeerHeader) []*bgp.MarshallingOption {
 // message decodes one BMP message. stop is true on a termination message.
 func (d *decoder) message(raw []byte) (evs []plugin.RIBEvent, stop bool) {
 	msg, err := gobmp.ParseBMPMessageWithOptions(raw, d.options)
-	if msg == nil {
+	// The parser recovers its own panics (a body shorter than its fields)
+	// and then returns the partly decoded message with the error. Only a
+	// route monitoring error is handled below; any other type would be
+	// read as if it were whole, such as a peer up with no OPENs.
+	if msg == nil || (err != nil && msg.Header.Type != gobmp.BMP_MSG_ROUTE_MONITORING) {
 		return d.undecodable(raw, err), false
 	}
 	switch msg.Header.Type {

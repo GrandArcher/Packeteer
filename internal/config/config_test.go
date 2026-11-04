@@ -472,6 +472,8 @@ func TestParseErrors(t *testing.T) {
 		{"too many workers", edit(t, validYAML, "packets: 10", "packets: 10\n  workers: 5000"), "probe.workers 5000"},
 		{"negative pps", edit(t, validYAML, "packets: 10", "packets: 10\n  rate_limit_pps: -5"), "probe.rate_limit_pps -5"},
 		{"too high pps", edit(t, validYAML, "packets: 10", "packets: 10\n  rate_limit_pps: 200000"), "probe.rate_limit_pps 200000"},
+		{"negative provider inflight", edit(t, validYAML, "packets: 10", "packets: 10\n  provider_inflight: -1"), "probe.provider_inflight -1 must be between 0 and probe.workers 8"},
+		{"provider inflight over workers", edit(t, validYAML, "packets: 10", "packets: 10\n  workers: 4\n  provider_inflight: 5"), "probe.provider_inflight 5 must be between 0 and probe.workers 4"},
 		{"bad per-target", edit(t, validYAML, "packets: 10", "packets: 10\n  per_target_concurrency: 65"), "probe.per_target_concurrency 65"},
 		{"negative per-asn pps", edit(t, validYAML, "packets: 10", "packets: 10\n  per_asn_pps: -1"), "probe.per_asn_pps -1 must be between 0 and probe.rate_limit_pps 100"},
 		{"per-asn pps over global", edit(t, validYAML, "packets: 10", "packets: 10\n  rate_limit_pps: 50\n  per_asn_pps: 51"), "probe.per_asn_pps 51 must be between 0 and probe.rate_limit_pps 50"},

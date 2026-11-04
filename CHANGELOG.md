@@ -6,6 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Changed
 
+- Probe/RIB at 100k targets: bounded probe outcome channel, `probe.provider_inflight` cap, looking glass via `Find`, RIB copies rebuilt at most every 5 s, improvement counter, nightly bench (#491).
 - Prober memory evicts in one sort-based pass instead of a scan per host; sub-range jobs stop after two silent hosts of a down provider; job order uses the reloaded interval (#507).
 - Audit hygiene: ENV.md and threat model gaps, release pins in quickstart, Compose and install.sh, ASCII gate on source, documentation test data, errcheck on, image and action pins (#494).
 - `-pbr linux -apply` adds before it removes, rolls back a failed run, reads named tables; `make test` lists skipped tests; fuzz targets for v5, sFlow, BMP, RTR, BER, TWAMP, pcap run in CI (#510).
@@ -15,6 +16,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 - Signed `SHA256SUMS` names its version, `-version` must match exactly; herd hub pins keys per ASN, checks resolved addresses; CSV formulas escaped; sqlite DSN via url.URL; bounded whois line (#493).
 - Report, what-if, blast, preflight, config-write and send-now errors return a generic message; the detail (paths, SQL text) stays in the log (#510).
 - Auth lockout counts failed passwords per user and address and never refuses a valid session or token; the herd per-address table evicts instead of refusing (#506).
+- BMP stations bind `127.0.0.1` without `listen`; a decoder panic ends only that router's session; a partly decoded peer up drops the peer; GO-2026-4736 exposure documented (#490).
 - The config editor refuses a new `*_env` name outside its plugin's prefix (`PACKETEER_SNMP_*`, ...); `influxdb` and a feed with a token need https, http only to loopback (#504).
 - Flow decoder: IPFIX templates check their length before allocating, a bad template set ends the datagram, and sampling rates go with their last template; v9/IPFIX fuzz tests (#502).
 - A RIS Live leak sighting withdraws or holds only an injected prefix with the local ASN next to the RIS peer, else emits `leak.unconfirmed`; large communities are read from RIS (#505).
@@ -30,6 +32,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 ### Upgrade notes
 
 - List your flow routers in the flow source's new `exporters` key; without it every source is still accepted and a warning is logged (#493).
+- A `bmp` RIB or leak source without `listen` now binds `127.0.0.1`; set `listen` to the address the routers connect to (`:11019` for every interface) (#490).
 - Use an `https` `url` for `influxdb` and for an `http` threat feed with `token_env` (http only to loopback); in the editor, name new secrets with the prefixes in docs/ENV.md (#504).
 - `packeteer-policy` exits with code 2 without `-community` (your `packeteer_community`) or with a non-loopback `http` `-url`; add `-community`, and `-allow` with your allowlist (#488).
 - Rename webhook/`otlp` variables to `PACKETEER_WEBHOOK_*`/`PACKETEER_OTLP_*` (others fail at start); use final URLs; OIDC without `email_verified`: `username_claim: sub` (#489).

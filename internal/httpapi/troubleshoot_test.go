@@ -25,7 +25,12 @@ func (f tsRIB) Exact(p netip.Prefix) (rib.Route, bool) {
 func (f tsRIB) Covering(p netip.Prefix) (rib.Route, bool) {
 	return f.r, f.r.Prefix.Bits() <= p.Bits() && f.r.Prefix.Contains(p.Addr())
 }
-func (f tsRIB) Routes() []rib.Route { return []rib.Route{f.r} }
+func (f tsRIB) Find(keep func(rib.Route) bool, _ func(a, b rib.Route) bool, _ int) ([]rib.Route, int) {
+	if keep(f.r) {
+		return []rib.Route{f.r}, 1
+	}
+	return nil, 0
+}
 func (f tsRIB) Paths(p netip.Prefix) []rib.Route {
 	if p.Masked() == f.r.Prefix {
 		return []rib.Route{f.r}

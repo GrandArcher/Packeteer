@@ -770,6 +770,9 @@ type Probe struct {
 	Packets  int           `yaml:"packets"`
 	// Workers is the number of concurrent probe runs.
 	Workers int `yaml:"workers"`
+	// ProviderInflight caps the probe runs one provider may have in flight
+	// at once (#491). Zero is no cap beyond the fair share of Workers.
+	ProviderInflight int `yaml:"provider_inflight"`
 	// RateLimitPPS caps the global probe packet rate (packets per second).
 	RateLimitPPS int `yaml:"rate_limit_pps"`
 	// PerASNPPS caps the probe and trace packets per second toward one

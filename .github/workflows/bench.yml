@@ -1,0 +1,31 @@
+name: bench
+
+# Nightly Go benchmarks (#491), including the 100,000-target probe round and
+# decide benchmarks. Schedule only: not a pull request check and not part of
+# the required checks. Results are uploaded as an artifact so two nights can
+# be compared with benchstat. No network, no BGP: the benchmarks use
+# documentation prefixes and fake probers.
+on:
+  schedule:
+    - cron: "23 2 * * *" # nightly, 02:23 UTC
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+      - name: benchmarks
+        run: go test -run '^$' -bench . -benchmem -count=3 -timeout 25m ./... | tee bench.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: always()
+        with:
+          name: bench
+          path: bench.txt
+          if-no-files-found: ignore

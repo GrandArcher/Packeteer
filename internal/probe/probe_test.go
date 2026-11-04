@@ -1805,3 +1805,38 @@ func TestCombineStatsPhases(t *testing.T) {
 		t.Fatalf("pooled phases = %v %v %v, want %v", got.Connect, got.Handshake, got.TTFB, want)
 	}
 }
+
+func TestProviderInflightCapsConcurrentRunsPerProvider(t *testing.T) {
+	var mu sync.Mutex
+	cur, peak := map[string]int{}, map[string]int{}
+	p := &fakeProber{fn: func(_ context.Context, req plugin.ProbeRequest) (plugin.ProbeResult, error) {
+		mu.Lock()
+		cur[req.Provider]++
+		peak[req.Provider] = max(peak[req.Provider], cur[req.Provider])
+		mu.Unlock()
+		time.Sleep(10 * time.Millisecond)
+		mu.Lock()
+		cur[req.Provider]--
+		mu.Unlock()
+		return plugin.ProbeResult{Sent: req.Count, RTTs: ms(1)}, nil
+	}}
+	var targets []plugin.Target
+	for i := 1; i <= 12; i++ {
+		targets = append(targets, plugin.Target{Prefix: netip.MustParsePrefix(fmt.Sprintf("198.51.100.%d/32", i)), Host: netip.MustParseAddr(fmt.Sprintf("198.51.100.%d", i)), Pinned: true})
+	}
+	o := opts()
+	o.Workers, o.PerTargetConcurrency, o.ProviderInflight = 8, 8, 2
+	e, err := New([]Provider{provA, provB}, []NamedProber{{Name: "p", Prober: p}}, src(targets...), o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.RunOnce(context.Background())
+	for _, prov := range []string{provA.Name, provB.Name} {
+		if peak[prov] != 2 {
+			t.Errorf("peak runs for %s = %d, want 2", prov, peak[prov])
+		}
+	}
+	if n := len(e.Results()); n != 24 {
+		t.Errorf("results = %d, want 24: every job must still run under the cap", n)
+	}
+}
