@@ -255,8 +255,8 @@ func TestCommitSetupEditsHostsAndUntracks(t *testing.T) {
 }
 
 func TestCommitSetupHostRefusals(t *testing.T) {
-	good := FormCommitHost{Key: "edge", Name: "edge", Address: "192.0.2.254", Version: "3", UsernameEnv: "U_ENV", SecurityLevel: "authPriv",
-		AuthProtocol: "SHA", AuthEnv: "A_ENV", PrivProtocol: "AES", PrivEnv: "P_ENV"}
+	good := FormCommitHost{Key: "edge", Name: "edge", Address: "192.0.2.254", Version: "3", UsernameEnv: "PACKETEER_SNMP_USER", SecurityLevel: "authPriv",
+		AuthProtocol: "SHA", AuthEnv: "PACKETEER_SNMP_AUTH", PrivProtocol: "AES", PrivEnv: "PACKETEER_SNMP_PRIV"}
 	cases := []struct {
 		name string
 		edit func(h *FormCommitHost)
@@ -264,14 +264,14 @@ func TestCommitSetupHostRefusals(t *testing.T) {
 	}{
 		{"auth passphrase typed in", func(h *FormCommitHost) { h.AuthEnv = "my secret pass" }, "auth_env"},
 		{"user typed in", func(h *FormCommitHost) { h.UsernameEnv = "admin user" }, "username_env"},
-		{"v3 with a community", func(h *FormCommitHost) { h.CommunityEnv = "C_ENV" }, "community_env does not apply"},
+		{"v3 with a community", func(h *FormCommitHost) { h.CommunityEnv = "PACKETEER_SNMP_COMMUNITY" }, "community_env does not apply"},
 		{"no auth, but a protocol", func(h *FormCommitHost) { h.SecurityLevel, h.PrivProtocol, h.PrivEnv = "noAuthNoPriv", "", "" }, "auth_protocol does not apply"},
 		{"authNoPriv with privacy", func(h *FormCommitHost) { h.SecurityLevel = "authNoPriv" }, "priv_protocol does not apply"},
 		{"unknown auth protocol", func(h *FormCommitHost) { h.AuthProtocol = "CRC" }, "auth_protocol"},
 		{"missing priv env", func(h *FormCommitHost) { h.PrivEnv = "" }, "priv_env"},
 		{"bad security level", func(h *FormCommitHost) { h.SecurityLevel = "auth" }, "security_level"},
 		{"v2c with a user", func(h *FormCommitHost) {
-			*h = FormCommitHost{Key: "edge", Name: "edge", Address: "192.0.2.254", Version: "2c", CommunityEnv: "C_ENV", UsernameEnv: "U_ENV"}
+			*h = FormCommitHost{Key: "edge", Name: "edge", Address: "192.0.2.254", Version: "2c", CommunityEnv: "PACKETEER_SNMP_COMMUNITY", UsernameEnv: "PACKETEER_SNMP_USER"}
 		}, "username_env does not apply"},
 		{"bad version", func(h *FormCommitHost) { h.Version = "1" }, "version"},
 		{"bad port", func(h *FormCommitHost) { h.Port = "70000" }, "port"},
@@ -467,5 +467,35 @@ func TestCommitSetupKeepsFileCase(t *testing.T) {
 	}
 	if _, err := config.Parse(out); err != nil {
 		t.Fatalf("parse: %v\n%s", err, out)
+	}
+}
+
+// A new or changed *_env name must start with PACKETEER_SNMP_, so the form
+// cannot point a host's community at another secret such as the admin
+// password (#504). A name already in the file is kept when other fields
+// of the host change.
+func TestCommitSetupHostEnvNames(t *testing.T) {
+	legacy := strings.Replace(formYAML, "community_env: PACKETEER_SNMP_COMMUNITY", "community_env: SNMP_COMMUNITY", 1)
+	if legacy == formYAML {
+		t.Fatal("fixture has no community_env")
+	}
+	f, _ := ParseForm([]byte(legacy))
+	f.Commit.Hosts[0].Port = "1161"
+	out, err := ApplyForm([]byte(legacy), f)
+	if err != nil || !strings.Contains(string(out), "community_env: SNMP_COMMUNITY") || !strings.Contains(string(out), "port: 1161") {
+		t.Fatalf("editing the port of a host with a name from the file: %v\n%s", err, out)
+	}
+	f, _ = ParseForm([]byte(legacy))
+	f.Commit.Hosts[0].CommunityEnv = "PACKETEER_ADMIN_PASSWORD"
+	if _, err := ApplyForm([]byte(legacy), f); err == nil || !strings.Contains(err.Error(), `community_env: "PACKETEER_ADMIN_PASSWORD" must start with PACKETEER_SNMP_`) {
+		t.Fatalf("changed name: err = %v", err)
+	}
+	for env, ok := range map[string]bool{"PACKETEER_ADMIN_PASSWORD": false, "PACKETEER_OIDC_CLIENT_SECRET": false, "PACKETEER_SNMP_": false, "PACKETEER_SNMP_EDGE2": true} {
+		f, _ = ParseForm([]byte(formYAML))
+		f.Commit.Hosts = append(f.Commit.Hosts, FormCommitHost{Name: "edge2", Address: "192.0.2.253", Version: "2c", CommunityEnv: env})
+		_, err := ApplyForm([]byte(formYAML), f)
+		if (err == nil) != ok || (!ok && !strings.Contains(err.Error(), "commit.hosts[1].community_env")) {
+			t.Errorf("new host with %s: err = %v, want accepted %v", env, err, ok)
+		}
 	}
 }

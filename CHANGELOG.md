@@ -9,6 +9,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 - Audit hygiene: ENV.md and threat model gaps, release pins in quickstart, Compose and install.sh, ASCII gate on source, documentation test data, errcheck on, image and action pins (#494).
 ### Security
 
+- The config editor refuses a new `*_env` name outside its plugin's prefix (`PACKETEER_SNMP_*`, ...); `influxdb` and a feed with a token need https, http only to loopback (#504).
 - Flow decoder: IPFIX templates check their length before allocating, a bad template set ends the datagram, and sampling rates go with their last template; v9/IPFIX fuzz tests (#502).
 - The config editor refuses any `upgrade.*` change and checks exec/grpc plugins against the running config after a reload, not the start-time one (#501).
 - `packeteer-policy` requires https (http only to loopback) and `-community`, checks each route (NO_EXPORT, communities, `-allow`); GR off in the examples; feed token backoff, connection cap (#488).
@@ -17,6 +18,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Upgrade notes
 
+- Use an `https` `url` for `influxdb` and for an `http` threat feed with `token_env` (http only to loopback); in the editor, name new secrets with the prefixes in docs/ENV.md (#504).
 - `packeteer-policy` exits with code 2 without `-community` (your `packeteer_community`) or with a non-loopback `http` `-url`; add `-community`, and `-allow` with your allowlist (#488).
 - Rename webhook/`otlp` variables to `PACKETEER_WEBHOOK_*`/`PACKETEER_OTLP_*` (others fail at start); use final URLs; OIDC without `email_verified`: `username_claim: sub` (#489).
 - Remove `0.0.0.0/0` or `::/0` from `allowlist.prefixes`; a config with one no longer loads (#486).

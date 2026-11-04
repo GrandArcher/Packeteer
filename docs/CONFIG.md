@@ -1611,7 +1611,7 @@ curl -u "$USER:$PASS" -X DELETE http://127.0.0.1:8080/api/maintenance/api-1
 | | `headers` | none | Request headers; values may use `${PACKETEER_OTLP_*}` variables, and any other or unset variable is an error. |
 | | `ca_file` | system roots | PEM for an `https` endpoint. |
 | | `service_name` | `packeteer` | The `service.name` resource attribute. |
-| `influxdb` | `url` | required | Server base URL, for example `http://influxdb.example.net:8086`; points go to `/api/v2/write`. |
+| `influxdb` | `url` | required | Server base URL, for example `https://influxdb.example.net:8086`; points go to `/api/v2/write`. `http` only to a loopback host, as the token is sent (#504). |
 | | `org`, `bucket` | required | Where points are written. |
 | | `token_env` | required | Environment variable holding an API token with write access to the bucket. |
 | | `ca_file` | system roots | PEM for an `https` URL. |
@@ -2105,7 +2105,7 @@ The built-in threat feed (#134). It GETs the whole list every `threat_feeds.inte
 |---|---|---|
 | `url` | none | Required. Absolute `http` or `https` URL without credentials or query string. |
 | `format` | `cidr` | `cidr`: one CIDR or bare address per line; blank lines skipped; text after `#` or `;` is the entry's comment (`192.0.2.0/24 ; SBL1`). `json`: `{"entries": [{"prefix": "192.0.2.0/24", "comment": "..."}]}`; other keys are ignored. Host bits, a default route, or an IPv4-mapped IPv6 prefix fail the fetch. |
-| `token_env` | none | Name of an environment variable holding a bearer token, sent as `Authorization: Bearer`. Unset sends none. The token is never read from the config file; a set name whose variable is empty refuses to start. |
+| `token_env` | none | Name of an environment variable holding a bearer token, sent as `Authorization: Bearer`. Unset sends none. With a token, `url` must be `https` (`http` only to a loopback host). The token is never read from the config file; a set name whose variable is empty refuses to start. |
 
 ### Announcer `gobgp`
 

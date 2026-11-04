@@ -18,6 +18,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/plugins/oop"
 	"github.com/GrandArcher/Packeteer/internal/subscribe"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
+	"gopkg.in/yaml.v3"
 )
 
 // Remaining UI features (#34): the config editor, custom dashboards, and
@@ -110,6 +111,9 @@ func candidateChecker(getenv func(string) string, httpUser string) func(running 
 		if err := checkProgramsUnchanged(running, next); err != nil {
 			return nil, err
 		}
+		if err := checkEnvNames(running, next); err != nil {
+			return nil, err
+		}
 		quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
 		if _, err := preflight(next, quiet, getenv, httpUser, true); err != nil {
 			return nil, err
@@ -150,7 +154,15 @@ type programSpec struct {
 
 // programSpecs lists every exec or grpc plugin spec anywhere in cfg.
 func programSpecs(cfg *config.Config) []programSpec {
-	var out []programSpec
+	specs, _ := walkConfig(cfg)
+	return slices.DeleteFunc(specs, func(sp programSpec) bool { return !oop.RunsProgram(sp.spec.Type) })
+}
+
+// walkConfig lists every plugin spec anywhere in cfg, and every typed *_env
+// field as an envKey whose place is the yaml path of its block.
+func walkConfig(cfg *config.Config) ([]programSpec, []envKey) {
+	var specs []programSpec
+	var envs []envKey
 	specType := reflect.TypeFor[config.PluginSpec]()
 	var walk func(v reflect.Value, field string)
 	walk = func(v reflect.Value, field string) {
@@ -169,9 +181,7 @@ func programSpecs(cfg *config.Config) []programSpec {
 			}
 		case reflect.Struct:
 			if v.Type() == specType {
-				if sp := v.Interface().(config.PluginSpec); oop.RunsProgram(sp.Type) {
-					out = append(out, programSpec{field: field, spec: sp})
-				}
+				specs = append(specs, programSpec{field: field, spec: v.Interface().(config.PluginSpec)})
 				return
 			}
 			t := v.Type()
@@ -184,6 +194,12 @@ func programSpecs(cfg *config.Config) []programSpec {
 				if name == "-" {
 					continue
 				}
+				if strings.HasSuffix(name, "_env") && f.Type.Kind() == reflect.String {
+					if s := v.Field(i).String(); s != "" {
+						envs = append(envs, envKey{place: field, key: name, name: s})
+					}
+					continue
+				}
 				path := field
 				if name != "" {
 					path = strings.TrimPrefix(field+"."+name, ".")
@@ -193,7 +209,69 @@ func programSpecs(cfg *config.Config) []programSpec {
 		}
 	}
 	walk(reflect.ValueOf(cfg), "")
-	return out
+	return specs, envs
+}
+
+// envKey is one *_env key: the variable it names, and its place as
+// configedit.EnvNameAllowed reads it.
+type envKey struct {
+	place, key, name string
+}
+
+// envKeys lists every *_env key in cfg, typed fields and plugin configs.
+func envKeys(cfg *config.Config) []envKey {
+	specs, envs := walkConfig(cfg)
+	for _, sp := range specs {
+		place := sp.field + "/" + sp.spec.Type
+		var walk func(n *yaml.Node)
+		walk = func(n *yaml.Node) {
+			switch n.Kind {
+			case yaml.MappingNode:
+				for i := 0; i+1 < len(n.Content); i += 2 {
+					k, v := n.Content[i], n.Content[i+1]
+					if strings.HasSuffix(k.Value, "_env") && v.Kind == yaml.ScalarNode {
+						envs = append(envs, envKey{place: place, key: k.Value, name: v.Value})
+						continue
+					}
+					walk(v)
+				}
+			case yaml.SequenceNode, yaml.DocumentNode:
+				for _, c := range n.Content {
+					walk(c)
+				}
+			case yaml.AliasNode:
+				if n.Alias != nil {
+					walk(n.Alias)
+				}
+			}
+		}
+		walk(&sp.spec.Config)
+	}
+	return envs
+}
+
+// checkEnvNames refuses a candidate with a *_env key that names a variable
+// configedit.EnvNameAllowed does not accept at its place, unless the
+// running config names the same variable at that place: a plugin sends
+// that variable's value to the host it is configured with (#504).
+func checkEnvNames(running, next *config.Config) error {
+	have := map[envKey]bool{}
+	for _, r := range envKeys(running) {
+		have[envKey{place: r.place, name: r.name}] = true
+	}
+	var errs []error
+	for _, r := range envKeys(next) {
+		if r.name == "" || have[envKey{place: r.place, name: r.name}] || configedit.EnvNameAllowed(r.place, r.name) {
+			continue
+		}
+		want := "a name the running config already uses there"
+		if p := configedit.EnvPrefixes(r.place); len(p) > 0 {
+			want = "a name that starts with " + strings.Join(p, " or ")
+		}
+		errs = append(errs, fmt.Errorf("%s: %s %q cannot be set through the config editor; use %s, or edit the mounted file",
+			r.place, r.key, r.name, want))
+	}
+	return errors.Join(errs...)
 }
 
 // setupInfo is what the dashboard's first-run checklist reads from the

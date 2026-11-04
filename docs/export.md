@@ -37,7 +37,7 @@ With `events` in `streams`, each event is a log record: the message is the body,
 
 ## InfluxDB
 
-Points go to the v2 write API with nanosecond precision and the header `Authorization: Token <token>`; InfluxDB 1.8 and 3 accept the same call. The token is read from the environment variable `token_env` names; use an `https` URL unless the server is on a trusted network.
+Points go to the v2 write API with nanosecond precision and the header `Authorization: Token <token>`; InfluxDB 1.8 and 3 accept the same call. The token is read from the environment variable `token_env` names. The URL must be `https`; plain `http` is refused except to a loopback host (#504).
 
 | Measurement | Tags | Fields |
 |---|---|---|

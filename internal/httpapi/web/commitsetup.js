@@ -7,6 +7,10 @@
 
 var cs = {scorer: "weighted", balance: "", precedence: "performance"};
 var CS_ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+// A new host's variables must start with this prefix, so the form cannot
+// point a community at another secret such as the admin password (#504).
+// The server also refuses a changed name on a host from the file.
+var CS_ENV_PREFIX = "PACKETEER_SNMP_";
 var CS_PERCENTILES = [["greater_separate", "greater of the in and out 95th"], ["greater", "95th of the larger direction"], ["separate", "in and out apart (out is compared)"]];
 
 function csKey(p) { return p.key || p.name; }
@@ -89,8 +93,13 @@ function csHostNames() {
 
 function csEnvProblem(h, key, what, not) {
   var v = h[key] || "";
-  if (CS_ENV_NAME.test(v)) return [];
-  return ["SNMP host " + (h.name || "") + ": enter the name of the environment variable that holds " + what + " (letters, digits, underscore), not " + (not || "the secret") + " itself."];
+  if (!CS_ENV_NAME.test(v)) {
+    return ["SNMP host " + (h.name || "") + ": enter the name of the environment variable that holds " + what + " (letters, digits, underscore), not " + (not || "the secret") + " itself."];
+  }
+  if (!h.key && (v.indexOf(CS_ENV_PREFIX) !== 0 || v.length === CS_ENV_PREFIX.length)) {
+    return ["SNMP host " + (h.name || "") + ": the variable that holds " + what + " must start with " + CS_ENV_PREFIX + "; other variables are set only in the mounted file."];
+  }
+  return [];
 }
 
 // csHostProblems are the checks of one SNMP host, the same as the server's.
@@ -241,7 +250,7 @@ function renderCsHosts() {
     card.appendChild(row);
     var creds = el("div", "row");
     if (h.version === "3") {
-      csEnvInput(creds, h, "User variable (name only)", "username_env", "Environment variable that holds the SNMP user name, for example PACKETEER_SNMP_USER.");
+      csEnvInput(creds, h, "User variable (name only)", "username_env", "Environment variable that holds the SNMP user name; a new name starts with PACKETEER_SNMP_, for example PACKETEER_SNMP_USER.");
       csSelectField(creds, h, "Security level", "security_level", opts(snmp.security_levels), "What the session protects.", function () {
         if (h.security_level === "noAuthNoPriv") ["auth_protocol", "auth_env", "priv_protocol", "priv_env"].forEach(function (k) { h[k] = ""; });
         if (h.security_level === "authNoPriv") { h.priv_protocol = ""; h.priv_env = ""; }
@@ -251,17 +260,17 @@ function renderCsHosts() {
       });
       if (h.security_level !== "noAuthNoPriv") {
         csSelectField(creds, h, "Authentication", "auth_protocol", opts(snmp.auth_protocols), "Protocol of the authentication secret.");
-        csEnvInput(creds, h, "Authentication variable (name only)", "auth_env", "Environment variable that holds the secret (at least 8 characters), for example PACKETEER_SNMP_AUTH.");
+        csEnvInput(creds, h, "Authentication variable (name only)", "auth_env", "Environment variable that holds the secret (at least 8 characters); a new name starts with PACKETEER_SNMP_, for example PACKETEER_SNMP_AUTH.");
       }
       if (h.security_level === "authPriv") {
         csSelectField(creds, h, "Privacy", "priv_protocol", opts(snmp.priv_protocols), "Protocol of the privacy secret.");
-        csEnvInput(creds, h, "Privacy variable (name only)", "priv_env", "Environment variable that holds the secret (at least 8 characters), for example PACKETEER_SNMP_PRIV.");
+        csEnvInput(creds, h, "Privacy variable (name only)", "priv_env", "Environment variable that holds the secret (at least 8 characters); a new name starts with PACKETEER_SNMP_, for example PACKETEER_SNMP_PRIV.");
       }
       var ctx = rowInput(h.context_name);
       ctx.addEventListener("input", function () { markDirty(ctx); h.context_name = ctx.value.trim(); });
       creds.appendChild(labeled("Context", ctx, "SNMP context name. Optional, and not a credential.", "telemetry.snmp.hosts.context_name"));
     } else {
-      csEnvInput(creds, h, "Community variable (name only)", "community_env", "Environment variable that holds the SNMP community, for example PACKETEER_SNMP_COMMUNITY.");
+      csEnvInput(creds, h, "Community variable (name only)", "community_env", "Environment variable that holds the SNMP community; a new name starts with PACKETEER_SNMP_, for example PACKETEER_SNMP_COMMUNITY.");
     }
     card.appendChild(creds);
     root.appendChild(card);

@@ -30,7 +30,8 @@ func init() { plugin.Exporters.Register(TypeName, New) }
 
 // Config is the influxdb exporter's config block.
 type Config struct {
-	// URL is the server's base URL, for example http://influxdb:8086.
+	// URL is the server's base URL, for example https://influxdb:8086. Plain
+	// http is refused except to a loopback host, as the token is sent.
 	URL    string `yaml:"url"`
 	Org    string `yaml:"org"`
 	Bucket string `yaml:"bucket"`
@@ -58,6 +59,9 @@ func New(c plugin.Config, e plugin.Env) (plugin.Exporter, error) {
 		return nil, err
 	}
 	u, err := sinkcfg.HTTPURL(cfg.URL)
+	if err == nil {
+		err = sinkcfg.TokenURL(u)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("url %w", err)
 	}

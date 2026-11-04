@@ -1015,7 +1015,8 @@ jobs:
           # Headless Chrome cannot click, so uiproxy adds a driver to
           # /settings.html. It walks the Commit setup: the commit scorer, a
           # community typed where a variable name goes (refused in the page),
-          # a new SNMP host, a commit and binding on lab-d, a provider renamed after
+          # the admin password's variable (refused, #504), a new SNMP host,
+          # a commit and binding on lab-d, a provider renamed after
           # its commit is ticked, a group. lab-c has percentile: Separate and lab-d
           # cc_disable: True, which the form must read as the loader does. Apply
           # writes the YAML text and the editor validates it with the same
@@ -1032,6 +1033,7 @@ jobs:
             'start: 4 providers | scorer weighted' \
             'balance shown: true | precedence shown: false' \
             'refused: SNMP host edge2: enter the name of the environment variable that holds the community (letters, digits, underscore), not the community itself. | step 2 shown: true' \
+            'refused env: SNMP host edge2: the variable that holds the community must start with PACKETEER_SNMP_; other variables are set only in the mounted file. | step 2 shown: true' \
             'Scorer: commit (was weighted). | Balance in a group: equal. | New SNMP host edge2 at 192.0.2.253, version 2c, community read from the environment variable PACKETEER_SNMP_COMMUNITY.' \
             'case: lab-c percentile separate | lab-d cc_disable true' \
             'renamed: Provider lab-y: enter a commit greater than zero (Mbps). | Provider lab-y: enter the interface name. | step 2 shown: true | lab-y tracked: true' \

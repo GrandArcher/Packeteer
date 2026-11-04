@@ -70,6 +70,9 @@ type FormCommitProvider struct {
 
 var envVarName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
+// snmpPlace is where the form's SNMP hosts live, for EnvNameAllowed.
+const snmpPlace = "telemetry/snmp"
+
 // scorerShared are the scorer config keys every built-in scorer reads. The
 // others belong to one scorer, and another scorer's strict decoder would
 // refuse them.
@@ -257,9 +260,11 @@ var (
 	snmpPrivProtocols  = []string{"DES", "AES", "AES192", "AES256", "AES192C", "AES256C"}
 )
 
-// validateFields checks one host the operator added or edited. The place
-// of a credential is an environment variable name, never its value.
-func (h FormCommitHost) validateFields(at string) error {
+// validateFields checks one host the operator added or edited; was is the
+// host in the file, zero for a new one. The place of a credential is an
+// environment variable name, never its value, and a name the host did not
+// already use must be one EnvNameAllowed accepts.
+func (h FormCommitHost) validateFields(at string, was FormCommitHost) error {
 	if _, err := netip.ParseAddr(h.Address); err != nil && (h.Address == "" || len(h.Address) > 253 || strings.ContainsAny(h.Address, " /\\:@")) {
 		return fmt.Errorf("%w: %s.address: %q must be an IP address or a hostname", ErrForm, at, h.Address)
 	}
@@ -269,7 +274,7 @@ func (h FormCommitHost) validateFields(at string) error {
 	if len(h.ContextName) > 64 || strings.ContainsAny(h.ContextName, "\r\n") {
 		return fmt.Errorf("%w: %s.context_name must be one line of at most 64 characters", ErrForm, at)
 	}
-	env := func(key, v string, want bool) error {
+	env := func(key, v, old string, want bool) error {
 		switch {
 		case v == "" && !want:
 			return nil
@@ -279,6 +284,9 @@ func (h FormCommitHost) validateFields(at string) error {
 			return fmt.Errorf("%w: %s.%s does not apply to %s", ErrForm, at, key, h.describe())
 		case !envVarName.MatchString(v):
 			return fmt.Errorf("%w: %s.%s: %q must be the name of an environment variable, not the secret", ErrForm, at, key, v)
+		case v != old && !EnvNameAllowed(snmpPlace, v):
+			return fmt.Errorf("%w: %s.%s: %q must start with %s; other variables are set only in the mounted file",
+				ErrForm, at, key, v, strings.Join(EnvPrefixes(snmpPlace), " or "))
 		}
 		return nil
 	}
@@ -290,12 +298,12 @@ func (h FormCommitHost) validateFields(at string) error {
 				return fmt.Errorf("%w: %s.%s does not apply to SNMP version 2c", ErrForm, at, k[0])
 			}
 		}
-		return env("community_env", h.CommunityEnv, true)
+		return env("community_env", h.CommunityEnv, was.CommunityEnv, true)
 	case "3":
-		if err := env("community_env", h.CommunityEnv, false); err != nil {
+		if err := env("community_env", h.CommunityEnv, was.CommunityEnv, false); err != nil {
 			return err
 		}
-		if err := env("username_env", h.UsernameEnv, true); err != nil {
+		if err := env("username_env", h.UsernameEnv, was.UsernameEnv, true); err != nil {
 			return err
 		}
 		if !slices.Contains(snmpSecurityLevels, h.SecurityLevel) {
@@ -314,10 +322,10 @@ func (h FormCommitHost) validateFields(at string) error {
 		if !priv && h.PrivProtocol != "" {
 			return fmt.Errorf("%w: %s.priv_protocol does not apply to %s", ErrForm, at, h.SecurityLevel)
 		}
-		if err := env("auth_env", h.AuthEnv, auth); err != nil {
+		if err := env("auth_env", h.AuthEnv, was.AuthEnv, auth); err != nil {
 			return err
 		}
-		return env("priv_env", h.PrivEnv, priv)
+		return env("priv_env", h.PrivEnv, was.PrivEnv, priv)
 	}
 	return fmt.Errorf("%w: %s.version %q is invalid (want 2c or 3)", ErrForm, at, h.Version)
 }
@@ -386,7 +394,7 @@ func (f Form) checkCommitChange(cur Form) error {
 			if _, dup := old[h.Name]; dup {
 				return fmt.Errorf("%w: %s: SNMP host %s is already in the file; choose it instead of adding it", ErrForm, at, h.Name)
 			}
-			if err := h.validateFields(at); err != nil {
+			if err := h.validateFields(at, FormCommitHost{}); err != nil {
 				return err
 			}
 			continue
@@ -397,7 +405,7 @@ func (f Form) checkCommitChange(cur Form) error {
 		}
 		kept[h.Key] = true
 		if o != h {
-			if err := h.validateFields(at); err != nil {
+			if err := h.validateFields(at, o); err != nil {
 				return err
 			}
 		}

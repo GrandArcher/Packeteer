@@ -86,9 +86,10 @@ func TestCommitSetupAssets(t *testing.T) {
 		}
 	}
 	for _, s := range []string{
-		`postForm(csStatus)`,               // the form's own Apply, role check and audit included
-		`CS_ENV_NAME.test(v)`,              // a variable name, not a secret
-		`"Community variable (name only)"`, // the labels say so
+		`postForm(csStatus)`,                // the form's own Apply, role check and audit included
+		`CS_ENV_NAME.test(v)`,               // a variable name, not a secret
+		`CS_ENV_PREFIX = "PACKETEER_SNMP_"`, // a new host names only an SNMP variable (#504)
+		`"Community variable (name only)"`,  // the labels say so
 		`"User variable (name only)"`,
 		`"Authentication variable (name only)"`,
 		`"Privacy variable (name only)"`,

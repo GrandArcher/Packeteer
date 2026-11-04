@@ -342,3 +342,105 @@ func TestConfigEditorProgramCheckFollowsReload(t *testing.T) {
 		t.Fatal("re-adding the removed exec source saved")
 	}
 }
+
+const uiSNMP = `telemetry:
+  - type: snmp
+    config:
+      hosts:
+        - name: edge
+          address: 192.0.2.254
+          version: 2c
+          community_env: SNMP_COMMUNITY
+      providers:
+        - {name: transit-a, host: edge, interface: ether1}
+`
+
+// A *_env key names the variable whose value a plugin sends to its host.
+// Through the editor it must start with the prefix of its plugin, so an
+// admin cannot send the admin password over SNMPv2c to a host they name
+// (#504). A name the running config already uses there still saves, so
+// the mounted file is unaffected.
+func TestConfigEditorRestrictsEnvNames(t *testing.T) {
+	running := uiBase + uiSNMP
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(running), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := map[string]string{"SNMP_COMMUNITY": "lab-only-a", "PACKETEER_SNMP_EDGE": "lab-only-b", "PACKETEER_TRAP_COMMUNITY": "lab-only-c",
+		"PACKETEER_ADMIN_PASSWORD": "lab-only-d"}
+	ed, err := newConfigEditor(cfg, path, func(k string) string { return env[k] }, "ops", false)
+	if err != nil || ed == nil {
+		t.Fatalf("editor: %v %v", ed, err)
+	}
+	srv, err := httpapi.New(httpapi.Options{User: "ops", Password: "ops-password", ConfigEditor: ed})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := srv.Handler()
+	base := configedit.Hash([]byte(running))
+	admin := strings.Replace(running, "community_env: SNMP_COMMUNITY", "community_env: PACKETEER_ADMIN_PASSWORD", 1)
+	const want = `telemetry/snmp: community_env "PACKETEER_ADMIN_PASSWORD" cannot be set through the config editor; use a name that starts with PACKETEER_SNMP_`
+	if res := ed.Check([]byte(admin)); res.Valid || !strings.Contains(strings.Join(res.Errors, "\n"), want) {
+		t.Fatalf("check: %+v", res)
+	}
+	if code, body := putConfig(t, h, admin, base); code != http.StatusUnprocessableEntity || !strings.Contains(strings.ReplaceAll(body, `\"`, `"`), want) {
+		t.Fatalf("PUT = %d %s", code, body)
+	}
+	if b, _ := os.ReadFile(path); string(b) != running {
+		t.Fatal("a refused env name was written")
+	}
+	trap := running + "notifiers:\n  - type: snmptrap\n    config: {address: 192.0.2.40, version: 2c, community_env: SNMP_COMMUNITY}\n"
+	if res := ed.Check([]byte(trap)); res.Valid || !strings.Contains(strings.Join(res.Errors, "\n"), `notifiers/snmptrap: community_env "SNMP_COMMUNITY"`) {
+		t.Fatalf("the running name at another place: %+v", res)
+	}
+	for name, yaml := range map[string]string{
+		"unchanged name": running + "hold_time: 20m\n",
+		"prefixed name":  strings.Replace(running, "community_env: SNMP_COMMUNITY", "community_env: PACKETEER_SNMP_EDGE", 1),
+		"trap prefix":    running + "notifiers:\n  - type: snmptrap\n    config: {address: 192.0.2.40, version: 2c, community_env: PACKETEER_TRAP_COMMUNITY}\n",
+	} {
+		if res := ed.Check([]byte(yaml)); !res.Valid {
+			t.Errorf("%s: %+v", name, res)
+		}
+	}
+	if code, body := putConfig(t, h, running+"hold_time: 20m\n", base); code != http.StatusOK {
+		t.Fatalf("unrelated change beside a name from the mounted file: PUT = %d %s", code, body)
+	}
+}
+
+// checkEnvNames reads typed *_env fields and plugin keys at any depth, and
+// a place with no prefix list takes only names the running config uses.
+func TestCheckEnvNamesPlaces(t *testing.T) {
+	parse := func(s string) *config.Config {
+		t.Helper()
+		c, err := config.Parse([]byte(s))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	running := parse(uiBase)
+	feed := "external_policy:\n  enabled: false\n  listen: 192.0.2.10:9443\n  cert_file: /etc/packeteer/tls/feed.crt\n  key_file: /etc/packeteer/tls/feed.key\n"
+	for yaml, want := range map[string]string{
+		uiBase + feed + "  token_env: PACKETEER_ADMIN_PASSWORD\n": `external_policy: token_env "PACKETEER_ADMIN_PASSWORD"`,
+		uiBase + feed + "  token_env: PACKETEER_POLICY_FEED\n":    "",
+		uiBase + feed: "",
+		uiBase + "exporters:\n  - type: kafka\n    config: {brokers: [192.0.2.50:9093], sasl: {username_env: PACKETEER_KAFKA_USER, password_env: PACKETEER_HTTP_PASSWORD}}\n": `exporters/kafka: password_env "PACKETEER_HTTP_PASSWORD"`,
+		uiBase + "probers:\n  - type: icmp\n    config: {token_env: PACKETEER_PROBE_TOKEN}\n":                                                                                 `probers/icmp: token_env "PACKETEER_PROBE_TOKEN" cannot be set through the config editor; use a name the running config already uses there`,
+	} {
+		err := checkEnvNames(running, parse(yaml))
+		switch {
+		case want == "" && err != nil:
+			t.Errorf("%s: %v", yaml, err)
+		case want != "" && (err == nil || !strings.Contains(err.Error(), want)):
+			t.Errorf("%s: err = %v, want %q", yaml, err, want)
+		}
+	}
+	legacy := parse(uiBase + "probers:\n  - type: icmp\n    config: {token_env: LEGACY_TOKEN}\n")
+	if err := checkEnvNames(legacy, legacy); err != nil {
+		t.Fatalf("the running config against itself: %v", err)
+	}
+}
