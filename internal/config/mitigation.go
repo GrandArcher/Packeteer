@@ -16,6 +16,12 @@ const (
 	// in memory, and it must expire on its own.
 	MaxMitigationMaxTTL = 7 * 24 * time.Hour
 	MinMitigationTTL    = time.Second
+	// DefaultMitigationHideWindow is how long an on-wire rule's prefix may
+	// be missing from a ready RIB before the rule is withdrawn (#487).
+	DefaultMitigationHideWindow = 5 * time.Minute
+	// MinMitigationHideWindow keeps a hidden rule from being withdrawn and
+	// announced again nearly every round.
+	MinMitigationHideWindow = time.Minute
 )
 
 // Mitigation is threat mitigation (#28): RTBH (blackhole), BGP redirect,
@@ -38,6 +44,12 @@ type Mitigation struct {
 	// (default 24h, at most 168h). Every rule expires.
 	DefaultTTL time.Duration `yaml:"default_ttl"`
 	MaxTTL     time.Duration `yaml:"max_ttl"`
+	// HideWindow is how long the prefix of a rule on the wire may be
+	// missing from a ready RIB before the rule is withdrawn and waits for
+	// the prefix again (default 5m). The edge stops sending a prefix whose
+	// mitigation route won, so a hide and a real withdraw look the same;
+	// this bounds how long a rule outlives a prefix that left.
+	HideWindow time.Duration `yaml:"hide_window"`
 	// LocalPref is set on mitigation routes (default: the top-level
 	// local_pref). It must win on the edge over the native route.
 	LocalPref uint32 `yaml:"local_pref"`
@@ -86,6 +98,9 @@ func (c *Config) normalizeMitigation() {
 	}
 	if m.DefaultTTL == 0 {
 		m.DefaultTTL = min(DefaultMitigationTTL, m.MaxTTL)
+	}
+	if m.HideWindow == 0 {
+		m.HideWindow = DefaultMitigationHideWindow
 	}
 	if m.LocalPref == 0 {
 		m.LocalPref = c.LocalPref
@@ -139,6 +154,9 @@ func (c *Config) validateMitigation(add func(string, ...any)) {
 	}
 	if m.MaxTTL < MinMitigationTTL || m.MaxTTL > MaxMitigationMaxTTL {
 		add("mitigation.max_ttl %s must be between %s and %s", m.MaxTTL, MinMitigationTTL, MaxMitigationMaxTTL)
+	}
+	if m.HideWindow < MinMitigationHideWindow || m.HideWindow > MaxMitigationMaxTTL {
+		add("mitigation.hide_window %s must be between %s and %s", m.HideWindow, MinMitigationHideWindow, MaxMitigationMaxTTL)
 	}
 	if m.GeoIPDB != "" && !strings.HasPrefix(m.GeoIPDB, "/") {
 		add("mitigation.geoip_db %q must be an absolute path (mount the file into the container)", m.GeoIPDB)

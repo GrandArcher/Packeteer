@@ -57,6 +57,7 @@ func newMitigation(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger
 		MaxRules:   m.MaxRules,
 		DefaultTTL: m.DefaultTTL,
 		MaxTTL:     m.MaxTTL,
+		HideWindow: m.HideWindow,
 		LocalPref:  m.LocalPref,
 		Community:  cfg.PacketeerCommunity,
 		Leader:     haLeader(plugins),

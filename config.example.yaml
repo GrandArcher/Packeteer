@@ -859,6 +859,7 @@ plugin_dir: /etc/packeteer/plugins
 #   max_rules: 10                     # routes; a country rule counts per network
 #   default_ttl: 1h
 #   max_ttl: 24h
+#   hide_window: 5m                   # withdraw a route whose prefix left the RIB
 #   # geoip_db: /etc/packeteer/GeoLite2-Country.mmdb   # you mount it; for source_countries
 #   announcer:
 #     type: gobgp

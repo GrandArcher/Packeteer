@@ -298,7 +298,7 @@ mitigation:
 	if code := run(context.Background(), []string{"-config", path, "-check"}, noEnv, &out, &errb); code != 0 {
 		t.Fatalf("check exit %d: %s", code, errb.String())
 	}
-	if !strings.Contains(out.String(), "mitigation: observe allowlist=1 max_rules=10 default_ttl=1h0m0s max_ttl=24h0m0s") ||
+	if !strings.Contains(out.String(), "mitigation: observe allowlist=1 max_rules=10 default_ttl=1h0m0s max_ttl=24h0m0s hide_window=5m0s") ||
 		!strings.Contains(out.String(), "announcer mitigation gobgp") {
 		t.Fatalf("check output:\n%s", out.String())
 	}

@@ -22,7 +22,7 @@ func TestMitigationDefaults(t *testing.T) {
 	if m.Mode != ModeObserve || cfg.MitigationMode() != ModeObserve {
 		t.Fatalf("mitigation mode = %q, want observe by default", m.Mode)
 	}
-	if m.MaxRules != DefaultMitigationMaxRules || m.DefaultTTL != time.Hour || m.MaxTTL != 24*time.Hour || m.LocalPref != cfg.LocalPref {
+	if m.MaxRules != DefaultMitigationMaxRules || m.DefaultTTL != time.Hour || m.MaxTTL != 24*time.Hour || m.HideWindow != 5*time.Minute || m.LocalPref != cfg.LocalPref {
 		t.Fatalf("defaults = %+v", m)
 	}
 	if got := m.MitigationAllowlist(); len(got) != 1 || got[0].String() != "203.0.113.0/24" {
@@ -35,6 +35,13 @@ func TestMitigationDefaults(t *testing.T) {
 	}
 	if cfg.Mitigation.DefaultTTL != 10*time.Minute {
 		t.Fatalf("default_ttl = %s", cfg.Mitigation.DefaultTTL)
+	}
+	cfg, err = Parse([]byte(validYAML + mitigationBlock + "  hide_window: 30m\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Mitigation.HideWindow != 30*time.Minute {
+		t.Fatalf("hide_window = %s", cfg.Mitigation.HideWindow)
 	}
 	cfg, err = Parse([]byte(validYAML))
 	if err != nil {
@@ -76,6 +83,8 @@ func TestMitigationValidation(t *testing.T) {
 		"cap negative":                  {validYAML, mitigationBlock + "  max_rules: -1\n", "max_rules"},
 		"max ttl too long":              {validYAML, mitigationBlock + "  max_ttl: 200h\n", "max_ttl"},
 		"default over max":              {validYAML, mitigationBlock + "  default_ttl: 2h\n  max_ttl: 1h\n", "default_ttl"},
+		"hide window too short":         {validYAML, mitigationBlock + "  hide_window: 30s\n", "hide_window"},
+		"hide window too long":          {validYAML, mitigationBlock + "  hide_window: 200h\n", "hide_window"},
 		"announcer without type":        {validYAML, "\nmitigation:\n  allowlist: [203.0.113.0/24]\n  announcer: {config: {}}\n", "type is required"},
 		"unknown key":                   {validYAML, mitigationBlock + "  rules: []\n", "rules"},
 		"relative geoip_db":             {validYAML, mitigationBlock + "  geoip_db: country.mmdb\n", "absolute path"},

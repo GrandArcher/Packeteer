@@ -156,7 +156,7 @@ func newLab(t *testing.T, mode, body string, rules []Rule, mut func(*Config)) *l
 		ann: &ann{wire: map[netip.Prefix]plugin.MitigationRoute{}, fwire: map[string]plugin.FlowSpecRoute{}},
 		rib: &rib{ready: true, learned: map[netip.Prefix]bool{victim: true, victim2: true, other: true}}}
 	mit, err := mitigation.New(mitigation.Config{Mode: mode, Allowlist: []netip.Prefix{victim, other}, MaxRules: 4,
-		DefaultTTL: time.Hour, MaxTTL: 2 * time.Hour, LocalPref: 250, Community: "64512:666"}, l.ann, quiet())
+		DefaultTTL: time.Hour, MaxTTL: 2 * time.Hour, HideWindow: 5 * time.Minute, LocalPref: 250, Community: "64512:666"}, l.ann, quiet())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -451,7 +451,7 @@ func TestWithdrawOnRIBLossAndShutdown(t *testing.T) {
 
 func TestNewChecks(t *testing.T) {
 	mit, err := mitigation.New(mitigation.Config{Mode: config.ModeObserve, Allowlist: []netip.Prefix{victim}, MaxRules: 4,
-		DefaultTTL: time.Hour, MaxTTL: 2 * time.Hour}, nil, quiet())
+		DefaultTTL: time.Hour, MaxTTL: 2 * time.Hour, HideWindow: 5 * time.Minute}, nil, quiet())
 	if err != nil {
 		t.Fatal(err)
 	}

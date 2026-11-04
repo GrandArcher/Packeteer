@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -410,8 +411,9 @@ func TestBlocksMitigation(t *testing.T) {
 	out, cfg := editBlocks(t, func(f *Form) {
 		f.Blocks["mitigation"]["allowlist"] = []string{"198.51.100.0/24", "203.0.113.0/24"}
 		f.Blocks["mitigation"]["max_rules"] = "20"
+		f.Blocks["mitigation"]["hide_window"] = "15m"
 	})
-	if cfg.Mitigation == nil || cfg.Mitigation.MaxRules != 20 || len(cfg.Mitigation.Allowlist) != 2 {
+	if cfg.Mitigation == nil || cfg.Mitigation.MaxRules != 20 || len(cfg.Mitigation.Allowlist) != 2 || cfg.Mitigation.HideWindow != 15*time.Minute {
 		t.Fatalf("mitigation = %+v\n%s", cfg.Mitigation, out)
 	}
 	// Turning inject on is not a form choice.
@@ -830,6 +832,7 @@ func TestBlocksRefusals(t *testing.T) {
 		{"mitigation allowlist", func(f *Form) { f.Blocks["mitigation"]["allowlist"] = []string{"198.51.100.1/24"} }, "host bits"},
 		{"mitigation cap", func(f *Form) { f.Blocks["mitigation"]["max_rules"] = "0" }, "max_rules"},
 		{"geoip path", func(f *Form) { f.Blocks["mitigation"]["geoip_db"] = "geo.mmdb" }, "absolute path"},
+		{"hide window", func(f *Form) { f.Blocks["mitigation"]["hide_window"] = "30s" }, "hide_window"},
 		{"http allow", func(f *Form) { f.Blocks["http"]["allow_from"] = []string{"nope"} }, "http.allow_from[0]"},
 		{"http listen", func(f *Form) { f.Blocks["http"]["listen"] = "8080" }, "http.listen"},
 		{"http listen unbracketed IPv6", func(f *Form) { f.Blocks["http"]["listen"] = "::1:8080" }, "wrap IPv6 in brackets"},

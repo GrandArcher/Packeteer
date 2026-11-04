@@ -349,8 +349,8 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		}
 	}
 	if m := cfg.Mitigation; m != nil {
-		fmt.Fprintf(stdout, "mitigation: %s allowlist=%d max_rules=%d default_ttl=%s max_ttl=%s local_pref=%d\n",
-			m.Mode, len(m.Allowlist), m.MaxRules, m.DefaultTTL, m.MaxTTL, m.LocalPref)
+		fmt.Fprintf(stdout, "mitigation: %s allowlist=%d max_rules=%d default_ttl=%s max_ttl=%s hide_window=%s local_pref=%d\n",
+			m.Mode, len(m.Allowlist), m.MaxRules, m.DefaultTTL, m.MaxTTL, m.HideWindow, m.LocalPref)
 		if m.GeoIPDB != "" {
 			fmt.Fprintf(stdout, "mitigation geoip_db: %s\n", m.GeoIPDB)
 		}

@@ -88,6 +88,7 @@ func testConfig(mode string) Config {
 		MaxRules:   2,
 		DefaultTTL: time.Hour,
 		MaxTTL:     2 * time.Hour,
+		HideWindow: 5 * time.Minute,
 		LocalPref:  250,
 		Community:  "64512:666",
 	}
@@ -118,6 +119,7 @@ func TestNewValidation(t *testing.T) {
 		"negative max ttl":  func(c *Config) { c.MaxTTL = -1 },
 		"no ttl at all":     func(c *Config) { c.DefaultTTL, c.MaxTTL = 0, 0 },
 		"cap below one too": func(c *Config) { c.MaxRules = -3 },
+		"no hide window":    func(c *Config) { c.HideWindow = 0 },
 	}
 	for name, mut := range cases {
 		cfg := testConfig(config.ModeInject)
@@ -314,6 +316,81 @@ func TestInjectAnnounceWithdrawExpire(t *testing.T) {
 	}
 	if len(c.Status().Rules) != 1 { // other, still pending
 		t.Fatalf("rules = %+v", c.Status().Rules)
+	}
+}
+
+// A route on the wire hides its prefix from the edge's iBGP feed, so a
+// short gap keeps it. A prefix missing from a ready RIB for HideWindow is
+// treated as gone: the route is withdrawn and the rule waits with a reason
+// until the prefix is back (#487).
+func TestHideWindowWithdrawsUnicast(t *testing.T) {
+	ctx := context.Background()
+	c, ann, rib := newTest(t, config.ModeInject)
+	if _, err := c.Add(Request{Prefix: victim, Action: plugin.MitigationBlackhole, TTL: time.Hour}, t0); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Sync(ctx, t0); err != nil {
+		t.Fatal(err)
+	}
+	hidden := t0.Add(time.Minute)
+	delete(rib.learned, victim)
+	for _, at := range []time.Duration{0, 4 * time.Minute, 5*time.Minute - time.Second} {
+		if err := c.Sync(ctx, hidden.Add(at)); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := ann.on(victim); !ok || c.Active() != 1 {
+			t.Fatalf("hidden for %s: route withdrawn inside the hide window", at)
+		}
+	}
+	// Back before the window ends: the next gap starts a new window.
+	rib.learned[victim] = true
+	if err := c.Sync(ctx, hidden.Add(5*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	delete(rib.learned, victim)
+	hidden = hidden.Add(6 * time.Minute)
+	if err := c.Sync(ctx, hidden); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Sync(ctx, hidden.Add(5*time.Minute-time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := ann.on(victim); !ok {
+		t.Fatal("the first gap's start was kept after the prefix returned")
+	}
+
+	if err := c.Sync(ctx, hidden.Add(5*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := ann.on(victim); ok || c.Active() != 0 {
+		t.Fatal("route still on the wire after the hide window")
+	}
+	st := c.Status().Rules[0]
+	if st.Announced || st.Pending != pendingLeft {
+		t.Fatalf("rule after the hide window = %+v", st)
+	}
+	if !c.Holds(victim) {
+		t.Fatal("a waiting rule must keep holding its prefix")
+	}
+	var withdrawn bool
+	changes := c.Changes()
+	for _, ch := range changes {
+		withdrawn = withdrawn || ch.Kind == ChangeWithdrawn && ch.Detail == pendingLeft
+	}
+	if !withdrawn {
+		t.Fatalf("no withdrawn change with the hide_window reason: %+v", changes)
+	}
+	calls := ann.calls
+	if err := c.Sync(ctx, hidden.Add(6*time.Minute)); err != nil || ann.calls != calls || c.Status().Rules[0].Pending != pendingLeft {
+		t.Fatalf("waiting rule: err %v, calls %d -> %d, pending %q", err, calls, ann.calls, c.Status().Rules[0].Pending)
+	}
+
+	rib.learned[victim] = true
+	if err := c.Sync(ctx, hidden.Add(7*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := ann.on(victim); !ok || c.Status().Rules[0].Pending != "" {
+		t.Fatalf("not announced again once the prefix returned: %+v", c.Status().Rules[0])
 	}
 }
 

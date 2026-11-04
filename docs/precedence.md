@@ -13,7 +13,7 @@ Issue #235. Lab-proven only, not on a public edge. This page changes no behavior
 | Flap quarantine | Nothing; it vetoes outbound changes for one prefix | `flap_quarantine` |
 | HA | Nothing; the standby vetoes every surface | `ha` |
 | Federation | Nothing; it adds peer providers to the outbound input | `federation` |
-| External policy (#232) | Not built | |
+| External policy (#232) | Nothing itself; it publishes the routes the outbound announce controller accepted | `external_policy` |
 
 Every route that does go out is in the learned RIB, inside its allowlist, and carries `packeteer_community` and NO_EXPORT. Ownership below only decides which surface gets the prefix.
 
@@ -71,4 +71,4 @@ There is no single conflict line today. Outbound refusals are `announce` errors,
 
 ## External policy (#232)
 
-Not built. Its scope says the feed must match what inject mode would announce, so it has to publish after the ownership, cap, and quarantine rules above, not the raw decision.
+The feed adds no owner. The outbound announce controller drives it as its announcer ([external-policy.md](external-policy.md)), so a route reaches the feed only after the gates, ownership, the cap, the leak hold, and flap quarantine above accepted it, and with an embedded announcer only after that announcer accepted it. A prefix a mitigation rule or inbound owns is refused before it gets there. Inbound steers and mitigation rules are not in the feed. Tests: `TestFeedCarriesWhatInjectAnnounces`, `TestMirrorFollowsTheWire`.

@@ -16,8 +16,10 @@
 //
 // Only inject announces. observe accepts and lists rules as a dry run. A
 // mitigation route is announced only for a prefix that is in the learned
-// RIB, and it stays while the rule holds even after the edge stops sending
-// the prefix (its best path is then the mitigation route). While an RTBH
+// RIB. The edge stops sending a prefix whose mitigation route won, which
+// looks the same as the prefix leaving, so a route on the wire stays for
+// up to HideWindow after its prefix goes missing from a ready RIB; then it
+// is withdrawn and the rule waits for the prefix again. While an RTBH
 // or redirect rule holds a prefix, or its route is still on the wire,
 // outbound improvements and inbound steers leave that prefix alone, so the
 // speaker never has two Packeteer paths for one prefix. FlowSpec rules do
@@ -76,6 +78,9 @@ type Config struct {
 	MaxRules   int
 	DefaultTTL time.Duration
 	MaxTTL     time.Duration
+	// HideWindow bounds how long a route stays on the wire while its
+	// prefix is missing from a ready RIB.
+	HideWindow time.Duration
 	LocalPref  uint32
 	Community  string
 	// Geo turns FlowSpec source countries into networks. Nil refuses
@@ -220,8 +225,11 @@ type Controller struct {
 	rules map[string]*Rule
 	// wire is what the announcer has for each RTBH/redirect prefix, fwire
 	// its FlowSpec routes by route key.
-	wire    map[netip.Prefix]Rule
-	fwire   map[string]fsWire
+	wire  map[netip.Prefix]Rule
+	fwire map[string]fsWire
+	// gone is since when each prefix with a route on the wire has been
+	// missing from the ready RIB.
+	gone    map[netip.Prefix]time.Time
 	feed    []Change
 	pending []Change
 	onWire  atomic.Int64
@@ -240,6 +248,9 @@ func New(cfg Config, ann plugin.MitigationAnnouncer, log *slog.Logger) (*Control
 	if cfg.MaxTTL <= 0 || cfg.DefaultTTL <= 0 || cfg.DefaultTTL > cfg.MaxTTL {
 		return nil, errors.New("mitigation: default_ttl must be positive and at most max_ttl")
 	}
+	if cfg.HideWindow <= 0 {
+		return nil, errors.New("mitigation: hide_window must be positive")
+	}
 	if cfg.Mode == config.ModeInject {
 		if err := checkInject(cfg, ann); err != nil {
 			return nil, err
@@ -248,7 +259,8 @@ func New(cfg Config, ann plugin.MitigationAnnouncer, log *slog.Logger) (*Control
 	if log == nil {
 		log = slog.Default()
 	}
-	c := &Controller{cfg: cfg, ann: ann, log: log, rules: map[string]*Rule{}, wire: map[netip.Prefix]Rule{}, fwire: map[string]fsWire{}}
+	c := &Controller{cfg: cfg, ann: ann, log: log, rules: map[string]*Rule{}, wire: map[netip.Prefix]Rule{}, fwire: map[string]fsWire{},
+		gone: map[netip.Prefix]time.Time{}}
 	c.catalog.Targets = []plugin.MitigationTarget{}
 	c.fsCat.Targets = []plugin.FlowSpecTarget{}
 	if ann != nil {
@@ -387,6 +399,10 @@ const pendingInbound = "waiting for inbound to release the prefix"
 
 // pendingRIB is Rule.Pending while a rule waits for its prefix in the RIB.
 const pendingRIB = "not in the learned RIB"
+
+// pendingLeft is Rule.Pending after the rule was withdrawn because its
+// prefix stayed out of the RIB for HideWindow, until the prefix returns.
+const pendingLeft = "withdrawn: not in the learned RIB for mitigation.hide_window"
 
 func unicastKey(p netip.Prefix) string { return "route " + p.String() }
 
@@ -715,10 +731,43 @@ func (c *Controller) Sync(ctx context.Context, now time.Time) error {
 		}
 		return c.withdrawAllLocked(ctx)
 	}
-	return errors.Join(c.syncUnicastLocked(ctx), c.syncFlowSpecLocked(ctx))
+	c.trackGoneLocked(now)
+	return errors.Join(c.syncUnicastLocked(ctx, now), c.syncFlowSpecLocked(ctx, now))
 }
 
-func (c *Controller) syncUnicastLocked(ctx context.Context) error {
+// trackGoneLocked updates gone for the prefixes with a route on the wire.
+// The caller holds mu and has checked that the RIB is ready.
+func (c *Controller) trackGoneLocked(now time.Time) {
+	onWire := map[netip.Prefix]bool{}
+	for p := range c.wire {
+		onWire[p] = true
+	}
+	for _, w := range c.fwire {
+		onWire[w.route.Destination] = true
+	}
+	for p := range c.gone {
+		if !onWire[p] {
+			delete(c.gone, p)
+		}
+	}
+	for p := range onWire {
+		switch _, missing := c.gone[p]; {
+		case c.rib.Contains(p):
+			delete(c.gone, p)
+		case !missing:
+			c.gone[p] = now
+		}
+	}
+}
+
+// leftLocked reports whether p has been missing from the ready RIB for
+// at least HideWindow while a route for it was on the wire.
+func (c *Controller) leftLocked(p netip.Prefix, now time.Time) bool {
+	since, ok := c.gone[p]
+	return ok && now.Sub(since) >= c.cfg.HideWindow
+}
+
+func (c *Controller) syncUnicastLocked(ctx context.Context, now time.Time) error {
 	uni := map[netip.Prefix]*Rule{}
 	for _, r := range c.rules {
 		if !r.FlowSpec() {
@@ -739,6 +788,14 @@ func (c *Controller) syncUnicastLocked(ctx context.Context) error {
 	for _, p := range order {
 		r := uni[p]
 		cur, on := c.wire[p]
+		if on && c.leftLocked(p, now) {
+			if r.Pending != pendingLeft {
+				c.log.Warn("mitigation rule withdrawn: prefix not in the learned RIB for hide_window", "id", r.ID, "prefix", p, "hide_window", c.cfg.HideWindow)
+			}
+			r.Pending = pendingLeft
+			errs = append(errs, c.withdrawLocked(ctx, p))
+			continue
+		}
 		if on && cur.Action == r.Action && cur.Target == r.Target {
 			r.Pending = ""
 			continue
@@ -754,6 +811,9 @@ func (c *Controller) syncUnicastLocked(ctx context.Context) error {
 		// Replacing the action of a route already on the wire does not:
 		// the edge stops sending a prefix once the mitigation route wins.
 		if !on && !c.rib.Contains(p) {
+			if r.Pending == pendingLeft {
+				continue
+			}
 			if r.Pending == "" {
 				c.log.Warn("mitigation rule waits: prefix is not in the learned RIB", "id", r.ID, "prefix", p)
 			}
@@ -786,7 +846,7 @@ func (c *Controller) syncUnicastLocked(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-func (c *Controller) syncFlowSpecLocked(ctx context.Context) error {
+func (c *Controller) syncFlowSpecLocked(ctx context.Context, now time.Time) error {
 	type want struct {
 		rule  *Rule
 		route plugin.FlowSpecRoute
@@ -806,8 +866,12 @@ func (c *Controller) syncFlowSpecLocked(ctx context.Context) error {
 	// waited is the rules that already waited for the RIB, so the warning
 	// is logged once per wait and not every round.
 	waited := map[*Rule]bool{}
+	// left is the rules withdrawn for hide_window, so their reason stays
+	// until the prefix is back and the warning is logged once.
+	left := map[*Rule]bool{}
 	for _, r := range rules {
 		waited[r] = r.Pending == pendingRIB
+		left[r] = r.Pending == pendingLeft
 		r.Pending = ""
 		for _, rt := range c.flowRoutes(r) {
 			k := rt.Key()
@@ -830,6 +894,15 @@ func (c *Controller) syncFlowSpecLocked(ctx context.Context) error {
 		d := desired[k]
 		r, rt := d.rule, d.route
 		cur, on := c.fwire[k]
+		if on && c.leftLocked(r.Prefix, now) {
+			if !left[r] {
+				c.log.Warn("mitigation flowspec rule withdrawn: prefix not in the learned RIB for hide_window", "id", r.ID, "prefix", r.Prefix, "hide_window", c.cfg.HideWindow)
+				left[r] = true
+			}
+			r.Pending = pendingLeft
+			errs = append(errs, c.withdrawFlowSpecLocked(ctx, k))
+			continue
+		}
 		if on && cur.route.Action == rt.Action && cur.route.Target == rt.Target && cur.route.RateMbps == rt.RateMbps {
 			continue
 		}
@@ -848,6 +921,10 @@ func (c *Controller) syncFlowSpecLocked(ctx context.Context) error {
 		// already on the wire keeps its place when only the action
 		// changes, as for RTBH.
 		if !on && !c.rib.Contains(r.Prefix) {
+			if left[r] {
+				r.Pending = pendingLeft
+				continue
+			}
 			if !waited[r] {
 				c.log.Warn("mitigation flowspec rule waits: prefix is not in the learned RIB", "id", r.ID, "prefix", r.Prefix)
 				waited[r] = true
@@ -935,6 +1012,7 @@ func (c *Controller) withdrawAllLocked(ctx context.Context) error {
 	n := len(c.wire) + len(c.fwire)
 	c.wire = map[netip.Prefix]Rule{}
 	c.fwire = map[string]fsWire{}
+	c.gone = map[netip.Prefix]time.Time{}
 	c.log.Info("mitigation routes withdrawn", "routes", n)
 	return nil
 }
