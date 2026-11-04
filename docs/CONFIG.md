@@ -1103,7 +1103,7 @@ Set these in the container. They are not keys in the YAML file. `PACKETEER_HTTP_
 | `PACKETEER_POLICY_TOKEN` | Bearer token of the [`external_policy`](#external_policy) feed (#232), unless `token_env` names another variable. Never logged. |
 | `PACKETEER_ADMIN_PASSWORD` | With `auth`: creates that admin at start when no user has the name (12-256 characters). An existing user is not changed, so a password set through the API survives a restart. Not written to the log. |
 
-`${VAR}` expansion applies inside a webhook `url` and `headers` values (only `PACKETEER_WEBHOOK_*` names), `otlp` exporter `headers` values (only `PACKETEER_OTLP_*` names), and an `exec` or `grpc` plugin's `env` values. In a webhook or `otlp` value any other name, or an unset one, is a startup error, so a config edit cannot put another variable (such as `PACKETEER_ADMIN_PASSWORD`) into a URL or header (#489). A `*_env` key still names any variable. It is not applied to the rest of the file.
+`${VAR}` expansion applies inside a webhook `url` and `headers` values (only `PACKETEER_WEBHOOK_*` names), `otlp` exporter `headers` values (only `PACKETEER_OTLP_*` names), and an `exec` or `grpc` plugin's `env` values. In a webhook or `otlp` value any other name, or an unset one, is a startup error, so a config edit cannot put another variable (such as `PACKETEER_ADMIN_PASSWORD`) into a URL or header (#489). `${VAR}` expansion is not applied to the rest of the file. A `*_env` key still names any variable.
 
 ## Inject checklist
 
