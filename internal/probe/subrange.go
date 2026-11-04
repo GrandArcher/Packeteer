@@ -86,10 +86,17 @@ func jobSubranges(t plugin.Target, avoid func(netip.Addr) bool) []plugin.Subrang
 // sub-range produced a measurement; the caller then probes the prefix
 // hosts as usual. A dead probe source fails closed. Every packet waits on
 // the global rate limit inside probeOne, including a loss or dispersion
-// retry.
-func (e *Engine) probeSubranges(ctx context.Context, j job) (res Result, down, ok bool) {
+// retry. Like the host loop in probe, a provider that looks down stops
+// the job after silentHostLimit silent sub-range hosts with none
+// answered, so a dead provider does not hold a worker for every
+// sub-range (#381).
+func (e *Engine) probeSubranges(ctx context.Context, j job, looksDown func(string) bool) (res Result, down, ok bool) {
 	subs := make([]SubrangeResult, 0, len(j.subs))
+	silent, answered := 0, false
 	for _, s := range j.subs {
+		if silent >= silentHostLimit && !answered && looksDown(j.provider.Name) {
+			break
+		}
 		one, dn := e.probeOne(ctx, j.provider, j.target.Prefix, s.Host, e.packets())
 		if dn || ctx.Err() != nil {
 			return one, dn, true
@@ -104,6 +111,11 @@ func (e *Engine) probeSubranges(ctx context.Context, j job) (res Result, down, o
 				one = again
 			}
 		}
+		if one.Err == "" && one.Stats.Received > 0 {
+			answered = true
+		} else {
+			silent++
+		}
 		subs = append(subs, SubrangeResult{Prefix: s.Prefix, Target: s.Host, Weight: s.Weight,
 			Prober: one.Prober, Stats: one.Stats, Err: one.Err, Time: one.Time})
 	}
@@ -114,7 +126,8 @@ func (e *Engine) probeSubranges(ctx context.Context, j job) (res Result, down, o
 // combineSubranges builds the prefix result from its sub-ranges. Loss,
 // RTT, and jitter are traffic-weighted means. Loss is over every
 // sub-range: one whose probe errored counts as full loss, so every
-// provider is scored on the same sub-ranges and one that fails where the
+// provider is scored on the same sub-ranges (except one cut off as silent,
+// #381, whose probed sub-ranges all show full loss) and one that fails where the
 // traffic goes cannot look better by leaving that sub-range out. RTT and
 // jitter are over those that answered. Sent and Received are sums.
 // Targets are the measured sub-range hosts, and Target is the busiest of

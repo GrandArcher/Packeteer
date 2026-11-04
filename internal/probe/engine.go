@@ -1216,7 +1216,7 @@ func (e *Engine) runRound(ctx context.Context, allow func(plugin.Target) bool, m
 	// Urgent and shorter intervals first, so a round that runs out of time
 	// still measures the priority tier, VIP prefixes, and confirm-urgent
 	// prefixes before a longer tail (#118, #125).
-	sortJobs(jobs, e.opt.Interval)
+	sortJobs(jobs, e.interval())
 
 	disp := newDispatcher(jobs, e.silentProviders())
 	type outcome struct {
@@ -1639,7 +1639,7 @@ func (e *Engine) sem(a netip.Addr) chan struct{} {
 // skip in-prefix hosts.
 func (e *Engine) probe(ctx context.Context, j job, looksDown func(string) bool) (Result, bool) {
 	if len(j.subs) > 0 {
-		if res, down, ok := e.probeSubranges(ctx, j); ok {
+		if res, down, ok := e.probeSubranges(ctx, j, looksDown); ok {
 			return res, down
 		}
 	}
