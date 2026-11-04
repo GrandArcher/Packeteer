@@ -11,6 +11,34 @@ import (
 
 // A release publishes SHA256SUMS and SHA256SUMS.sig: a base64 Ed25519
 // signature over the exact bytes of SHA256SUMS. cmd/relsign makes both.
+// The asset names carry no version, so SHA256SUMS starts with a version
+// line ("# packeteer 1.0.0") and the signature binds the version too
+// (#493). sha256sum -c skips the line as a comment.
+
+const versionLine = "# packeteer "
+
+// VersionLine is the SHA256SUMS line that names the release version.
+func VersionLine(version string) string { return versionLine + Normalize(version) }
+
+// sumsVersion is the version SHA256SUMS names, or an error when it names
+// none or more than one.
+func sumsVersion(sums []byte) (string, error) {
+	var v string
+	for _, line := range strings.Split(string(sums), "\n") {
+		rest, ok := strings.CutPrefix(strings.TrimRight(line, "\r"), versionLine)
+		if !ok {
+			continue
+		}
+		if v != "" {
+			return "", errors.New("SHA256SUMS names more than one version")
+		}
+		v = rest
+	}
+	if v == "" {
+		return "", errors.New("SHA256SUMS names no version")
+	}
+	return v, nil
+}
 
 // GenerateKey makes a signing key pair, base64 encoded.
 func GenerateKey() (public, private string, err error) {

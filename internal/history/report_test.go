@@ -2,6 +2,7 @@ package history
 
 import (
 	"bytes"
+	"encoding/csv"
 	"encoding/json"
 	"net/netip"
 	"slices"
@@ -284,6 +285,30 @@ func TestCSV(t *testing.T) {
 	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
 	if len(lines) != 2 || !strings.HasPrefix(lines[1], "203.0.113.0/24,transit-a,transit-b,commit,") || !strings.Contains(lines[1], ",64500,") {
 		t.Fatalf("improvements csv =\n%s", buf.String())
+	}
+}
+
+// TestCSVEscapesFormulas: a cell that would run as a formula gets a
+// leading ', a number does not, and the JSON rows keep the raw text.
+func TestCSVEscapesFormulas(t *testing.T) {
+	r := Report{
+		head:  []string{"a", "b", "c", "d", "e", "f", "g"},
+		lines: [][]string{{"=cmd|' /C calc'!A0", "+1+1", "-2.5", "@SUM(A1)", "\tx", "AS64500 net", "-1+cmd"}},
+	}
+	var buf bytes.Buffer
+	if err := r.CSV(&buf); err != nil {
+		t.Fatal(err)
+	}
+	got, err := csv.NewReader(&buf).ReadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"'=cmd|' /C calc'!A0", "'+1+1", "-2.5", "'@SUM(A1)", "'\tx", "AS64500 net", "'-1+cmd"}
+	if len(got) != 2 || !slices.Equal(got[1], want) {
+		t.Fatalf("csv rows = %q, want %q", got, want)
+	}
+	if r.lines[0][0] != "=cmd|' /C calc'!A0" {
+		t.Fatalf("CSV changed the report rows: %q", r.lines[0][0])
 	}
 }
 

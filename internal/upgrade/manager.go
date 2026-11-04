@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -442,6 +443,15 @@ func (m *Manager) apply(ctx context.Context, req Request) (Result, error) {
 	if err := VerifySignature(m.opt.Config.PublicKey, sums, sig); err != nil {
 		return Result{}, fmt.Errorf("%w: %v", ErrVerify, err)
 	}
+	// A signed SHA256SUMS of another release must not install under this
+	// tag: the binary names carry no version.
+	signed, err := sumsVersion(sums)
+	if err != nil {
+		return Result{}, fmt.Errorf("%w: %v", ErrVerify, err)
+	}
+	if signed != version {
+		return Result{}, fmt.Errorf("%w: SHA256SUMS is signed for %s, not %s", ErrVerify, signed, version)
+	}
 	want, err := checksumFor(sums, asset)
 	if err != nil {
 		return Result{}, fmt.Errorf("%w: %v", ErrVerify, err)
@@ -565,9 +575,10 @@ func (m *Manager) switchTo(e Entry, verb string) (Result, error) {
 	return Result{From: from, To: Normalize(e.Version), Message: fmt.Sprintf("%s %s to %s: Packeteer routes are withdrawn as on SIGTERM, then %s starts in the configured mode and learns the RIB again before it injects.", verb, from, Normalize(e.Version), Normalize(e.Version))}, nil
 }
 
-// defaultTrial runs the staged binary's -version, which must name the
-// version, and -check against the mounted config. -check sends no probes
-// and opens no BGP session.
+// defaultTrial runs the staged binary's -version, which must print exactly
+// "packeteer <version>" on a line of its own (0.9.10 is not 0.9.1), and
+// -check against the mounted config. -check sends no probes and opens no
+// BGP session.
 func defaultTrial(ctx context.Context, path, version, configPath string, environ []string) error {
 	ctx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
@@ -584,7 +595,7 @@ func defaultTrial(ctx context.Context, path, version, configPath string, environ
 	if err != nil {
 		return fmt.Errorf("-version: %v: %s", err, tail(out))
 	}
-	if !strings.Contains(out, "packeteer "+Normalize(version)) {
+	if !slices.Contains(strings.Split(out, "\n"), "packeteer "+Normalize(version)) {
 		return fmt.Errorf("-version printed %q, want packeteer %s", tail(out), Normalize(version))
 	}
 	args := []string{"-check"}

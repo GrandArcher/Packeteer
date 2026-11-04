@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/netip"
 	"sync"
+	"time"
 )
 
 // Decoding lives here rather than in github.com/netsampler/goflow2. That
@@ -17,7 +18,12 @@ import (
 // header or record, the TCP flags of that one packet.
 
 const (
-	maxTemplates   = 4096
+	maxTemplates = 4096
+	// templateTTL is how long a domain's templates are kept without a
+	// refresh once the table is full. Exporters over UDP resend their
+	// templates on a timer, usually minutes apart, so only a domain that
+	// went quiet, or a spoofed one, is that old.
+	templateTTL    = time.Hour
 	maxFlowSamples = 1024
 	maxFlowRecords = 64
 
@@ -91,6 +97,8 @@ type domainKey struct {
 type domainState struct {
 	tmpl map[uint16]tmpl
 	rate uint64
+	// seen is when a template of this domain was last stored.
+	seen time.Time
 }
 
 // decoder holds NetFlow v9 / IPFIX templates and sampling rates per
@@ -99,6 +107,8 @@ type decoder struct {
 	mu    sync.Mutex
 	doms  map[domainKey]*domainState
 	ntmpl int // templates across all domains
+	// at is the arrival time of the datagram being decoded, set under mu.
+	at time.Time
 }
 
 // obsPool reuses the observation slice for one datagram. Observations
@@ -122,7 +132,8 @@ func putObs(s []observation) {
 	obsPool.Put(&s)
 }
 
-func (d *decoder) decode(exporter netip.Addr, payload []byte) ([]observation, error) {
+// decode reads one datagram from exporter that arrived at at.
+func (d *decoder) decode(exporter netip.Addr, at time.Time, payload []byte) ([]observation, error) {
 	if len(payload) < 2 {
 		return nil, errors.New("short packet")
 	}
@@ -135,9 +146,9 @@ func (d *decoder) decode(exporter netip.Addr, payload []byte) ([]observation, er
 	case 5:
 		return decodeV5(payload)
 	case 9:
-		return d.decodeV9(exporter, payload)
+		return d.decodeV9(exporter, at, payload)
 	case 10:
-		return d.decodeIPFIX(exporter, payload)
+		return d.decodeIPFIX(exporter, at, payload)
 	default:
 		return nil, fmt.Errorf("unknown flow version %d", binary.BigEndian.Uint16(payload[:2]))
 	}
@@ -186,7 +197,7 @@ func decodeV5(p []byte) ([]observation, error) {
 	return out, nil
 }
 
-func (d *decoder) decodeV9(exporter netip.Addr, p []byte) ([]observation, error) {
+func (d *decoder) decodeV9(exporter netip.Addr, at time.Time, p []byte) ([]observation, error) {
 	if len(p) < 20 {
 		return nil, errors.New("netflow v9: short header")
 	}
@@ -194,10 +205,11 @@ func (d *decoder) decodeV9(exporter netip.Addr, p []byte) ([]observation, error)
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.init()
+	d.at = at
 	return d.walkSets(exporter, 9, domain, p[20:])
 }
 
-func (d *decoder) decodeIPFIX(exporter netip.Addr, p []byte) ([]observation, error) {
+func (d *decoder) decodeIPFIX(exporter netip.Addr, at time.Time, p []byte) ([]observation, error) {
 	if len(p) < 16 {
 		return nil, errors.New("ipfix: short header")
 	}
@@ -209,6 +221,7 @@ func (d *decoder) decodeIPFIX(exporter netip.Addr, p []byte) ([]observation, err
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.init()
+	d.at = at
 	return d.walkSets(exporter, 10, domain, p[16:total])
 }
 
@@ -384,8 +397,13 @@ func (d *decoder) store(k domainKey, id uint16, t tmpl) error {
 	if ds != nil {
 		if _, ok := ds.tmpl[id]; ok {
 			ds.tmpl[id] = t
+			ds.seen = d.at
 			return nil
 		}
+	}
+	if d.ntmpl >= maxTemplates {
+		d.expire()
+		ds = d.doms[k]
 	}
 	if d.ntmpl >= maxTemplates {
 		return errTableFull
@@ -395,8 +413,22 @@ func (d *decoder) store(k domainKey, id uint16, t tmpl) error {
 		d.doms[k] = ds
 	}
 	ds.tmpl[id] = t
+	ds.seen = d.at
 	d.ntmpl++
 	return nil
+}
+
+// expire drops every domain whose templates were not refreshed within
+// templateTTL, with its sampling rate. It runs only on a full table, so a
+// sender that filled the table holds it for at most templateTTL after it
+// stops (#493).
+func (d *decoder) expire() {
+	for k, ds := range d.doms {
+		if d.at.Sub(ds.seen) >= templateTTL {
+			d.ntmpl -= len(ds.tmpl)
+			delete(d.doms, k)
+		}
+	}
 }
 
 func usable(fields []fieldSpec) bool {

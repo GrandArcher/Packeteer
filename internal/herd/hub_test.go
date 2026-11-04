@@ -3,12 +3,14 @@ package herd
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -392,6 +394,7 @@ func TestHubPeersPullAndMayConnect(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(p.Close)
+	p.hubDial = nil // a runs on loopback
 	p.Round(context.Background())
 	if len(p.Peers()) != 0 || len(pulledRows(t, b, a.node)) != 0 {
 		t.Fatal("pulled with no peers")
@@ -462,6 +465,7 @@ func TestHubPeerWhoseStatusDisagreesWithItsEntryIsRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(p.Close)
+	p.hubDial = nil // a runs on loopback
 
 	p.SetHub([]HubPeer{{URL: a.url(), Key: a.node.pub, ASN: 64999, Source: SourceHub}})
 	p.Round(context.Background())
@@ -541,5 +545,148 @@ func TestHerdWithoutAHubHasNone(t *testing.T) {
 	}
 	if h.hub != nil || h.Status(context.Background()).Hub != nil || h.srv.o.Hub != nil {
 		t.Error("hub state exists without herd.hub")
+	}
+}
+
+// memberEntry is an entry for asn issued at issued, listing nodes and
+// signed by signer.
+func memberEntry(t *testing.T, asn uint32, issued time.Time, signer *Node, nodes ...*Node) []byte {
+	t.Helper()
+	e := testEntry(signer)
+	e.ASN, e.Issued, e.Expires = asn, issued, issued.Add(30*24*time.Hour)
+	e.Nodes = nil
+	for i, n := range nodes {
+		e.Nodes = append(e.Nodes, EntryNode{Key: n.PublicKey(), URL: fmt.Sprintf("https://192.0.2.%d:9444", 50+i)})
+	}
+	return signed(t, signer, e)
+}
+
+func peerKeys(ps []HubPeer) []string {
+	var out []string
+	for _, p := range ps {
+		out = append(out, fmt.Sprintf("%d/%s", p.ASN, KeyID(p.Key)))
+	}
+	return out
+}
+
+// TestHubPinsKeysPerASN: once an ASN is pinned, a newer entry signed by a
+// key the pinned entry does not list is refused, so it cannot replace the
+// member's nodes; an older one is dropped. A member rotates by signing the
+// new key set with a pinned key (#493).
+func TestHubPinsKeysPerASN(t *testing.T) {
+	member, stranger, next := testNode(t), testNode(t), testNode(t)
+	genuine := memberEntry(t, 64501, t0, member, member)
+	srv := newHubServer(t, listOf(t, genuine))
+	clock := t0.Add(6 * time.Hour)
+	h, ap := testHub(t, srv, nil, &clock)
+	h.Refresh(context.Background())
+	want := []string{"64501/" + member.ID()}
+	if got := peerKeys(ap.get()); !slices.Equal(got, want) {
+		t.Fatalf("first list: %v", got)
+	}
+
+	forged := memberEntry(t, 64501, t0.Add(time.Hour), stranger, stranger)
+	backdated := memberEntry(t, 64501, t0.Add(-time.Hour), stranger, stranger)
+	srv.set(listOf(t, genuine, forged, backdated), 200)
+	h.Refresh(context.Background())
+	if got := peerKeys(ap.get()); !slices.Equal(got, want) {
+		t.Fatalf("forged newer entry replaced the member: %v", got)
+	}
+	if st := h.Status(); st.Rejected != 1 || st.Listed != 1 {
+		t.Fatalf("status after the forgery: %+v", st)
+	}
+
+	rotate := memberEntry(t, 64501, t0.Add(2*time.Hour), member, member, next)
+	moved := memberEntry(t, 64501, t0.Add(3*time.Hour), next, next)
+	srv.set(listOf(t, genuine, rotate, moved), 200)
+	h.Refresh(context.Background())
+	if got := peerKeys(ap.get()); !slices.Equal(got, []string{"64501/" + next.ID()}) {
+		t.Fatalf("rotation not followed: %v", got)
+	}
+	// After the move only the new key set may sign a newer entry.
+	late := memberEntry(t, 64501, t0.Add(4*time.Hour), stranger, stranger)
+	srv.set(listOf(t, moved, late), 200)
+	h.Refresh(context.Background())
+	if got := peerKeys(ap.get()); !slices.Equal(got, []string{"64501/" + next.ID()}) || h.Status().Rejected != 1 {
+		t.Fatalf("after the move: %v %+v", got, h.Status())
+	}
+}
+
+// TestHubRefusesAnUnpinnedASNWithUnrelatedKeys: when a list is the first
+// to name an ASN and its entries are signed by unrelated keys, none is used,
+// whichever is older or newer; other ASNs are unaffected.
+func TestHubRefusesAnUnpinnedASNWithUnrelatedKeys(t *testing.T) {
+	a, b, other := testNode(t), testNode(t), testNode(t)
+	for _, order := range [][2]time.Duration{{0, time.Hour}, {time.Hour, 0}, {0, 0}} {
+		srv := newHubServer(t, listOf(t,
+			memberEntry(t, 64501, t0.Add(order[0]), a, a),
+			memberEntry(t, 64501, t0.Add(order[1]), b, b),
+			memberEntry(t, 64502, t0, other, other)))
+		clock := t0.Add(6 * time.Hour)
+		h, ap := testHub(t, srv, nil, &clock)
+		h.Refresh(context.Background())
+		if got := peerKeys(ap.get()); !slices.Equal(got, []string{"64502/" + other.ID()}) {
+			t.Fatalf("order %v: peers %v", order, got)
+		}
+		if st := h.Status(); st.Rejected != 2 || st.Listed != 1 {
+			t.Fatalf("order %v: status %+v", order, st)
+		}
+		// The ASN stays unpinned: a later list with one key set uses it.
+		srv.set(listOf(t, memberEntry(t, 64501, t0, a, a)), 200)
+		h.Refresh(context.Background())
+		if got := peerKeys(ap.get()); !slices.Equal(got, []string{"64501/" + a.ID()}) {
+			t.Fatalf("order %v: after the conflict: %v", order, got)
+		}
+	}
+}
+
+// TestHubSnapshotPinsMembers: the release snapshot pins its members before
+// the hub is read, so a hub list that names one of them with another key
+// does not take it over.
+func TestHubSnapshotPinsMembers(t *testing.T) {
+	member, stranger := testNode(t), testNode(t)
+	srv := newHubServer(t, listOf(t, memberEntry(t, 64540, t0.Add(time.Hour), stranger, stranger)))
+	clock := t0.Add(6 * time.Hour)
+	h, ap := testHub(t, srv, listOf(t, memberEntry(t, 64540, t0, member, member)), &clock)
+	h.Refresh(context.Background())
+	if got := ap.get(); len(got) != 0 || h.Status().Rejected != 1 {
+		t.Fatalf("stranger took over a snapshot member: %v %+v", peerKeys(got), h.Status())
+	}
+}
+
+// TestHubPeerNameResolvingInternalIsRefused: a hub peer is dialed only at
+// a routable address, checked after DNS, so a name that resolves to
+// loopback is refused before any connection; a configured peer is not
+// checked (#493).
+func TestHubPeerNameResolvingInternalIsRefused(t *testing.T) {
+	a := newMember(t, 64501, nil)
+	b := newMember(t, 64502, nil)
+	a.hub = &KeySet{}
+	a.serve()
+	a.hub.Set([]HubPeer{{Key: b.node.pub}})
+	a.seedN(2, 64510)
+	b.cfg.Peers = nil
+	p, err := NewPuller(PullerOptions{
+		Cfg: b.cfg, Node: b.node, Store: b.store, Origins: func() []uint32 { return []uint32{64510} },
+		Now: b.clock, Log: slog.New(slog.NewTextHandler(io.Discard, nil)), Trips: b.trips, Jitter: func() float64 { return 1 },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(p.Close)
+	_, port, _ := strings.Cut(strings.TrimPrefix(a.url(), "https://"), ":")
+	p.SetHub([]HubPeer{{URL: "https://localhost:" + port, Key: a.node.pub, ASN: 64501, Source: SourceHub}})
+	p.Round(context.Background())
+	st := p.Peers()
+	if len(st) != 1 || st[0].Failures != 1 || !strings.Contains(st[0].LastError, "is not a routable address") || len(pulledRows(t, b, a.node)) != 0 {
+		t.Fatalf("hub peer at a name for loopback: %+v", st)
+	}
+	for _, addr := range []string{"127.0.0.1:443", "[::1]:443", "10.0.0.1:443", "[fe80::1]:443", "[::ffff:192.168.0.1]:443"} {
+		if refuseUnroutable("tcp", addr, nil) == nil {
+			t.Errorf("%s dialed", addr)
+		}
+	}
+	if err := refuseUnroutable("tcp", "192.0.2.31:9444", nil); err != nil {
+		t.Errorf("routable address refused: %v", err)
 	}
 }

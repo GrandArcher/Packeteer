@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -202,6 +203,17 @@ type Hub struct {
 	mu      sync.Mutex
 	entries []Entry
 	st      HubStatus
+	// pins holds, per ASN, the node keys of its newest accepted entry.
+	pins map[uint32]pin
+}
+
+// pin is what an ASN's next entry must be signed by. An entry signs
+// itself, so its ASN claim proves nothing on its own: once an ASN is
+// pinned, a newer entry counts only when a key of the pinned entry signed
+// it, which is how a member rotates keys (#493).
+type pin struct {
+	keys   map[string]bool
+	issued time.Time
 }
 
 // NewHub returns a Hub; Run starts it.
@@ -226,7 +238,67 @@ func NewHub(o HubOptions) *Hub {
 			},
 		}
 	}
-	return &Hub{o: o, guard: newGuard(o.Log, o.Event), st: HubStatus{URL: statusURL(o.Cfg.URL)}}
+	h := &Hub{o: o, guard: newGuard(o.Log, o.Event), st: HubStatus{URL: statusURL(o.Cfg.URL)}, pins: map[uint32]pin{}}
+	// The release's snapshot was reviewed with the release, so its
+	// members are pinned before any hub list is read.
+	if entries, _, err := ParseHubList(o.Snapshot, o.Now()); err == nil {
+		h.pin(entries)
+	}
+	return h
+}
+
+// pin keeps the entries that agree with the pins, oldest first, and moves
+// each pin to the newest entry its keys signed. An entry older than its
+// ASN's pin and not signed by it is superseded and dropped without a
+// count. A newer one is refused and counted. When an ASN that had no pin
+// before this list gets an entry its first entry's keys did not sign, the
+// list does not say who holds the ASN: none of its entries is used and it
+// stays unpinned. h.mu is held or h is not shared yet.
+func (h *Hub) pin(entries []Entry) ([]Entry, int) {
+	sorted := slices.Clone(entries)
+	slices.SortStableFunc(sorted, func(a, b Entry) int { return a.Issued.Compare(b.Issued) })
+	fresh, conflict := map[uint32]bool{}, map[uint32]bool{}
+	kept, refused := sorted[:0], 0
+	for _, e := range sorted {
+		p, ok := h.pins[e.ASN]
+		switch {
+		case !ok:
+			fresh[e.ASN] = true
+		case p.keys[e.Signer]:
+		case e.Issued.Before(p.issued):
+			continue
+		default:
+			refused++
+			if fresh[e.ASN] {
+				conflict[e.ASN] = true
+			}
+			continue
+		}
+		if !ok || e.Issued.After(p.issued) {
+			keys := make(map[string]bool, len(e.Nodes))
+			for _, n := range e.Nodes {
+				keys[n.Key] = true
+			}
+			h.pins[e.ASN] = pin{keys: keys, issued: e.Issued}
+		}
+		kept = append(kept, e)
+	}
+	if len(conflict) == 0 {
+		return kept, refused
+	}
+	out := kept[:0]
+	for _, e := range kept {
+		if conflict[e.ASN] {
+			refused++
+			continue
+		}
+		out = append(out, e)
+	}
+	for asn := range conflict {
+		delete(h.pins, asn)
+		h.o.Log.Warn("herd hub: entries for one ASN are signed by unrelated keys; none is used", "asn", asn)
+	}
+	return out, refused
 }
 
 // statusURL is u without userinfo, query, or fragment, which may carry a
@@ -289,12 +361,15 @@ func (h *Hub) Refresh(ctx context.Context) {
 	}
 }
 
-// load replaces the list and applies it.
+// load replaces the list with its entries that agree with the pins and
+// applies it.
 func (h *Hub) load(entries []Entry, rejected int, source string, now time.Time) {
 	h.mu.Lock()
 	if source == SourceHub {
 		h.st.LastError = ""
 	}
+	entries, refused := h.pin(entries)
+	rejected += refused
 	h.entries = entries
 	h.st.Source, h.st.FetchedAt, h.st.Rejected = source, now, rejected
 	h.mu.Unlock()

@@ -59,7 +59,8 @@ func handler(listen, binaryPath, version, repo string) (http.Handler, string, er
 	}
 	sum := sha256.Sum256(bin)
 	h := hex.EncodeToString(sum[:])
-	sums := h + "  packeteer-linux-amd64\n" + h + "  packeteer-linux-arm64\n"
+	vline := upgrade.VersionLine(version) + "\n"
+	sums := vline + h + "  packeteer-linux-amd64\n" + h + "  packeteer-linux-arm64\n"
 	sig, err := upgrade.Sign(priv, []byte(sums))
 	if err != nil {
 		return nil, "", err
@@ -68,7 +69,7 @@ func handler(listen, binaryPath, version, repo string) (http.Handler, string, er
 	// sum mode: a correctly signed checksum file that does not match the
 	// binary, so only the checksum check can catch it.
 	zero := strings.Repeat("0", 64)
-	badSums := zero + "  packeteer-linux-amd64\n" + zero + "  packeteer-linux-arm64\n"
+	badSums := vline + zero + "  packeteer-linux-amd64\n" + zero + "  packeteer-linux-arm64\n"
 	badSumsSig, _ := upgrade.Sign(priv, []byte(badSums))
 	var corrupt atomic.Value
 	corrupt.Store("none")

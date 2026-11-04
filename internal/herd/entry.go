@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/config"
@@ -179,7 +180,8 @@ func (e *Entry) validate(now time.Time) error {
 // checkEndpoint is config.CheckHerdURL plus a refusal of the localhost
 // names and of IP literals no peer could be at: a hostile list must not
 // make a node probe its own or its operator's internal services. Other
-// host names are not resolved here.
+// host names are not resolved here; the puller checks the address a hub
+// peer's name resolves to when it dials (refuseUnroutable).
 func checkEndpoint(s string) error {
 	if err := config.CheckHerdURL(s); err != nil {
 		return err
@@ -189,8 +191,28 @@ func checkEndpoint(s string) error {
 	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
 		return errors.New("is not a routable address")
 	}
-	if a, err := netip.ParseAddr(host); err == nil && (a.IsLoopback() || a.IsUnspecified() || a.IsLinkLocalUnicast() || a.IsMulticast() || a.IsPrivate()) {
+	if a, err := netip.ParseAddr(host); err == nil && unroutable(a) {
 		return errors.New("is not a routable address")
+	}
+	return nil
+}
+
+// unroutable reports an address no herd peer could be at.
+func unroutable(a netip.Addr) bool {
+	a = a.Unmap()
+	return a.IsLoopback() || a.IsUnspecified() || a.IsLinkLocalUnicast() || a.IsMulticast() || a.IsPrivate()
+}
+
+// refuseUnroutable is the dialer check for hub peers. It runs on the
+// address a host name resolved to, after DNS, so a hub entry whose name
+// resolves to an internal address is refused like an IP literal (#493).
+func refuseUnroutable(_, address string, _ syscall.RawConn) error {
+	ap, err := netip.ParseAddrPort(address)
+	if err != nil {
+		return err
+	}
+	if unroutable(ap.Addr()) {
+		return fmt.Errorf("herd: %s is not a routable address", ap.Addr())
 	}
 	return nil
 }

@@ -2,8 +2,8 @@
 // The publish workflow runs it on a version tag; the controller's Settings
 // upgrade verifies the result against upgrade.public_key.
 //
-//	relsign keygen                 print a new public and private key (base64)
-//	relsign sign DIR FILE...       write DIR/SHA256SUMS and DIR/SHA256SUMS.sig
+//	relsign keygen                     print a new public and private key (base64)
+//	relsign sign VERSION DIR FILE...   write DIR/SHA256SUMS and DIR/SHA256SUMS.sig
 //
 // sign reads the private key from PACKETEER_RELEASE_KEY. It never prints it.
 // This is a release tool. It does not touch Packeteer's runtime or announce.
@@ -31,7 +31,7 @@ func main() {
 
 func run(args []string, getenv func(string) string, out io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: relsign keygen | relsign sign DIR FILE")
+		return errors.New("usage: relsign keygen | relsign sign VERSION DIR FILE")
 	}
 	switch args[0] {
 	case "keygen":
@@ -42,20 +42,26 @@ func run(args []string, getenv func(string) string, out io.Writer) error {
 		fmt.Fprintf(out, "public_key: %s\nprivate_key: %s\n", pub, priv)
 		return nil
 	case "sign":
-		if len(args) < 3 {
-			return errors.New("usage: relsign sign DIR FILE")
+		if len(args) < 4 {
+			return errors.New("usage: relsign sign VERSION DIR FILE")
+		}
+		if !upgrade.ValidTag(args[1]) {
+			return fmt.Errorf("version %q is not a release version", args[1])
 		}
 		key := getenv("PACKETEER_RELEASE_KEY")
 		if key == "" {
 			return fmt.Errorf("PACKETEER_RELEASE_KEY is not set")
 		}
-		return sign(args[1], args[2:], key)
+		return sign(args[1], args[2], args[3:], key)
 	}
 	return fmt.Errorf("unknown command %q", args[0])
 }
 
-func sign(dir string, files []string, key string) error {
+// sign writes the version line first, so the signature covers which
+// release the unversioned binary names belong to.
+func sign(version, dir string, files []string, key string) error {
 	var sums strings.Builder
+	sums.WriteString(upgrade.VersionLine(version) + "\n")
 	for _, f := range files {
 		data, err := os.ReadFile(f)
 		if err != nil {

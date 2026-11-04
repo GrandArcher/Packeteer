@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"net/netip"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -23,6 +24,30 @@ func newStore(t *testing.T, yaml string) *Store {
 		t.Fatalf("New: %v", err)
 	}
 	return s
+}
+
+// TestPathIsNotParsedAsParameters: a ? in the path is part of the file
+// name. Before #493 this path turned on query_only and the schema write
+// failed.
+func TestPathIsNotParsedAsParameters(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "lab.db?_pragma=query_only(1)&x=#y")
+	s := newStore(t, "path: '"+path+"'")
+	if err := s.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer s.Stop(context.Background())
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("database not at the literal path: %v", err)
+	}
+	var mode string
+	if err := s.db.QueryRow("PRAGMA journal_mode").Scan(&mode); err != nil || mode != "wal" {
+		t.Fatalf("journal_mode %q %v, want wal", mode, err)
+	}
+	var ro int
+	if err := s.db.QueryRow("PRAGMA query_only").Scan(&ro); err != nil || ro != 0 {
+		t.Fatalf("query_only %d %v, want 0", ro, err)
+	}
 }
 
 func TestRegistered(t *testing.T) {
