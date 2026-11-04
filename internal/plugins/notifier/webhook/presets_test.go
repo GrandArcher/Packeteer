@@ -44,7 +44,7 @@ var downEvent = plugin.NewEvent(plugin.EventProviderDown, time.Date(2026, 1, 2, 
 
 func TestSlackPreset(t *testing.T) {
 	srv, c := captureServer(t)
-	n, err := newWithEnv(t, "preset: slack\nurl: ${SLACK_URL}", map[string]string{"SLACK_URL": srv.URL + "/services/x"})
+	n, err := newWithEnv(t, "preset: slack\nurl: ${PACKETEER_WEBHOOK_SLACK_URL}", map[string]string{"PACKETEER_WEBHOOK_SLACK_URL": srv.URL + "/services/x"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,7 +190,7 @@ func TestEventsFilterAndGate(t *testing.T) {
 }
 
 func TestErrorDoesNotLeakURL(t *testing.T) {
-	n, err := newWithEnv(t, "url: http://127.0.0.1:1/hook?token=${T}", map[string]string{"T": "sekret"})
+	n, err := newWithEnv(t, "url: http://127.0.0.1:1/hook?token=${PACKETEER_WEBHOOK_T}", map[string]string{"PACKETEER_WEBHOOK_T": "sekret"})
 	if err != nil {
 		t.Fatal(err)
 	}

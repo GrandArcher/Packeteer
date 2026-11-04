@@ -14,19 +14,22 @@ import (
 	"maps"
 	"net/http"
 	"net/url"
-	"os"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/outbound"
 	"github.com/GrandArcher/Packeteer/internal/plugins/exporter/sinkcfg"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
 // TypeName is the plugin type used in config.
 const TypeName = "otlp"
+
+// EnvPrefix is the only prefix of the variables headers expand.
+const EnvPrefix = "PACKETEER_OTLP_"
 
 // DefaultServiceName is the service.name resource attribute.
 const DefaultServiceName = "packeteer"
@@ -49,8 +52,8 @@ type Config struct {
 	// Streams defaults to decisions, so existing configs keep sending
 	// spans only. events become log records and metrics become metrics.
 	Streams []string `yaml:"streams"`
-	// Headers are added to each request. Values may reference ${VAR} from
-	// the environment so tokens stay out of the config file.
+	// Headers are added to each request. Values may reference
+	// ${PACKETEER_OTLP_*} variables so tokens stay out of the config file.
 	Headers     map[string]string `yaml:"headers"`
 	CAFile      string            `yaml:"ca_file"`
 	ServiceName string            `yaml:"service_name"`
@@ -94,30 +97,19 @@ func New(c plugin.Config, e plugin.Env) (plugin.Exporter, error) {
 	if cfg.ServiceName == "" {
 		cfg.ServiceName = DefaultServiceName
 	}
-	getenv := e.Getenv
-	if getenv == nil {
-		getenv = func(string) string { return "" }
-	}
 	hdr := http.Header{"Content-Type": {"application/json"}}
 	for k, v := range cfg.Headers {
 		if !headerName.MatchString(k) {
 			return nil, fmt.Errorf("header name %q is invalid", k)
 		}
-		var missing string
-		val := os.Expand(v, func(n string) string {
-			s := getenv(n)
-			if s == "" && missing == "" {
-				missing = n
-			}
-			return s
-		})
-		if missing != "" {
-			return nil, fmt.Errorf("header %s: %s is not set", k, missing)
+		val, err := outbound.Expand(v, EnvPrefix, e.Getenv)
+		if err != nil {
+			return nil, fmt.Errorf("header %s: %w", k, err)
 		}
 		hdr.Set(k, val)
 	}
 	return &Exporter{base: *u, streams: streams, headers: hdr, service: cfg.ServiceName, started: time.Now(),
-		client: &http.Client{Transport: &http.Transport{TLSClientConfig: tlsConf}}}, nil
+		client: &http.Client{Transport: &http.Transport{TLSClientConfig: tlsConf}, CheckRedirect: outbound.SameHost}}, nil
 }
 
 // Streams implements plugin.Exporter.

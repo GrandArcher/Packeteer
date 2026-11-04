@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/outbound"
 	"github.com/GrandArcher/Packeteer/internal/plugins/exporter/sinkcfg"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
@@ -80,7 +81,7 @@ func New(c plugin.Config, e plugin.Env) (plugin.Exporter, error) {
 	u.RawQuery = url.Values{"org": {cfg.Org}, "bucket": {cfg.Bucket}, "precision": {"ns"}}.Encode()
 	return &Exporter{target: u.String(), streams: streams,
 		header: http.Header{"Authorization": {"Token " + token}, "Content-Type": {"text/plain; charset=utf-8"}},
-		client: &http.Client{Transport: &http.Transport{TLSClientConfig: tlsConf}}}, nil
+		client: &http.Client{Transport: &http.Transport{TLSClientConfig: tlsConf}, CheckRedirect: outbound.SameHost}}, nil
 }
 
 // Streams implements plugin.Exporter.

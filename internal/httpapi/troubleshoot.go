@@ -68,11 +68,17 @@ func parsePrefixOrAddr(v string) (netip.Prefix, error) {
 
 // readTool decodes a JSON tool request. POST with application/json keeps
 // a cross-site page from triggering probes: that needs a CORS preflight,
-// which this server never grants.
+// which this server never grants. Without auth or basic auth anyone who
+// reaches the port could send probes and queue prefixes, so the tools are
+// refused like every other write.
 func (s *Server) readTool(w http.ResponseWriter, r *http.Request) (toolRequest, bool) {
 	var req toolRequest
 	if s.tools == nil {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": troubleshoot.ErrDisabled.Error()})
+		return req, false
+	}
+	if !s.writesEnabled() {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "probe, traceroute, whois, and probe and optimize require auth (auth.enabled) or PACKETEER_HTTP_USER and PACKETEER_HTTP_PASSWORD"})
 		return req, false
 	}
 	mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))

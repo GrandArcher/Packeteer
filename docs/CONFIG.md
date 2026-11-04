@@ -645,7 +645,7 @@ Peers get `add_path: true` automatically when a neighbor has `add_path` (and `bm
 
 ### `troubleshoot`
 
-Operator tools on the ops HTTP server (`/api/troubleshoot/...` and the dashboard's Troubleshooting section). None of them announces or withdraws a route. On-demand probe results go back to the caller only and are not stored as probe results. The one write is `POST /api/troubleshoot/optimize` (operator): it adds a learned prefix to the probe set for a while, so the decision engine can then improve it under its usual rules (below).
+Operator tools on the ops HTTP server (`/api/troubleshoot/...` and the dashboard's Troubleshooting section). None of them announces or withdraws a route. With `auth.enabled: false` and no `PACKETEER_HTTP_USER`, the `POST` tools (probe, traceroute, whois, probe and optimize) answer `403`; the looking glass stays open (#489). On-demand probe results go back to the caller only and are not stored as probe results. The one write is `POST /api/troubleshoot/optimize` (operator): it adds a learned prefix to the probe set for a while, so the decision engine can then improve it under its usual rules (below).
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -1103,7 +1103,7 @@ Set these in the container. They are not keys in the YAML file. `PACKETEER_HTTP_
 | `PACKETEER_POLICY_TOKEN` | Bearer token of the [`external_policy`](#external_policy) feed (#232), unless `token_env` names another variable. Never logged. |
 | `PACKETEER_ADMIN_PASSWORD` | With `auth`: creates that admin at start when no user has the name (12-256 characters). An existing user is not changed, so a password set through the API survives a restart. Not written to the log. |
 
-`${VAR}` expansion applies inside a webhook `url`, webhook `headers` values, and an `exec` or `grpc` plugin's `env` values. It is not applied to the rest of the file.
+`${VAR}` expansion applies inside a webhook `url` and `headers` values (only `PACKETEER_WEBHOOK_*` names), `otlp` exporter `headers` values (only `PACKETEER_OTLP_*` names), and an `exec` or `grpc` plugin's `env` values. In a webhook or `otlp` value any other name, or an unset one, is a startup error, so a config edit cannot put another variable (such as `PACKETEER_ADMIN_PASSWORD`) into a URL or header (#489). `${VAR}` expansion is not applied to the rest of the file. A `*_env` key still names any variable.
 
 ## Inject checklist
 
@@ -1605,9 +1605,9 @@ curl -u "$USER:$PASS" -X DELETE http://127.0.0.1:8080/api/maintenance/api-1
 | | `streams` | `events`, `decisions` | As for `kafka`. |
 | | `tls`, `ca_file` | off | As for `kafka`; a `tls://` URL needs `tls: true`. |
 | | `username_env`, `password_env` | none | Both or neither; need `tls: true`. |
-| `otlp` | `endpoint` | required | OTLP/HTTP base URL, for example `http://collector.example.net:4318`; `/v1/traces`, `/v1/logs`, and `/v1/metrics` are added. |
+| `otlp` | `endpoint` | required | OTLP/HTTP base URL, for example `http://collector.example.net:4318`; `/v1/traces`, `/v1/logs`, and `/v1/metrics` are added. A redirect to another host is refused. |
 | | `streams` | `decisions` | Any of `decisions` (spans), `events` (log records), `metrics`. |
-| | `headers` | none | Request headers; values may use `${VAR}`, and an unset variable is an error. |
+| | `headers` | none | Request headers; values may use `${PACKETEER_OTLP_*}` variables, and any other or unset variable is an error. |
 | | `ca_file` | system roots | PEM for an `https` endpoint. |
 | | `service_name` | `packeteer` | The `service.name` resource attribute. |
 | `influxdb` | `url` | required | Server base URL, for example `http://influxdb.example.net:8086`; points go to `/api/v2/write`. |
@@ -1641,9 +1641,9 @@ Every notifier, including `exec` and `grpc`, accepts these keys next to its own.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `url` | none | Required absolute `http` or `https` URL, except for `preset: pagerduty`. `${VAR}` expands from the environment, so a Slack or Teams URL that is itself a secret stays out of the file. |
+| `url` | none | Required absolute `http` or `https` URL, except for `preset: pagerduty`. `${PACKETEER_WEBHOOK_*}` variables expand from the environment, so a Slack or Teams URL that is itself a secret stays out of the file; any other or unset variable is an error. A redirect to another host is refused. |
 | `timeout` | `5s` | Not negative. |
-| `headers` | none | Extra request headers. Values expand `${VAR}`. |
+| `headers` | none | Extra request headers. Values expand `${PACKETEER_WEBHOOK_*}` variables, as for `url`. |
 | `preset` | `generic` | `generic` (the event as JSON), `slack` (`{"text": ...}` for an incoming webhook), `teams` (a MessageCard for an incoming webhook), or `pagerduty` (Events API v2). |
 | `routing_key_env` | none | `pagerduty` only, and required there: the name of the environment variable holding the integration key. `url` defaults to `https://events.pagerduty.com/v2/enqueue`. Problems `trigger`; resolving kinds `resolve` the same `dedup_key`. |
 | `template` | none | A Go `text/template` for the body instead of a preset, for SMS and other gateways. The data is the event (`.Kind`, `.Severity`, `.Message`, `.Time`, `.Fields`); functions `json` (quote a string) and `upper`. At most 16 KiB. Only with `preset: generic`. |
@@ -1854,7 +1854,7 @@ Used under `troubleshoot.whois`. Asks an RDAP server (RFC 9082/9083) about an ad
 
 | Key | Default | Meaning |
 |---|---|---|
-| `base_url` | `https://rdap.org` | RDAP service. `http` or `https`, no credentials, query, or fragment. rdap.org redirects to the right registry; at most 3 redirects, and an `https` base never follows a redirect to `http`. |
+| `base_url` | `https://rdap.org` | RDAP service. `http` or `https`, no credentials, query, or fragment. rdap.org redirects to the right registry; at most 3 redirects, and a redirect to another host must be `https` and carries only the `Accept` header. |
 | `timeout` | `5s` | Whole request, up to `1m`. |
 | `max_bytes` | `262144` | Largest response accepted, 1024-4194304. |
 
@@ -1953,7 +1953,7 @@ Used under `auth.sso` (#32). OpenID Connect authorization code flow with PKCE. T
 | `client_secret_env` | required | Environment variable with the client secret. The secret is never a key in the file. |
 | `redirect_url` | required | `https://<packeteer>/auth/callback`, registered at the provider. `https`, or `http` on loopback. The session cookie is `Secure`, so browsers keep it only over https or on localhost. |
 | `scopes` | `[email, profile]` | Scopes besides `openid`. Add `groups` if your provider needs it for the roles claim. |
-| `username_claim` | `email` | Claim used as the account name (`email`, `preferred_username`, `sub`, ...). With `email`, `email_verified: false` is refused. |
+| `username_claim` | `email` | Claim used as the account name (`email`, `preferred_username`, `sub`, ...). With `email`, the ID token must carry `email_verified: true`; a token without it is refused (#489). For a provider that does not send it, use `sub`. |
 | `roles_claim` | `groups` | Claim listing the user's groups (a string or a list). |
 | `role_map` | none | Group -> `viewer`, `operator`, or `admin`. The highest mapped role wins. |
 | `default_role` | none | Role when no group maps. Empty refuses the sign-in. `role_map` or `default_role` is required. |

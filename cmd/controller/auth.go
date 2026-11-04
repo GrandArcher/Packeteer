@@ -42,22 +42,25 @@ func besideStorage(plugins *pluginhost.Set, name string) string {
 	return filepath.Join(filepath.Dir(db), name)
 }
 
-// writeFirstRunPassword writes the generated password with mode 0600.
-func writeFirstRunPassword(path, user, pw string) error {
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+// stageFirstRunPassword writes the generated password to a new 0600 file
+// beside path and returns its name. It is renamed to path once the account
+// exists, so an account is never created without its password on disk and
+// a start that loses the race to create it leaves no file behind.
+func stageFirstRunPassword(path, user, pw string) (string, error) {
+	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+"-*")
 	if err != nil {
-		return err
-	}
-	// A file left by an earlier run keeps its old mode on open.
-	if err := f.Chmod(0o600); err != nil {
-		_ = f.Close()
-		return err
+		return "", err
 	}
 	if _, err := fmt.Fprintf(f, "user: %s\npassword: %s\n", user, pw); err != nil {
 		_ = f.Close()
-		return err
+		_ = os.Remove(f.Name())
+		return "", err
 	}
-	return f.Close()
+	if err := f.Close(); err != nil {
+		_ = os.Remove(f.Name())
+		return "", err
+	}
+	return f.Name(), nil
 }
 
 // removeFirstRunPassword deletes the file once its password no longer
@@ -146,12 +149,14 @@ func newAuthService(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logge
 
 // bootstrapAdmin creates the first admin once the store is open. The
 // password is PACKETEER_ADMIN_PASSWORD. With none set and no user yet (and
-// no single sign-on), it generates one, logs it once, writes it to a 0600
-// file next to the storage file, and limits the account to a password
-// change (#328). An existing user of that name is left alone. A password
-// file left by an earlier run is removed once no user still has to change
-// a generated password (the user was deleted, or the store was replaced).
-func bootstrapAdmin(ctx context.Context, svc *auth.Service, audit *auth.Auditor, plugins *pluginhost.Set, getenv func(string) string, log *slog.Logger) {
+// no single sign-on), it generates one, writes it to the 0600 file pwFile
+// (next to the storage file), and limits the account to a password change
+// (#328). The log names the file and never holds the password, so a log
+// shipper never sees it (#489). With no pwFile nothing is generated. An
+// existing user of that name is left alone. A password file left by an
+// earlier run is removed once no user still has to change a generated
+// password (the user was deleted, or the store was replaced).
+func bootstrapAdmin(ctx context.Context, svc *auth.Service, audit *auth.Auditor, pwFile string, getenv func(string) string, log *slog.Logger) {
 	if svc == nil {
 		return
 	}
@@ -172,33 +177,48 @@ func bootstrapAdmin(ctx context.Context, svc *auth.Service, audit *auth.Auditor,
 			pw, generated = auth.GeneratePassword(), true
 		}
 	}
-	if !generated {
-		if path := besideStorage(plugins, firstRunPasswordFile); path != "" {
-			switch pending, err := svc.ChangePending(ctx); {
-			case err != nil:
-				log.Warn("auth: cannot read the users; first-run password file not checked", "err", err)
-			case !pending:
-				removeFirstRunPassword(path, log)
-			}
+	if !generated && pwFile != "" {
+		switch pending, err := svc.ChangePending(ctx); {
+		case err != nil:
+			log.Warn("auth: cannot read the users; first-run password file not checked", "err", err)
+		case !pending:
+			removeFirstRunPassword(pwFile, log)
 		}
 	}
 	if pw == "" {
 		return
+	}
+	var staged string
+	if generated {
+		if pwFile == "" {
+			log.Error("auth: no admin created: the storage plugin has no directory for a generated password; set " + AdminPassEnv)
+			return
+		}
+		var err error
+		if staged, err = stageFirstRunPassword(pwFile, name, pw); err != nil {
+			log.Error("auth: no admin created: cannot write the first-run password file; make its directory writable or set "+AdminPassEnv,
+				"path", pwFile, "err", err)
+			return
+		}
+		defer func() {
+			if staged != "" {
+				_ = os.Remove(staged)
+			}
+		}()
 	}
 	created, err := svc.Bootstrap(ctx, name, pw, generated)
 	switch {
 	case err != nil:
 		log.Error("auth: bootstrap admin", "user", name, "err", err)
 	case created && generated:
-		path := besideStorage(plugins, firstRunPasswordFile)
-		if path != "" {
-			if err := writeFirstRunPassword(path, name, pw); err != nil {
-				log.Warn("auth: cannot write the first-run password file", "path", path, "err", err)
-				path = ""
-			}
+		file := pwFile
+		if err := os.Rename(staged, pwFile); err != nil {
+			file = staged
+			log.Error("auth: cannot move the first-run password file into place", "path", staged, "err", err)
 		}
-		log.Warn("auth: first run: generated admin password; sign in with it, then choose a new one",
-			"user", name, "password", pw, "file", path)
+		staged = ""
+		log.Warn("auth: first run: generated admin password; read it from the file, sign in, then choose a new one",
+			"user", name, "file", file)
 		audit.Record(ctx, plugin.AuditRecord{Actor: "system", Method: auth.MethodSystem, Action: "auth.bootstrap", Target: name,
 			Detail: "admin created with a generated password; change required"})
 	case created:

@@ -877,7 +877,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		log.Error("refusing to start", "err", err)
 		return 1
 	}
-	bootstrapAdmin(ctx, authSvc, audit, plugins, getenv, log)
+	bootstrapAdmin(ctx, authSvc, audit, besideStorage(plugins, firstRunPasswordFile), getenv, log)
 	hd, herr := startHerd(ctx, cfg, plugins, view, audit, dispatch.Emit, ha.active, log)
 	if herr != nil {
 		log.Error("refusing to start", "err", herr)

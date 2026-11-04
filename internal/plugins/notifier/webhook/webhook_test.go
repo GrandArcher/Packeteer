@@ -19,10 +19,7 @@ func newNotifier(t *testing.T, y string) (plugin.Notifier, error) {
 		t.Fatal(err)
 	}
 	return plugin.Notifiers.New(TypeName, c, plugin.Env{Getenv: func(k string) string {
-		if k == "HOOK_TOKEN" {
-			return "abc"
-		}
-		return ""
+		return map[string]string{"PACKETEER_WEBHOOK_TOKEN": "abc", "HOOK_TOKEN": "abc", "PACKETEER_ADMIN_PASSWORD": "admin-secret"}[k]
 	}})
 }
 
@@ -40,7 +37,7 @@ func TestNotify(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	n, err := newNotifier(t, "url: "+srv.URL+"\nheaders:\n  Authorization: Bearer ${HOOK_TOKEN}\n")
+	n, err := newNotifier(t, "url: "+srv.URL+"\nheaders:\n  Authorization: Bearer ${PACKETEER_WEBHOOK_TOKEN}\n")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,6 +82,10 @@ func TestConfigValidation(t *testing.T) {
 		{"negative timeout", "url: http://example.invalid\ntimeout: -1s", "must not be negative"},
 		{"bad severity", "url: http://example.invalid\nmin_severity: loud", `min_severity "loud"`},
 		{"unknown field", "url: http://example.invalid\nretries: 3", "field retries not found"},
+		{"admin password in url", "url: https://hooks.example.net/x?p=${PACKETEER_ADMIN_PASSWORD}", "url: ${PACKETEER_ADMIN_PASSWORD} is not allowed"},
+		{"other variable in url", "url: ${HOOK_TOKEN}", "only PACKETEER_WEBHOOK_* variables expand"},
+		{"other variable in header", "url: https://hooks.example.net/x\nheaders: {X-Leak: \"$PACKETEER_ADMIN_PASSWORD\"}", "header X-Leak: ${PACKETEER_ADMIN_PASSWORD} is not allowed"},
+		{"unset variable", "url: https://hooks.example.net/x\nheaders: {X-Token: \"${PACKETEER_WEBHOOK_UNSET}\"}", "PACKETEER_WEBHOOK_UNSET is not set"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -93,5 +94,48 @@ func TestConfigValidation(t *testing.T) {
 				t.Fatalf("err = %v, want %q", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+// A receiver that redirects to another host gets no delivery from there:
+// the token header stays on the configured host (#489).
+func TestRedirectToAnotherHostRefused(t *testing.T) {
+	var leaked string
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		leaked = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer other.Close()
+	var sameHostAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/away":
+			http.Redirect(w, r, other.URL+"/hook", http.StatusTemporaryRedirect)
+		case "/moved":
+			http.Redirect(w, r, "/hook", http.StatusTemporaryRedirect)
+		default:
+			sameHostAuth = r.Header.Get("Authorization")
+			w.WriteHeader(http.StatusNoContent)
+		}
+	}))
+	defer srv.Close()
+	ev := plugin.Event{Kind: "provider.down", Severity: plugin.SeverityCritical}
+
+	n, err := newNotifier(t, "url: "+srv.URL+"/away\nheaders: {Authorization: \"Bearer ${PACKETEER_WEBHOOK_TOKEN}\"}\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := n.Notify(context.Background(), ev); err == nil || !strings.Contains(err.Error(), "refusing a redirect to another host") {
+		t.Fatalf("cross-host redirect: %v", err)
+	}
+	if leaked != "" {
+		t.Fatalf("the other host got the token %q", leaked)
+	}
+	n, err = newNotifier(t, "url: "+srv.URL+"/moved\nheaders: {Authorization: \"Bearer ${PACKETEER_WEBHOOK_TOKEN}\"}\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := n.Notify(context.Background(), ev); err != nil || sameHostAuth != "Bearer abc" {
+		t.Fatalf("same-host redirect: %v %q", err, sameHostAuth)
 	}
 }

@@ -90,10 +90,12 @@ func toolServer(t *testing.T, enabled bool, lim troubleshoot.Limiter) (http.Hand
 
 func toolServerQ(t *testing.T, enabled bool, lim troubleshoot.Limiter) (http.Handler, *tsProber, *tsQueue) {
 	t.Helper()
-	return toolServerLANs(t, enabled, lim, nil)
+	return toolServerLANs(t, enabled, lim, nil, "ops")
 }
 
-func toolServerLANs(t *testing.T, enabled bool, lim troubleshoot.Limiter, lans []netip.Prefix) (http.Handler, *tsProber, *tsQueue) {
+// toolServerLANs serves the tools with basic auth for user (password
+// secret), or with no auth at all when user is empty.
+func toolServerLANs(t *testing.T, enabled bool, lim troubleshoot.Limiter, lans []netip.Prefix, user string) (http.Handler, *tsProber, *tsQueue) {
 	t.Helper()
 	pr, q := &tsProber{}, &tsQueue{}
 	tools := troubleshoot.New(troubleshoot.Options{
@@ -115,7 +117,11 @@ func toolServerLANs(t *testing.T, enabled bool, lim troubleshoot.Limiter, lans [
 	})
 	tools.SetRIB(tsRIB{r: rib.Route{Prefix: netip.MustParsePrefix("198.51.100.0/24"), NextHop: netip.MustParseAddr("192.0.2.1"), Provider: "transit-a", ASPath: []uint32{64496}}})
 	tools.SetQueue(q)
-	s, err := New(Options{Tools: tools, Snapshot: func() Snapshot { return Assemble(sampleInput()) }})
+	pass := ""
+	if user != "" {
+		pass = "secret"
+	}
+	s, err := New(Options{User: user, Password: pass, Tools: tools, Snapshot: func() Snapshot { return Assemble(sampleInput()) }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,20 +130,20 @@ func toolServerLANs(t *testing.T, enabled bool, lim troubleshoot.Limiter, lans [
 
 func TestToolStatusAndLookingGlass(t *testing.T) {
 	h, _ := toolServer(t, false, nil)
-	rec := mdo(h, "GET", "/api/troubleshoot", "", "", false)
+	rec := mdo(h, "GET", "/api/troubleshoot", "", "", true)
 	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"looking_glass":true`) || !strings.Contains(rec.Body.String(), `"probe":false`) {
 		t.Fatalf("status: %d %s", rec.Code, rec.Body)
 	}
-	rec = mdo(h, "GET", "/api/troubleshoot/lookingglass?prefix=198.51.100.9", "", "", false)
+	rec = mdo(h, "GET", "/api/troubleshoot/lookingglass?prefix=198.51.100.9", "", "", true)
 	var g troubleshoot.Glass
 	if err := json.Unmarshal(rec.Body.Bytes(), &g); err != nil || rec.Code != 200 || g.Covering == nil || g.Covering.Provider != "transit-a" || g.Exact != nil {
 		t.Fatalf("glass: %d %s", rec.Code, rec.Body)
 	}
-	rec = mdo(h, "GET", "/api/troubleshoot/lookingglass?prefix=198.51.100.0/24", "", "", false)
+	rec = mdo(h, "GET", "/api/troubleshoot/lookingglass?prefix=198.51.100.0/24", "", "", true)
 	if !strings.Contains(rec.Body.String(), `"exact"`) {
 		t.Fatalf("exact: %s", rec.Body)
 	}
-	if rec := mdo(h, "GET", "/api/troubleshoot/lookingglass?prefix=nope", "", "", false); rec.Code != 400 {
+	if rec := mdo(h, "GET", "/api/troubleshoot/lookingglass?prefix=nope", "", "", true); rec.Code != 400 {
 		t.Fatalf("bad prefix: %d", rec.Code)
 	}
 	// No tools at all: the looking glass says so.
@@ -153,11 +159,11 @@ func TestToolStatusAndLookingGlass(t *testing.T) {
 func TestToolsDisabled(t *testing.T) {
 	h, pr := toolServer(t, false, nil)
 	for _, path := range []string{"/api/troubleshoot/probe", "/api/troubleshoot/traceroute"} {
-		if rec := mdo(h, "POST", path, "application/json", `{"target":"198.51.100.1"}`, false); rec.Code != 403 {
+		if rec := mdo(h, "POST", path, "application/json", `{"target":"198.51.100.1"}`, true); rec.Code != 403 {
 			t.Fatalf("%s: %d %s", path, rec.Code, rec.Body)
 		}
 	}
-	if rec := mdo(h, "POST", "/api/troubleshoot/whois", "application/json", `{"query":"AS64496"}`, false); rec.Code != 403 {
+	if rec := mdo(h, "POST", "/api/troubleshoot/whois", "application/json", `{"query":"AS64496"}`, true); rec.Code != 403 {
 		t.Fatalf("whois: %d", rec.Code)
 	}
 	if pr.n != 0 {
@@ -167,17 +173,17 @@ func TestToolsDisabled(t *testing.T) {
 
 func TestToolProbeTraceWhois(t *testing.T) {
 	h, pr := toolServer(t, true, nil)
-	rec := mdo(h, "POST", "/api/troubleshoot/probe", "application/json", `{"target":"198.51.100.1"}`, false)
+	rec := mdo(h, "POST", "/api/troubleshoot/probe", "application/json", `{"target":"198.51.100.1"}`, true)
 	var ans troubleshoot.ProbeAnswer
 	if err := json.Unmarshal(rec.Body.Bytes(), &ans); err != nil || rec.Code != 200 || len(ans.Results) != 1 || ans.Results[0].Stats.LossPct != 0 || ans.Route == nil || pr.n != 1 {
 		t.Fatalf("probe: %d %s", rec.Code, rec.Body)
 	}
-	rec = mdo(h, "POST", "/api/troubleshoot/traceroute", "application/json", `{"target":"203.0.113.5","provider":"transit-a"}`, false)
+	rec = mdo(h, "POST", "/api/troubleshoot/traceroute", "application/json", `{"target":"203.0.113.5","provider":"transit-a"}`, true)
 	var tr troubleshoot.TraceAnswer
 	if err := json.Unmarshal(rec.Body.Bytes(), &tr); err != nil || rec.Code != 200 || len(tr.Traces) != 1 || !tr.Traces[0].Reached || len(tr.Traces[0].Hops) != 2 {
 		t.Fatalf("trace: %d %s", rec.Code, rec.Body)
 	}
-	rec = mdo(h, "POST", "/api/troubleshoot/whois", "application/json", `{"query":"AS64496"}`, false)
+	rec = mdo(h, "POST", "/api/troubleshoot/whois", "application/json", `{"query":"AS64496"}`, true)
 	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "DOC-ASN") {
 		t.Fatalf("whois: %d %s", rec.Code, rec.Body)
 	}
@@ -198,11 +204,11 @@ func TestToolRequestValidation(t *testing.T) {
 		{"/api/troubleshoot/whois", "application/json", `{"query":"https://rdap.example/"}`, 400},
 	}
 	for _, c := range cases {
-		if rec := mdo(h, "POST", c.path, c.ctype, c.body, false); rec.Code != c.code {
+		if rec := mdo(h, "POST", c.path, c.ctype, c.body, true); rec.Code != c.code {
 			t.Errorf("%s %s: got %d want %d (%s)", c.path, c.body, rec.Code, c.code, rec.Body)
 		}
 	}
-	if rec := mdo(h, "GET", "/api/troubleshoot/probe?target=198.51.100.1", "", "", false); rec.Code == 200 {
+	if rec := mdo(h, "GET", "/api/troubleshoot/probe?target=198.51.100.1", "", "", true); rec.Code == 200 {
 		t.Fatal("GET triggered a probe")
 	}
 	if pr.n != 0 {
@@ -212,12 +218,36 @@ func TestToolRequestValidation(t *testing.T) {
 
 func TestToolRateLimit(t *testing.T) {
 	h, _ := toolServer(t, true, &tsLimit{n: 1})
-	if rec := mdo(h, "POST", "/api/troubleshoot/probe", "application/json", `{"target":"198.51.100.1"}`, false); rec.Code != 200 {
+	if rec := mdo(h, "POST", "/api/troubleshoot/probe", "application/json", `{"target":"198.51.100.1"}`, true); rec.Code != 200 {
 		t.Fatalf("first: %d", rec.Code)
 	}
-	rec := mdo(h, "POST", "/api/troubleshoot/probe", "application/json", `{"target":"198.51.100.1"}`, false)
+	rec := mdo(h, "POST", "/api/troubleshoot/probe", "application/json", `{"target":"198.51.100.1"}`, true)
 	if rec.Code != 429 || rec.Header().Get("Retry-After") == "" {
 		t.Fatalf("second: %d", rec.Code)
+	}
+}
+
+// With auth off and no basic-auth account nobody may send probes,
+// traceroutes, or lookups, or queue a prefix; the read-only looking glass
+// stays open (#489).
+func TestToolWritesRefusedWithAuthOff(t *testing.T) {
+	h, pr, q := toolServerLANs(t, true, nil, nil, "")
+	for path, body := range map[string]string{
+		"/api/troubleshoot/probe":      `{"target":"198.51.100.1"}`,
+		"/api/troubleshoot/optimize":   `{"target":"198.51.100.9"}`,
+		"/api/troubleshoot/traceroute": `{"target":"203.0.113.5","provider":"transit-a"}`,
+		"/api/troubleshoot/whois":      `{"query":"AS64496"}`,
+	} {
+		rec := mdo(h, "POST", path, "application/json", body, false)
+		if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "require auth (auth.enabled) or PACKETEER_HTTP_USER") {
+			t.Errorf("%s: %d %s", path, rec.Code, rec.Body)
+		}
+	}
+	if pr.n != 0 || len(q.got) != 0 {
+		t.Fatalf("auth off sent %d probes and queued %v", pr.n, q.got)
+	}
+	if rec := mdo(h, "GET", "/api/troubleshoot/lookingglass?prefix=198.51.100.0/24", "", "", false); rec.Code != 200 {
+		t.Fatalf("looking glass with auth off: %d %s", rec.Code, rec.Body)
 	}
 }
 

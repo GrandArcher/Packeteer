@@ -780,12 +780,12 @@ plugin_dir: /etc/packeteer/plugins
 #     config:
 #       url: https://hooks.example.invalid/packeteer
 #       headers:
-#         Authorization: "Bearer ${HOOK_TOKEN}"
+#         Authorization: "Bearer ${PACKETEER_WEBHOOK_TOKEN}"   # only PACKETEER_WEBHOOK_* names expand
 #   - type: webhook
 #     name: chat
 #     config:
 #       preset: slack                   # slack, teams, pagerduty, or generic
-#       url: ${SLACK_WEBHOOK_URL}
+#       url: ${PACKETEER_WEBHOOK_SLACK_URL}
 #       events: ["provider.*", "bgp.*", "commit.*", "outage.*"]
 #   - type: webhook
 #     name: pager

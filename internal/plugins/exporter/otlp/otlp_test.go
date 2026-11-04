@@ -22,10 +22,7 @@ func build(t *testing.T, y string) (plugin.Exporter, error) {
 		t.Fatal(err)
 	}
 	return plugin.Exporters.New(TypeName, c, plugin.Env{Name: "o", Getenv: func(k string) string {
-		if k == "OTEL_TOKEN" {
-			return "tok"
-		}
-		return ""
+		return map[string]string{"PACKETEER_OTLP_TOKEN": "tok", "PACKETEER_ADMIN_PASSWORD": "admin-secret", "OTEL_TOKEN": "tok"}[k]
 	}})
 }
 
@@ -44,7 +41,9 @@ func TestConfigValidation(t *testing.T) {
 		"query":            "endpoint: http://c:4318/?a=b\n",
 		"ca on http":       "endpoint: http://c:4318\nca_file: /x.pem\n",
 		"bad header":       "endpoint: http://c:4318\nheaders: {\"a b\": x}\n",
-		"unset header env": "endpoint: http://c:4318\nheaders: {authorization: \"Bearer ${NOPE}\"}\n",
+		"unset header env": "endpoint: http://c:4318\nheaders: {authorization: \"Bearer ${PACKETEER_OTLP_NOPE}\"}\n",
+		"other env":        "endpoint: http://c:4318\nheaders: {authorization: \"Bearer ${OTEL_TOKEN}\"}\n",
+		"admin password":   "endpoint: http://c:4318\nheaders: {x-leak: \"${PACKETEER_ADMIN_PASSWORD}\"}\n",
 		"timeout is fixed": "endpoint: http://c:4318\ntimeout: 5s\n",
 		"unknown field":    "endpoint: http://c:4318\ninterval: 5s\n",
 		"flows":            "endpoint: http://c:4318\nstreams: [flows]\n",
@@ -108,7 +107,7 @@ func TestExportSpansPerDecision(t *testing.T) {
 		_, _ = w.Write([]byte("{}"))
 	}))
 	defer srv.Close()
-	x, err := build(t, "endpoint: "+srv.URL+"\nservice_name: edge1\nheaders: {Authorization: \"Bearer ${OTEL_TOKEN}\"}\n")
+	x, err := build(t, "endpoint: "+srv.URL+"\nservice_name: edge1\nheaders: {Authorization: \"Bearer ${PACKETEER_OTLP_TOKEN}\"}\n")
 	if err != nil {
 		t.Fatal(err)
 	}

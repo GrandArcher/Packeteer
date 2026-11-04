@@ -189,7 +189,8 @@ jobs:
           }
           code() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
           # The shipped example, mounted unchanged and with no environment,
-          # asks for sign-in and prints a generated admin password once.
+          # asks for sign-in and writes a generated admin password to a 0600
+          # file; the log names the file and never holds the password (#489).
           docker run -d --name pksec --network host --cap-add NET_RAW --cap-add NET_ADMIN \
             -v "$PWD/config.example.yaml:/etc/packeteer/config.yaml:ro" packeteer:ci
           trap 'docker logs pksec >&2 || true; docker rm -f pksec >/dev/null 2>&1 || true' EXIT
@@ -203,7 +204,8 @@ jobs:
           pw="$(docker exec pksec sed -n 's/^password: //p' "$file")"
           test -n "$pw"
           test "$(docker exec pksec stat -c %a "$file")" = 600
-          test "$(docker logs pksec 2>&1 | grep -cF -- "$pw")" = 1
+          test "$(docker logs pksec 2>&1 | grep -cF -- "$pw")" = 0
+          docker logs pksec 2>&1 | grep 'generated admin password' | grep -qF "file=$file"
           # The generated password signs in but only buys a password change.
           curl -fsS -H 'Content-Type: application/json' -d "{\"name\":\"admin\",\"password\":\"$pw\"}" "$base/auth/signin" | jq -e '.must_change == true'
           test "$(code -u "admin:$pw" "$base/api/overview")" = 403
@@ -1169,7 +1171,7 @@ jobs:
           curl -fsS "${auth[@]}" "$base/api/dashboards" | tee /tmp/dash178.json
           jq -e '.dashboards[] | select(.name == "a-reports") | .spec.widgets == [{"type": "report", "title": "Improvements (cause cost)", "report": "improvements", "days": 30, "query": "cause=cost&sort=prefix&order=desc", "w": 12}]' /tmp/dash178.json
           bash lab/ui-smoke.sh http://127.0.0.1:18209/dashboards.html 'Improvements (cause cost)' '192.0.2.0/24' 'It announces nothing.' --absent 'Cannot reach' '198.51.100.0/24'
-      - name: UI troubleshooting smoke (#180, #126; looking glass, traceroute, and hostname probe from canned answers, observe)
+      - name: UI troubleshooting smoke (#180, #126, #489; looking glass, traceroute, and hostname probe from canned answers, whois refused with auth off, observe)
         run: |
           set -euo pipefail
           base=http://127.0.0.1:18180
@@ -1227,6 +1229,7 @@ jobs:
             'host.example.net resolved to 198.51.100.9 (also 2001:db8::9)' 'Covering learned prefix 198.51.100.0/24, current exit transit-a. The best measured exit is transit-b.' \
             '>current<' '>best<' 'indirect: nothing in the target answered' '>Probe and optimize<' \
             'Queued 198.51.100.0/24 for probing until' 'the prefix page' \
+            'Whois AS64496' 'probe, traceroute, whois, and probe and optimize require auth (auth.enabled)' \
             --absent 'rate limited; try again shortly' 'Cannot reach' 'mode-inject'
       - name: UI NLNOG RING panel smoke (#283; opt-in panel from canned answers, no request to RING)
         run: |

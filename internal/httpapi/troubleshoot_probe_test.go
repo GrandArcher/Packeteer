@@ -17,7 +17,7 @@ import (
 
 func TestToolProbeHostname(t *testing.T) {
 	h, pr, _ := toolServerQ(t, true, nil)
-	rec := mdo(h, "POST", "/api/troubleshoot/probe", "application/json", `{"target":"Host.Example.Net"}`, false)
+	rec := mdo(h, "POST", "/api/troubleshoot/probe", "application/json", `{"target":"Host.Example.Net"}`, true)
 	var ans troubleshoot.ProbeAnswer
 	if err := json.Unmarshal(rec.Body.Bytes(), &ans); err != nil || rec.Code != 200 {
 		t.Fatalf("probe: %d %s", rec.Code, rec.Body)
@@ -35,7 +35,7 @@ func TestToolProbeAndOptimizeRejectInvalidInput(t *testing.T) {
 	for _, target := range []string{"", "bad host!", "127.1", "127.0.0.1", "::1", "http://host.example.net", "gone.example.net", "-x.example", "198.51.100.0/24"} {
 		body, _ := json.Marshal(map[string]string{"target": target})
 		for _, path := range []string{"/api/troubleshoot/probe", "/api/troubleshoot/optimize"} {
-			if rec := mdo(h, "POST", path, "application/json", string(body), false); rec.Code != 400 {
+			if rec := mdo(h, "POST", path, "application/json", string(body), true); rec.Code != 400 {
 				t.Errorf("%s %q: got %d (%s)", path, target, rec.Code, rec.Body)
 			}
 		}
@@ -44,14 +44,14 @@ func TestToolProbeAndOptimizeRejectInvalidInput(t *testing.T) {
 		{"text/plain", `{"target":"198.51.100.9"}`},
 		{"application/x-www-form-urlencoded", `target=198.51.100.9`},
 	} {
-		if rec := mdo(h, "POST", "/api/troubleshoot/optimize", c.ctype, c.body, false); rec.Code != 415 {
+		if rec := mdo(h, "POST", "/api/troubleshoot/optimize", c.ctype, c.body, true); rec.Code != 415 {
 			t.Errorf("optimize %s: %d", c.ctype, rec.Code)
 		}
 	}
-	if rec := mdo(h, "POST", "/api/troubleshoot/optimize", "application/json", `{"target":"198.51.100.9","extra":1}`, false); rec.Code != 400 {
+	if rec := mdo(h, "POST", "/api/troubleshoot/optimize", "application/json", `{"target":"198.51.100.9","extra":1}`, true); rec.Code != 400 {
 		t.Errorf("unknown field: %d", rec.Code)
 	}
-	if rec := mdo(h, "GET", "/api/troubleshoot/optimize?target=198.51.100.9", "", "", false); rec.Code == 200 {
+	if rec := mdo(h, "GET", "/api/troubleshoot/optimize?target=198.51.100.9", "", "", true); rec.Code == 200 {
 		t.Error("GET queued a prefix")
 	}
 	if pr.n != 0 || len(q.got) != 0 {
@@ -61,7 +61,7 @@ func TestToolProbeAndOptimizeRejectInvalidInput(t *testing.T) {
 
 func TestToolOptimize(t *testing.T) {
 	h, _, q := toolServerQ(t, true, nil)
-	rec := mdo(h, "POST", "/api/troubleshoot/optimize", "application/json", `{"target":"host.example.net"}`, false)
+	rec := mdo(h, "POST", "/api/troubleshoot/optimize", "application/json", `{"target":"host.example.net"}`, true)
 	var ans troubleshoot.OptimizeAnswer
 	if err := json.Unmarshal(rec.Body.Bytes(), &ans); err != nil || rec.Code != 200 {
 		t.Fatalf("optimize: %d %s", rec.Code, rec.Body)
@@ -74,7 +74,7 @@ func TestToolOptimize(t *testing.T) {
 	}
 
 	// No learned prefix covers the address: nothing is queued.
-	if rec := mdo(h, "POST", "/api/troubleshoot/optimize", "application/json", `{"target":"203.0.113.9"}`, false); rec.Code != 400 || !strings.Contains(rec.Body.String(), "no learned prefix") {
+	if rec := mdo(h, "POST", "/api/troubleshoot/optimize", "application/json", `{"target":"203.0.113.9"}`, true); rec.Code != 400 || !strings.Contains(rec.Body.String(), "no learned prefix") {
 		t.Fatalf("uncovered: %d %s", rec.Code, rec.Body)
 	}
 	if len(q.got) != 1 {
@@ -82,11 +82,11 @@ func TestToolOptimize(t *testing.T) {
 	}
 
 	q.err = probe.ErrManualFull
-	if rec := mdo(h, "POST", "/api/troubleshoot/optimize", "application/json", `{"target":"198.51.100.9"}`, false); rec.Code != http.StatusConflict {
+	if rec := mdo(h, "POST", "/api/troubleshoot/optimize", "application/json", `{"target":"198.51.100.9"}`, true); rec.Code != http.StatusConflict {
 		t.Fatalf("full queue: %d %s", rec.Code, rec.Body)
 	}
 	q.err = errors.New("other")
-	if rec := mdo(h, "POST", "/api/troubleshoot/optimize", "application/json", `{"target":"198.51.100.9"}`, false); rec.Code != 400 {
+	if rec := mdo(h, "POST", "/api/troubleshoot/optimize", "application/json", `{"target":"198.51.100.9"}`, true); rec.Code != 400 {
 		t.Fatalf("queue error: %d", rec.Code)
 	}
 }
@@ -94,8 +94,8 @@ func TestToolOptimize(t *testing.T) {
 // A learned prefix inside a peering LAN is refused with 422 and nothing is
 // queued, because the probe engine would drop it without a sign.
 func TestToolOptimizeRefusesExchangeLAN(t *testing.T) {
-	h, _, q := toolServerLANs(t, true, nil, []netip.Prefix{netip.MustParsePrefix("198.51.100.0/24")})
-	rec := mdo(h, "POST", "/api/troubleshoot/optimize", "application/json", `{"target":"198.51.100.9"}`, false)
+	h, _, q := toolServerLANs(t, true, nil, []netip.Prefix{netip.MustParsePrefix("198.51.100.0/24")}, "ops")
+	rec := mdo(h, "POST", "/api/troubleshoot/optimize", "application/json", `{"target":"198.51.100.9"}`, true)
 	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "inside an exchange LAN and is not probed") {
 		t.Fatalf("exchange LAN: %d %s", rec.Code, rec.Body)
 	}
@@ -104,8 +104,8 @@ func TestToolOptimizeRefusesExchangeLAN(t *testing.T) {
 	}
 
 	// A LAN that does not contain the learned prefix does not refuse it.
-	h, _, q = toolServerLANs(t, true, nil, []netip.Prefix{netip.MustParsePrefix("203.0.113.0/24")})
-	if rec := mdo(h, "POST", "/api/troubleshoot/optimize", "application/json", `{"target":"198.51.100.9"}`, false); rec.Code != http.StatusOK {
+	h, _, q = toolServerLANs(t, true, nil, []netip.Prefix{netip.MustParsePrefix("203.0.113.0/24")}, "ops")
+	if rec := mdo(h, "POST", "/api/troubleshoot/optimize", "application/json", `{"target":"198.51.100.9"}`, true); rec.Code != http.StatusOK {
 		t.Fatalf("outside LAN: %d %s", rec.Code, rec.Body)
 	}
 	if len(q.got) != 1 || q.got[0].String() != "198.51.100.0/24" {
@@ -115,23 +115,23 @@ func TestToolOptimizeRefusesExchangeLAN(t *testing.T) {
 
 func TestToolOptimizeDisabledAndRateLimited(t *testing.T) {
 	h, _, q := toolServerQ(t, false, nil)
-	if rec := mdo(h, "POST", "/api/troubleshoot/optimize", "application/json", `{"target":"198.51.100.9"}`, false); rec.Code != 403 {
+	if rec := mdo(h, "POST", "/api/troubleshoot/optimize", "application/json", `{"target":"198.51.100.9"}`, true); rec.Code != 403 {
 		t.Fatalf("disabled: %d %s", rec.Code, rec.Body)
 	}
 	h, _, q2 := toolServerQ(t, true, &tsLimit{n: 1})
-	if rec := mdo(h, "POST", "/api/troubleshoot/optimize", "application/json", `{"target":"198.51.100.9"}`, false); rec.Code != 200 {
+	if rec := mdo(h, "POST", "/api/troubleshoot/optimize", "application/json", `{"target":"198.51.100.9"}`, true); rec.Code != 200 {
 		t.Fatalf("first: %d", rec.Code)
 	}
-	rec := mdo(h, "POST", "/api/troubleshoot/optimize", "application/json", `{"target":"198.51.100.9"}`, false)
+	rec := mdo(h, "POST", "/api/troubleshoot/optimize", "application/json", `{"target":"198.51.100.9"}`, true)
 	if rec.Code != 429 || rec.Header().Get("Retry-After") == "" {
 		t.Fatalf("second: %d", rec.Code)
 	}
 	// Probe and optimize share one limit.
 	h, _, q3 := toolServerQ(t, true, &tsLimit{n: 1})
-	if rec := mdo(h, "POST", "/api/troubleshoot/probe", "application/json", `{"target":"198.51.100.9"}`, false); rec.Code != 200 {
+	if rec := mdo(h, "POST", "/api/troubleshoot/probe", "application/json", `{"target":"198.51.100.9"}`, true); rec.Code != 200 {
 		t.Fatalf("probe: %d", rec.Code)
 	}
-	if rec := mdo(h, "POST", "/api/troubleshoot/optimize", "application/json", `{"target":"198.51.100.9"}`, false); rec.Code != 429 {
+	if rec := mdo(h, "POST", "/api/troubleshoot/optimize", "application/json", `{"target":"198.51.100.9"}`, true); rec.Code != 429 {
 		t.Fatalf("optimize after probe: %d", rec.Code)
 	}
 	if len(q.got) != 0 || len(q2.got) != 1 || len(q3.got) != 0 {

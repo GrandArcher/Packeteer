@@ -21,6 +21,7 @@ import (
 
 	"golang.org/x/time/rate"
 
+	"github.com/GrandArcher/Packeteer/internal/outbound"
 	"github.com/GrandArcher/Packeteer/internal/rpki"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
@@ -114,7 +115,7 @@ func New(c plugin.Config, env plugin.Env) (plugin.RPKI, error) {
 	}
 	return &Client{
 		name: env.Name, cfg: cfg, base: defaultBase,
-		http:  &http.Client{Timeout: fetchTimeout},
+		http:  &http.Client{Timeout: fetchTimeout, CheckRedirect: outbound.SameHost},
 		limit: rate.NewLimiter(rate.Limit(float64(cfg.RatePerMinute)/60), 1),
 		queue: make(chan key, queueLen),
 		cache: map[key]entry{}, pending: map[key]bool{},

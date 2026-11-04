@@ -101,7 +101,7 @@ docker run --rm -e PACKETEER_CONFIG=/etc/packeteer/config.example.yaml \
 
 The default config path inside the container is `/etc/packeteer/config.yaml` (`PACKETEER_CONFIG`, or `-config`).
 
-The dashboard and API require sign-in (#328). On the first start the log prints a generated admin password once (`docker logs packeteer 2>&1 | grep 'generated admin password'`; it is also in `/var/lib/packeteer/first-run-admin-password`), and the sign-in page makes you choose a new one. Set `PACKETEER_ADMIN_PASSWORD` to pick it yourself. Details and the opt-out: [docs/auth.md](docs/auth.md#first-run).
+The dashboard and API require sign-in (#328). On the first start the controller writes a generated admin password to `/var/lib/packeteer/first-run-admin-password` (`docker exec packeteer cat /var/lib/packeteer/first-run-admin-password`; the log names the file, never the password), and the sign-in page makes you choose a new one. Set `PACKETEER_ADMIN_PASSWORD` to pick it yourself. Details and the opt-out: [docs/auth.md](docs/auth.md#first-run).
 
 Without `NET_RAW`, or where ICMP is filtered, the probe falls back to TCP port 443 (the log shows `prober=tcp`). With the example config (providers in 192.0.2.0/24) the signed-in admin is sent to the setup wizard after changing the generated password, with no config edit: the settings form, wizard, and config editor are on until a config is saved or setup is skipped (and until the next restart), then off unless you set `http.config_editor: true`. A config with a real provider keeps them off, and `false` keeps them off (sign-in is on by default; [docs/ui.md](docs/ui.md), [docs/auth.md](docs/auth.md)). Every environment variable: [docs/ENV.md](docs/ENV.md).
 

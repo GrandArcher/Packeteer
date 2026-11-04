@@ -22,6 +22,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/outbound"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -179,7 +180,7 @@ func (s *Source) read(ctx context.Context) (connected bool, err error) {
 		return false, err
 	}
 	req.Header.Set("X-RIS-Subscribe", s.subscription())
-	hc := &http.Client{Transport: &http.Transport{ResponseHeaderTimeout: connectTimeout, TLSHandshakeTimeout: connectTimeout}}
+	hc := &http.Client{Transport: &http.Transport{ResponseHeaderTimeout: connectTimeout, TLSHandshakeTimeout: connectTimeout}, CheckRedirect: outbound.SameHost}
 	defer hc.CloseIdleConnections()
 	resp, err := hc.Do(req)
 	if err != nil {

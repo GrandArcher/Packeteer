@@ -13,7 +13,7 @@ import (
 // not cover. The rendered tables are covered by the UI smoke test in CI.
 func TestTraceAnswerOriginAS(t *testing.T) {
 	h, _ := toolServer(t, true, nil)
-	rec := mdo(h, "POST", "/api/troubleshoot/traceroute", "application/json", `{"target":"198.51.100.5","provider":"transit-a"}`, false)
+	rec := mdo(h, "POST", "/api/troubleshoot/traceroute", "application/json", `{"target":"198.51.100.5","provider":"transit-a"}`, true)
 	var ans troubleshoot.TraceAnswer
 	if err := json.Unmarshal(rec.Body.Bytes(), &ans); err != nil || rec.Code != 200 || len(ans.Traces) != 1 || len(ans.Traces[0].Hops) != 2 {
 		t.Fatalf("trace: %d %s", rec.Code, rec.Body)

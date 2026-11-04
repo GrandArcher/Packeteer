@@ -32,6 +32,8 @@ Plugins read secrets from variables whose names you choose in the config (`commu
 |---|---|
 | `PACKETEER_AGENT_CONFIG` | Config path of `packeteer-agent` when `-config` is not given. Default `/etc/packeteer/agent.yaml`. See [agents.md](agents.md#agent-config). |
 
+A webhook `url` or `headers` value expands only `${PACKETEER_WEBHOOK_*}` variables, and an `otlp` exporter `headers` value only `${PACKETEER_OTLP_*}` variables (#489). The examples use `PACKETEER_WEBHOOK_TOKEN` and `PACKETEER_WEBHOOK_SLACK_URL`.
+
 ## Exec plugins
 
 An `exec` plugin process gets `PATH`, `PACKETEER_PLUGIN_KIND`, and its configured `env`, and nothing else. See [PLUGINS.md](PLUGINS.md).
