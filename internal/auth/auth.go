@@ -148,8 +148,8 @@ type failures struct {
 
 // failKey is what failed sign-ins are counted under: a user name and the
 // client address. Behind a reverse proxy every client has the proxy's
-// address, so counting per address alone let anyone lock every user out
-// (#506). user is empty for a failure that names no valid user (a bad
+// address; the user name keeps one client's guesses from locking out every
+// user (#506). user is empty for a failure that names no valid user (a bad
 // token, a malformed header), so those still share one count per address.
 type failKey struct {
 	user string
