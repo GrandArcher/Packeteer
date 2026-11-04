@@ -408,6 +408,8 @@ func TestOutageSnapCopiesAltPaths(t *testing.T) {
 		paths: []rib.AltPath{{Prefix: p, Provider: "transit-b", ASPath: []uint32{64501, 64496}}},
 	}
 	var snap outageSnap
+	at := time.Unix(1000, 0)
+	snap.gate.now = func() time.Time { return at }
 	got := snap.get(f)
 	if len(got) != 1 || got[0].Provider != "transit-a" || len(got[0].Alts) != 1 || got[0].Alts[0].Provider != "transit-b" {
 		t.Fatalf("routes = %+v", got)
@@ -422,6 +424,7 @@ func TestOutageSnapCopiesAltPaths(t *testing.T) {
 	}
 	f.gen = 3
 	f.paths = nil
+	at = at.Add(snapRebuildGap)
 	if cleared := snap.get(f); len(cleared) != 1 || len(cleared[0].Alts) != 0 {
 		t.Fatalf("new generation kept alts: %+v", cleared)
 	}
@@ -433,6 +436,8 @@ func TestLearnedSnapSkipsCopyWhenGenerationIsStable(t *testing.T) {
 		{Prefix: netip.MustParsePrefix("0.0.0.0/0"), ASPath: []uint32{64496}},
 	}}
 	var snap learnedSnap
+	at := time.Unix(1000, 0)
+	snap.gate.now = func() time.Time { return at }
 	g, routes := snap.get(f)
 	if g != 3 || len(routes) != 1 || routes[0].Prefix.String() != "198.51.100.0/24" || f.calls != 1 {
 		t.Fatalf("g=%d routes=%v calls=%d", g, routes, f.calls)
@@ -442,12 +447,52 @@ func TestLearnedSnapSkipsCopyWhenGenerationIsStable(t *testing.T) {
 	}
 	f.gen = 4
 	f.routes = nil
+	at = at.Add(snapRebuildGap)
 	if _, routes = snap.get(f); len(routes) != 0 || f.calls != 2 {
 		t.Fatalf("new generation calls=%d routes=%d", f.calls, len(routes))
 	}
 	f.ready = false
 	if g, routes = snap.get(f); g != 0 || routes != nil {
 		t.Fatalf("unready view returned g=%d routes=%v", g, routes)
+	}
+}
+
+func TestSnapsRateLimitRebuildsOnAChurningTable(t *testing.T) {
+	f := &fakeLearned{ready: true, gen: 1, routes: []rib.Route{
+		{Prefix: netip.MustParsePrefix("198.51.100.0/24"), ASPath: []uint32{64496}},
+	}}
+	at := time.Unix(1000, 0)
+	var snap learnedSnap
+	snap.gate.now = func() time.Time { return at }
+	snap.get(f)
+	f.routes = append(f.routes, rib.Route{Prefix: netip.MustParsePrefix("203.0.113.0/24"), ASPath: []uint32{64496}})
+	for gen := uint64(2); gen < 50; gen++ {
+		f.gen = gen
+		at = at.Add(50 * time.Millisecond)
+		g, routes := snap.get(f)
+		if g != 1 || len(routes) != 1 || f.calls != 1 {
+			t.Fatalf("gen %d inside the gap: returned gen %d, %d routes, %d copies; want the gen 1 copy and no rebuild", gen, g, len(routes), f.calls)
+		}
+	}
+	// The change that landed inside the gap shows up after it, with no
+	// further RIB change needed.
+	at = at.Add(snapRebuildGap)
+	if g, routes := snap.get(f); g != 49 || len(routes) != 2 || f.calls != 2 {
+		t.Fatalf("after the gap: gen %d, %d routes, %d copies; want gen 49, 2 routes, 2 copies", g, len(routes), f.calls)
+	}
+
+	var out outageSnap
+	out.gate.now = func() time.Time { return at }
+	o := &snapView{fakeLearned: fakeLearned{ready: true, gen: 1, routes: f.routes}}
+	out.get(o)
+	o.gen = 2
+	o.routes = f.routes[:1]
+	if got := out.get(o); len(got) != 2 {
+		t.Fatalf("outage copy rebuilt inside the gap: %d routes", len(got))
+	}
+	at = at.Add(snapRebuildGap)
+	if got := out.get(o); len(got) != 1 {
+		t.Fatalf("outage copy not rebuilt after the gap: %d routes", len(got))
 	}
 }
 

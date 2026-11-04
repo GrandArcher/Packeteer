@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -43,7 +44,18 @@ func (f fakeRIB) Covering(p netip.Prefix) (rib.Route, bool) {
 	}
 	return f.routes[best], true
 }
-func (f fakeRIB) Routes() []rib.Route { return f.routes }
+func (f fakeRIB) Find(keep func(rib.Route) bool, before func(a, b rib.Route) bool, limit int) ([]rib.Route, int) {
+	var out []rib.Route
+	matched := 0
+	for _, r := range f.routes {
+		if keep(r) {
+			matched++
+			out = append(out, r)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return before(out[i], out[j]) })
+	return out[:min(len(out), limit)], matched
+}
 func (f fakeRIB) Paths(p netip.Prefix) []rib.Route {
 	var out []rib.Route
 	for _, r := range f.routes {
@@ -130,6 +142,31 @@ func TestLookingGlass(t *testing.T) {
 	g, _ = tl.LookingGlass(pfx("192.0.2.0/24"))
 	if g.Exact != nil || g.Covering != nil || len(g.MoreSpecifics) != 0 {
 		t.Fatalf("unknown: %+v", g)
+	}
+}
+
+func TestLookingGlassCapsMoreSpecificsInPrefixOrder(t *testing.T) {
+	r := testRIB()
+	// Added in descending order: the glass must still list the lowest
+	// prefixes first and flag the cut.
+	for i := 255; i >= 0; i-- {
+		r.routes = append(r.routes, rib.Route{Prefix: pfx(fmt.Sprintf("203.0.113.%d/32", i)), Provider: "transit-a"})
+	}
+	tl := New(Options{})
+	tl.SetRIB(r)
+	g, err := tl.LookingGlass(pfx("203.0.113.0/24"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(g.MoreSpecifics) != maxMoreSpecifics || !g.Truncated {
+		t.Fatalf("got %d more-specifics, truncated=%v, want %d and true", len(g.MoreSpecifics), g.Truncated, maxMoreSpecifics)
+	}
+	if first, last := g.MoreSpecifics[0].Prefix, g.MoreSpecifics[maxMoreSpecifics-1].Prefix; first != pfx("203.0.113.0/32") || last != pfx("203.0.113.99/32") {
+		t.Fatalf("range %s..%s, want 203.0.113.0/32..203.0.113.99/32", first, last)
+	}
+	g, _ = tl.LookingGlass(pfx("198.51.100.0/24"))
+	if g.Truncated {
+		t.Fatalf("a short list was flagged truncated: %+v", g)
 	}
 }
 

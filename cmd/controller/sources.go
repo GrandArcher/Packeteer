@@ -45,13 +45,44 @@ type routeSnapshotSetter interface {
 	SetRouteSnapshot(func() (uint64, []vip.LearnedRoute))
 }
 
-// learnedSnap caches the copied RIB for one generation. A VIP interval as
-// short as a second must not copy every AS path on every wake.
-type learnedSnap struct {
-	mu  sync.Mutex
+// snapRebuildGap is the least time between two copies of the RIB for one
+// cache (#491). A table that changes on every update has a new generation
+// on every call, and at 100,000 routes each copy costs real allocation.
+const snapRebuildGap = 5 * time.Second
+
+// snapGate decides when a cached RIB copy must be rebuilt: never built, or
+// the generation moved and the copy is at least snapRebuildGap old. In
+// between, callers keep the older copy together with its own generation,
+// so a consumer comparing generations sees a consistent pair. A change
+// that lands inside the gap shows up on the first call after it.
+type snapGate struct {
 	gen uint64
 	ok  bool
-	out []vip.LearnedRoute
+	at  time.Time
+	now func() time.Time // nil: time.Now
+}
+
+func (g *snapGate) clock() time.Time {
+	if g.now != nil {
+		return g.now()
+	}
+	return time.Now()
+}
+
+func (g *snapGate) fresh(gen uint64) bool {
+	return g.ok && (g.gen == gen || g.clock().Sub(g.at) < snapRebuildGap)
+}
+
+func (g *snapGate) built(gen uint64) {
+	g.gen, g.ok, g.at = gen, true, g.clock()
+}
+
+// learnedSnap caches the copied RIB. A VIP interval as short as a second
+// must not copy every AS path on every wake.
+type learnedSnap struct {
+	mu   sync.Mutex
+	gate snapGate
+	out  []vip.LearnedRoute
 }
 
 func (s *learnedSnap) get(view learnedView) (uint64, []vip.LearnedRoute) {
@@ -61,8 +92,8 @@ func (s *learnedSnap) get(view learnedView) (uint64, []vip.LearnedRoute) {
 	g := view.Generation()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.ok && s.gen == g {
-		return g, s.out
+	if s.gate.fresh(g) {
+		return s.gate.gen, s.out
 	}
 	routes := view.Routes()
 	out := make([]vip.LearnedRoute, 0, len(routes))
@@ -72,14 +103,16 @@ func (s *learnedSnap) get(view learnedView) (uint64, []vip.LearnedRoute) {
 		}
 		out = append(out, vip.LearnedRoute{Prefix: rt.Prefix, ASPath: append([]uint32(nil), rt.ASPath...)})
 	}
-	s.gen, s.ok, s.out = g, true, out
+	s.gate.built(g)
+	s.out = out
 	return g, out
 }
 
 // wireLearnedRoutes gives the vip source the current RIB. The callback
 // returns nothing while the view is missing or not ready, and it drops
 // default routes, so an ASN list cannot invent targets from stale state.
-// The copy is rebuilt only when the view's generation changes.
+// The copy is rebuilt only when the view's generation changes, and no more
+// often than snapRebuildGap.
 func wireLearnedRoutes(plugins *pluginhost.Set, view *rib.View) {
 	if plugins == nil {
 		return
@@ -113,13 +146,12 @@ func noteOutages(plugins *pluginhost.Set, engine *probe.Engine) {
 	}
 }
 
-// outageSnap caches the copied RIB for one generation. Evaluate runs once
-// per completed round and must not copy every AS path when nothing changed.
+// outageSnap caches the copied RIB. Evaluate runs once per completed round
+// and must not copy every AS path when nothing changed.
 type outageSnap struct {
-	mu  sync.Mutex
-	gen uint64
-	ok  bool
-	out []outage.Route
+	mu   sync.Mutex
+	gate snapGate
+	out  []outage.Route
 }
 
 func (s *outageSnap) get(view learnedView) []outage.Route {
@@ -129,7 +161,7 @@ func (s *outageSnap) get(view learnedView) []outage.Route {
 	g := view.Generation()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.ok && s.gen == g {
+	if s.gate.fresh(g) {
 		return s.out
 	}
 	var routes []rib.Route
@@ -158,7 +190,8 @@ func (s *outageSnap) get(view learnedView) []outage.Route {
 			Alts:     alt[rt.Prefix],
 		})
 	}
-	s.gen, s.ok, s.out = g, true, out
+	s.gate.built(g)
+	s.out = out
 	return out
 }
 

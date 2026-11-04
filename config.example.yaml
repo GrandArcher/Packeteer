@@ -136,6 +136,7 @@ probe:
   #   prefixes: [203.0.113.0/24]
   #   asns: [64496]           #   or every destination whose learned covering route this ASN originates
   per_target_concurrency: 2   # concurrent runs toward one destination host
+  # provider_inflight: 4      # 0 (default) is off. Most probe runs in flight for one provider (#491)
   prober_recheck_rounds: 10   # every Nth probe of a host starts at the first prober again
   prober_memory: 100000       # hosts that remember which prober answered; oldest are dropped past this
   # degraded_loss_pct: 5      # dashboard shows a provider degraded at this mean loss
