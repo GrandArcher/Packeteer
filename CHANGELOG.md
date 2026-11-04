@@ -13,7 +13,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 - Webhook/`otlp` `${VAR}` expand only `PACKETEER_WEBHOOK_*`/`PACKETEER_OTLP_*`; webhook, exporter, feed, RPKI, OIDC, RIS Live, agent refuse cross-host redirects (RDAP: https, Accept only) (#489).
 - First-run admin password is no longer logged, only its 0600 file; troubleshoot POSTs need auth; OIDC requires `email_verified: true` with the email claim (#489).
 - SSO sessions mint tokens of at most 7 days; federation peers can pin a `domain` and implausible peer measurements are dropped; the federation listener has a read timeout (#508).
-- `upgrade/apply` refuses a version older than the running one (use rollback); a lower CRL Number than the loaded one is refused by the probe-agent hub; a delayed probe re-checks the agent's site (#508).
+- `upgrade/apply` refuses an older version (use rollback); the probe-agent hub refuses a CRL with a lower Number; a delayed probe re-checks the agent's site (#508).
 - RTR and VRP JSON: max length is range-checked, VRP JSON is stream-decoded under the `MaxVRPs` cap; IX-F peering LANs need at least /16 (v4) or /48 (v6) (#508).
 - `packeteer-reflector -allow-from` limits who is answered; the SNMPv3 agent enforces the RFC 3414 150 s time window and answers with a notInTimeWindow Report (#508).
 
