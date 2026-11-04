@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/netip"
-	"strconv"
 	"sync"
 	"time"
 
@@ -19,7 +18,7 @@ const DefaultLeakPort = DefaultPort + 1
 
 // LeakConfig is the config of the bmp leak source (#199).
 type LeakConfig struct {
-	// Listen is host:port for the station (default ":11020").
+	// Listen is host:port for the station (default "127.0.0.1:11020").
 	Listen string `yaml:"listen"`
 	// ExternalRouters are routers outside the AS (a peer's or customer's,
 	// or a looking-glass router) that send their post-policy Adj-RIB-In.
@@ -56,7 +55,7 @@ func NewLeakSource(c plugin.Config, env plugin.Env) (plugin.LeakSource, error) {
 		return nil, err
 	}
 	if cfg.Listen == "" {
-		cfg.Listen = ":" + strconv.Itoa(DefaultLeakPort)
+		cfg.Listen = loopbackListen(DefaultLeakPort)
 	}
 	if err := checkListen(cfg.Listen); err != nil {
 		return nil, err

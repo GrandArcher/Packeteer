@@ -1878,7 +1878,7 @@ rib_sources:
 
 | Key | Default | Meaning |
 |---|---|---|
-| `listen` | `:11019` | `host:port` of the station. The host must be an IP address. With `--network host` this is a host port; firewall it to the routers. |
+| `listen` | `127.0.0.1:11019` | `host:port` of the station. The host must be an IP address. BMP has no authentication, so the default binds loopback only: set the address the routers reach, or `:11019` for every interface. With `--network host` this is a host port; firewall it to the routers. |
 | `routers` | required | Router addresses allowed to connect. A session from any other address is closed at once. A router that reconnects replaces its old session; the old session's paths are dropped first. |
 | `policy` | `post` | Which Adj-RIB-In to read. Only `post` (after the router's import policy) is accepted; `pre` is a config error. Pre-policy routes include everything a peer sent before the router's import filter (bogons, RPKI-invalid routes, a hijacked more-specific), and a route the router rejected must never make a prefix learned or pass a route check. Pre-policy and Adj-RIB-Out route messages are ignored; the RIB view also drops any Adj-RIB-In paths not marked post-policy. |
 | `loc_rib` | `true` | Read Loc-RIB messages (the router's selected route) when the router sends them. |
@@ -1985,7 +1985,7 @@ A BMP station for the leak watch (#199). It listens on its own port, separate fr
 
 | Key | Default | Meaning |
 |---|---|---|
-| `listen` | `:11020` | `host:port` for the station. |
+| `listen` | `127.0.0.1:11020` | `host:port` for the station. Set the address the routers reach, or `:11020` for every interface. |
 | `external_routers` | none | Addresses of routers outside the AS allowed to connect. |
 | `own_routers` | none | Addresses of your edge routers allowed to connect. An address cannot be in both lists, and at least one list is required. |
 | `idle_timeout` | off | Drop a router's session after this long without a BMP message (at least 10s). |

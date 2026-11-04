@@ -568,7 +568,7 @@ scorer:
 # rib_sources:
 #   - type: bmp
 #     config:
-#       listen: ":11019"
+#       listen: ":11019"         # default 127.0.0.1:11019 (loopback only); set the address the routers reach
 #       routers: [192.0.2.254]
 #       policy: post            # the only accepted value; pre-policy routes are refused
 #       loc_rib: true

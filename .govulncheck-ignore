@@ -1,1 +1,1 @@
-GO-2026-4736 GoBGP NEXT_HOP DoS; no upstream fix as of v3.37.0. Revisit on every GoBGP release.
+GO-2026-4736 GoBGP NEXT_HOP DoS (GoBGP issue 3305): the DB marks all v3 affected; v3.37.0 treats the UPDATE as withdraw (internal/rib/nexthop_test.go), the panic is v4 < v4.4.0. Drop on GoBGP >= v4.4.0; recheck every GoBGP release. See docs/THREAT_MODEL.md.

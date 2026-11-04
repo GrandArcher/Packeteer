@@ -41,8 +41,11 @@ func TestLeakConfigValidation(t *testing.T) {
 		}
 	}
 	l := newLeak(t, "own_routers: [192.0.2.254]")
-	if l.st.listen != ":11020" || !l.st.adjOut || l.st.locRIB {
+	if l.st.listen != "127.0.0.1:11020" || !l.st.adjOut || l.st.locRIB {
 		t.Fatalf("defaults %+v", l.st)
+	}
+	if l = newLeak(t, "own_routers: [192.0.2.254]\nlisten: \":11020\""); l.st.listen != ":11020" {
+		t.Fatalf("explicit wildcard listen: %q", l.st.listen)
 	}
 }
 

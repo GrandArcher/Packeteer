@@ -61,9 +61,14 @@ func TestConfigValidation(t *testing.T) {
 			t.Errorf("%s: want error", name)
 		}
 	}
+	// BMP has no authentication: without listen the station binds only
+	// loopback, and every interface needs an explicit wildcard.
 	s := newStation(t, "routers: [192.0.2.254]")
-	if s.listen != ":11019" || !s.locRIB || s.idle != 0 {
+	if s.listen != "127.0.0.1:11019" || !s.locRIB || s.idle != 0 {
 		t.Fatalf("defaults: %+v", s)
+	}
+	if s = newStation(t, "routers: [192.0.2.254]\nlisten: \":11019\""); s.listen != ":11019" {
+		t.Fatalf("explicit wildcard listen: %q", s.listen)
 	}
 	s = newStation(t, "routers: [192.0.2.254]\npolicy: post\nloc_rib: false\nlisten: \"[::]:1790\"\nidle_timeout: 90s")
 	if s.locRIB || s.listen != "[::]:1790" || s.idle != 90*time.Second {

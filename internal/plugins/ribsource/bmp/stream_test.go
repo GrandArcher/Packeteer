@@ -102,21 +102,28 @@ func idPrefix4(s string, id uint32) *bgp.IPAddrPrefix {
 	return p
 }
 
-// corruptMonitoring is a route monitoring message whose BGP UPDATE claims
-// more withdrawn-route bytes than it has.
-func corruptMonitoring(t *testing.T, ph *gobmp.BMPPeerHeader) []byte {
+// rawMessage frames body after a per-peer header as a BMP message of typ,
+// so a test can send bytes the encoder would not produce.
+func rawMessage(t *testing.T, typ uint8, ph *gobmp.BMPPeerHeader, body []byte) []byte {
 	t.Helper()
 	p, err := ph.Serialize()
 	if err != nil {
 		t.Fatal(err)
 	}
+	p = append(p, body...)
+	h := gobmp.BMPHeader{Version: gobmp.BMP_VERSION, Type: typ, Length: uint32(gobmp.BMP_HEADER_SIZE + len(p))}
+	hb, _ := h.Serialize()
+	return append(hb, p...)
+}
+
+// corruptMonitoring is a route monitoring message whose BGP UPDATE claims
+// more withdrawn-route bytes than it has.
+func corruptMonitoring(t *testing.T, ph *gobmp.BMPPeerHeader) []byte {
+	t.Helper()
 	upd := bytes.Repeat([]byte{0xff}, 16)
 	upd = binary.BigEndian.AppendUint16(upd, 23)
 	upd = append(upd, bgp.BGP_MSG_UPDATE, 0xff, 0xff, 0, 0)
-	body := append(p, upd...)
-	h := gobmp.BMPHeader{Version: gobmp.BMP_VERSION, Type: gobmp.BMP_MSG_ROUTE_MONITORING, Length: uint32(gobmp.BMP_HEADER_SIZE + len(body))}
-	hb, _ := h.Serialize()
-	return append(hb, body...)
+	return rawMessage(t, gobmp.BMP_MSG_ROUTE_MONITORING, ph, upd)
 }
 
 // syntheticStream builds the recorded stream message by message.
