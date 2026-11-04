@@ -81,12 +81,15 @@ func newEditor(t *testing.T) (*configedit.Editor, string) {
 		}
 		return restart, online
 	}
-	e, err := configedit.New(path, running, func(_ *config.Config, b []byte) (*config.Config, error) { return config.Parse(b) }, diff)
+	e, err := configedit.New(path, running, parseCandidate, diff)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return e, path
 }
+
+// parseCandidate is a configedit.Checker that only parses.
+func parseCandidate(_ *config.Config, data []byte) (*config.Config, error) { return config.Parse(data) }
 
 type memDashboards struct {
 	mu sync.Mutex

@@ -240,7 +240,8 @@ func putConfig(t *testing.T, h http.Handler, yaml, base string) (int, string) {
 
 // The upgrade block decides which binary an upgrade runs: its public_key
 // verifies the release, repo and api_url say where it comes from. The
-// editor refuses any change to it (FAB-01); only the mounted file sets it.
+// editor refuses any change to it, adding or removing it included (FAB-01);
+// only the mounted file sets it. Other keys still save beside it.
 func TestConfigEditorRefusesUpgradeChange(t *testing.T) {
 	pub, _, err := upgrade.GenerateKey()
 	if err != nil {
@@ -280,7 +281,6 @@ func TestConfigEditorRefusesUpgradeChange(t *testing.T) {
 	if b, _ := os.ReadFile(path); string(b) != running {
 		t.Fatal("a refused upgrade change was written")
 	}
-	// Adding the block is refused too.
 	plain, plainPath := editorFor(t, uiBase)
 	if res := plain.Check([]byte(running)); res.Valid || !strings.Contains(strings.Join(res.Errors, "\n"), "upgrade: cannot be changed") {
 		t.Fatalf("adding the upgrade block: %+v", res)
@@ -288,7 +288,6 @@ func TestConfigEditorRefusesUpgradeChange(t *testing.T) {
 	if b, _ := os.ReadFile(plainPath); string(b) != uiBase {
 		t.Fatal("the file changed on a check")
 	}
-	// Other keys still save with the upgrade block as it runs.
 	if code, body := putConfig(t, h, running+"hold_time: 20m\n", base); code != http.StatusOK {
 		t.Fatalf("unrelated change: PUT = %d %s", code, body)
 	}
@@ -296,7 +295,7 @@ func TestConfigEditorRefusesUpgradeChange(t *testing.T) {
 
 // After a reload removes an exec source, the editor compares with the
 // config now running, so putting the same source back is refused
-// (FAB-10). Before, it compared with the config the process started with.
+// (FAB-10).
 func TestConfigEditorProgramCheckFollowsReload(t *testing.T) {
 	script, _ := execMarkerScript(t)
 	start := uiBase + "sources:\n  - type: static\n    name: one\n    config: {targets: [{prefix: 198.51.100.0/24}]}\n" +
