@@ -923,7 +923,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	var loopWG sync.WaitGroup
 	live := &liveConfig{cfg: cfg}
 	preview := blastSource{live: live, decider: decider, ctl: ctl, view: view, plugins: plugins,
-		check: candidateChecker(cfg, getenv, httpUser), held: lw.Held,
+		check: candidateChecker(getenv, httpUser), held: lw.Held,
 		reserved: func(p netip.Prefix) bool { return inb.Reserved(p) || mit.Holds(p) }}
 	if httpSrv != nil && cfg.IXP == nil {
 		httpSrv.SetPreflight(newPreflight(live, view, lw, plugins, pktLimiter, log))

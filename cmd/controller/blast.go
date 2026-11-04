@@ -23,8 +23,9 @@ type blastSource struct {
 	ctl     *announce.Controller
 	view    *rib.View
 	plugins *pluginhost.Set
-	// check parses and validates a candidate like a start does.
-	check func([]byte) (*config.Config, error)
+	// check parses and validates a candidate like a start does, against
+	// the running config.
+	check func(running *config.Config, data []byte) (*config.Config, error)
 	// held and reserved are the announcer's refusals: the leak watch holds
 	// a prefix out, inbound steering or a mitigation rule reserves it.
 	held, reserved func(netip.Prefix) bool
@@ -42,7 +43,7 @@ func (b blastSource) Preview(candidate []byte) (blast.Report, error) {
 		inject.Mode = config.ModeInject
 		return b.report(&inject, nil)
 	}
-	next, err := b.check(candidate)
+	next, err := b.check(run, candidate)
 	if err != nil {
 		return blast.Report{}, err
 	}

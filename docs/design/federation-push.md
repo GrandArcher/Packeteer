@@ -47,7 +47,7 @@ Assets: what the instance announces, and the config file.
 |---|---|
 | A compromised or mistaken peer turns inject on, widens the allowlist, or changes the announcer | Only `thresholds` and `policies` are accepted; everything else is refused by name. The merged file is also checked, and a push is refused if any other key differs from the running config or if it would enable inject. `confirm_inject` is therefore never needed and never bypassed. |
 | A peer with a valid certificate that was only meant to read | `accept_settings_from` is separate from `allow_clients` and empty by default. |
-| Code execution through a pushed policy | The editor's exec rule refuses a candidate that adds or changes an `exec` plugin or `plugin_dir`. Only built-in plugin types come through. |
+| Code execution through a pushed policy | The editor's exec rule refuses a candidate that adds or changes an `exec` plugin, `plugin_dir`, or the `upgrade` block. Only built-in plugin types come through. |
 | Invalid or hostile values | The candidate passes the same validation as a start; unknown keys are errors. |
 | Pushed settings loosen safety | They cannot reach the safety rails: allowlist, community, NO_EXPORT, `max_improvements`, `hold_time`, and withdraw rules are not pushable. Lower thresholds make `Decide` act on smaller gains; the admin who pushes and the admin who enabled `accept_settings_from` accept that. |
 | Replay or tamper in transit | Mutual TLS 1.3 with the shared CA. Pushing the same settings again is a no-op (`unchanged`). |

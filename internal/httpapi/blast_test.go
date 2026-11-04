@@ -56,7 +56,7 @@ func blastUI(t *testing.T) (*uiEnv, *fakeBlast) {
 		}
 		return nil, online
 	}
-	ed, err := configedit.New(path, running, config.Parse, diff)
+	ed, err := configedit.New(path, running, parseCandidate, diff)
 	if err != nil {
 		t.Fatal(err)
 	}

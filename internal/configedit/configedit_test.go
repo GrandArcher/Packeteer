@@ -46,7 +46,7 @@ announcer:
   type: gobgp
 `
 
-func parse(data []byte) (*config.Config, error) { return config.Parse(data) }
+func parse(_ *config.Config, data []byte) (*config.Config, error) { return config.Parse(data) }
 
 func editor(t *testing.T, content string) (*Editor, string) {
 	t.Helper()

@@ -44,8 +44,10 @@ var (
 )
 
 // Checker runs every check the controller runs at start on a candidate
-// file and returns the loaded config. It must not start anything.
-type Checker func(data []byte) (*config.Config, error)
+// file and returns the loaded config. It must not start anything. running
+// is the config the editor diffs against (New, then SetRunning), so checks
+// that compare with the running config follow a reload.
+type Checker func(running *config.Config, data []byte) (*config.Config, error)
 
 // Differ lists what differs between the running config and a candidate.
 // restart are the keys that need a restart. online are the keys a reload
@@ -163,7 +165,7 @@ func (e *Editor) checkLocked(data []byte) Result {
 	if len(data) > MaxSize {
 		return Result{Errors: []string{ErrTooLarge.Error()}}
 	}
-	next, err := e.check(data)
+	next, err := e.check(e.running, data)
 	if err != nil {
 		return Result{Errors: splitErrors(err)}
 	}
