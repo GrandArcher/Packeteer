@@ -3,6 +3,7 @@ package probe
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net/netip"
 	"strings"
 	"sync/atomic"
@@ -470,4 +471,82 @@ func newChain(t *testing.T, o Options, icmp, tcp plugin.Prober, targets ...plugi
 		t.Fatal(err)
 	}
 	return e
+}
+
+// evictRef is the one-victim-per-scan loop that evictProberMemLocked
+// replaced. It is the reference for the single-pass version.
+func evictRef(mem map[netip.Addr]proberSlot, capacity int) {
+	for {
+		named := 0
+		var old netip.Addr
+		var oldTick uint64
+		found := false
+		for h, slot := range mem {
+			if slot.name == "" {
+				continue
+			}
+			named++
+			if !found || slot.tick < oldTick || (slot.tick == oldTick && h.Compare(old) < 0) {
+				found, old, oldTick = true, h, slot.tick
+			}
+		}
+		if named <= capacity || !found {
+			return
+		}
+		delete(mem, old)
+	}
+}
+
+// evictFixture is n hosts in 2001:db8::/32. Ticks repeat so the address
+// tie-break matters, and every 7th slot has no name.
+func evictFixture(n int) map[netip.Addr]proberSlot {
+	mem := make(map[netip.Addr]proberSlot, n)
+	for i := range n {
+		slot := proberSlot{name: "icmp", probes: 1, tick: uint64(i * 31 % 997)}
+		if i%7 == 0 {
+			slot.name = ""
+		}
+		mem[benchAddr(i, true).Addr()] = slot
+	}
+	return mem
+}
+
+func TestEvictProberMemMatchesOldLoop(t *testing.T) {
+	for _, capacity := range []int{0, 1, 500, 1999, 5000} {
+		want := evictFixture(2000)
+		evictRef(want, capacity)
+		e := &Engine{opt: Options{ProberMemory: capacity}, proberMem: evictFixture(2000)}
+		e.evictProberMemLocked()
+		if len(e.proberMem) != len(want) {
+			t.Fatalf("cap %d: kept %d, old loop kept %d", capacity, len(e.proberMem), len(want))
+		}
+		for h, slot := range want {
+			if got, ok := e.proberMem[h]; !ok || got != slot {
+				t.Fatalf("cap %d: host %s = %+v (present %v), old loop kept %+v", capacity, h, got, ok, slot)
+			}
+		}
+	}
+}
+
+func BenchmarkEvictProberMem150kHostsCap100k(b *testing.B) {
+	const hosts = 150_000
+	fixture := evictFixture(hosts)
+	e := &Engine{opt: Options{ProberMemory: DefaultProberMemory}}
+	b.ReportAllocs()
+	for range b.N {
+		b.StopTimer()
+		e.proberMem = maps.Clone(fixture)
+		b.StartTimer()
+		e.evictProberMemLocked()
+	}
+	b.StopTimer()
+	named := 0
+	for _, slot := range e.proberMem {
+		if slot.name != "" {
+			named++
+		}
+	}
+	if named != DefaultProberMemory {
+		b.Fatalf("named hosts after eviction = %d, want %d", named, DefaultProberMemory)
+	}
 }
