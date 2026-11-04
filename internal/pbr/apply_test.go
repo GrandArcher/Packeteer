@@ -258,7 +258,7 @@ func TestPlanRefusals(t *testing.T) {
 	}
 }
 
-func TestApplyStopsAtTheFirstFailure(t *testing.T) {
+func TestApplyUndoesWhatRanBeforeTheFailure(t *testing.T) {
 	h := newHost()
 	h.fail["route replace default via 192.0.2.2 table 1002"] = struct{}{}
 	err := Apply(context.Background(), h.exec, mustPlan(t, h, entries(t, twoProviders)))
@@ -385,13 +385,34 @@ func TestFailedApplyRollsBack(t *testing.T) {
 	}
 }
 
+// A failure at the last step, the stale route delete, undoes the rule adds
+// and deletes before it.
+func TestFailedLastStepUndoesRuleChanges(t *testing.T) {
+	h := newHost()
+	es := entries(t, threeProviders)
+	if err := Apply(context.Background(), h.exec, mustPlan(t, h, es)); err != nil {
+		t.Fatal(err)
+	}
+	rules, routes := slices.Clone(h.rules), maps.Clone(h.routes)
+	kept := rest(es)
+	h.fail["route del default via 192.0.2.3 table 1003"] = struct{}{}
+	if err := Apply(context.Background(), h.exec, mustPlan(t, h, kept)); err == nil {
+		t.Fatal("apply did not fail")
+	}
+	slices.Sort(rules)
+	slices.Sort(h.rules)
+	if !slices.Equal(h.rules, rules) || !maps.Equal(h.routes, routes) {
+		t.Fatalf("host not restored: rules %q routes %v, want %q %v", h.rules, h.routes, rules, routes)
+	}
+}
+
 // An undo that fails is reported next to the error that started it.
 func TestFailedRollbackIsReported(t *testing.T) {
 	h := newHost()
 	h.fail["route del default via 192.0.2.1 table 1001"] = struct{}{}
 	h.fail["route replace default via 192.0.2.2 table 1002"] = struct{}{}
 	err := Apply(context.Background(), h.exec, mustPlan(t, h, entries(t, twoProviders)))
-	if err == nil || !strings.Contains(err.Error(), "rollback: ") {
+	if err == nil || !strings.Contains(err.Error(), "rollback: ") || !strings.Contains(err.Error(), "File exists") {
 		t.Fatalf("apply = %v", err)
 	}
 }
