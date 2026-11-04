@@ -568,7 +568,7 @@ scorer:
 # rib_sources:
 #   - type: bmp
 #     config:
-#       listen: ":11019"
+#       listen: ":11019"         # default 127.0.0.1:11019 (loopback only); set the address the routers reach
 #       routers: [192.0.2.254]
 #       policy: post            # the only accepted value; pre-policy routes are refused
 #       loc_rib: true
@@ -968,6 +968,7 @@ plugin_dir: /etc/packeteer/plugins
 #   sources:
 #     - type: bmp                       # routers outside the AS stream BMP here
 #       config:
+#         listen: ":11020"              # default 127.0.0.1:11020 (loopback only); set the address the routers reach
 #         external_routers: [192.0.2.30]
 #         own_routers: [192.0.2.254]    # your edge: Adj-RIB-Out toward eBGP
 #     - type: rislive                   # public RIPE RIS Live, read-only

@@ -48,6 +48,7 @@ leak_watch:
   sources:
     - type: bmp
       config:
+        listen: "192.0.2.10:11020"
         external_routers: [192.0.2.30]
 probe:
   interval: 2s

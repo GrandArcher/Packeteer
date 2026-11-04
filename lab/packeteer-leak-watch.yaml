@@ -58,6 +58,7 @@ leak_watch:
   sources:
     - type: bmp
       config:
+        listen: "192.0.2.10:11020"
         external_routers: [192.0.2.30]
 
 # Lab only: no sign-in, so the e2e scripts can read the API (#328).

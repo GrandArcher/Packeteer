@@ -155,7 +155,7 @@ var blockDefs = []Block{
 		Help: "Routers send their per-peer routes to this station. Learn only: it never sends BGP and never announces. Then set a provider's BMP use to prefer or only.",
 		list: "rib_sources", typ: "bmp", path: []string{"config"},
 		Fields: []Field{
-			field("listen", "Listen", "host:port the routers connect to. With --network host this is a host port: allow it only from the routers.", KindString).check("ipport").dflt(":11019"),
+			field("listen", "Listen", "host:port the routers connect to. With --network host this is a host port: allow it only from the routers.", KindString).check("ipport").dflt("127.0.0.1:11019"),
 			field("routers", "Routers", "Router addresses allowed to connect, one per row.", KindList).check("ip").req(),
 			field("loc_rib", "Read Loc-RIB", "Read the router's selected routes when it sends them.", KindBool).dtrue().adv(),
 			field("idle_timeout", "Idle timeout", "Drop a router that sends nothing for this long. 0 is off, otherwise at least 10s.", KindDuration).rng(0, day).dflt("0s").adv(),
