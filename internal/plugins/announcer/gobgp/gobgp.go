@@ -501,7 +501,7 @@ type parsedCommunity struct {
 
 // parseAnyCommunity accepts a standard community or a large community
 // (RFC 8092). A two-part value above 16 bits stays rejected: a 4-byte ASN
-// is written as a large community ("70000:1:0").
+// is written as a large community ("65536:1:0").
 func parseAnyCommunity(s string) (parsedCommunity, error) {
 	parts := strings.Split(s, ":")
 	switch len(parts) {

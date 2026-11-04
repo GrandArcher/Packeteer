@@ -1380,9 +1380,9 @@ func TestPinBeatsFlowCandidate(t *testing.T) {
 }
 
 func TestExchangeLANTargetsDropped(t *testing.T) {
-	lan := netip.MustParsePrefix("203.0.113.0/24")
+	lan := netip.MustParsePrefix("203.0.113.0/25")
 	keep := netip.MustParsePrefix("198.51.100.0/24")
-	wider := netip.MustParsePrefix("203.0.112.0/23")
+	wider := netip.MustParsePrefix("203.0.113.0/24")
 	o := opts()
 	o.ExchangeLANs = []netip.Prefix{lan}
 	src := &fakeSource{targets: []plugin.Target{

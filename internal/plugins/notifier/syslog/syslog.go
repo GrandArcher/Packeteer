@@ -297,7 +297,7 @@ func (n *Notifier) Notify(ctx context.Context, e plugin.Event) error {
 		return n.write(c, msg, timeout)
 	}
 	if n.conn != nil && !alive(n.conn) {
-		n.conn.Close()
+		_ = n.conn.Close()
 		n.conn = nil
 	}
 	if n.conn == nil {
@@ -308,7 +308,7 @@ func (n *Notifier) Notify(ctx context.Context, e plugin.Event) error {
 		n.conn = c
 	}
 	if err := n.write(n.conn, msg, timeout); err != nil {
-		n.conn.Close()
+		_ = n.conn.Close()
 		n.conn = nil
 		return err
 	}
@@ -352,7 +352,7 @@ func (n *Notifier) Stop(context.Context) error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.conn != nil {
-		n.conn.Close()
+		_ = n.conn.Close()
 		n.conn = nil
 	}
 	return nil

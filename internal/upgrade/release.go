@@ -181,7 +181,7 @@ func (c *client) releases(ctx context.Context, prerelease bool) ([]Release, erro
 		r := Release{Tag: g.TagName, Notes: g.Body, Prerelease: g.Prerelease,
 			Published: g.PublishedAt.UTC(), assets: map[string]string{}}
 		if len(r.Notes) > maxNotes {
-			r.Notes = r.Notes[:maxNotes] + "\n…"
+			r.Notes = r.Notes[:maxNotes] + "\n..."
 		}
 		for _, a := range g.Assets {
 			if _, err := allowedURL(a.URL); err == nil {

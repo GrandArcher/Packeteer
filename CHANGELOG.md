@@ -4,6 +4,9 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ## [Unreleased]
 
+### Changed
+
+- Audit hygiene: ENV.md and threat model gaps, release pins in quickstart, Compose and install.sh, ASCII gate on source, documentation test data, errcheck on, image and action pins (#494).
 ### Security
 
 - `packeteer-policy` requires https (http only to loopback) and `-community`, checks each route (NO_EXPORT, communities, `-allow`); GR off in the examples; feed token backoff, connection cap (#488).

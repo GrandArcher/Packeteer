@@ -14,7 +14,7 @@ type sample struct {
 }
 
 // window keeps the open billing period. The period is [start, end) in UTC,
-// beginning at 00:00 UTC on billingDay. Days 29–31 are rejected at config
+// beginning at 00:00 UTC on billingDay. Days 29-31 are rejected at config
 // time so February always contains the day.
 type window struct {
 	billingDay int

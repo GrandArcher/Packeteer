@@ -115,7 +115,7 @@ func (p *Prober) listen(src netip.Addr, m sockmark.Marking) (*conn, error) {
 		c, err := xicmp.ListenPacket(network, src.String())
 		if err == nil {
 			if terr := tag(c, v6, m); terr != nil {
-				c.Close()
+				_ = c.Close()
 				return nil, fmt.Errorf("%w: %s: %v", plugin.ErrSourceUnavailable, src, terr)
 			}
 			return &conn{c: c, udp: udp, proto: proto}, nil

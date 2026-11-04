@@ -111,7 +111,7 @@ func listenAll(addr string) ([]*net.UDPConn, error) {
 	if err == nil {
 		conns = append(conns, c6)
 	} else if !errors.Is(err, syscall.EAFNOSUPPORT) && !errors.Is(err, syscall.EADDRNOTAVAIL) {
-		c4.Close()
+		_ = c4.Close()
 		return nil, err
 	}
 	return conns, nil

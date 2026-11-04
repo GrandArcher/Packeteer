@@ -4,17 +4,17 @@
 # the config is the shipped observe example, and the setup wizard in the web
 # UI takes it from there.
 #
-#   sh install.sh                      # into ./packeteer, image from main
-#   PACKETEER_VERSION=0.9.0 sh install.sh   # a release (config from its tag)
+#   sh install.sh                           # into ./packeteer, the last release
+#   PACKETEER_VERSION=edge sh install.sh    # the build from main
 #
 # PACKETEER_DIR       where config.yaml and plugins/ live (default ./packeteer)
-# PACKETEER_VERSION   an image tag; "edge" (default) is the build from main
+# PACKETEER_VERSION   an image tag (default: the last release); "edge" is the build from main
 # PACKETEER_ADMIN_PASSWORD  the first admin's password (default: generated)
 # PACKETEER_RAW_BASE  where config.example.yaml is downloaded from
 set -eu
 
 dir=${PACKETEER_DIR:-packeteer}
-version=${PACKETEER_VERSION:-edge}
+version=${PACKETEER_VERSION:-0.9.0}
 image=${PACKETEER_IMAGE:-ghcr.io/grandarcher/packeteer:$version}
 if [ "$version" = edge ]; then
 	ref=main

@@ -1,8 +1,8 @@
 // Package rib maintains Packeteer's view of routes learned from edge routers.
 //
 // An embedded GoBGP speaker holds iBGP sessions with the configured edge
-// routers. The view records each neighbor's adj-RIB-in — paths that neighbor
-// advertised — and not Packeteer's own best path. A route Packeteer injects
+// routers. The view records each neighbor's adj-RIB-in - paths that neighbor
+// advertised - and not Packeteer's own best path. A route Packeteer injects
 // can become the local best path; that must not remove the neighbor's prefix.
 // The view maps every prefix a neighbor still advertises to its next-hop and,
 // through providers[].next_hop, to the provider. The speaker is learn-only:
@@ -350,7 +350,7 @@ func (v *View) Start(ctx context.Context) error {
 
 	for _, n := range v.opt.Neighbors {
 		if err := v.addPeer(ctx, n); err != nil {
-			v.Stop(context.Background())
+			_ = v.Stop(context.Background())
 			return err
 		}
 	}

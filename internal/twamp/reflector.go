@@ -139,7 +139,7 @@ func Serve(ctx context.Context, conn *net.UDPConn, r *Reflector, log *slog.Logge
 			log.Warn("destination not readable, replies leave from the kernel's source", "err", err)
 		}
 	}
-	stop := context.AfterFunc(ctx, func() { conn.Close() })
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stop()
 	buf := make([]byte, 65535)
 	for {

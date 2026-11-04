@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -109,9 +110,9 @@ func TestInstallBringsUpObserveAndPointsAtTheWizard(t *testing.T) {
 		t.Fatalf("the config must pass -check before the container starts:\n%s", calls)
 	}
 	for _, want := range []string{
-		"curl -fsSLo " + e.dir + "/config.yaml https://raw.githubusercontent.com/GrandArcher/Packeteer/main/config.example.yaml",
+		"curl -fsSLo " + e.dir + "/config.yaml https://raw.githubusercontent.com/GrandArcher/Packeteer/v0.9.0/config.example.yaml",
 		"-v " + e.dir + "/config.yaml:/etc/packeteer/config.yaml -v ", // writable: the wizard saves
-		"-v packeteer-data:/var/lib/packeteer ghcr.io/grandarcher/packeteer:edge",
+		"-v packeteer-data:/var/lib/packeteer ghcr.io/grandarcher/packeteer:0.9.0",
 		"docker logs packeteer",
 	} {
 		if !strings.Contains(calls, want) {
@@ -142,6 +143,47 @@ func TestInstallPinsAReleaseAndPassesTheAdminPasswordByName(t *testing.T) {
 	}
 	if strings.Contains(calls, "chosen-by-the-operator") || strings.Contains(out, "chosen-by-the-operator") || strings.Contains(out, "fake-generated-password") {
 		t.Errorf("the password is on a command line or in the output:\n%s\n%s", calls, out)
+	}
+}
+
+func TestInstallEdgeReadsTheConfigFromMain(t *testing.T) {
+	e := newEnv(t)
+	out, errOut, err := e.run(t, "PACKETEER_VERSION=edge")
+	if err != nil {
+		t.Fatalf("install: %v\n%s\n%s", err, out, errOut)
+	}
+	calls := e.calls(t)
+	for _, want := range []string{"/Packeteer/main/config.example.yaml", "-v packeteer-data:/var/lib/packeteer ghcr.io/grandarcher/packeteer:edge"} {
+		if !strings.Contains(calls, want) {
+			t.Errorf("calls lack %q:\n%s", want, calls)
+		}
+	}
+}
+
+// The README, the quickstart, the Compose file, and the installer all pin the
+// last release. A release bumps all four together; this fails if one is missed.
+func TestReleasePinsAgree(t *testing.T) {
+	pin := regexp.MustCompile(`grandarcher/packeteer:(\d+\.\d+\.\d+)`)
+	installer := regexp.MustCompile(`PACKETEER_VERSION:-(\d+\.\d+\.\d+)`)
+	for file, re := range map[string]*regexp.Regexp{
+		"README.md":          pin,
+		"docs/quickstart.md": pin,
+		"docker-compose.yml": pin,
+		"scripts/install.sh": installer,
+	} {
+		b, err := os.ReadFile(filepath.Join("..", file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := re.FindAllStringSubmatch(string(b), -1)
+		if len(m) == 0 {
+			t.Errorf("%s pins no release", file)
+		}
+		for _, v := range m {
+			if v[1] != "0.9.0" {
+				t.Errorf("%s pins %s, want 0.9.0", file, v[1])
+			}
+		}
 	}
 }
 

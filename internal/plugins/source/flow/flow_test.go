@@ -184,7 +184,7 @@ exclude: ["192.0.2.0/24"]
 func TestRIBMapping(t *testing.T) {
 	s := mustSource(t, "listen: 127.0.0.1:2055\nwindow: 1m\ntop_n: 10\n")
 	pin(s, time.Unix(1_700_000_000, 0))
-	cover := netip.MustParsePrefix("198.51.0.0/16")
+	cover := netip.MustParsePrefix("198.51.100.0/24")
 	s.SetPrefixLookup(func(a netip.Addr) (netip.Prefix, bool) {
 		if cover.Contains(a) {
 			return cover, true
@@ -193,14 +193,14 @@ func TestRIBMapping(t *testing.T) {
 			return netip.MustParsePrefix("0.0.0.0/0"), true // ignored
 		}
 		if a.String() == "203.0.113.6" {
-			return netip.MustParsePrefix("198.51.100.0/24"), true // does not contain dst
+			return netip.MustParsePrefix("192.0.2.0/24"), true // does not contain dst
 		}
 		return netip.Prefix{}, false
 	})
 	now := time.Unix(1_700_000_000, 0)
 	s.ingest(now, netip.MustParseAddr("192.0.2.8"), buildV5(0, []v5rec{
 		{dst: netip.MustParseAddr("198.51.100.10"), octets: 100},
-		{dst: netip.MustParseAddr("198.51.200.10"), octets: 50},
+		{dst: netip.MustParseAddr("198.51.100.20"), octets: 50},
 		{dst: netip.MustParseAddr("203.0.113.5"), octets: 40},
 		{dst: netip.MustParseAddr("203.0.113.6"), octets: 30},
 	}))

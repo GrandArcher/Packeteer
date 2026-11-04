@@ -3,10 +3,13 @@ package main
 import (
 	"os"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 
+	"github.com/GrandArcher/Packeteer/internal/atlas"
 	"github.com/GrandArcher/Packeteer/internal/config"
+	"github.com/GrandArcher/Packeteer/internal/geoip"
 	"github.com/GrandArcher/Packeteer/internal/plugins/announcer/gobgp"
 	"github.com/GrandArcher/Packeteer/internal/plugins/detector/baseline"
 	"github.com/GrandArcher/Packeteer/internal/plugins/elector/lease"
@@ -22,6 +25,7 @@ import (
 	coreicmp "github.com/GrandArcher/Packeteer/internal/plugins/ixpcore/icmp"
 	"github.com/GrandArcher/Packeteer/internal/plugins/ixpcorrelate/topology"
 	fabricicmp "github.com/GrandArcher/Packeteer/internal/plugins/ixpfabric/icmp"
+	"github.com/GrandArcher/Packeteer/internal/plugins/ixpmember/ixf"
 	"github.com/GrandArcher/Packeteer/internal/plugins/ixprouteserver/birdseye"
 	"github.com/GrandArcher/Packeteer/internal/plugins/leaksource/rislive"
 	"github.com/GrandArcher/Packeteer/internal/plugins/lookup/peeringdb"
@@ -152,6 +156,45 @@ func TestConfigDocCoversStructs(t *testing.T) {
 	}
 	if !strings.Contains(text, "gobgp") {
 		t.Fatal("docs/CONFIG.md does not document the gobgp announcer")
+	}
+}
+
+// envRef matches the variable name in a "<key>_env: NAME" line of the example config.
+var envRef = regexp.MustCompile(`(?m)^#?\s*[a-z_]+_env:\s*([A-Z][A-Z0-9_]*)`)
+
+// TestEnvDocCoversVariables fails when a variable the code reads, or one the
+// example config names through a *_env key, is missing from docs/ENV.md.
+func TestEnvDocCoversVariables(t *testing.T) {
+	doc, err := os.ReadFile("../../docs/ENV.md")
+	if err != nil {
+		t.Fatalf("read docs/ENV.md: %v", err)
+	}
+	example, err := os.ReadFile("../../config.example.yaml")
+	if err != nil {
+		t.Fatalf("read config.example.yaml: %v", err)
+	}
+	names := []string{
+		ConfigEnv, PluginDirEnv, LogLevelEnv, LogFormatEnv, HTTPListenEnv, HTTPUserEnv, HTTPPassEnv,
+		AdminUserEnv, AdminPassEnv, lease.IDEnv, peeringdb.APIKeyEnv, regripe.UserEnv, regripe.PasswordEnv,
+		ixf.APIKeyEnv, geoip.UserEnv, geoip.KeyEnv, config.DefaultPolicyTokenEnv, atlas.KeyEnv,
+		netbox.TokenEnv, peeringmanager.TokenEnv,
+		"PACKETEER_AGENT_CONFIG", // cmd/agent is package main, so no constant to import
+	}
+	refs := envRef.FindAllStringSubmatch(string(example), -1)
+	if len(refs) < 10 {
+		t.Fatalf("found %d *_env names in config.example.yaml, the pattern no longer matches", len(refs))
+	}
+	for _, m := range refs {
+		names = append(names, m[1])
+	}
+	var missing []string
+	for _, n := range names {
+		if !strings.Contains(string(doc), "`"+n+"`") {
+			missing = append(missing, n)
+		}
+	}
+	if len(missing) > 0 {
+		t.Fatalf("docs/ENV.md is missing %s", strings.Join(missing, ", "))
 	}
 }
 

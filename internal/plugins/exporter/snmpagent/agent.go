@@ -226,7 +226,7 @@ func (a *Agent) Stop(context.Context) error {
 	a.conn, a.done = nil, nil
 	a.mu.Unlock()
 	if conn != nil {
-		conn.Close()
+		_ = conn.Close()
 		<-done
 	}
 	return nil

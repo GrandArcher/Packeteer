@@ -5,6 +5,8 @@ import (
 	"context"
 	"log/slog"
 	"net"
+	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -116,5 +118,25 @@ func TestListenAllAnyPort(t *testing.T) {
 	p4, p6 := conns[0].LocalAddr().(*net.UDPAddr).Port, conns[1].LocalAddr().(*net.UDPAddr).Port
 	if p4 == 0 || p4 != p6 {
 		t.Fatalf("ports %d and %d", p4, p6)
+	}
+}
+
+func TestEveryFlagIsDocumented(t *testing.T) {
+	var out bytes.Buffer
+	if err := run(context.Background(), []string{"-h"}, &out, slog.New(slog.DiscardHandler)); err == nil {
+		t.Fatal("-h returned no error")
+	}
+	doc, err := os.ReadFile("../../docs/reordering.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	flags := regexp.MustCompile(`(?m)^\s+-([a-z-]+)`).FindAllStringSubmatch(out.String(), -1)
+	if len(flags) != 3 {
+		t.Fatalf("usage lists %d flags, want 3:\n%s", len(flags), out.String())
+	}
+	for _, f := range flags {
+		if !strings.Contains(string(doc), "| `-"+f[1]+"` |") {
+			t.Errorf("docs/reordering.md has no table row for -%s", f[1])
+		}
 	}
 }

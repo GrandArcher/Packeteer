@@ -9,11 +9,11 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.mod
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 22
       - name: build
@@ -47,11 +47,11 @@ jobs:
   race:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.mod
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 22
       - name: test with the race detector (#380)
@@ -60,11 +60,11 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.mod
-      - uses: golangci/golangci-lint-action@v9
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9
         with:
           version: v2.14.0
       - name: staticcheck
@@ -84,35 +84,35 @@ jobs:
   govulncheck:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version: stable
       - name: govulncheck
         run: |
-          go install golang.org/x/vuln/cmd/govulncheck@latest
+          go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
           scripts/govulncheck.sh
 
   gitleaks:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v3
+      - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   docker:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: docker/setup-buildx-action@v4
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.mod
       - name: build image
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
           context: .
           load: true
@@ -372,9 +372,9 @@ jobs:
             --absent 'Cannot reach' 'Active improvements'
           # The paged list (#183): the default page, a page past the end that
           # falls back to the last page, and a filter that matches nothing.
-          bash lab/ui-smoke.sh "$base/prefixes.html" 'Showing 1–1 of 1 measured prefixes.' 'Page 1 of 1' 'Expected gain' --absent 'Cannot reach'
-          bash lab/ui-smoke.sh "$base/prefixes.html?page=7&size=25" '127.0.0.1/32' 'Showing 1–1 of 1 measured prefixes.' --absent 'Cannot reach'
-          bash lab/ui-smoke.sh "$base/prefixes.html?asn=64500&sort=rtt" 'No prefix matches the filter.' 'Showing 0–0 of 0 matching (1 measured) prefixes.' --absent 'Cannot reach' '127.0.0.1/32'
+          bash lab/ui-smoke.sh "$base/prefixes.html" $'Showing 1\xe2\x80\x931 of 1 measured prefixes.' 'Page 1 of 1' 'Expected gain' --absent 'Cannot reach'
+          bash lab/ui-smoke.sh "$base/prefixes.html?page=7&size=25" '127.0.0.1/32' $'Showing 1\xe2\x80\x931 of 1 measured prefixes.' --absent 'Cannot reach'
+          bash lab/ui-smoke.sh "$base/prefixes.html?asn=64500&sort=rtt" 'No prefix matches the filter.' $'Showing 0\xe2\x80\x930 of 0 matching (1 measured) prefixes.' --absent 'Cannot reach' '127.0.0.1/32'
           curl -fsS "$base/api/prefixes" | jq -e '.total == 1 and .measured == 1 and .limit == 100 and .offset == 0 and (.prefixes | length) == 1 and (.asn_map | length) == 0 and .asn_total == 0'
           curl -fsS -G "$base/api/prefixes" --data-urlencode 'prefix=127.0.0.1/32' --data-urlencode 'sort=loss' --data-urlencode 'limit=1' | jq -e '.total == 1 and (.prefixes[0].prefix == "127.0.0.1/32") and .limit == 1'
           curl -fsS "$base/api/prefixes?limit=1&offset=1" | jq -e '.total == 1 and (.prefixes | length) == 0'
@@ -755,7 +755,7 @@ jobs:
           curl -fsS "${auth[@]}" -X PUT -H 'Content-Type: application/json' \
             -d '{"title":"Layout","favorite":true,"widgets":[{"type":"status","w":3},{"type":"providers","w":3},{"type":"causes","days":7,"w":6},{"type":"commit","days":7,"w":12,"h":3},{"type":"timeseries","bucket":"better_50","days":7,"wide":true}]}' \
             "$base/api/dashboards/layout" >/dev/null
-          bash lab/ui-smoke.sh http://127.0.0.1:18098/dashboards.html 'id="db-favorite"' '★ layout' 'class="card widget w-3"' 'class="card widget w-6"' 'class="card widget w-12 h-3"' \
+          bash lab/ui-smoke.sh http://127.0.0.1:18098/dashboards.html 'id="db-favorite"' $'\xe2\x98\x85 layout' 'class="card widget w-3"' 'class="card widget w-6"' 'class="card widget w-12 h-3"' \
             'class="card widget w-12"' 'class="ts-chart cause-chart"' 'Improvements started per day' 'Performance: 2' 'Cost: 1' \
             'No provider has a telemetry binding' 'class="ts-chart"' 'mode-observe' 'It announces nothing.' --absent 'Cannot reach' 'mode-inject' 'No improvements started in this range.'
           # Headless Chrome cannot click or press keys, so uiproxy adds a
@@ -1031,7 +1031,7 @@ jobs:
             'renamed: Provider lab-y: enter a commit greater than zero (Mbps). | Provider lab-y: enter the interface name. | step 2 shown: true | lab-y tracked: true' \
             'lab-d: commit 300 Mbps on edge2 ether2, billing day 5, greater_separate; group pair; precedence 200; left out of commit control.' \
             'yaml: commit scorer true | balance equal true | host edge2 true | env name true | commit 300 true | interface ether2 true | billing day 5 true | precedence 200 true | group pair true | cc_disable kept true | mode observe true | no community true' \
-            'validated: Valid · mode observe · changed: providers, scorer, telemetry · restart required' \
+            $'validated: Valid \xc2\xb7 mode observe \xc2\xb7 changed: providers, scorer, telemetry \xc2\xb7 restart required' \
             --absent 'Cannot reach' 'mode-inject' 'lab-only-community' 's3cret-community'
       - name: UI reports smoke (#178; range, filters, sorting, CSV and XLSX from seeded history, observe)
         run: |
@@ -1130,7 +1130,7 @@ jobs:
           # exports with the same query.
           bash lab/ui-smoke.sh 'http://127.0.0.1:18208/reports.html?report=improvements&days=30&provider=lab-b&sort=hours&order=desc' \
             'mode-observe' 'It announces nothing.' '>Improvements</h3>' '>Protection</h3>' 'aria-current="page"' 'id="rf-cause-label"' \
-            'aria-sort="descending"' 'Active (h) ▼' 'Showing 3 of 3 rows' 'href="/prefix/198.51.100.0/24"' \
+            'aria-sort="descending"' $'Active (h) \xe2\x96\xbc' 'Showing 3 of 3 rows' 'href="/prefix/198.51.100.0/24"' \
             'provider=lab-b&amp;sort=hours&amp;order=desc&amp;format=csv' 'provider=lab-b&amp;sort=hours&amp;order=desc&amp;format=xlsx' \
             --absent 'Cannot reach' 'mode-inject' 'History is off'
           bash lab/ui-smoke.sh 'http://127.0.0.1:18208/reports.html?report=improvements&days=30&cause=cost' 'Showing 1 of 1 rows' 'href="/prefix/192.0.2.0/24"' \
@@ -1490,7 +1490,7 @@ jobs:
             'asn map: bounded, counts kept, links 1' \
             'page 2: ?size=25&amp;page=2 first 2001:db8:1a::/48 cards 0' \
             'filtered: ?asn=AS64500&amp;sort=gain&amp;size=25 first 2001:db8:1::/48 rows 3' \
-            'Showing 1–3 of 3 matching (100000 measured) prefixes.' 'Page 1 of 1' \
+            $'Showing 1\xe2\x80\x933 of 3 matching (100000 measured) prefixes.' 'Page 1 of 1' \
             --absent 'Cannot reach' 'mode-inject'
       - name: UI RPKI labels smoke (#200; per-path validity with source and age, stored RPKI timeline, observe)
         run: |
@@ -2770,8 +2770,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.mod
       - name: FRR announce/withdraw lab
@@ -2852,8 +2852,8 @@ jobs:
       matrix:
         surface: [outbound, more-specific, inbound, mitigation, ha]
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.mod
       - name: failure-mode matrix, ${{ matrix.surface }}
@@ -2876,13 +2876,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
-      - uses: docker/setup-buildx-action@v4
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.mod
       - name: build image
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
           context: .
           load: true
@@ -2949,8 +2949,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.mod
       - name: install net-snmp tools
@@ -2969,8 +2969,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.mod
       - name: NetBox container produces a valid config; the applied change is the planned one (#208)
@@ -2984,8 +2984,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.mod
       - name: start the sinks
@@ -3058,8 +3058,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.mod
       - name: enable KVM
@@ -3079,13 +3079,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
-      - uses: docker/setup-buildx-action@v4
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.mod
       - name: build image
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
           context: .
           load: true
@@ -3095,7 +3095,7 @@ jobs:
         env:
           SOAK_OUT: load-result.json
         run: bash lab/soak.sh packeteer:ci pr
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()
         with:
           name: load-result
@@ -3106,13 +3106,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
-      - uses: docker/setup-buildx-action@v4
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.mod
       - name: build image
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
           context: .
           load: true
@@ -3122,7 +3122,7 @@ jobs:
         env:
           SOAK_OUT: load-bmp-result.json
         run: bash lab/soak.sh packeteer:ci bmp
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()
         with:
           name: load-bmp-result
@@ -3133,13 +3133,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
-      - uses: docker/setup-buildx-action@v4
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.mod
       - name: build image
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
           context: .
           load: true
@@ -3149,7 +3149,7 @@ jobs:
         env:
           SOAK_OUT: load-multi-result.json
         run: bash lab/soak.sh packeteer:ci multi-smoke
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()
         with:
           name: load-multi-result

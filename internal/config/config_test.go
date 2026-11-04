@@ -295,7 +295,7 @@ func TestCommunitiesRejected(t *testing.T) {
 	tests := []struct {
 		name, yaml, want string
 	}{
-		{"bad packeteer", edit(t, injectYAML, `"64512:666"`, `"70000:1"`), "0-65535"},
+		{"bad packeteer", edit(t, injectYAML, `"64512:666"`, `"65536:1"`), "0-65535"},
 		{"large packeteer too many parts", edit(t, injectYAML, `"64512:666"`, `"1:2:3:4"`), "asn:value"},
 		{"extra equals packeteer", injectYAML + "communities_cause: {performance: [\"64512:666\"]}\n", "duplicates packeteer_community"},
 		{"well-known extra", injectYAML + "communities_cause: {static: [\"65535:65281\"]}\n", "reserved"},
@@ -305,7 +305,7 @@ func TestCommunitiesRejected(t *testing.T) {
 		{"duplicate extra", injectYAML + "communities_cause: {performance: [\"64512:100\", \"64512:0100\"]}\n", "duplicate community 64512:100"},
 		{"too many", injectYAML + "communities_cause: {performance: [\"64512:1\", \"64512:2\", \"64512:3\", \"64512:4\", \"64512:5\", \"64512:6\", \"64512:7\", \"64512:8\", \"64512:9\", \"64512:10\", \"64512:11\", \"64512:12\", \"64512:13\", \"64512:14\", \"64512:15\", \"64512:16\", \"64512:17\"]}\n", "at most 16"},
 		{"unknown cause", injectYAML + "communities_cause: {vip: [\"64512:1\"]}\n", "field vip not found"},
-		{"four-byte two-part extra", injectYAML + "communities_cause: {performance: [\"70000:1\"]}\n", "0-65535"},
+		{"four-byte two-part extra", injectYAML + "communities_cause: {performance: [\"65536:1\"]}\n", "0-65535"},
 		{"provider duplicate of packeteer", edit(t, injectYAML, "next_hop: 192.0.2.1", "next_hop: 192.0.2.1\n    communities: [\"64512:666\"]"), "duplicates packeteer_community"},
 	}
 	for _, tt := range tests {

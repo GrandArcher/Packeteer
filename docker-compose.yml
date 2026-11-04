@@ -2,8 +2,8 @@
 # Keep mode: observe until you have read docs/THREAT_MODEL.md.
 services:
   packeteer:
-    # :edge tracks main. Pin a release with ghcr.io/grandarcher/packeteer:0.9.0
-    image: ghcr.io/grandarcher/packeteer:edge
+    # Pinned to the last release. :edge tracks main.
+    image: ghcr.io/grandarcher/packeteer:0.9.0
     container_name: packeteer
     # Host networking: probes must leave via each transit's source IP, the
     # iBGP session must reach the edge router, and a flow source binds its

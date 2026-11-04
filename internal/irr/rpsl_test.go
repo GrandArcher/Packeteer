@@ -43,7 +43,7 @@ func TestParseRPSL(t *testing.T) {
 }
 
 func TestRoute(t *testing.T) {
-	objs := parseAll(t, "route6: 2001:DB8::/32\norigin: as64496\nsource: radb\n\nroute: 203.0.113.0/24\norigin: AS64499\nsource: RPKI  # Trust Anchor: ripe\n\nroute: bogus\norigin: AS1\n\naut-num: AS64496\n")
+	objs := parseAll(t, "route6: 2001:DB8::/32\norigin: as64496\nsource: radb\n\nroute: 203.0.113.0/24\norigin: AS64499\nsource: RPKI  # Trust Anchor: ripe\n\nroute: bogus\norigin: AS64498\n\naut-num: AS64496\n")
 	rt, ok := Route(objs[0])
 	if !ok || rt != (plugin.IRRRoute{Prefix: netip.MustParsePrefix("2001:db8::/32"), Origin: 64496, Database: "RADB"}) {
 		t.Fatalf("route6 = %+v %v", rt, ok)

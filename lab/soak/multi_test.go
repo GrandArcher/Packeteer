@@ -27,7 +27,7 @@ func TestTableIndexInvertsPrefix(t *testing.T) {
 				t.Fatalf("n=%d: index(prefix(%d) = %s) = %d, %v", n, i, tbl.prefix(i), got, ok)
 			}
 		}
-		for _, s := range []string{"192.0.2.0/23", "192.0.3.0/24", "10.0.0.0/8", "2001:db8::/31", "2001:db9::/48", "2001:db8:ffff:ffff::/64"} {
+		for _, s := range []string{"192.0.2.0/23", "192.0.3.0/24", "10.0.0.0/8", "2001:db8::/31", "2001:db8:1::/48", "2001:db8:ffff:ffff::/64"} {
 			if i, ok := tbl.index(netip.MustParsePrefix(s)); ok {
 				t.Fatalf("n=%d: %s is entry %d", n, s, i)
 			}

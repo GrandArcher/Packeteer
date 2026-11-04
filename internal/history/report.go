@@ -37,7 +37,7 @@ const (
 )
 
 // HoursPerMonth converts a monthly price per Mbps into an hourly accrual.
-// Savings accrue as est_savings × hours / HoursPerMonth.
+// Savings accrue as est_savings x hours / HoursPerMonth.
 const HoursPerMonth = 730
 
 // Sort keys for the top-N reports.
@@ -883,7 +883,7 @@ func (a *agg) probeASNs(rep *Report) {
 // ---- savings ----
 
 // SavingsRow is one priced improvement. EstSavings is the monthly rate
-// (cost_delta × volume); Accrued is that rate over the hours inside the
+// (cost_delta x volume); Accrued is that rate over the hours inside the
 // range, divided by HoursPerMonth. Negative values are extra spend.
 type SavingsRow struct {
 	Prefix     string    `json:"prefix"`
