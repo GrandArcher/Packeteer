@@ -72,6 +72,9 @@ type limiterSet struct {
 type limiterEntry struct {
 	lim  *rate.Limiter
 	seen time.Time
+	// pinned is set once a connection from this key completed a pinned
+	// handshake; churn from unknown keys evicts the entry last.
+	pinned bool
 }
 
 func newLimiterSet(perMin int) *limiterSet {
@@ -86,14 +89,7 @@ func (l *limiterSet) reserve(key string, n int, now time.Time) (bool, time.Durat
 	e := l.m[key]
 	if e == nil {
 		if len(l.m) >= maxLimiterKeys {
-			for k, old := range l.m {
-				if now.Sub(old.seen) > time.Minute {
-					delete(l.m, k)
-				}
-			}
-			if len(l.m) >= maxLimiterKeys {
-				return false, time.Minute
-			}
+			l.evict(now)
 		}
 		e = &limiterEntry{lim: rate.NewLimiter(rate.Limit(float64(l.perMin)/60), max(l.perMin, maxCost))}
 		l.m[key] = e
@@ -108,6 +104,39 @@ func (l *limiterSet) reserve(key string, n int, now time.Time) (bool, time.Durat
 		return false, d
 	}
 	return true, 0
+}
+
+// markPinned records that key completed a pinned handshake.
+func (l *limiterSet) markPinned(key string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if e := l.m[key]; e != nil {
+		e.pinned = true
+	}
+}
+
+// evict makes room for one key. Entries idle past a minute hold a full
+// bucket, so dropping them changes nothing. Otherwise the least recently
+// seen entry goes, preferring one without a pinned handshake. A new key is
+// never refused for want of room: many source addresses must not lock out
+// a pinned peer that connects from a new one (#506).
+func (l *limiterSet) evict(now time.Time) {
+	for k, e := range l.m {
+		if now.Sub(e.seen) > time.Minute {
+			delete(l.m, k)
+		}
+	}
+	if len(l.m) < maxLimiterKeys {
+		return
+	}
+	var victim string
+	var v *limiterEntry
+	for k, e := range l.m {
+		if v == nil || (v.pinned && !e.pinned) || (v.pinned == e.pinned && e.seen.Before(v.seen)) {
+			victim, v = k, e
+		}
+	}
+	delete(l.m, victim)
 }
 
 // retryAfter is the Retry-After header value for a wait.

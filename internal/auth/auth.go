@@ -70,7 +70,7 @@ const (
 	cacheTTL        = 5 * time.Minute
 	failWindow      = 5 * time.Minute
 	failLimit       = 10
-	maxThrottleIPs  = 10000
+	maxFailKeys     = 10000
 	tokenPrefix     = "pkt_"
 )
 
@@ -146,6 +146,23 @@ type failures struct {
 	start time.Time
 }
 
+// failKey is what failed sign-ins are counted under: a user name and the
+// client address. Behind a reverse proxy every client has the proxy's
+// address, so counting per address alone let anyone lock every user out
+// (#506). user is empty for a failure that names no valid user (a bad
+// token, a malformed header), so those still share one count per address.
+type failKey struct {
+	user string
+	ip   netip.Addr
+}
+
+func newFailKey(user string, ip netip.Addr) failKey {
+	if !ValidUserName(user) {
+		user = ""
+	}
+	return failKey{user: user, ip: ip}
+}
+
 // Service authenticates requests and manages users and tokens.
 type Service struct {
 	users      plugin.UserStore
@@ -164,7 +181,7 @@ type Service struct {
 	sessions map[string]session
 	pending  map[string]pendingLogin
 	pwCache  map[string]cached
-	fails    map[netip.Addr]*failures
+	fails    map[failKey]*failures
 
 	dummyOnce sync.Once
 	dummy     string
@@ -199,7 +216,7 @@ func New(o Options) (*Service, error) {
 	}
 	return &Service{
 		users: o.Users, sso: o.SSO, sessionTTL: o.SessionTTL, tokenTTL: o.TokenTTL, log: o.Logger, now: o.Now, pepper: pepper, onGone: o.OnGeneratedGone,
-		sessions: map[string]session{}, pending: map[string]pendingLogin{}, pwCache: map[string]cached{}, fails: map[netip.Addr]*failures{},
+		sessions: map[string]session{}, pending: map[string]pendingLogin{}, pwCache: map[string]cached{}, fails: map[failKey]*failures{},
 	}, nil
 }
 
@@ -221,37 +238,42 @@ func RemoteIP(r *http.Request) netip.Addr {
 }
 
 // Authenticate identifies the caller from an Authorization header (Bearer
-// token or Basic password) or an SSO session cookie. Failed passwords and
-// tokens are counted per client address; past the limit every attempt
-// from it fails with ErrThrottled until the window ends.
+// token or Basic password) or a session cookie. A valid token or session
+// is accepted whatever the failure count; only a guessable password is
+// refused before it is checked. Failures are counted per user name and
+// client address; past the limit an attempt under that count fails with
+// ErrThrottled until the window ends.
 func (s *Service) Authenticate(r *http.Request) (Principal, error) {
 	ip := RemoteIP(r)
 	now := s.now()
-	if s.throttled(ip, now) {
-		return Principal{}, ErrThrottled
-	}
 	ctx := r.Context()
 	if h := r.Header.Get("Authorization"); h != "" {
 		scheme, cred, _ := strings.Cut(h, " ")
-		var p Principal
-		var err error
 		switch strings.ToLower(scheme) {
 		case "bearer":
-			p, err = s.token(ctx, strings.TrimSpace(cred), now)
+			p, err := s.token(ctx, strings.TrimSpace(cred), now)
+			if errors.Is(err, ErrBadCredentials) {
+				return Principal{}, s.failed(newFailKey("", ip), now)
+			}
+			return p, err
 		case "basic":
 			user, pass, ok := r.BasicAuth()
-			if !ok {
-				err = ErrBadCredentials
-				break
+			k := newFailKey(user, ip)
+			if s.throttled(k, now) {
+				return Principal{}, ErrThrottled
 			}
-			p, err = s.password(ctx, user, pass, now)
+			if !ok {
+				s.fail(k, now)
+				return Principal{}, ErrBadCredentials
+			}
+			p, err := s.password(ctx, user, pass, now)
+			if errors.Is(err, ErrBadCredentials) {
+				s.fail(k, now)
+			}
+			return p, err
 		default:
-			err = ErrBadCredentials
+			return Principal{}, s.failed(newFailKey("", ip), now)
 		}
-		if errors.Is(err, ErrBadCredentials) {
-			s.fail(ip, now)
-		}
-		return p, err
 	}
 	if c, err := r.Cookie(SessionCookie); err == nil && c.Value != "" {
 		p, err := s.session(ctx, c.Value, now)
@@ -265,38 +287,64 @@ func (s *Service) Authenticate(r *http.Request) (Principal, error) {
 	return Principal{}, ErrNoCredentials
 }
 
-func (s *Service) throttled(ip netip.Addr, now time.Time) bool {
+// failed answers a credential that was checked and refused: ErrThrottled
+// once k is over the limit, else it counts the failure.
+func (s *Service) failed(k failKey, now time.Time) error {
+	if s.throttled(k, now) {
+		return ErrThrottled
+	}
+	s.fail(k, now)
+	return ErrBadCredentials
+}
+
+func (s *Service) throttled(k failKey, now time.Time) bool {
 	s.smu.Lock()
 	defer s.smu.Unlock()
-	f := s.fails[ip]
+	f := s.fails[k]
 	if f == nil {
 		return false
 	}
 	if now.Sub(f.start) >= failWindow {
-		delete(s.fails, ip)
+		delete(s.fails, k)
 		return false
 	}
 	return f.count >= failLimit
 }
 
-func (s *Service) fail(ip netip.Addr, now time.Time) {
+func (s *Service) fail(k failKey, now time.Time) {
 	s.smu.Lock()
 	defer s.smu.Unlock()
-	if len(s.fails) >= maxThrottleIPs {
-		for k, f := range s.fails {
-			if now.Sub(f.start) >= failWindow {
-				delete(s.fails, k)
-			}
-		}
+	if _, ok := s.fails[k]; !ok && len(s.fails) >= maxFailKeys {
+		s.evictFail(now)
 	}
-	f := s.fails[ip]
+	f := s.fails[k]
 	if f == nil || now.Sub(f.start) >= failWindow {
 		f = &failures{start: now}
-		s.fails[ip] = f
+		s.fails[k] = f
 	}
 	f.count++
 	if f.count == failLimit {
-		s.log.Warn("http auth: too many failed sign-ins; throttling", "remote", ip.String(), "window", failWindow)
+		s.log.Warn("http auth: too many failed sign-ins; throttling", "user", k.user, "remote", k.ip.String(), "window", failWindow)
+	}
+}
+
+// evictFail makes room for one count: expired ones first, else the one
+// with the oldest window. Resetting a count that way takes maxFailKeys
+// other failures, each a full password check, inside one window.
+func (s *Service) evictFail(now time.Time) {
+	var oldest failKey
+	var of *failures
+	for k, f := range s.fails {
+		if now.Sub(f.start) >= failWindow {
+			delete(s.fails, k)
+			continue
+		}
+		if of == nil || f.start.Before(of.start) {
+			oldest, of = k, f
+		}
+	}
+	if len(s.fails) >= maxFailKeys {
+		delete(s.fails, oldest)
 	}
 }
 
@@ -419,18 +467,18 @@ func (s *Service) session(ctx context.Context, id string, now time.Time) (Princi
 }
 
 // SignIn checks a local user's password for the sign-in page and starts a
-// session. It shares the per-address failure count with Authenticate, so
-// the form and basic auth lock out together. A session the browser
-// already holds is ended first.
+// session. It shares the per-user-and-address failure count with
+// Authenticate, so the form and basic auth lock out together. A session
+// the browser already holds is ended first.
 func (s *Service) SignIn(w http.ResponseWriter, r *http.Request, name, pw string) (Principal, error) {
-	ip := RemoteIP(r)
+	k := newFailKey(name, RemoteIP(r))
 	now := s.now()
-	if s.throttled(ip, now) {
+	if s.throttled(k, now) {
 		return Principal{}, ErrThrottled
 	}
 	p, err := s.password(r.Context(), name, pw, now)
 	if errors.Is(err, ErrBadCredentials) {
-		s.fail(ip, now)
+		s.fail(k, now)
 	}
 	if err != nil {
 		return Principal{}, err
@@ -792,12 +840,12 @@ func (s *Service) generatedGone(was plugin.User, now *plugin.User) {
 }
 
 // ChangePassword sets p's own password after checking the current one. A
-// wrong current password counts toward the per-address lockout. It ends
+// wrong current password counts toward p's sign-in lockout. It ends
 // the user's sessions and, for a session request, starts a new one, so a
 // browser stays signed in. It clears MustChange.
 func (s *Service) ChangePassword(w http.ResponseWriter, r *http.Request, p Principal, current, next string) error {
-	ip, now := RemoteIP(r), s.now()
-	if s.throttled(ip, now) {
+	k, now := newFailKey(p.User, RemoteIP(r)), s.now()
+	if s.throttled(k, now) {
 		return ErrThrottled
 	}
 	if err := CheckPassword(next); err != nil {
@@ -823,7 +871,7 @@ func (s *Service) ChangePassword(w http.ResponseWriter, r *http.Request, p Princ
 		return invalid("this account signs in through the identity provider and has no local password")
 	}
 	if !VerifyPassword(u.PasswordHash, current) {
-		s.fail(ip, now)
+		s.fail(k, now)
 		return fmt.Errorf("%w: the current password is wrong", ErrForbidden)
 	}
 	updated := u

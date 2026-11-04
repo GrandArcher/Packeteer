@@ -3,8 +3,10 @@ package auth
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"net/url"
 	"strings"
 	"sync"
@@ -500,7 +502,8 @@ func TestSignInSessionCap(t *testing.T) {
 }
 
 // TestSignInLockout: the form and basic auth share one failure count per
-// address, and a locked address cannot sign in even with the right password.
+// user and address, and a locked user cannot sign in from that address
+// even with the right password.
 func TestSignInLockout(t *testing.T) {
 	s, _, c := newSvc(t, nil)
 	ctx := context.Background()
@@ -514,7 +517,7 @@ func TestSignInLockout(t *testing.T) {
 		}
 	}
 	// The tenth failure comes from basic auth; it counts with the form's.
-	if _, err := s.Authenticate(req(ip, basic("nobody", "wrong-password-x"))); !errors.Is(err, ErrBadCredentials) {
+	if _, err := s.Authenticate(req(ip, basic("noc", "wrong-password-x"))); !errors.Is(err, ErrBadCredentials) {
 		t.Fatalf("basic failure: %v", err)
 	}
 	if _, cookie, err := signIn(s, ip, "noc", "viewer-password-1", nil); !errors.Is(err, ErrThrottled) || cookie != nil {
@@ -530,6 +533,87 @@ func TestSignInLockout(t *testing.T) {
 	c.add(failWindow)
 	if _, cookie, err := signIn(s, ip, "noc", "viewer-password-1", nil); err != nil || cookie == nil {
 		t.Fatalf("after window: %v", err)
+	}
+}
+
+// TestThrottleSparesValidSessionAndToken: behind a reverse proxy every
+// client has one address. Failed passwords from it must not refuse a
+// signed-in session, an API token, or another user (#506).
+func TestThrottleSparesValidSessionAndToken(t *testing.T) {
+	s, _, _ := newSvc(t, nil)
+	ctx := context.Background()
+	if _, err := s.CreateUser(ctx, "noc", plugin.RoleOperator, "operator-password"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateUser(ctx, "ops", plugin.RoleViewer, "viewer-password-1"); err != nil {
+		t.Fatal(err)
+	}
+	const proxy = "192.0.2.80:443"
+	sp, cookie, err := signIn(s, proxy, "noc", "operator-password", nil)
+	if err != nil || cookie == nil {
+		t.Fatalf("sign in: %v", err)
+	}
+	_, raw, err := s.CreateToken(ctx, sp, "script", "", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < failLimit; i++ {
+		if _, err := s.Authenticate(req(proxy, basic("noc", "guess-guess-guess"))); !errors.Is(err, ErrBadCredentials) {
+			t.Fatalf("failure %d: %v", i, err)
+		}
+	}
+	if _, err := s.Authenticate(req(proxy, basic("noc", "operator-password"))); !errors.Is(err, ErrThrottled) {
+		t.Fatalf("guessed user not throttled: %v", err)
+	}
+	p, err := s.Authenticate(req(proxy, func(r *http.Request) { r.AddCookie(cookie) }))
+	if err != nil || p.User != "noc" || !p.Session {
+		t.Fatalf("session refused: %+v %v", p, err)
+	}
+	p, err = s.Authenticate(req(proxy, bearer(raw)))
+	if err != nil || p.User != "noc" || p.Method != MethodToken {
+		t.Fatalf("token refused: %+v %v", p, err)
+	}
+	if p, err := s.Authenticate(req(proxy, basic("ops", "viewer-password-1"))); err != nil || p.User != "ops" {
+		t.Fatalf("other user refused: %+v %v", p, err)
+	}
+	if _, c, err := signIn(s, proxy, "ops", "viewer-password-1", nil); err != nil || c == nil {
+		t.Fatalf("other user sign-in refused: %v", err)
+	}
+
+	// Bad tokens share one count per address; a valid token still passes.
+	for i := 0; i < failLimit; i++ {
+		_, _ = s.Authenticate(req(proxy, bearer("pkt_0123456789abcdef_"+strings.Repeat("A", 43))))
+	}
+	if _, err := s.Authenticate(req(proxy, bearer("pkt_nope"))); !errors.Is(err, ErrThrottled) {
+		t.Fatalf("bad tokens not throttled: %v", err)
+	}
+	if p, err := s.Authenticate(req(proxy, bearer(raw))); err != nil || p.User != "noc" {
+		t.Fatalf("token refused after bad tokens: %+v %v", p, err)
+	}
+}
+
+// TestFailTableBounded: user names make the count keys, so the table is
+// capped; the oldest count goes first.
+func TestFailTableBounded(t *testing.T) {
+	s, _, c := newSvc(t, nil)
+	ip := netip.MustParseAddr("192.0.2.9")
+	s.fail(newFailKey("first", ip), c.now())
+	c.add(time.Second)
+	for i := 1; i < maxFailKeys; i++ {
+		s.fail(newFailKey(fmt.Sprintf("u%d", i), ip), c.now())
+	}
+	s.fail(newFailKey("last", ip), c.now())
+	if len(s.fails) != maxFailKeys {
+		t.Fatalf("table holds %d", len(s.fails))
+	}
+	if _, ok := s.fails[newFailKey("first", ip)]; ok {
+		t.Fatal("oldest count kept")
+	}
+	if _, ok := s.fails[newFailKey("last", ip)]; !ok {
+		t.Fatal("new count dropped")
+	}
+	if k := newFailKey("bad name\n", ip); k.user != "" {
+		t.Fatalf("invalid name keyed: %q", k.user)
 	}
 }
 
