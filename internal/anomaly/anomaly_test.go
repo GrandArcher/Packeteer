@@ -141,7 +141,7 @@ func newLab(t *testing.T, mode string, rules []Rule, mut func(*Config)) *lab {
 	l := &lab{t: t, src: &flows{ctr: map[plugin.TrafficKey]uint64{}}, ann: newAnn(), now: t0, lead: true,
 		rib: &rib{ready: true, learned: map[netip.Prefix]bool{victim: true, other: true}}}
 	mit, err := mitigation.New(mitigation.Config{Mode: mode, Allowlist: []netip.Prefix{victim, other}, MaxRules: 3,
-		DefaultTTL: time.Hour, MaxTTL: 2 * time.Hour, LocalPref: 250, Community: "64512:666"}, l.ann, quiet())
+		DefaultTTL: time.Hour, MaxTTL: 2 * time.Hour, HideWindow: 5 * time.Minute, LocalPref: 250, Community: "64512:666"}, l.ann, quiet())
 	if err != nil {
 		t.Fatal(err)
 	}

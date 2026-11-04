@@ -17,7 +17,7 @@ import (
 // the Protection form cannot submit a prefix that is not learned (#131).
 func TestMitigationCandidatesWithoutRIB(t *testing.T) {
 	mit, err := mitigation.New(mitigation.Config{Mode: config.ModeObserve, Allowlist: []netip.Prefix{netip.MustParsePrefix("203.0.113.0/24")},
-		MaxRules: 2, DefaultTTL: time.Hour, MaxTTL: 2 * time.Hour}, nil, nil)
+		MaxRules: 2, DefaultTTL: time.Hour, MaxTTL: 2 * time.Hour, HideWindow: 5 * time.Minute}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

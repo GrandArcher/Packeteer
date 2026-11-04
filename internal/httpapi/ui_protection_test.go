@@ -79,7 +79,7 @@ func newProtEnv(t *testing.T) *protEnv {
 	allow := []netip.Prefix{netip.MustParsePrefix("203.0.113.0/24")}
 	ann := &silentAnn{}
 	ctl, err := mitigation.New(mitigation.Config{Mode: config.ModeObserve, Allowlist: allow, MaxRules: 2,
-		DefaultTTL: time.Hour, MaxTTL: 2 * time.Hour}, ann, nil)
+		DefaultTTL: time.Hour, MaxTTL: 2 * time.Hour, HideWindow: 5 * time.Minute}, ann, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

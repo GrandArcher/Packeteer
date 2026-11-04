@@ -482,3 +482,69 @@ func TestFlowSpecWaitLogsOnce(t *testing.T) {
 		t.Fatalf("pending = %q", st.Rules[0].Pending)
 	}
 }
+
+// FlowSpec routes on the wire follow the same hide window as RTBH: kept
+// through a short gap, withdrawn once the destination has been missing from
+// a ready RIB for HideWindow, and announced again when it returns (#487).
+func TestFlowSpecHideWindowWithdraws(t *testing.T) {
+	ctx := context.Background()
+	var buf bytes.Buffer
+	ann := newFakeFSAnn()
+	cfg := testConfig(config.ModeInject)
+	cfg.MaxRules = 4
+	cfg.Geo = geo
+	c, err := New(cfg, ann, slog.New(slog.NewTextHandler(&buf, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rib := &fakeRIB{ready: true, learned: map[netip.Prefix]bool{victim: true}}
+	if err := c.SetRIB(rib); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Add(Request{Prefix: victim, Action: plugin.MitigationFlowSpecDrop, Countries: []string{"XA", "XB"},
+		Match: plugin.FlowSpecMatch{Protocols: []plugin.IPProtocol{17}}, TTL: time.Hour}, t0); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Sync(ctx, t0); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(ann.flows()); n != 2 {
+		t.Fatalf("announced %d routes, want 2", n)
+	}
+
+	delete(rib.learned, victim)
+	hidden := t0.Add(time.Minute)
+	for _, at := range []time.Duration{0, 5*time.Minute - time.Second} {
+		if err := c.Sync(ctx, hidden.Add(at)); err != nil {
+			t.Fatal(err)
+		}
+		if n := len(ann.flows()); n != 2 || !c.Status().Rules[0].Announced {
+			t.Fatalf("hidden for %s: %d routes on the wire, want 2", at, n)
+		}
+	}
+	for _, at := range []time.Duration{5 * time.Minute, 6 * time.Minute} {
+		if err := c.Sync(ctx, hidden.Add(at)); err != nil {
+			t.Fatal(err)
+		}
+		if n := len(ann.flows()); n != 0 || c.Active() != 0 {
+			t.Fatalf("hidden for %s: %d routes still on the wire", at, n)
+		}
+		if st := c.Status().Rules[0]; st.Announced || st.Pending != pendingLeft {
+			t.Fatalf("hidden for %s: rule = %+v", at, st)
+		}
+	}
+	if n := strings.Count(buf.String(), "mitigation flowspec rule withdrawn"); n != 1 {
+		t.Fatalf("withdraw logged %d times, want 1", n)
+	}
+	if strings.Contains(buf.String(), "mitigation flowspec rule waits") {
+		t.Fatal("a rule withdrawn for hide_window logged the plain wait")
+	}
+
+	rib.learned[victim] = true
+	if err := c.Sync(ctx, hidden.Add(7*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(ann.flows()); n != 2 || c.Status().Rules[0].Pending != "" {
+		t.Fatalf("after the prefix returned: %d routes, rule %+v", n, c.Status().Rules[0])
+	}
+}

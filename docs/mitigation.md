@@ -14,12 +14,13 @@ All of them are sent only to your own edge routers on the existing iBGP session.
 ## Safety
 
 - `mitigation.mode` defaults to `observe`: rules are accepted and listed as a dry run and nothing is announced. `inject` also needs top-level `mode: inject`.
-- **Exact learned prefix only.** A rule is announced only while the exact prefix is in the learned RIB. A more-specific of a learned prefix (for example one host) is accepted as a rule but waits forever with `pending: not in the learned RIB`. Packeteer never synthesizes a prefix. A FlowSpec rule's destination is always the rule's exact learned prefix; source prefixes and countries only narrow the match and are never announced as reachability.
+- **Exact learned prefix only.** A rule is announced only when the exact prefix is in the learned RIB. A more-specific of a learned prefix (for example one host) is accepted as a rule but waits forever with `pending: not in the learned RIB`. Packeteer never synthesizes a prefix. A FlowSpec rule's destination is always the rule's exact learned prefix; source prefixes and countries only narrow the match and are never announced as reachability.
+- **Hide window.** Once a mitigation route wins, the edge stops sending the prefix over iBGP, which looks the same as the prefix leaving. A route on the wire is kept while its prefix is missing from a ready RIB for up to `hide_window` (default 5m, 1m-168h). Then it is withdrawn and the rule shows `pending: withdrawn: not in the learned RIB for mitigation.hide_window` until the prefix is learned again, when it is announced again (#487). On an iBGP-only RIB view a rule that outlives `hide_window` is therefore off the wire every `hide_window` until the edge advertises the prefix again and the next round runs. A BMP feed of the transit sessions' Adj-RIB-In keeps the prefix learned, so there is no gap.
 - **Its own allowlist.** `mitigation.allowlist` is separate from `allowlist.prefixes`. A rule outside it is refused, and the announcer checks it again on every announce.
 - **A cap.** `mitigation.max_rules` (default 10) caps mitigation routes held at once, announced or waiting. RTBH, redirect, and a FlowSpec rule count once; a FlowSpec rule with `source_countries` counts once per source network, and is refused (`409`) when it does not fit. The announcer enforces the same cap on its routes, RTBH and FlowSpec together. Mitigation routes do not count toward `max_improvements`.
 - **Every rule expires.** A request may give a `ttl` up to `max_ttl` (default 24h, at most 168h); without one it gets `default_ttl` (default 1h). An expired rule is withdrawn within one decision round.
 - **No stale intent.** Rules live in memory only. A restart, a crash, or a redeploy drops them, and nothing is announced again until someone adds a rule again.
-- **Withdraw on failure.** SIGTERM withdraws every mitigation route while the session is up. A crash drops the session and, with no graceful restart, the edge forgets the routes within its hold time. RIB session loss withdraws them.
+- **Withdraw on failure.** SIGTERM withdraws every mitigation route while the session is up. A crash drops the session and, with no graceful restart, the edge forgets the routes within its hold time. RIB session loss withdraws them, and so does the hide window above.
 - **One Packeteer route per prefix.** While an RTBH or redirect rule holds a prefix (or its route is still on the wire), outbound improvements and inbound steers for that prefix are withdrawn and not announced again until the rule is gone. The mitigation route goes out on the next round, once the edge advertises the prefix again. Until outbound or inbound has withdrawn its route the rule shows `pending: waiting for outbound to release the prefix` or `waiting for inbound to release the prefix` (#486).
 - **No provider next hops.** A catalog next hop equal to a provider's `next_hop` is refused at startup, so a mitigation route never looks like an outbound improvement.
 - **FlowSpec sessions only when used.** The iBGP sessions offer the FlowSpec address families only when `mitigation.mode` is `inject` and the announcer has a `flowspec` block. In `observe` the sessions are unchanged.
@@ -41,6 +42,7 @@ mitigation:
   max_rules: 10
   default_ttl: 1h
   max_ttl: 24h
+  hide_window: 5m
   announcer:
     type: gobgp
     config:
