@@ -412,3 +412,166 @@ func TestCommitSafetyRetirements(t *testing.T) {
 		})
 	}
 }
+
+// commitOnC steers pA from native a to c with a commit move at t0.
+func commitOnC(t *testing.T, c Config, s plugin.Scorer) State {
+	t.Helper()
+	st, _ := Decide(NewState(), in(results(t0, pA, m{"a", 0, 40}, m{"b", 0, 50}, m{"c", 0, 45}), natA()), c, s, t0)
+	if imp := st.Improvements[pA]; imp.Provider != "c" || imp.Cause != plugin.CauseCommit {
+		t.Fatalf("setup: %+v", st.Improvements)
+	}
+	return st
+}
+
+func TestCommitSwitchToPerformancePassesTheCapacityGate(t *testing.T) {
+	c := ovCfg()
+	s := planBare{moves: []plugin.PlanMove{{Prefix: pA, Provider: "c", Reason: "plan c", ReliefMbps: 60}}}
+	st := commitOnC(t, c, s)
+	later := t0.Add(2 * time.Minute)
+	// b beats native a for both prefixes. pA's switch off its commit steer
+	// and the new pB steer each carry 30 Mbps onto b.
+	round := func(outMbps float64) Input {
+		res := append(results(later, pA, m{"a", 0, 90}, m{"b", 0, 30}, m{"c", 0, 35}), results(later, pB, m{"a", 0, 80}, m{"b", 0, 40})...)
+		input := in(res, map[netip.Prefix]string{pA: "a", pB: "a"})
+		input.Load = map[string]Load{"b": {CapacityMbps: 1000, OutMbps: outMbps, Updated: later}}
+		input.WeightVolumeMbps = map[netip.Prefix]float64{pA: 30, pB: 30}
+		return input
+	}
+
+	// 860 + 30 Mbps is 89% of b's interface, over the 85% limit.
+	next, out := Decide(st, round(860), c, s, later)
+	d := decision(t, out, pA)
+	if imp := next.Improvements[pA]; imp.Provider != "c" || imp.Cause != plugin.CauseCommit {
+		t.Fatalf("improvement %+v, want the commit steer kept on c", imp)
+	}
+	if d.Action != ActionKeep || d.Current != "c" || d.Recommended != "b" || !strings.HasPrefix(d.Reason, overloadRefused+"b would reach 89%") {
+		t.Fatalf("decision %+v", d)
+	}
+	var notes []Overload
+	for _, o := range out.Overloads {
+		if o.Prefix == pA {
+			notes = append(notes, o)
+		}
+	}
+	if len(notes) != 1 || notes[0].Action != OverloadRefused || notes[0].Provider != "b" || notes[0].ProjectedPct != 89 {
+		t.Fatalf("pA overloads = %+v", out.Overloads)
+	}
+	for _, ch := range out.Changes {
+		if ch.New.Prefix == pA || ch.Old.Prefix == pA {
+			t.Fatalf("pA changed: %+v", ch)
+		}
+	}
+	i, _ := findDecision(out.Decisions, pA)
+	ex := buildExplain(out.Decisions[i], out.facts[i], c, len(next.Improvements))
+	if ex.BlockedBy != GateOverload || ex.Outcome != OutcomeKept || !strings.HasPrefix(ex.Counterfactual, "would move to b once its interface") {
+		t.Fatalf("blocked by %q outcome %q counterfactual %q, want %s kept", ex.BlockedBy, ex.Outcome, ex.Counterfactual, GateOverload)
+	}
+	wantGate(t, ex, GateOverload, GateFail, "b would reach 89%")
+	wantGate(t, ex, GateThresholds, GateSkip, "the interface capacity limit refused the switch")
+
+	// The refusal does not pin the steer: a planner that lets go of it
+	// still withdraws it.
+	next, out = Decide(st, round(860), c, planBare{}, later)
+	if _, ok := next.Improvements[pA]; ok {
+		t.Fatalf("released commit steer kept: %+v", next.Improvements[pA])
+	}
+	if d := decision(t, out, pA); d.Action != ActionRetire || d.Reason != "commit relieved" {
+		t.Fatalf("decision %+v, want the commit steer relieved", d)
+	}
+
+	// 800 + 30 Mbps is 83%: the switch goes ahead and is booked, so the new
+	// pB steer in the same round would make 86% and is refused.
+	next, out = Decide(st, round(800), c, s, later)
+	if imp := next.Improvements[pA]; imp.Provider != "b" || imp.Cause != plugin.CausePerformance {
+		t.Fatalf("improvement %+v, want a performance switch to b", imp)
+	}
+	if _, ok := next.Improvements[pB]; ok {
+		t.Fatalf("pB steered past the limit: %+v", next.Improvements[pB])
+	}
+	if len(out.Overloads) != 1 || out.Overloads[0].Prefix != pB || out.Overloads[0].UsedPct != 83 || out.Overloads[0].ProjectedPct != 86 {
+		t.Fatalf("overloads = %+v, want pB refused at 83%% used", out.Overloads)
+	}
+}
+
+func TestCommitPerformanceCycleIsQuarantined(t *testing.T) {
+	s := planBare{moves: []plugin.PlanMove{{Prefix: pA, Provider: "c", Reason: "plan c", ReliefMbps: 60}}}
+	commitPaths := []m{{"a", 0, 40}, {"b", 0, 50}, {"c", 0, 45}}
+	round := func(st State, c Config, at time.Time, ms []m) (State, Output) {
+		return Decide(st, in(results(at, pA, ms...), natA()), c, s, at)
+	}
+
+	t.Run("cycle", func(t *testing.T) {
+		c := flapCfg()
+		st := commitOnC(t, c, s) // flip 1
+		at := t0.Add(2 * time.Minute)
+		st, _ = round(st, c, at, []m{{"a", 0, 90}, {"b", 0, 30}, {"c", 0, 35}})
+		if imp := st.Improvements[pA]; imp.Provider != "b" || imp.Cause != plugin.CausePerformance || len(st.flips[pA]) != 2 {
+			t.Fatalf("switch: %+v flips %v", imp, st.flips[pA])
+		}
+		at = at.Add(2 * time.Minute)
+		st, _ = round(st, c, at, []m{{"a", 0, 30}, {"b", 0, 50}, {"c", 0, 45}})
+		if _, ok := st.Improvements[pA]; ok || len(st.flips[pA]) != 3 {
+			t.Fatalf("flip-back: %+v flips %v", st.Improvements, st.flips[pA])
+		}
+		// The commit move back to c is the 4th change, past max_flips 3.
+		at = at.Add(2 * time.Minute)
+		st, out := round(st, c, at, commitPaths)
+		q, ok := st.quarantine[pA]
+		if !ok || q.Flips != 4 || len(st.Improvements) != 0 {
+			t.Fatalf("not quarantined: %+v improvements %+v", st.quarantine, st.Improvements)
+		}
+		if d := decision(t, out, pA); !strings.HasPrefix(d.Reason, "flap quarantine: 4 provider changes") {
+			t.Fatalf("decision %+v", d)
+		}
+	})
+
+	t.Run("switch past the limit", func(t *testing.T) {
+		c := flapCfg()
+		c.Flap.MaxFlips = 1
+		st := commitOnC(t, c, s)
+		at := t0.Add(2 * time.Minute)
+		st, out := round(st, c, at, []m{{"a", 0, 90}, {"b", 0, 30}, {"c", 0, 35}})
+		if _, ok := st.quarantine[pA]; !ok || len(st.Improvements) != 0 {
+			t.Fatalf("switch not quarantined: %+v improvements %+v", st.quarantine, st.Improvements)
+		}
+		if len(out.Changes) != 1 || out.Changes[0].Action != ActionRetire || out.Changes[0].Old.Provider != "c" {
+			t.Fatalf("changes = %+v, want the commit steer withdrawn", out.Changes)
+		}
+		d := decision(t, out, pA)
+		if d.Action != ActionRetire || d.Current != "a" || !strings.HasPrefix(d.Reason, "flap quarantine: 2 provider changes") {
+			t.Fatalf("decision %+v", d)
+		}
+	})
+}
+
+func TestCommitSwitchToPerformanceReportsMEDOverride(t *testing.T) {
+	c := medCfg()
+	s := planBare{moves: []plugin.PlanMove{{Prefix: pA, Provider: "c", Reason: "plan c", ReliefMbps: 60}}}
+	st := commitOnC(t, c, s)
+	later := t0.Add(16 * time.Minute)
+	input := medIn("a", twoLinks, m{"a", 0, 90}, m{"b", 0, 30}, m{"c", 0, 35})
+	for i := range input.Results {
+		input.Results[i].Time = later
+	}
+	next, out := Decide(st, input, c, s, later)
+	want := MEDOverride{ASN: 64496, Preferred: "a", PreferredMED: 10, Chosen: "b", ChosenMED: 50, ScoreGap: 60}
+	imp := next.Improvements[pA]
+	if imp.Provider != "b" || imp.Cause != plugin.CausePerformance || imp.MEDOverride == nil || *imp.MEDOverride != want {
+		t.Fatalf("improvement %+v, want a switch to b that reports %+v", imp, want)
+	}
+	if len(out.Changes) != 1 || out.Changes[0].Action != ActionSwitch || out.Changes[0].New.MEDOverride == nil {
+		t.Fatalf("changes = %+v", out.Changes)
+	}
+
+	// d is on b's AS with a lower MED and scores within the margin of b:
+	// the switch takes d, as a performance switch does.
+	meds := map[string]NeighborMED{"a": {ASN: 64496, MED: 10}, "b": {ASN: 64496, MED: 50}, "d": {ASN: 64496, MED: 20}}
+	input = medIn("a", meds, m{"a", 0, 90}, m{"b", 0, 30}, m{"c", 0, 35}, m{"d", 0, 40})
+	for i := range input.Results {
+		input.Results[i].Time = later
+	}
+	next, _ = Decide(st, input, c, s, later)
+	if imp := next.Improvements[pA]; imp.Provider != "d" || imp.Cause != plugin.CausePerformance {
+		t.Fatalf("improvement %+v, want the switch to take d, the lower-MED exit", imp)
+	}
+}
