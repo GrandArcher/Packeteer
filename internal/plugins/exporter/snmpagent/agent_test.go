@@ -635,7 +635,7 @@ func TestV3ResponsesUseFreshSalts(t *testing.T) {
 
 // raw v3 request with the given engine ID in msgAuthoritativeEngineID and the
 // given user name.
-func v3Message(t *testing.T, engine, user string) []byte {
+func v3Message(t testing.TB, engine, user string) []byte {
 	t.Helper()
 	p := &gosnmp.SnmpPacket{Version: gosnmp.Version3, MsgFlags: gosnmp.NoAuthNoPriv, SecurityModel: gosnmp.UserSecurityModel,
 		SecurityParameters: &gosnmp.UsmSecurityParameters{AuthoritativeEngineID: engine, UserName: user,

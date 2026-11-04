@@ -9,8 +9,10 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 - Probe/RIB at 100k targets: bounded probe outcome channel, `probe.provider_inflight` cap, looking glass via `Find`, RIB copies rebuilt at most every 5 s, improvement counter, nightly bench (#491).
 - Prober memory evicts in one sort-based pass instead of a scan per host; sub-range jobs stop after two silent hosts of a down provider; job order uses the reloaded interval (#507).
 - Audit hygiene: ENV.md and threat model gaps, release pins in quickstart, Compose and install.sh, ASCII gate on source, documentation test data, errcheck on, image and action pins (#494).
+- `-pbr linux -apply` adds before it removes, rolls back a failed run, reads named tables; `make test` lists skipped tests; fuzz targets for v5, sFlow, BMP, RTR, BER, TWAMP, pcap run in CI (#510).
 ### Security
 
+- Report, what-if, blast, preflight, config-write and send-now errors return a generic message; the detail (paths, SQL text) stays in the log (#510).
 - Auth lockout counts failed passwords per user and address and never refuses a valid session or token; the herd per-address table evicts instead of refusing (#506).
 - The config editor refuses a new `*_env` name outside its plugin's prefix (`PACKETEER_SNMP_*`, ...); `influxdb` and a feed with a token need https, http only to loopback (#504).
 - Flow decoder: IPFIX templates check their length before allocating, a bad template set ends the datagram, and sampling rates go with their last template; v9/IPFIX fuzz tests (#502).
@@ -39,6 +41,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Fixed
 
+- OIDC sign-ins no longer queue behind a slow discovery; the troubleshoot probe keeps the first silent prober and reports a lost probe source like the engine; comment and doc drift fixed (#510).
 - A performance switch off a commit or cost steer passes `interface_capacity_threshold_pct`, `flap_quarantine` and the MED tie break like any performance switch (#503).
 - A mitigation route whose prefix is missing from a ready RIB for `mitigation.hide_window` (default 5m) is withdrawn; the rule waits for the prefix (#487).
 - `docs/precedence.md` documents the shipped external policy feed instead of "Not built" (#487).

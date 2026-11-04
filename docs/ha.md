@@ -89,3 +89,4 @@ The archive holds the config file as loaded and, with `storage: sqlite`, a copy 
 - One elector type (`lease`). A VRRP-style elector over the LAN would be another plugin behind the same interface.
 - A frozen active instance (process stopped, host hung) keeps its routes until each router's hold timer runs out; the standby waits that long. If the frozen process resumes, its elector reports standby at once and it withdraws within `renew`/2, but a BGP session it re-establishes in that window can briefly carry its old routes. Stop a frozen instance rather than resuming it.
 - Mitigation rules and on-demand maintenance windows are not replicated.
+- The `external_policy` feed is per instance and the standby serves an empty set, so a consumer must follow the active instance ([external-policy.md](external-policy.md#with-a-pair-of-instances)).

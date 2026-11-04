@@ -271,9 +271,9 @@ func steerGain(cands []Candidate, imp Improvement) float64 {
 	return nat.Score - cur.Score
 }
 
-// volumes is the per-prefix traffic rate the evaluation reads: the
-// planner's, else the one read for improvement weights or the overload
-// limit.
+// volumes is the per-prefix traffic rate the evaluation reads for improvement
+// weights and the overload limit: WeightVolumeMbps when set, else the
+// planner's VolumeMbps.
 func (in Input) volumes() map[netip.Prefix]float64 {
 	if in.WeightVolumeMbps != nil {
 		return in.WeightVolumeMbps

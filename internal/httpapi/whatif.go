@@ -72,6 +72,6 @@ func (s *Server) handleWhatIf(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error(), "code": "no_rounds"})
 	default:
 		s.log.Error("what-if replay", "err", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "the replay failed: " + err.Error()})
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "the replay failed"})
 	}
 }

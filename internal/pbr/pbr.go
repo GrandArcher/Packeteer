@@ -1,8 +1,10 @@
 // Package pbr prints the policy routing that makes each provider's probes
 // leave through that provider (#157): Linux ip rule and ip route commands,
 // and policy-based routing snippets for FRR, Junos, Cisco IOS, and
-// MikroTik RouterOS. It only generates text for an operator to review.
-// Nothing is applied and nothing is sent to a router.
+// MikroTik RouterOS. The generators only print text for an operator to
+// review and send nothing to a router. Plan and Apply (apply.go) are the one
+// exception: they run ip rule and ip route on this host, and only when the
+// operator passes -pbr linux -apply -yes.
 package pbr
 
 import (

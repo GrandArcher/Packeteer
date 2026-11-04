@@ -16,7 +16,8 @@ import (
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
-// Plugin types that run a program from the plugin dir.
+// Plugin types that run a program: a relative command is looked up in the
+// plugin dir, an absolute one runs as given.
 const (
 	ExecType = "exec"
 	GRPCType = "grpc"

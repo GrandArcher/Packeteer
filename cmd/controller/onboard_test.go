@@ -59,7 +59,7 @@ type scriptedIP struct {
 }
 
 func (s *scriptedIP) exec(_ context.Context, args ...string) (string, error) {
-	line := strings.Join(args, " ")
+	line := strings.Replace(strings.Join(args, " "), "-N ", "", 1) // numeric ids: the fake always prints them
 	switch {
 	case line == "rule show":
 		if s.applied {

@@ -93,7 +93,7 @@ func TestSetupSkipSaveFails(t *testing.T) {
 	fr := &fakeFirstRun{pending: true, err: errors.New("read-only volume")}
 	e := newUIWith(t, func(o *Options) { o.FirstRun = fr })
 	rec, got := e.do(t, "POST", "/api/setup/skip", plugin.RoleAdmin, nil)
-	if rec.Code != http.StatusInternalServerError || !strings.Contains(got["error"].(string), "read-only volume") || fr.pending {
+	if rec.Code != http.StatusInternalServerError || !strings.Contains(got["error"].(string), "pending file cannot be removed") || strings.Contains(got["error"].(string), "read-only volume") || fr.pending {
 		t.Fatalf("skip: %d %s %+v", rec.Code, rec.Body, fr)
 	}
 	for _, r := range e.store.Records() {

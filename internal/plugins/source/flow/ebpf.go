@@ -10,8 +10,9 @@ import (
 )
 
 // ebpfPoll is how often the kernel counters are read. A burst shorter than
-// that is still counted whole: the kernel adds up every packet, and the
-// window buckets are 10 seconds wide.
+// that is still counted whole: the kernel adds up every packet, and a window
+// bucket is at least a second wide (a thirtieth of the window, 10 seconds
+// for the default 5 minutes).
 const ebpfPoll = time.Second
 
 // EBPFConfig is the flow source's eBPF collector block (#229). It counts
