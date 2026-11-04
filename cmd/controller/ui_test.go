@@ -19,6 +19,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/httpapi"
 	"github.com/GrandArcher/Packeteer/internal/pluginhost"
 	"github.com/GrandArcher/Packeteer/internal/upgrade"
+	"gopkg.in/yaml.v3"
 )
 
 const uiBase = `mode: observe
@@ -393,6 +394,12 @@ func TestConfigEditorRestrictsEnvNames(t *testing.T) {
 	if b, _ := os.ReadFile(path); string(b) != running {
 		t.Fatal("a refused env name was written")
 	}
+	alias := strings.Replace(strings.Replace(running, "- name: edge\n", "- name: &a PACKETEER_ADMIN_PASSWORD\n", 1),
+		"community_env: SNMP_COMMUNITY", "community_env: *a", 1)
+	alias = strings.Replace(alias, "host: edge,", "host: PACKETEER_ADMIN_PASSWORD,", 1)
+	if res := ed.Check([]byte(alias)); res.Valid || !strings.Contains(strings.Join(res.Errors, "\n"), want) {
+		t.Fatalf("the name behind an alias: %+v", res)
+	}
 	trap := running + "notifiers:\n  - type: snmptrap\n    config: {address: 192.0.2.40, version: 2c, community_env: SNMP_COMMUNITY}\n"
 	if res := ed.Check([]byte(trap)); res.Valid || !strings.Contains(strings.Join(res.Errors, "\n"), `notifiers/snmptrap: community_env "SNMP_COMMUNITY"`) {
 		t.Fatalf("the running name at another place: %+v", res)
@@ -411,8 +418,9 @@ func TestConfigEditorRestrictsEnvNames(t *testing.T) {
 	}
 }
 
-// checkEnvNames reads typed *_env fields and plugin keys at any depth, and
-// a place with no prefix list takes only names the running config uses.
+// checkEnvNames reads typed *_env fields and plugin keys at any depth, the
+// places match the ones configedit lists, and a place with no prefix list
+// takes only names the running config uses.
 func TestCheckEnvNamesPlaces(t *testing.T) {
 	parse := func(s string) *config.Config {
 		t.Helper()
@@ -424,19 +432,37 @@ func TestCheckEnvNamesPlaces(t *testing.T) {
 	}
 	running := parse(uiBase)
 	feed := "external_policy:\n  enabled: false\n  listen: 192.0.2.10:9443\n  cert_file: /etc/packeteer/tls/feed.crt\n  key_file: /etc/packeteer/tls/feed.key\n"
-	for yaml, want := range map[string]string{
+	for text, want := range map[string]string{
 		uiBase + feed + "  token_env: PACKETEER_ADMIN_PASSWORD\n": `external_policy: token_env "PACKETEER_ADMIN_PASSWORD"`,
 		uiBase + feed + "  token_env: PACKETEER_POLICY_FEED\n":    "",
 		uiBase + feed: "",
 		uiBase + "exporters:\n  - type: kafka\n    config: {brokers: [192.0.2.50:9093], sasl: {username_env: PACKETEER_KAFKA_USER, password_env: PACKETEER_HTTP_PASSWORD}}\n": `exporters/kafka: password_env "PACKETEER_HTTP_PASSWORD"`,
+		uiBase + "notifiers:\n  - type: smtp\n    config:\n      x: &m {password_env: PACKETEER_ADMIN_PASSWORD}\n      <<: *m\n":                                              `notifiers/smtp: password_env "PACKETEER_ADMIN_PASSWORD"`,
+		uiBase + "notifiers:\n  - type: smtp\n    config: {? &k password_env : PACKETEER_SMTP_PASSWORD, *k : PACKETEER_ADMIN_PASSWORD}\n":                                     `notifiers/smtp: password_env "PACKETEER_ADMIN_PASSWORD"`,
+		uiBase + "notifiers:\n  - type: smtp\n    config: {password_env: !!binary UEFDS0VURUVSX0FETUlOX1BBU1NXT1JE}\n":                                                        `notifiers/smtp: password_env "PACKETEER_ADMIN_PASSWORD"`,
+		uiBase + "storage: {type: sqlite}\nauth:\n  enabled: true\n  sso:\n    type: oidc\n    config: {client_secret_env: PACKETEER_ADMIN_PASSWORD}\n":                       `auth.sso/oidc: client_secret_env "PACKETEER_ADMIN_PASSWORD"`,
+		uiBase + "storage: {type: sqlite}\nauth:\n  enabled: true\n  sso:\n    type: oidc\n    config: {client_secret_env: PACKETEER_OIDC_CLIENT_SECRET}\n":                   "",
 		uiBase + "probers:\n  - type: icmp\n    config: {token_env: PACKETEER_PROBE_TOKEN}\n":                                                                                 `probers/icmp: token_env "PACKETEER_PROBE_TOKEN" cannot be set through the config editor; use a name the running config already uses there`,
 	} {
-		err := checkEnvNames(running, parse(yaml))
+		err := checkEnvNames(running, parse(text))
 		switch {
 		case want == "" && err != nil:
-			t.Errorf("%s: %v", yaml, err)
+			t.Errorf("%s: %v", text, err)
 		case want != "" && (err == nil || !strings.Contains(err.Error(), want)):
-			t.Errorf("%s: err = %v, want %q", yaml, err, want)
+			t.Errorf("%s: err = %v, want %q", text, err, want)
+		}
+	}
+	// threat_feeds needs a whole mitigation block to load, so the feed is
+	// set on a parsed config.
+	for name, want := range map[string]string{"PACKETEER_ADMIN_PASSWORD": `threat_feeds.feeds/http: token_env "PACKETEER_ADMIN_PASSWORD"`, "PACKETEER_FEED_TOKEN": ""} {
+		next := parse(uiBase)
+		var node yaml.Node
+		if err := yaml.Unmarshal([]byte("{token_env: "+name+"}"), &node); err != nil {
+			t.Fatal(err)
+		}
+		next.ThreatFeeds = &config.ThreatFeeds{Feeds: []config.PluginSpec{{Type: "http", Config: *node.Content[0]}}}
+		if err := checkEnvNames(running, next); (want == "") != (err == nil) || (err != nil && !strings.Contains(err.Error(), want)) {
+			t.Errorf("feed %s: err = %v, want %q", name, err, want)
 		}
 	}
 	legacy := parse(uiBase + "probers:\n  - type: icmp\n    config: {token_env: LEGACY_TOKEN}\n")

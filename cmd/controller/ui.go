@@ -227,10 +227,14 @@ func envKeys(cfg *config.Config) []envKey {
 		walk = func(n *yaml.Node) {
 			switch n.Kind {
 			case yaml.MappingNode:
+				// Keys and values are decoded as the plugin's decoder reads
+				// them, so an alias, a merge key, or a tag such as !!binary
+				// cannot hide the name.
 				for i := 0; i+1 < len(n.Content); i += 2 {
-					k, v := n.Content[i], n.Content[i+1]
-					if strings.HasSuffix(k.Value, "_env") && v.Kind == yaml.ScalarNode {
-						envs = append(envs, envKey{place: place, key: k.Value, name: v.Value})
+					var key, name string
+					v := n.Content[i+1]
+					if n.Content[i].Decode(&key) == nil && strings.HasSuffix(key, "_env") && v.Decode(&name) == nil {
+						envs = append(envs, envKey{place: place, key: key, name: name})
 						continue
 					}
 					walk(v)
