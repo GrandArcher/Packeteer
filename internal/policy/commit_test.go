@@ -462,6 +462,16 @@ func TestCommitSwitchToPerformancePassesTheCapacityGate(t *testing.T) {
 		}
 	}
 
+	// The refusal does not pin the steer: a planner that lets go of it
+	// still withdraws it.
+	next, out = Decide(st, round(860), c, planBare{}, later)
+	if _, ok := next.Improvements[pA]; ok {
+		t.Fatalf("released commit steer kept: %+v", next.Improvements[pA])
+	}
+	if d := decision(t, out, pA); d.Action != ActionRetire || d.Reason != "commit relieved" {
+		t.Fatalf("decision %+v, want the commit steer relieved", d)
+	}
+
 	// 800 + 30 Mbps is 83%: the switch goes ahead and is booked, so the new
 	// pB steer in the same round would make 86% and is refused.
 	next, out = Decide(st, round(800), c, s, later)
@@ -544,5 +554,17 @@ func TestCommitSwitchToPerformanceReportsMEDOverride(t *testing.T) {
 	}
 	if len(out.Changes) != 1 || out.Changes[0].Action != ActionSwitch || out.Changes[0].New.MEDOverride == nil {
 		t.Fatalf("changes = %+v", out.Changes)
+	}
+
+	// d is on b's AS with a lower MED and scores within the margin of b:
+	// the switch takes d, as a performance switch does.
+	meds := map[string]NeighborMED{"a": {ASN: 64496, MED: 10}, "b": {ASN: 64496, MED: 50}, "d": {ASN: 64496, MED: 20}}
+	input = medIn("a", meds, m{"a", 0, 90}, m{"b", 0, 30}, m{"c", 0, 35}, m{"d", 0, 40})
+	for i := range input.Results {
+		input.Results[i].Time = later
+	}
+	next, _ = Decide(st, input, c, s, later)
+	if imp := next.Improvements[pA]; imp.Provider != "d" || imp.Cause != plugin.CausePerformance {
+		t.Fatalf("improvement %+v, want the switch to take d, the lower-MED exit", imp)
 	}
 }

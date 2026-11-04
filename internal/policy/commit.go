@@ -109,11 +109,15 @@ func integrateCommit(
 			setDecision(d, ActionRetire, "commit path loss regressed", h.imp.Native, "", cause)
 			continue
 		}
+		var refusal Overload
 		if nat, ok := usableCand(cands, h.imp.Native); ok && !(cause == plugin.CauseCost && cheapFirst) {
 			// Same rule as a performance improvement: wins count during
 			// hold_time, a fresh miss resets the streak, and the switch
 			// is created only after hold_time.
 			alt, altOK := bestCandidate(cands, cfg.Excluded, h.imp.Native)
+			if pref, med := medPreferred(cands, alt, cfg, h.imp.Native, h.imp.Native); altOK && med {
+				alt = pref
+			}
 			win := altOK && alt.Provider != h.imp.Provider && better(alt, nat, cfg)
 			if lacking := evidenceLacking(cfg, nat, alt); win && lacking != "" {
 				// Refused like a new performance move (#202). The steer
@@ -132,30 +136,32 @@ func integrateCommit(
 					continue
 				}
 				if note, refused := gate.refuse(alt.Provider, p); refused {
-					setDecision(d, ActionKeep, note.Reason, h.imp.Provider, alt.Provider, cause)
+					// The steer stays with its planner, which may still
+					// release or move it: a commit steer is valid only while
+					// its planner wants it, so the refusal must not pin it.
 					out.Overloads = append(out.Overloads, note)
-					continue
-				}
-				if st.flapNext(p, now, cfg.Flap) {
+					refusal = note
+				} else if st.flapNext(p, now, cfg.Flap) {
 					q := st.quarantinePrefix(p, now, cfg.Flap, out)
 					retire(p, flapReason(q), false)
 					setDecision(d, ActionRetire, flapReason(q), h.imp.Native, "", cause)
 					continue
+				} else {
+					st.noteFlip(p, now, cfg.Flap)
+					gate.release(h.imp)
+					gate.book(alt.Provider, p)
+					delete(st.confirm, p)
+					n := Improvement{
+						Prefix: p, Provider: alt.Provider, Native: h.imp.Native, Since: now,
+						Reason: reasonText(alt, nat), Cause: plugin.CausePerformance,
+						MEDOverride: medOverride(cands, alt, cfg, h.imp.Native),
+						nativeSeen:  h.imp.nativeSeen, nativeHeld: h.imp.nativeHeld,
+					}
+					st.Improvements[p] = n
+					out.Changes = append(out.Changes, Change{Action: ActionSwitch, Old: h.imp, New: n})
+					setDecision(d, ActionSwitch, n.Reason, n.Provider, n.Provider, plugin.CausePerformance)
+					continue
 				}
-				st.noteFlip(p, now, cfg.Flap)
-				gate.release(h.imp)
-				gate.book(alt.Provider, p)
-				delete(st.confirm, p)
-				n := Improvement{
-					Prefix: p, Provider: alt.Provider, Native: h.imp.Native, Since: now,
-					Reason: reasonText(alt, nat), Cause: plugin.CausePerformance,
-					MEDOverride: medOverride(cands, alt, cfg, h.imp.Native),
-					nativeSeen:  h.imp.nativeSeen, nativeHeld: h.imp.nativeHeld,
-				}
-				st.Improvements[p] = n
-				out.Changes = append(out.Changes, Change{Action: ActionSwitch, Old: h.imp, New: n})
-				setDecision(d, ActionSwitch, n.Reason, n.Provider, n.Provider, plugin.CausePerformance)
-				continue
 			} else if lost, _ := freshLoss(st.confirm[p], in, cfg, p, now); lost {
 				delete(st.confirm, p)
 			}
@@ -181,6 +187,10 @@ func integrateCommit(
 			imp := h.imp
 			imp.Reason = mv.Reason
 			st.Improvements[p] = imp
+			if refusal.Reason != "" {
+				setDecision(d, ActionKeep, refusal.Reason, imp.Provider, refusal.Provider, cause)
+				continue
+			}
 			setDecision(d, ActionKeep, mv.Reason, imp.Provider, imp.Provider, cause)
 			continue
 		}
