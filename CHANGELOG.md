@@ -26,6 +26,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Fixed
 
+- A performance switch off a commit or cost steer passes `interface_capacity_threshold_pct` and `flap_quarantine` like any performance switch, and reports a MED override (#503).
 - A mitigation route whose prefix is missing from a ready RIB for `mitigation.hide_window` (default 5m) is withdrawn; the rule waits for the prefix (#487).
 - `docs/precedence.md` documents the shipped external policy feed instead of "Not built" (#487).
 - A mitigation rule waits until an inbound steer on its prefix is withdrawn, so the steer's withdraw cannot remove the mitigation route (#486).

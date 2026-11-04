@@ -568,7 +568,7 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 				MEDOverride: medOverride(cands, alt, cfg, d.Native), Covering: cover[p]}})
 	}
 
-	integrateCommit(st, &out, decIdx, holds, commitOK, byPrefix, &wants, cfg, scorer, in, now, retire)
+	integrateCommit(st, &out, decIdx, holds, commitOK, byPrefix, &wants, cfg, scorer, in, now, gate, retire)
 
 	// A lower max_improvements (including 0) retires the lowest-ranked
 	// active improvements now, inside hold_time and with no cooldown.

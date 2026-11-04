@@ -26,7 +26,9 @@ const commitLossEps = 1e-6
 // plugin.Planner withdraws any commit improvement it finds, which is how
 // turning commit control off removes the routes it created. commitOK is
 // set only for prefixes that are in the learned RIB, so a commit move is
-// never queued for a prefix the RIB does not have.
+// never queued for a prefix the RIB does not have. A performance switch off
+// a commit or cost steer passes the same interface capacity gate and flap
+// quarantine as a performance switch in Decide.
 func integrateCommit(
 	st State,
 	out *Output,
@@ -39,6 +41,7 @@ func integrateCommit(
 	scorer plugin.Scorer,
 	in Input,
 	now time.Time,
+	gate *loadGate,
 	retire func(netip.Prefix, string, bool),
 ) {
 	planner, ok := scorer.(plugin.Planner)
@@ -128,11 +131,26 @@ func integrateCommit(
 					setDecision(d, ActionKeep, "performance gain but hold_time not elapsed", h.imp.Provider, alt.Provider, cause)
 					continue
 				}
+				if note, refused := gate.refuse(alt.Provider, p); refused {
+					setDecision(d, ActionKeep, note.Reason, h.imp.Provider, alt.Provider, cause)
+					out.Overloads = append(out.Overloads, note)
+					continue
+				}
+				if st.flapNext(p, now, cfg.Flap) {
+					q := st.quarantinePrefix(p, now, cfg.Flap, out)
+					retire(p, flapReason(q), false)
+					setDecision(d, ActionRetire, flapReason(q), h.imp.Native, "", cause)
+					continue
+				}
+				st.noteFlip(p, now, cfg.Flap)
+				gate.release(h.imp)
+				gate.book(alt.Provider, p)
 				delete(st.confirm, p)
 				n := Improvement{
 					Prefix: p, Provider: alt.Provider, Native: h.imp.Native, Since: now,
 					Reason: reasonText(alt, nat), Cause: plugin.CausePerformance,
-					nativeSeen: h.imp.nativeSeen, nativeHeld: h.imp.nativeHeld,
+					MEDOverride: medOverride(cands, alt, cfg, h.imp.Native),
+					nativeSeen:  h.imp.nativeSeen, nativeHeld: h.imp.nativeHeld,
 				}
 				st.Improvements[p] = n
 				out.Changes = append(out.Changes, Change{Action: ActionSwitch, Old: h.imp, New: n})
