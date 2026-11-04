@@ -10,6 +10,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/exchange"
 	"github.com/GrandArcher/Packeteer/internal/export"
 	"github.com/GrandArcher/Packeteer/internal/mitigation"
+	"github.com/GrandArcher/Packeteer/internal/pluginhost"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -280,6 +281,19 @@ func ExportMetrics(stats []export.Stat) []byte {
 		}
 	}
 	writeCounter(&b, "packeteer_export_records_total", "Records handed to an exporter since start, by stream and result: sent (the sink acknowledged the batch), failed (the sink refused or timed out), dropped (the exporter's queue was full).", recs...)
+	return []byte(b.String())
+}
+
+// SourceErrorMetrics renders failed optional source reads (#492). A
+// rising count means a source's traffic classes or volumes are missing
+// from the decisions.
+func SourceErrorMetrics(rows []pluginhost.SourceReadErrors) []byte {
+	var b strings.Builder
+	var samples []sample
+	for _, r := range rows {
+		samples = append(samples, sample{labels: []lbl{{"source", r.Source}, {"read", r.Read}}, value: float64(r.Count)})
+	}
+	writeCounter(&b, "packeteer_source_read_errors_total", "Failed optional reads of a target source since start, by source instance and read: traffic_mix (traffic classes for policies) or volumes (per-prefix rates). The input of a failed read is left out of that decision.", samples...)
 	return []byte(b.String())
 }
 

@@ -52,6 +52,10 @@ func TestCollectTraffic(t *testing.T) {
 	if len(got) != 2 || got[pT] != plugin.TrafficTransit || got[pL] != plugin.TrafficLocal {
 		t.Fatalf("traffic = %v", got)
 	}
+	// The broken source is left out, and counted (#492).
+	if errs := set.SourceReadErrors(); len(errs) != 1 || errs[0].Source != "flow" || errs[0].Read != pluginhost.ReadTrafficMix || errs[0].Count != 1 {
+		t.Fatalf("source read errors = %+v", errs)
+	}
 	// No policy chain: nothing reads the class, so it is not collected.
 	if got := collectTraffic(context.Background(), withSources(&pluginhost.Set{}, first)); got != nil {
 		t.Fatalf("without policies = %v", got)
@@ -148,5 +152,30 @@ rules:
 	}
 	if retired != 2 {
 		t.Fatalf("retired %d, changes %+v", retired, out.Changes)
+	}
+}
+
+type failingVolumes struct {
+	plugin.Base
+	err error
+}
+
+func (failingVolumes) Targets(context.Context) ([]plugin.Target, error) { return nil, nil }
+func (f failingVolumes) Volumes(context.Context) ([]plugin.PrefixVolume, error) {
+	return nil, f.err
+}
+
+// A failed Volumes read is counted; a read cancelled by shutdown is not
+// (#492).
+func TestCollectVolumesCountsFailedReads(t *testing.T) {
+	set := &pluginhost.Set{Sources: []pluginhost.Instance[plugin.TargetSource]{
+		{Name: "flow-a", Type: "flow", Plugin: failingVolumes{err: errors.New("window read failed")}},
+		{Name: "flow-b", Type: "flow", Plugin: failingVolumes{err: context.Canceled}},
+	}}
+	if got := collectVolumes(context.Background(), set); got != nil {
+		t.Fatalf("volumes = %v", got)
+	}
+	if errs := set.SourceReadErrors(); len(errs) != 1 || errs[0].Source != "flow-a" || errs[0].Read != pluginhost.ReadVolumes || errs[0].Count != 1 {
+		t.Fatalf("source read errors = %+v", errs)
 	}
 }

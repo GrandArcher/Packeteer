@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/config"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
@@ -97,6 +98,13 @@ type Set struct {
 
 	mu      sync.RWMutex
 	started []namedLifecycle
+
+	// log and now serve SourceReadFailed; nil is slog.Default and
+	// time.Now.
+	log      *slog.Logger
+	now      func() time.Time
+	readMu   sync.Mutex
+	readErrs map[sourceRead]*readFailure
 }
 
 type namedLifecycle struct {
@@ -138,6 +146,7 @@ func Build(cfg *config.Config, opts Options) (*Set, error) {
 
 	var errs []error
 	s := &Set{
+		log:       base.Logger,
 		Probers:   build(plugin.Probers, "probers", cfg.Probers, base, &errs),
 		Sources:   build(plugin.Sources, "sources", cfg.Sources, base, &errs),
 		Notifiers: build(plugin.Notifiers, "notifiers", cfg.Notifiers, base, &errs),
