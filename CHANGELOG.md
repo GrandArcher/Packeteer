@@ -9,9 +9,11 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 - Probe/RIB at 100k targets: bounded probe outcome channel, `probe.provider_inflight` cap, looking glass via `Find`, RIB copies rebuilt at most every 5 s, improvement counter, nightly bench (#491).
 - Prober memory evicts in one sort-based pass instead of a scan per host; sub-range jobs stop after two silent hosts of a down provider; job order uses the reloaded interval (#507).
 - Audit hygiene: ENV.md and threat model gaps, release pins in quickstart, Compose and install.sh, ASCII gate on source, documentation test data, errcheck on, image and action pins (#494).
+- History requeue capped at maxPending per row kind; lease and config editor writes check the directory fsync; failed source TrafficMix/Volumes reads warn and count in `packeteer_source_read_errors_total` (#492).
 - `-pbr linux -apply` adds before it removes, rolls back a failed run, reads named tables; `make test` lists skipped tests; fuzz targets for v5, sFlow, BMP, RTR, BER, TWAMP, pcap run in CI (#510).
 ### Security
 
+- HA step-down drops the BGP sessions after 3 failed withdraws; each probe agent needs a `site`, another is refused; mitigation announces outside its lock (#492).
 - Report, what-if, blast, preflight, config-write and send-now errors return a generic message; the detail (paths, SQL text) stays in the log (#510).
 - Auth lockout counts failed passwords per user and address and never refuses a valid session or token; the herd per-address table evicts instead of refusing (#506).
 - BMP stations bind `127.0.0.1` without `listen`; a decoder panic ends only that router's session; a partly decoded peer up drops the peer; GO-2026-4736 exposure documented (#490).
