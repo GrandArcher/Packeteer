@@ -81,7 +81,7 @@ func newEditor(t *testing.T) (*configedit.Editor, string) {
 		}
 		return restart, online
 	}
-	e, err := configedit.New(path, running, config.Parse, diff)
+	e, err := configedit.New(path, running, func(_ *config.Config, b []byte) (*config.Config, error) { return config.Parse(b) }, diff)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -60,7 +60,7 @@ func replayConfigs(ctx context.Context, store plugin.RoundStore, running, next *
 type whatIfSource struct {
 	live   *liveConfig
 	store  plugin.RoundStore
-	check  func([]byte) (*config.Config, error)
+	check  func(running *config.Config, data []byte) (*config.Config, error)
 	log    *slog.Logger
 	getenv func(string) string
 	busy   atomic.Bool
@@ -78,7 +78,7 @@ func (w *whatIfSource) Replay(ctx context.Context, candidate []byte, from, to st
 	}
 	var next *config.Config
 	if len(candidate) > 0 {
-		if next, err = w.check(candidate); err != nil {
+		if next, err = w.check(run, candidate); err != nil {
 			return replay.Result{}, fmt.Errorf("%w: %v", httpapi.ErrWhatIfInput, err)
 		}
 	}

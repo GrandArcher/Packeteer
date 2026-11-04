@@ -1,13 +1,24 @@
 package main
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/GrandArcher/Packeteer/internal/config"
 	"github.com/GrandArcher/Packeteer/internal/configedit"
+	"github.com/GrandArcher/Packeteer/internal/httpapi"
+	"github.com/GrandArcher/Packeteer/internal/pluginhost"
+	"github.com/GrandArcher/Packeteer/internal/upgrade"
 )
 
 const uiBase = `mode: observe
@@ -209,5 +220,126 @@ func TestConfigEditorFollowsReload(t *testing.T) {
 	ed.SetRunning(cfg)
 	if res := ed.Check([]byte(reloaded)); !res.Valid || res.ReloadOnline || res.RestartRequired || len(res.Changed) != 0 {
 		t.Fatalf("after reload: %+v", res)
+	}
+}
+
+// putConfig sends PUT /api/config as the basic-auth admin.
+func putConfig(t *testing.T, h http.Handler, yaml, base string) (int, string) {
+	t.Helper()
+	body, err := json.Marshal(map[string]string{"yaml": yaml, "base": base})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPut, "/api/config", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.SetBasicAuth("ops", "ops-password")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec.Code, rec.Body.String()
+}
+
+// The upgrade block decides which binary an upgrade runs: its public_key
+// verifies the release, repo and api_url say where it comes from. The
+// editor refuses any change to it (FAB-01); only the mounted file sets it.
+func TestConfigEditorRefusesUpgradeChange(t *testing.T) {
+	pub, _, err := upgrade.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, _, err := upgrade.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	block := "upgrade:\n  enabled: true\n  public_key: " + pub + "\n  dir: " + dir + "\n"
+	running := uiBase + block
+	ed, path := editorFor(t, running)
+	srv, err := httpapi.New(httpapi.Options{User: "ops", Password: "ops-password", ConfigEditor: ed})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := srv.Handler()
+	base := configedit.Hash([]byte(running))
+	for name, yaml := range map[string]string{
+		"public_key":     strings.Replace(running, pub, other, 1),
+		"repo":           running + "  repo: example/fork\n",
+		"api_url":        running + "  api_url: https://api.example.net\n",
+		"dir":            strings.Replace(running, dir, dir+"/other", 1),
+		"enabled":        strings.Replace(running, "enabled: true", "enabled: false", 1),
+		"check_interval": running + "  check_interval: 24h\n",
+		"removed":        uiBase,
+	} {
+		if _, err := config.Parse([]byte(yaml)); err != nil {
+			t.Fatalf("%s: the parser should accept it: %v", name, err)
+		}
+		code, body := putConfig(t, h, yaml, base)
+		if code != http.StatusUnprocessableEntity || !strings.Contains(body, "upgrade: cannot be changed through the config editor") {
+			t.Errorf("%s: PUT = %d %s", name, code, body)
+		}
+	}
+	if b, _ := os.ReadFile(path); string(b) != running {
+		t.Fatal("a refused upgrade change was written")
+	}
+	// Adding the block is refused too.
+	plain, plainPath := editorFor(t, uiBase)
+	if res := plain.Check([]byte(running)); res.Valid || !strings.Contains(strings.Join(res.Errors, "\n"), "upgrade: cannot be changed") {
+		t.Fatalf("adding the upgrade block: %+v", res)
+	}
+	if b, _ := os.ReadFile(plainPath); string(b) != uiBase {
+		t.Fatal("the file changed on a check")
+	}
+	// Other keys still save with the upgrade block as it runs.
+	if code, body := putConfig(t, h, running+"hold_time: 20m\n", base); code != http.StatusOK {
+		t.Fatalf("unrelated change: PUT = %d %s", code, body)
+	}
+}
+
+// After a reload removes an exec source, the editor compares with the
+// config now running, so putting the same source back is refused
+// (FAB-10). Before, it compared with the config the process started with.
+func TestConfigEditorProgramCheckFollowsReload(t *testing.T) {
+	script, _ := execMarkerScript(t)
+	start := uiBase + "sources:\n  - type: static\n    name: one\n    config: {targets: [{prefix: 198.51.100.0/24}]}\n" +
+		"  - type: exec\n    name: ext\n    config: {command: " + script + "}\n"
+	removed := strings.Replace(start, "  - type: exec\n    name: ext\n    config: {command: "+script+"}\n", "", 1)
+	ed, path := editorFor(t, start)
+	if res := ed.Check([]byte(start + "hold_time: 20m\n")); !res.Valid {
+		t.Fatalf("exec source the controller started with: %+v", res)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := applyRuntimeEnv(cfg, noEnv); err != nil {
+		t.Fatal(err)
+	}
+	cfg.DefaultAuth(true)
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	plugins, err := pluginhost.Build(cfg, pluginhost.Options{Logger: log, Getenv: noEnv})
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine, err := newEngine(cfg, plugins, log, nil, nil, nil, packetLimiter(cfg), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decider, err := newDecider(cfg, plugins)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rl := &reloader{path: path, getenv: noEnv, httpUser: "ops", log: log, cur: cfg, plugins: plugins, engine: engine, decider: decider,
+		opts: pluginhost.Options{Logger: log, Getenv: noEnv}, applied: ed.SetRunning}
+	if err := os.WriteFile(path, []byte(removed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if applied, refused, fatal := rl.reload(context.Background()); refused != nil || fatal != nil || !slices.Contains(applied, "sources") {
+		t.Fatalf("reload: applied %v refused %v fatal %v", applied, refused, fatal)
+	}
+	res := ed.Check([]byte(start))
+	if res.Valid || !strings.Contains(strings.Join(res.Errors, "\n"), "sources (ext): exec plugins cannot be added or changed") {
+		t.Fatalf("re-adding the removed exec source: %+v", res)
+	}
+	if _, _, err := ed.Save([]byte(start), configedit.Hash([]byte(removed)), false); err == nil {
+		t.Fatal("re-adding the removed exec source saved")
 	}
 }

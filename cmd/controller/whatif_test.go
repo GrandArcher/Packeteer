@@ -169,7 +169,7 @@ func TestWhatIfSource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	src := &whatIfSource{live: &liveConfig{cfg: running}, store: e.store, check: config.Parse, log: newLogger(&bytes.Buffer{}, "info", "text"), getenv: noEnv}
+	src := &whatIfSource{live: &liveConfig{cfg: running}, store: e.store, check: func(_ *config.Config, b []byte) (*config.Config, error) { return config.Parse(b) }, log: newLogger(&bytes.Buffer{}, "info", "text"), getenv: noEnv}
 	res, err := src.Replay(context.Background(), cand, "3h", "")
 	if err != nil {
 		t.Fatal(err)

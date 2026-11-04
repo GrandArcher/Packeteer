@@ -9,6 +9,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 - Audit hygiene: ENV.md and threat model gaps, release pins in quickstart, Compose and install.sh, ASCII gate on source, documentation test data, errcheck on, image and action pins (#494).
 ### Security
 
+- The config editor refuses any `upgrade.*` change and checks exec/grpc plugins against the running config after a reload, not the start-time one (#501).
 - `packeteer-policy` requires https (http only to loopback) and `-community`, checks each route (NO_EXPORT, communities, `-allow`); GR off in the examples; feed token backoff, connection cap (#488).
 - Webhook/`otlp` `${VAR}` expand only `PACKETEER_WEBHOOK_*`/`PACKETEER_OTLP_*`; webhook, exporter, feed, RPKI, OIDC, RIS Live, agent refuse cross-host redirects (RDAP: https, Accept only) (#489).
 - First-run admin password is no longer logged, only its 0600 file; troubleshoot POSTs need auth; OIDC requires `email_verified: true` with the email claim (#489).

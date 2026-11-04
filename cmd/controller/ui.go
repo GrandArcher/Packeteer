@@ -81,8 +81,11 @@ func usageReader(plugins *pluginhost.Set) httpapi.UsageReader {
 // config.Parse, the runtime environment, and preflight (every plugin's
 // config and the cross-checks), with plugins built check-only: no exec
 // or grpc plugin command runs. A candidate that adds or changes such a
-// plugin, or plugin_dir, is refused: which programs the controller runs is set by
-// the mounted file only, not through the API. Nothing is started.
+// plugin, plugin_dir, or the upgrade block is refused: which programs the
+// controller runs, and the key and source a release is verified against
+// before it runs, are set by the mounted file only, not through the API.
+// The comparison is with the running config, which follows a reload.
+// Nothing is started.
 func newConfigEditor(cfg *config.Config, path string, getenv func(string) string, httpUser string, setupPending bool) (*configedit.Editor, error) {
 	if !editorEnabled(cfg, httpUser, setupPending) {
 		return nil, nil
@@ -90,13 +93,13 @@ func newConfigEditor(cfg *config.Config, path string, getenv func(string) string
 	diff := func(running, next *config.Config) ([]string, []string) {
 		return classify(running, next)
 	}
-	return configedit.New(path, cfg, candidateChecker(cfg, getenv, httpUser), diff)
+	return configedit.New(path, cfg, candidateChecker(getenv, httpUser), diff)
 }
 
 // candidateChecker is the start-time validation of a candidate config
 // (see newConfigEditor), shared with the blast-radius preview.
-func candidateChecker(cfg *config.Config, getenv func(string) string, httpUser string) func([]byte) (*config.Config, error) {
-	return func(data []byte) (*config.Config, error) {
+func candidateChecker(getenv func(string) string, httpUser string) func(running *config.Config, data []byte) (*config.Config, error) {
+	return func(running *config.Config, data []byte) (*config.Config, error) {
 		next, err := config.Parse(data)
 		if err != nil {
 			return nil, err
@@ -104,7 +107,7 @@ func candidateChecker(cfg *config.Config, getenv func(string) string, httpUser s
 		if err := applyRuntimeEnv(next, getenv); err != nil {
 			return nil, err
 		}
-		if err := checkProgramsUnchanged(cfg, next); err != nil {
+		if err := checkProgramsUnchanged(running, next); err != nil {
 			return nil, err
 		}
 		quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -115,12 +118,17 @@ func candidateChecker(cfg *config.Config, getenv func(string) string, httpUser s
 	}
 }
 
-// checkProgramsUnchanged refuses a candidate whose exec or grpc plugins or
-// plugin_dir differ from the running config. Removing one is allowed.
+// checkProgramsUnchanged refuses a candidate whose exec or grpc plugins,
+// plugin_dir, or upgrade block differ from the running config. Removing a
+// plugin is allowed. The upgrade block is a program too: its public_key,
+// repo and api_url decide which binary the next upgrade runs.
 func checkProgramsUnchanged(running, next *config.Config) error {
 	var errs []error
 	if next.PluginDir != running.PluginDir {
 		errs = append(errs, errors.New("plugin_dir: cannot be changed through the config editor; edit the mounted file"))
+	}
+	if !sameYAML(running.Upgrade, next.Upgrade) {
+		errs = append(errs, errors.New("upgrade: cannot be changed through the config editor; edit the mounted file"))
 	}
 	have := programSpecs(running)
 	for _, sp := range programSpecs(next) {

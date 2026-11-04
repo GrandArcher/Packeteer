@@ -102,7 +102,7 @@ func TestBlastPreviewMatchesInject(t *testing.T) {
 
 	live := &liveConfig{cfg: cfg}
 	src := blastSource{live: live, decider: decider, ctl: ctl, view: view, plugins: plugins,
-		check: candidateChecker(cfg, noEnv, "")}
+		check: candidateChecker(noEnv, "")}
 	if _, err := src.Preview(nil); err != blast.ErrNoRound {
 		t.Fatalf("preview before any round: %v, want ErrNoRound", err)
 	}
