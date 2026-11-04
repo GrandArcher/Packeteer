@@ -29,14 +29,20 @@ On a leak Packeteer, for that one prefix only:
 
 It never withdraws anything in bulk. The hold lasts until an operator clears it with `POST /api/leaks/clear {"prefix": "..."}` (operator role, auth required) after fixing the filter, which emits `leak.cleared`. If the route is still visible outside, the next sighting holds it again. Holds are in memory: a restart clears them, and a route that is still leaking is held again at its next sighting.
 
-A sighting for a prefix that is not an outbound route on the wire is held and reported but has nothing to withdraw (`action: held`). The held set keeps at most 1000 such prefixes, since anyone downstream can tag routes with the community; an outbound route on the wire is always withdrawn and held. Inbound steers count toward that limit. Routes from threat mitigation rules are reported, not withdrawn: a rule is an operator's decision.
+A `bmp` sighting for a prefix that is not an outbound route on the wire is held and reported but has nothing to withdraw (`action: held`). The held set keeps at most 1000 such prefixes, since anyone downstream can tag routes with the community; an outbound route on the wire is always withdrawn and held. Inbound steers count toward that limit. Routes from threat mitigation rules are reported, not withdrawn: a rule is an operator's decision.
+
+### Public collectors
+
+A public collector relays routes from any AS. Anyone can announce a prefix with `packeteer_community` attached and your ASN in the path (path poisoning), and RIS Live will deliver it, so a collector sighting alone could switch injection off for any prefix. A `rislive` sighting therefore withdraws and holds only when the prefix is an outbound route on the wire now and your ASN is the collector's peer or the AS that sent the route to it (prepends ignored). Otherwise nothing is withdrawn or held: Packeteer logs it and emits `leak.unconfirmed` (warning, once per prefix per hour); confirm it from a source you control, such as `bmp`. A third party with a session to a RIS collector can still forge a path that passes, which withdraws one injected route and holds it until cleared; it never announces anything. `bmp` sightings are not limited this way.
+
+RIS Live lists only standard communities in its JSON; a large `packeteer_community` is read from the raw UPDATE it sends with each message.
 
 ## Sources
 
 | Type | What it reads |
 |---|---|
 | `bmp` | A BMP station for the post-policy Adj-RIB-In of routers outside your AS (`external_routers`) and the post-policy Adj-RIB-Out of your own edge toward eBGP peers (`own_routers`, RFC 8671). |
-| `rislive` | The public RIPE RIS Live stream, filtered by the service to announcements whose path contains your ASN. Read-only. |
+| `rislive` | The public RIPE RIS Live stream, filtered by the service to announcements whose path contains your ASN. Read-only. Acts only on injected prefixes next to your ASN ([public collectors](#public-collectors)). |
 
 Sources only read. They cannot announce, and an out-of-process plugin cannot be one. Public collectors see a route only after it left your AS and spread, so use them as a backstop next to a router you control.
 

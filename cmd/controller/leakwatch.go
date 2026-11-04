@@ -29,12 +29,8 @@ func newLeakWatch(cfg *config.Config, plugins *pluginhost.Set, out emitter, inje
 	for _, s := range plugins.LeakSources {
 		srcs = append(srcs, leakwatch.Source{Name: s.Name, Type: s.Type, Plugin: s.Plugin})
 	}
-	var asn uint32
-	if cfg.LeakWatch.ASPathRule {
-		asn = cfg.ASN
-	}
 	lc := leakwatch.Config{
-		ASN: asn, Community: std, Large: large,
+		ASN: cfg.ASN, ASPathRule: cfg.LeakWatch.ASPathRule, Community: std, Large: large,
 		Injected: injected, Withdraw: withdraw, Emit: out.Emit,
 		Log: log.With("component", "leakwatch"),
 	}

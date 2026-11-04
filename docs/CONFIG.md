@@ -1992,7 +1992,7 @@ A BMP station for the leak watch (#199). It listens on its own port, separate fr
 
 ### Leak source `rislive`
 
-Reads the public [RIPE RIS Live](https://ris-live.ripe.net) HTTP stream (#199). The subscription asks for UPDATE announcements whose AS path contains `asn`. The only request is the GET that opens the stream. A lost stream is retried after 5s, doubling to 5m; it is unhealthy meanwhile. A stream silent for 15 minutes is treated as lost and reopened, since the endpoint sends no keepalive. It needs the local `asn`. A route is seen only after it left the AS and propagated, so it complements a router-side source.
+Reads the public [RIPE RIS Live](https://ris-live.ripe.net) HTTP stream (#199). The subscription asks for UPDATE announcements whose AS path contains `asn`. The only request is the GET that opens the stream. A lost stream is retried after 5s, doubling to 5m; it is unhealthy meanwhile. A stream silent for 15 minutes is treated as lost and reopened, since the endpoint sends no keepalive. It needs the local `asn`. A route is seen only after it left the AS and propagated, so it complements a router-side source. Anyone can make RIS relay a route, so a sighting withdraws and holds only an injected prefix whose path has `asn` next to the RIS peer; otherwise it sends `leak.unconfirmed` and changes nothing ([leak-watch.md](leak-watch.md#public-collectors), #505). Large communities are read from the raw UPDATE.
 
 | Key | Default | Meaning |
 |---|---|---|

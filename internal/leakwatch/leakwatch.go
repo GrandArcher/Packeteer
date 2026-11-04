@@ -3,7 +3,10 @@
 // sessions. A sighting is a leak when it carries packeteer_community, or
 // when it shows a prefix Packeteer has injected with the local ASN in its
 // path. The route is withdrawn at once, alone, and the prefix is held out
-// of announcements until an operator clears it. The watch only withdraws:
+// of announcements until an operator clears it. A public collector relays
+// routes from any AS, so its sighting acts only when the prefix is injected
+// now and the local ASN is next to the collector's peer; otherwise it is
+// reported and nothing is held (#505). The watch only withdraws:
 // it never announces, and a source that is down or slow cannot delay a
 // withdraw, because sources hand sightings over a bounded queue and
 // withdraws run from the controller's own state.
@@ -36,6 +39,9 @@ const (
 	ActionWithdrawn      = "withdrawn"
 	ActionWithdrawFailed = "withdraw_failed"
 	ActionHeld           = "held"
+	// ActionUnconfirmed is a public collector's sighting that changed
+	// nothing; an operator confirms it.
+	ActionUnconfirmed = "unconfirmed"
 )
 
 const (
@@ -46,6 +52,12 @@ const (
 	// announcer.
 	maxHeld        = 1000
 	healthInterval = 5 * time.Second
+	// Every collector peer relays the same route, so an unconfirmed
+	// sighting is reported once per prefix per alertRepeat. maxAlerted
+	// bounds that memory; a full map is reset, which repeats alerts
+	// rather than silencing them.
+	alertRepeat = time.Hour
+	maxAlerted  = 1000
 )
 
 // Source is one configured leak source.
@@ -57,11 +69,13 @@ type Source struct {
 
 // Config wires the watch to the announcer and the event stream.
 type Config struct {
-	// ASN is the local AS for the AS path rule, which flags an injected
-	// prefix seen with it in the path. Zero turns that rule off: an
-	// operator that exports transit to customers sees every injected
-	// prefix with its ASN in the path, legitimately.
+	// ASN is the local AS. It confirms a public collector's sighting and
+	// is the AS the AS path rule looks for.
 	ASN uint32
+	// ASPathRule flags an injected prefix seen with ASN in the path. It is
+	// off by default: an operator that exports transit to customers sees
+	// every injected prefix with its ASN in the path, legitimately.
+	ASPathRule bool
 	// Community is packeteer_community as asn<<16|value, or Large as
 	// "global:data1:data2". At least one is set.
 	Community uint32
@@ -129,6 +143,7 @@ type Watcher struct {
 
 	mu      sync.RWMutex
 	held    map[netip.Prefix]*Leak
+	alerted map[netip.Prefix]time.Time
 	healthy map[string]bool
 }
 
@@ -139,7 +154,7 @@ func New(cfg Config, sources []Source) *Watcher {
 		cfg.Log = slog.Default()
 	}
 	w := &Watcher{cfg: cfg, sources: sources, queue: make(chan sighting, queueSize),
-		held: map[netip.Prefix]*Leak{}, healthy: map[string]bool{}}
+		held: map[netip.Prefix]*Leak{}, alerted: map[netip.Prefix]time.Time{}, healthy: map[string]bool{}}
 	for _, src := range sources {
 		name := src.Name
 		src.Plugin.SetLeakSink(func(s plugin.LeakSighting) {
@@ -194,10 +209,30 @@ func (w *Watcher) reason(s plugin.LeakSighting) string {
 		w.cfg.Large != "" && slices.Contains(s.LargeCommunities, w.cfg.Large) {
 		return ReasonCommunity
 	}
-	if !s.OurExport && w.cfg.ASN != 0 && slices.Contains(s.ASPath, w.cfg.ASN) && w.cfg.Injected(s.Prefix) {
+	if w.cfg.ASPathRule && !s.OurExport && w.cfg.ASN != 0 && slices.Contains(s.ASPath, w.cfg.ASN) && w.cfg.Injected(s.Prefix) {
 		return ReasonASPath
 	}
 	return ""
+}
+
+// nextToPeer reports whether asn is the collector's peer or the AS that
+// sent the route to it: one of the first two distinct ASNs of the path,
+// so prepending does not hide it. A third party can still forge that, but
+// only from a session with a collector, not by poisoning a path anywhere.
+func nextToPeer(path []uint32, asn uint32) bool {
+	distinct := 0
+	for i, a := range path {
+		if i > 0 && a == path[i-1] {
+			continue
+		}
+		if a == asn {
+			return true
+		}
+		if distinct++; distinct == 2 {
+			return false
+		}
+	}
+	return false
 }
 
 func (w *Watcher) handle(ctx context.Context, sg sighting) {
@@ -214,11 +249,16 @@ func (w *Watcher) handle(ctx context.Context, sg sighting) {
 	// Lock order: the announcer's lock may be held while it calls Held, so
 	// w.mu is never held across a call into cfg (Injected, Withdraw, Emit).
 	on := w.cfg.Injected(s.Prefix)
+	confirmed := !s.PublicCollector || on && w.cfg.ASN != 0 && nextToPeer(s.ASPath, w.cfg.ASN)
 	w.mu.Lock()
 	if l, ok := w.held[s.Prefix]; ok {
 		l.Sightings++
 		l.LastSeen = now
 		w.mu.Unlock()
+		return
+	}
+	if !confirmed {
+		w.unconfirmed(sg.source, s, reason, now)
 		return
 	}
 	// A full set drops only prefixes that are not on the wire: anyone
@@ -267,6 +307,28 @@ func (w *Watcher) handle(ctx context.Context, sg sighting) {
 		fields["rpki"] = string(snap.RPKI)
 	}
 	w.emit(plugin.EventLeakDetected, now, fmt.Sprintf("%s seen outside the AS (%s); %s and held out until cleared", snap.Prefix, reason, strings.ReplaceAll(action, "_", " ")), fields)
+}
+
+// unconfirmed reports a public collector's sighting that changes nothing.
+// Anyone can announce a prefix with packeteer_community and the local ASN
+// in the path and have a collector relay it, so holding on it would let a
+// third party switch injection off. It is called with w.mu held and
+// releases it.
+func (w *Watcher) unconfirmed(source string, s plugin.LeakSighting, reason string, now time.Time) {
+	if last, ok := w.alerted[s.Prefix]; ok && now.Sub(last) < alertRepeat {
+		w.mu.Unlock()
+		return
+	}
+	if len(w.alerted) >= maxAlerted {
+		clear(w.alerted)
+	}
+	w.alerted[s.Prefix] = now
+	w.mu.Unlock()
+	w.cfg.Log.Warn("public collector reports a route that looks like a leak; nothing withdrawn or held until confirmed", "prefix", s.Prefix, "reason", reason, "source", source, "seen", s.Seen, "as_path", fmt.Sprint(s.ASPath))
+	w.emit(plugin.EventLeakUnconfirmed, now, fmt.Sprintf("%s reported outside the AS by a public collector (%s); not withdrawn or held until confirmed", s.Prefix, reason), map[string]string{
+		"prefix": s.Prefix.String(), "reason": reason, "action": ActionUnconfirmed, "source": source,
+		"seen": s.Seen, "as_path": joinASNs(s.ASPath),
+	})
 }
 
 func (w *Watcher) emit(kind string, now time.Time, msg string, fields map[string]string) {

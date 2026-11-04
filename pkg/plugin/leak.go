@@ -26,6 +26,12 @@ type LeakSighting struct {
 	// local ASN is already in such a path, so only the Packeteer community
 	// marks it as a leak.
 	OurExport bool
+	// PublicCollector is set when the sighting comes from a public route
+	// collector, which relays routes from any AS. A third party can attach
+	// any community and put the local ASN in a path, so the watch acts on
+	// such a sighting only when the prefix is injected now and the local
+	// ASN is next to the collector's peer.
+	PublicCollector bool
 }
 
 // LeakSource reports sightings to the sink set before Start. The sink

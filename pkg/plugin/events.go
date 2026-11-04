@@ -63,6 +63,7 @@ const (
 	EventAnomalyCleared     = "anomaly.cleared"
 	EventLeakDetected       = "leak.detected"
 	EventLeakCleared        = "leak.cleared"
+	EventLeakUnconfirmed    = "leak.unconfirmed"
 	EventSteerUnverified    = "steer.unverified"
 	EventSteerVerified      = "steer.verified"
 	EventOverloadRefused    = "overload.refused"
@@ -191,6 +192,8 @@ var eventCatalog = []EventSpec{
 		Summary: "A route carrying packeteer_community, or an injected prefix with the local ASN in its path, was seen outside the AS. The route is withdrawn and held out until an operator clears it."},
 	{Kind: EventLeakCleared, Severity: SeverityInfo, Group: "leak", Keys: []string{"prefix"}, TrapID: 32, Resolves: true,
 		Summary: "An operator cleared the hold on a leaked prefix; it may be announced again."},
+	{Kind: EventLeakUnconfirmed, Severity: SeverityWarning, Group: "leak", Keys: []string{"prefix"}, TrapID: 72,
+		Summary: "A public route collector relayed a route that looks like a leak, but the prefix is not injected now or the local ASN is not next to the collector's peer. Anyone can make a collector relay such a route, so nothing is withdrawn or held until an operator confirms it."},
 	{Kind: EventFlapQuarantined, Severity: SeverityWarning, Group: "flap", Keys: []string{"prefix"}, TrapID: 33,
 		Summary: "A prefix changed its chosen provider too often. Its route is withdrawn and it stays on the native path until the cool-down ends or an operator releases it."},
 	{Kind: EventFlapReleased, Severity: SeverityInfo, Group: "flap", Keys: []string{"prefix"}, TrapID: 34, Resolves: true,

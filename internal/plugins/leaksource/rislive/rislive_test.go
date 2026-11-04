@@ -2,6 +2,7 @@ package rislive
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
+	"github.com/osrg/gobgp/v3/pkg/packet/bgp"
 )
 
 func build(t *testing.T, yaml string, asn uint32) (plugin.LeakSource, error) {
@@ -104,7 +106,7 @@ func TestStreamBecomesSightings(t *testing.T) {
 		t.Fatalf("query %s", query)
 	}
 	s := col.got[0]
-	if s.Prefix != netip.MustParsePrefix("203.0.113.0/24") || s.OurExport || s.Seen != "rrc00/192.0.2.9" {
+	if s.Prefix != netip.MustParsePrefix("203.0.113.0/24") || s.OurExport || !s.PublicCollector || s.Seen != "rrc00/192.0.2.9" {
 		t.Fatalf("sighting %+v", s)
 	}
 	if fmt.Sprint(s.ASPath) != "[64511 64500 64496 64497]" {
@@ -183,4 +185,83 @@ func TestStalledStreamIsUnhealthy(t *testing.T) {
 	defer src.Stop(context.Background())
 	waitFor(t, "open stream reported healthy", src.Healthy)
 	waitFor(t, "silent stream reported unhealthy", func() bool { return !src.Healthy() })
+}
+
+// rawUpdate is an UPDATE as RIS Live sends it in "raw", built by GoBGP so
+// the walker is checked against an independent encoder. The communities
+// attribute is long enough to need the extended length flag.
+func rawUpdate(t *testing.T) []byte {
+	t.Helper()
+	comms := make([]uint32, 70)
+	for i := range comms {
+		comms[i] = 64511<<16 | uint32(i)
+	}
+	u := bgp.NewBGPUpdateMessage(nil, []bgp.PathAttributeInterface{
+		bgp.NewPathAttributeOrigin(0),
+		bgp.NewPathAttributeAsPath([]bgp.AsPathParamInterface{bgp.NewAs4PathParam(bgp.BGP_ASPATH_ATTR_TYPE_SEQ, []uint32{64511, 64500})}),
+		bgp.NewPathAttributeNextHop("192.0.2.9"),
+		bgp.NewPathAttributeCommunities(comms),
+		bgp.NewPathAttributeLargeCommunities([]*bgp.LargeCommunity{bgp.NewLargeCommunity(64500, 1, 2), bgp.NewLargeCommunity(65551, 7, 8)}),
+	}, []*bgp.IPAddrPrefix{bgp.NewIPAddrPrefix(24, "203.0.113.0")})
+	b, err := u.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+func TestLargeCommunitiesFromRaw(t *testing.T) {
+	b := rawUpdate(t)
+	if got := fmt.Sprint(largeCommunities(hex.EncodeToString(b))); got != "[64500:1:2 65551:7:8]" {
+		t.Fatalf("large communities %s", got)
+	}
+	keepalive := bgp.NewBGPKeepAliveMessage()
+	kb, err := keepalive.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cut := append([]byte(nil), b[:len(b)-5]...)
+	cut[16], cut[17] = byte(len(cut)>>8), byte(len(cut))
+	for name, raw := range map[string]string{
+		"empty":           "",
+		"not hex":         "zz",
+		"keepalive":       hex.EncodeToString(kb),
+		"length mismatch": hex.EncodeToString(b[:len(b)-1]),
+		"truncated attrs": hex.EncodeToString(cut),
+	} {
+		if got := largeCommunities(raw); got != nil {
+			t.Errorf("%s: got %v, want none", name, got)
+		}
+	}
+}
+
+func TestStreamLargeCommunity(t *testing.T) {
+	line := fmt.Sprintf(`{"type":"ris_message","data":{"peer":"192.0.2.9","host":"rrc00","type":"UPDATE","path":[64511,64500],"community":[],"announcements":[{"next_hop":"192.0.2.9","prefixes":["203.0.113.0/24"]}],"raw":%q}}`+"\n", strings.ToUpper(hex.EncodeToString(rawUpdate(t))))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, line)
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+	src, err := build(t, fmt.Sprintf("{url: %q}", srv.URL+"/v1/stream/"), 64500)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var col collector
+	src.SetLeakSink(col.sink)
+	if err := src.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		stop, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = src.Stop(stop)
+	}()
+	waitFor(t, "a sighting", func() bool { return col.n() == 1 })
+	col.mu.Lock()
+	s := col.got[0]
+	col.mu.Unlock()
+	if fmt.Sprint(s.LargeCommunities) != "[64500:1:2 65551:7:8]" || len(s.Communities) != 0 || !s.PublicCollector {
+		t.Fatalf("sighting %+v", s)
+	}
 }

@@ -1,7 +1,9 @@
 // Package rislive is a leak source that reads RIPE RIS Live
 // (https://ris-live.ripe.net) over its HTTP stream. The subscription asks
 // for UPDATE announcements with the local ASN in the path, so the service
-// sends only routes that crossed the operator's AS. It is read-only: the
+// sends only routes that crossed the operator's AS, from whoever announced
+// them: its sightings are marked as from a public collector, which the leak
+// watch confirms before it acts (#505). It is read-only: the
 // only request is the GET that opens the stream. A dropped stream is
 // retried with a doubling delay, and while it is down the source reports
 // itself unhealthy, which the leak watch shows as unknown.
@@ -11,6 +13,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -236,6 +240,7 @@ type update struct {
 	Type          string      `json:"type"`
 	Path          []pathElem  `json:"path"`
 	Community     [][2]uint32 `json:"community"`
+	Raw           string      `json:"raw"`
 	Announcements []struct {
 		Prefixes []string `json:"prefixes"`
 	} `json:"announcements"`
@@ -288,6 +293,7 @@ func (s *Source) handle(line []byte) {
 	for i, c := range u.Community {
 		comms[i] = c[0]<<16 | c[1]
 	}
+	large := largeCommunities(u.Raw)
 	seen := u.Host + "/" + u.Peer
 	for _, a := range u.Announcements {
 		for _, ps := range a.Prefixes {
@@ -295,7 +301,56 @@ func (s *Source) handle(line []byte) {
 			if err != nil {
 				continue
 			}
-			fn(plugin.LeakSighting{Prefix: p, ASPath: path, Communities: comms, Seen: seen})
+			fn(plugin.LeakSighting{Prefix: p, ASPath: path, Communities: comms, LargeCommunities: large, Seen: seen, PublicCollector: true})
 		}
 	}
+}
+
+// largeCommunities reads the LARGE_COMMUNITY attribute (RFC 8092, type 32)
+// from the raw UPDATE, the only place RIS Live carries it: the "community"
+// field lists RFC 1997 communities only. The bytes come from whoever
+// announced the route, so only attribute headers are walked, not the full
+// GoBGP parser (GO-2026-4736, #490). A malformed message yields none.
+func largeCommunities(raw string) []string {
+	const header, update, attrLarge, extLen = 19, 2, 32, 0x10
+	b, err := hex.DecodeString(raw)
+	if err != nil || len(b) < header+4 || b[header-1] != update || int(binary.BigEndian.Uint16(b[16:])) != len(b) {
+		return nil
+	}
+	b = b[header:]
+	if n := int(binary.BigEndian.Uint16(b)); len(b) >= 4+n {
+		b = b[2+n:]
+	} else {
+		return nil
+	}
+	n := int(binary.BigEndian.Uint16(b))
+	if len(b) < 2+n {
+		return nil
+	}
+	attrs := b[2 : 2+n]
+	var out []string
+	for len(attrs) > 0 {
+		if len(attrs) < 3 {
+			return nil
+		}
+		flags, typ, hl, vl := attrs[0], attrs[1], 3, int(attrs[2])
+		if flags&extLen != 0 {
+			if len(attrs) < 4 {
+				return nil
+			}
+			hl, vl = 4, int(binary.BigEndian.Uint16(attrs[2:]))
+		}
+		if len(attrs) < hl+vl {
+			return nil
+		}
+		v := attrs[hl : hl+vl]
+		attrs = attrs[hl+vl:]
+		if typ != attrLarge || vl%12 != 0 {
+			continue
+		}
+		for ; len(v) > 0; v = v[12:] {
+			out = append(out, fmt.Sprintf("%d:%d:%d", binary.BigEndian.Uint32(v), binary.BigEndian.Uint32(v[4:]), binary.BigEndian.Uint32(v[8:])))
+		}
+	}
+	return out
 }
