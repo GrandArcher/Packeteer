@@ -12,7 +12,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 - `packeteer-policy` exits with code 2 without `-community` (your `packeteer_community`) or with a non-loopback `http` `-url`; add `-community`, and `-allow` with your allowlist (#488).
 - Remove `0.0.0.0/0` or `::/0` from `allowlist.prefixes`; a config with one no longer loads (#486).
-- On an iBGP-only RIB view a mitigation route is now off the wire briefly every `mitigation.hide_window` (5m); raise it to keep rules longer (#487).
+- On an iBGP-only RIB view a mitigation route is now off the wire briefly every `mitigation.hide_window` (5m); raise it to keep the route on the wire longer (#487).
 
 ### Changed
 
