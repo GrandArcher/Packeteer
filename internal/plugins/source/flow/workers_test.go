@@ -194,5 +194,4 @@ func TestStopEndsTheContextWatcher(t *testing.T) {
 	if n := live(); n != 0 {
 		t.Fatalf("%d Start goroutines still running after Stop", n)
 	}
-
 }
