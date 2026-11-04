@@ -2,6 +2,7 @@ package flow
 
 import (
 	"encoding/binary"
+	"errors"
 	"net/netip"
 	"runtime"
 	"testing"
@@ -18,16 +19,6 @@ func hugeTemplateSet(setID uint16) []byte {
 	}
 	binary.BigEndian.PutUint16(b[0:], setID)
 	binary.BigEndian.PutUint16(b[2:], uint16(len(b)))
-	return b
-}
-
-// withdrawSet is an IPFIX template withdrawal; id 2 withdraws every template
-// of the domain.
-func withdrawSet(id uint16) []byte {
-	b := make([]byte, 8)
-	binary.BigEndian.PutUint16(b[0:], 2)
-	binary.BigEndian.PutUint16(b[2:], 8)
-	binary.BigEndian.PutUint16(b[4:], id)
 	return b
 }
 
@@ -145,7 +136,7 @@ func TestWithdrawnDomainsDropRates(t *testing.T) {
 		if dom%2 == 1 {
 			w = 256
 		}
-		if _, err := d.decodeIPFIX(boundsExporter, buildIPFIX(dom, withdrawSet(w))); err != nil {
+		if _, err := d.decodeIPFIX(boundsExporter, buildIPFIX(dom, tmplSetIPFIX(w, nil))); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -181,6 +172,13 @@ func TestDomainsCappedByTemplateTable(t *testing.T) {
 	}
 	if got := len(d.doms[domainKey{boundsExporter, 10, 0}].tmpl[256].fields); got != 2 {
 		t.Fatalf("refresh not stored: %d fields", got)
+	}
+	// A refused new template does not end the datagram: data for a held
+	// template after it still counts, at the domain's learned rate of 100.
+	refused := tmplSetIPFIX(300, [][2]uint16{{ieInBytes, 4}, {ieDstV4, 4}})
+	obs, err := d.decodeIPFIX(boundsExporter, buildIPFIX(0, refused, dataSet(256, putU32(700), v4only(netip.MustParseAddr("198.51.100.7")))))
+	if !errors.Is(err, errTableFull) || len(obs) != 1 || obs[0].bytes != 700*100 {
+		t.Fatalf("err %v, obs %+v", err, obs)
 	}
 	checkDecoder(t, d)
 }

@@ -45,7 +45,10 @@ const (
 	sflowHeaderIPv6      = 12
 )
 
-var errNeedMore = errors.New("short record")
+var (
+	errNeedMore  = errors.New("short record")
+	errTableFull = errors.New("template table full")
+)
 
 type observation struct {
 	dst   netip.Addr
@@ -238,12 +241,15 @@ func (d *decoder) walkSets(exp netip.Addr, version uint16, domain uint32, body [
 			}
 			continue
 		}
-		// A broken template set ends the datagram: the sets after it come
+		// A malformed template set ends the datagram: the sets after it come
 		// from the same unauthenticated sender, and one packet may hold
-		// thousands of them.
+		// thousands of them. A full table is not malformed, and data for the
+		// templates already held still counts.
 		if err != nil {
 			errs = append(errs, err)
-			break
+			if !errors.Is(err, errTableFull) {
+				break
+			}
 		}
 	}
 	return obs, errors.Join(errs...)
@@ -382,7 +388,7 @@ func (d *decoder) store(k domainKey, id uint16, t tmpl) error {
 		}
 	}
 	if d.ntmpl >= maxTemplates {
-		return errors.New("template table full")
+		return errTableFull
 	}
 	if ds == nil {
 		ds = &domainState{tmpl: map[uint16]tmpl{}}

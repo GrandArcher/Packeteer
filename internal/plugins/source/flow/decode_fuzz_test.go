@@ -27,7 +27,7 @@ func fuzzDecode(t *testing.T, p []byte, dec func(*decoder, netip.Addr, []byte) (
 func FuzzDecodeIPFIX(f *testing.F) {
 	dst := netip.MustParseAddr("198.51.100.7")
 	f.Add(buildIPFIX(1, sampledTemplate(), sampledData()))
-	f.Add(buildIPFIX(1, sampledTemplate(), sampledData(), withdrawSet(2)))
+	f.Add(buildIPFIX(1, sampledTemplate(), sampledData(), tmplSetIPFIX(2, nil)))
 	f.Add(buildIPFIX(3, ipfixEnterpriseTemplate(256), dataSet(256, []byte{0x11, 0x22, 0x33, 0x44, 0x04}, putU32(500), v4only(dst))))
 	f.Add(buildIPFIX(1, hugeTemplateSet(2), hugeTemplateSet(3)))
 	f.Add(buildIPFIX(1, tmplSetIPFIX(256, [][2]uint16{{ieDstV6, 16}, {ieOutBytes, 8}}), dataSet(256, ip6rec(netip.MustParseAddr("2001:db8::7"), 64))))
