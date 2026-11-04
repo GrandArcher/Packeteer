@@ -76,7 +76,7 @@ max_concurrent: 8
 
 One CA signs the controller's certificate (server and client use; its names or IP addresses must match `controller_url`) and each agent's certificate (client use; the CN or a DNS SAN is the agent's name). Use one certificate per agent. TLS 1.3 only.
 
-Revoke an agent by adding its certificate to the CRL (PEM, signed by a CA in `ca_file`) that `crl_file` names, or by removing it from `agents` and restarting. A CRL that is not signed by the CA is refused; if a later reload fails, the previous list stays.
+Revoke an agent by adding its certificate to the CRL (PEM, signed by a CA in `ca_file`) that `crl_file` names, or by removing it from `agents` and restarting. A CRL that is not signed by the CA is refused, and so is one whose CRL Number is lower than the loaded list from the same issuer (an older list cannot un-revoke an agent), so give each new list a higher number. If a reload fails, the previous list stays. A warning is logged once when the loaded list passes its next-update time; it stays in force.
 
 ## Docker
 

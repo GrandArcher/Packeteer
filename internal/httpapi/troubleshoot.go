@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/netpfx"
 	"github.com/GrandArcher/Packeteer/internal/probe"
 	"github.com/GrandArcher/Packeteer/internal/troubleshoot"
 )
@@ -41,9 +42,9 @@ func (s *Server) handleLookingGlass(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": troubleshoot.ErrNoRIB.Error()})
 		return
 	}
-	p, err := parsePrefixOrAddr(r.URL.Query().Get("prefix"))
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	p, ok := netpfx.ParsePrefixOrAddr(r.URL.Query().Get("prefix"))
+	if !ok {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "prefix must be an IP prefix or address"})
 		return
 	}
 	g, err := s.tools.LookingGlass(p)
@@ -52,18 +53,6 @@ func (s *Server) handleLookingGlass(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, g)
-}
-
-func parsePrefixOrAddr(v string) (netip.Prefix, error) {
-	v = strings.TrimSpace(v)
-	if p, err := netip.ParsePrefix(v); err == nil {
-		return p.Masked(), nil
-	}
-	if a, err := netip.ParseAddr(v); err == nil && a.Zone() == "" {
-		a = a.Unmap()
-		return netip.PrefixFrom(a, a.BitLen()), nil
-	}
-	return netip.Prefix{}, errors.New("prefix must be an IP prefix or address")
 }
 
 // readTool decodes a JSON tool request. POST with application/json keeps

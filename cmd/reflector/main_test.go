@@ -5,6 +5,7 @@ import (
 	"context"
 	"log/slog"
 	"net"
+	"net/netip"
 	"os"
 	"regexp"
 	"strconv"
@@ -77,6 +78,32 @@ func TestReflects(t *testing.T) {
 	}
 }
 
+func TestParseAllow(t *testing.T) {
+	got, err := parseAllow(" 192.0.2.0/24, 2001:db8::1 ,::ffff:198.51.100.7,::ffff:203.0.113.0/120")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24"), netip.MustParsePrefix("2001:db8::1/128"), netip.MustParsePrefix("198.51.100.7/32"), netip.MustParsePrefix("203.0.113.0/24")}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("entry %d = %v, want %v", i, got[i], want[i])
+		}
+	}
+	if none, err := parseAllow(""); err != nil || len(none) != 0 {
+		t.Errorf("empty list = %v, %v", none, err)
+	}
+	if _, err := parseAllow("192.0.2.0/24,nope"); err == nil || !strings.Contains(err.Error(), "nope") {
+		t.Errorf("bad entry: %v", err)
+	}
+	var out bytes.Buffer
+	if err := run(context.Background(), []string{"-allow-from", "x"}, &out, slog.New(slog.DiscardHandler)); err == nil {
+		t.Error("run accepted a bad -allow-from")
+	}
+}
+
 func TestListenAllWildcard(t *testing.T) {
 	probe, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero})
 	if err != nil {
@@ -131,8 +158,8 @@ func TestEveryFlagIsDocumented(t *testing.T) {
 		t.Fatal(err)
 	}
 	flags := regexp.MustCompile(`(?m)^\s+-([a-z-]+)`).FindAllStringSubmatch(out.String(), -1)
-	if len(flags) != 3 {
-		t.Fatalf("usage lists %d flags, want 3:\n%s", len(flags), out.String())
+	if len(flags) != 4 {
+		t.Fatalf("usage lists %d flags, want 4:\n%s", len(flags), out.String())
 	}
 	for _, f := range flags {
 		if !strings.Contains(string(doc), "| `-"+f[1]+"` |") {

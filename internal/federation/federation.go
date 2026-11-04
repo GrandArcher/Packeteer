@@ -66,6 +66,20 @@ func fresh(cfg Config, peers []plugin.PeerState) map[string]*plugin.InstanceSnap
 	return out
 }
 
+// maxPathRTT bounds a peer's reported RTT; a longer one is not a
+// measurement worth steering onto.
+const maxPathRTT = time.Minute
+
+// validPath rejects a peer-reported measurement that cannot be real, so a
+// compromised or buggy peer cannot win every comparison with a negative
+// RTT or zero loss over no packets.
+func validPath(p plugin.FederatedPath) bool {
+	return p.Sent >= 1 &&
+		p.LossPct >= 0 && p.LossPct <= 100 &&
+		p.RTT >= 0 && p.RTT <= maxPathRTT &&
+		p.Jitter >= 0 && p.Jitter <= maxPathRTT
+}
+
 func ownProvider(s *plugin.InstanceSnapshot, name string) (plugin.FederatedProvider, bool) {
 	for _, p := range s.Providers {
 		if p.Name == name && p.Domain == s.Domain {
@@ -124,7 +138,7 @@ func Merge(in *policy.Input, cfg Config, peers []plugin.PeerState) {
 				routes[rt.Prefix] = rt
 			}
 			for _, p := range snap.Paths {
-				if p.Provider != name || !probed[p.Prefix] {
+				if p.Provider != name || !probed[p.Prefix] || !validPath(p) {
 					continue
 				}
 				rtt := p.RTT + cfg.InterDCRTT[domain]

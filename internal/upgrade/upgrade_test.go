@@ -301,6 +301,8 @@ func TestApplyRefusals(t *testing.T) {
 		{Request{Tag: "../../etc/passwd", Confirm: true}, ErrBadTag},
 		{Request{Tag: "v0.5.0", Confirm: true}, ErrSame},
 		{Request{Tag: "v0.7.0", Confirm: true}, ErrNotFound},
+		{Request{Tag: "v0.4.0", Confirm: true}, ErrOlder},
+		{Request{Tag: "v0.5.0-rc1", Confirm: true}, ErrOlder},
 	} {
 		if _, err := r.m.Apply(ctx, tc.req); !errors.Is(err, tc.want) {
 			t.Errorf("%+v: err = %v, want %v", tc.req, err, tc.want)
@@ -566,16 +568,20 @@ func TestFailedApplyKeepsTheRollbackTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 	m3 := restart(m2, "0.7.0")
-	prevPath := filepath.Join(r.dir, "versions", "0.6.0", "packeteer")
+	if _, err := m3.Rollback(ctx, Request{Confirm: true}); err != nil {
+		t.Fatal(err)
+	}
+	m4 := restart(m3, "0.6.0")
+	prevPath := filepath.Join(r.dir, "versions", "0.7.0", "packeteer")
 
-	f.bins["v0.6.0"] = script("0.9.9")
-	if _, err := m3.Apply(ctx, Request{Tag: "v0.6.0", Confirm: true}); !errors.Is(err, ErrTrial) {
+	f.bins["v0.7.0"] = script("0.9.9")
+	if _, err := m4.Apply(ctx, Request{Tag: "v0.7.0", Confirm: true}); !errors.Is(err, ErrTrial) {
 		t.Fatalf("err = %v, want ErrTrial", err)
 	}
-	if b, _ := os.ReadFile(prevPath); string(b) != script("0.6.0") {
+	if b, _ := os.ReadFile(prevPath); string(b) != script("0.7.0") {
 		t.Fatalf("the rollback target was overwritten: %q", b)
 	}
-	if _, err := m3.Rollback(ctx, Request{Confirm: true}); err != nil {
+	if _, err := m4.Rollback(ctx, Request{Confirm: true}); err != nil {
 		t.Fatalf("rollback after the failed upgrade: %v", err)
 	}
 }

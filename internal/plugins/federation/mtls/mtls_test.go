@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"math/big"
 	"net"
 	"net/http"
@@ -291,6 +292,72 @@ func TestRefusesUnknownClientAndWrongInstance(t *testing.T) {
 	}
 }
 
+// A peer that sends part of a settings body and stalls must be cut off at
+// the read deadline instead of holding the connection open.
+func TestServerBoundsBodyRead(t *testing.T) {
+	old := serverReadTimeout
+	serverReadTimeout = 300 * time.Millisecond
+	defer func() { serverReadTimeout = old }()
+	a, b := pushPair(t, []string{"pop-a"})
+	b.SetSettingsHandler(func(context.Context, string, plugin.SettingsPush) plugin.SettingsResult {
+		t.Error("handler ran for a body that never finished")
+		return plugin.SettingsResult{Status: plugin.SettingsApplied}
+	})
+	conn, err := tls.Dial("tcp", b.Addr().String(), a.clientTLS("pop-b"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if _, err := conn.Write([]byte("POST " + SettingsPath + " HTTP/1.1\r\nHost: pop-b\r\nContent-Type: application/json\r\nContent-Length: 1000\r\n\r\n{\"sections\":")); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	_ = conn.SetReadDeadline(start.Add(5 * time.Second))
+	buf := make([]byte, 4096)
+	n, err := conn.Read(buf)
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		t.Fatal("the server kept a stalled body open past its read deadline")
+	}
+	if n > 0 && !strings.Contains(string(buf[:n]), "400") {
+		t.Fatalf("response = %q, want a 400 for the cut-off body", buf[:n])
+	}
+	if d := time.Since(start); d > 3*time.Second {
+		t.Fatalf("cut off after %s", d)
+	}
+}
+
+// A peer pinned to a domain is refused when its snapshot claims another.
+func TestPeerDomainPin(t *testing.T) {
+	p := newPKI(t)
+	b := instance(t, p, "pop-b", map[string]any{"listen": "127.0.0.1:0", "allow_clients": []string{"pop-a"}})
+	if err := b.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer stop(t, b)
+	b.Publish(snap("pop-b", "pop-c"))
+	url := "https://" + b.Addr().String()
+
+	pinned := instance(t, p, "pop-a", map[string]any{"peers": []map[string]any{{"name": "pop-b", "url": url, "server_name": "pop-b", "domain": "pop-b"}}})
+	if err := pinned.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer stop(t, pinned)
+	got := waitPeer(t, pinned, func(s plugin.PeerState) bool { return s.Error != "" })
+	if got.Fresh || !strings.Contains(got.Error, `claims domain "pop-c", peer is pinned to "pop-b"`) {
+		t.Fatalf("pinned peer = %+v", got)
+	}
+
+	matching := instance(t, p, "pop-a", map[string]any{"peers": []map[string]any{{"name": "pop-b", "url": url, "server_name": "pop-b", "domain": "pop-c"}}})
+	if err := matching.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer stop(t, matching)
+	if got := waitPeer(t, matching, func(s plugin.PeerState) bool { return s.Fresh }); got.Snapshot.Domain != "pop-c" {
+		t.Fatalf("matching pin: %+v", got)
+	}
+}
+
 func TestConfigErrors(t *testing.T) {
 	p := newPKI(t)
 	cert, key := p.ca.issue(t, p.dir, "pop-a")
@@ -308,6 +375,7 @@ func TestConfigErrors(t *testing.T) {
 		{"http url", "peers", []map[string]any{{"name": "pop-b", "url": "http://192.0.2.20:9443"}}, "must be https://host:port"},
 		{"url path", "peers", []map[string]any{{"name": "pop-b", "url": "https://192.0.2.20:9443/x"}}, "must be https://host:port"},
 		{"dup peer", "peers", []map[string]any{{"name": "pop-b", "url": "https://192.0.2.20:9443"}, {"name": "pop-b", "url": "https://192.0.2.21:9443"}}, "duplicate name"},
+		{"bad domain", "peers", []map[string]any{{"name": "pop-b", "url": "https://192.0.2.20:9443", "domain": "-x"}}, "domain"},
 		{"bad name", "peers", []map[string]any{{"name": "-b", "url": "https://192.0.2.20:9443"}}, "name"},
 		{"no peers or listen", "peers", []map[string]any{}, "need listen, peers, or both"},
 		{"poll too fast", "poll_interval", "10ms", "poll_interval"},

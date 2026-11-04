@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"math/big"
 	"net/http"
 	"os"
 	"slices"
@@ -67,7 +68,9 @@ func (p *Prober) crlChanged() bool {
 
 // reloadCRL reads crl_file. Every list in it must be signed by a CA in
 // ca_file; an unsigned or foreign list is refused so nobody can revoke
-// agents (or hide a revocation) by replacing the file with their own.
+// agents with their own list. A list whose Number is lower than the one
+// loaded for the same issuer is refused too, so an older list from the
+// same CA cannot be put back to un-revoke an agent.
 func (p *Prober) reloadCRL() error {
 	fi, err := os.Stat(p.cfg.CRLFile)
 	if err != nil {
@@ -78,6 +81,8 @@ func (p *Prober) reloadCRL() error {
 		return fmt.Errorf("crl_file: %w", err)
 	}
 	revoked := map[string]bool{}
+	numbers := map[string]*big.Int{}
+	var next time.Time
 	lists := 0
 	for {
 		var blk *pem.Block
@@ -95,6 +100,16 @@ func (p *Prober) reloadCRL() error {
 		if !slices.ContainsFunc(p.cas, func(ca *x509.Certificate) bool { return rl.CheckSignatureFrom(ca) == nil }) {
 			return fmt.Errorf("crl_file %s: not signed by a CA in ca_file", p.cfg.CRLFile)
 		}
+		issuer := string(rl.RawIssuer)
+		if old := p.crlNumbers[issuer]; old != nil && (rl.Number == nil || rl.Number.Cmp(old) < 0) {
+			return fmt.Errorf("crl_file %s: CRL number %v is lower than the loaded %v; refusing a rollback to an older list", p.cfg.CRLFile, rl.Number, old)
+		}
+		if rl.Number != nil && (numbers[issuer] == nil || rl.Number.Cmp(numbers[issuer]) > 0) {
+			numbers[issuer] = rl.Number
+		}
+		if !rl.NextUpdate.IsZero() && (next.IsZero() || rl.NextUpdate.Before(next)) {
+			next = rl.NextUpdate
+		}
 		for _, e := range rl.RevokedCertificateEntries {
 			revoked[revokedKey(string(rl.RawIssuer), e.SerialNumber.Text(16))] = true
 		}
@@ -103,6 +118,14 @@ func (p *Prober) reloadCRL() error {
 	if lists == 0 {
 		return fmt.Errorf("crl_file %s: no PEM X509 CRL", p.cfg.CRLFile)
 	}
+	// A file that leaves a CA out must not forget that CA's number, or an
+	// older list from it would be accepted on a later reload.
+	for issuer, n := range p.crlNumbers {
+		if numbers[issuer] == nil {
+			numbers[issuer] = n
+		}
+	}
+	p.crlNumbers, p.crlNext, p.crlWarned = numbers, next, false
 	p.crl.Store(&revoked)
 	p.crlStat.Store(&fileStamp{mod: fi.ModTime(), size: fi.Size()})
 	return nil

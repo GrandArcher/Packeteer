@@ -139,3 +139,24 @@ func TestMatch(t *testing.T) {
 		}
 	}
 }
+
+func TestParsePrefixOrAddr(t *testing.T) {
+	for in, want := range map[string]string{
+		"192.0.2.9":               "192.0.2.9/32",
+		" 192.0.2.9/24 ":          "192.0.2.0/24",
+		"2001:db8::1":             "2001:db8::1/128",
+		"2001:db8::1/32":          "2001:db8::/32",
+		"::ffff:198.51.100.7":     "198.51.100.7/32",
+		"::ffff:198.51.100.0/120": "198.51.100.0/24",
+	} {
+		got, ok := ParsePrefixOrAddr(in)
+		if !ok || got.String() != want {
+			t.Errorf("%q = %v, %v; want %s", in, got, ok, want)
+		}
+	}
+	for _, in := range []string{"", "nope", "fe80::1%eth0", "::ffff:0:0/80", "192.0.2.0/33"} {
+		if got, ok := ParsePrefixOrAddr(in); ok {
+			t.Errorf("%q = %v, want a refusal", in, got)
+		}
+	}
+}

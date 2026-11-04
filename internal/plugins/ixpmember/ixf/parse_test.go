@@ -124,6 +124,32 @@ func TestParseSample(t *testing.T) {
 	}
 }
 
+func TestParseRejectsTooWidePeeringLAN(t *testing.T) {
+	for _, tc := range []struct {
+		field, prefix string
+		mask          int
+		ok            bool
+	}{
+		{"ipv4", "192.0.2.0", 0, false},
+		{"ipv4", "192.0.2.0", 15, false},
+		{"ipv4", "192.0.0.0", 16, true},
+		{"ipv4", "192.0.2.0", 24, true},
+		{"ipv6", "2001:db8::", 0, false},
+		{"ipv6", "2001:db8::", 47, false},
+		{"ipv6", "2001:db8::", 48, true},
+		{"ipv6", "2001:db8::", 64, true},
+	} {
+		body := fmt.Sprintf(`{"version":"1.0","ixp_list":[{"ixp_id":1,"vlan":[{"id":1,%q:{"prefix":%q,"mask_length":%d}}]}]}`, tc.field, tc.prefix, tc.mask)
+		_, err := parseIXF([]byte(body))
+		if (err == nil) != tc.ok {
+			t.Errorf("%s/%d: err = %v, want ok=%v", tc.prefix, tc.mask, err, tc.ok)
+		}
+		if err != nil && !strings.Contains(err.Error(), "below the minimum") {
+			t.Errorf("%s/%d: err = %v", tc.prefix, tc.mask, err)
+		}
+	}
+}
+
 func TestParseRejectsMappedIPv6Prefix(t *testing.T) {
 	for _, mask := range []int{0, 24, 32, 64} {
 		body := fmt.Sprintf(`{"version":"1.0","ixp_list":[{"ixp_id":1,"vlan":[{"id":1,"ipv6":{"prefix":"::ffff:192.0.2.0","mask_length":%d}}]}]}`, mask)

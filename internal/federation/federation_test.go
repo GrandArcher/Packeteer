@@ -104,6 +104,40 @@ func TestMergeAddsInterDCRTT(t *testing.T) {
 	}
 }
 
+func TestMergeDropsImplausiblePeerPaths(t *testing.T) {
+	cases := map[string]func(*plugin.FederatedPath){
+		"negative rtt":    func(p *plugin.FederatedPath) { p.RTT = -time.Millisecond },
+		"huge rtt":        func(p *plugin.FederatedPath) { p.RTT = 2 * maxPathRTT },
+		"negative loss":   func(p *plugin.FederatedPath) { p.LossPct = -1 },
+		"loss over 100":   func(p *plugin.FederatedPath) { p.LossPct = 101 },
+		"nothing sent":    func(p *plugin.FederatedPath) { p.Sent = 0 },
+		"negative sent":   func(p *plugin.FederatedPath) { p.Sent = -3 },
+		"negative jitter": func(p *plugin.FederatedPath) { p.Jitter = -time.Millisecond },
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			peer := peerB(t0)
+			mutate(&peer.Snapshot.Paths[0])
+			in := baseInput(t0)
+			Merge(&in, popA(), []plugin.PeerState{peer})
+			for _, r := range in.Results {
+				if r.Provider == "x-b" {
+					t.Fatalf("merged an implausible path: %+v", r.Stats)
+				}
+			}
+		})
+	}
+	in := baseInput(t0)
+	Merge(&in, popA(), []plugin.PeerState{peerB(t0)})
+	found := false
+	for _, r := range in.Results {
+		found = found || r.Provider == "x-b"
+	}
+	if !found {
+		t.Fatal("a valid peer path was dropped")
+	}
+}
+
 func TestMergeStalePeerIsStandalone(t *testing.T) {
 	cases := map[string]func(*plugin.PeerState){
 		"stale":            func(p *plugin.PeerState) { p.Fresh = false },

@@ -217,15 +217,11 @@ func (c *Client) fetch(ctx context.Context) (*rpki.VRPs, time.Time, error) {
 	return parse(io.LimitReader(resp.Body, maxBody))
 }
 
-// document is the part of the VRP JSON that matters. Routinator writes
-// metadata.generated (Unix seconds); rpki-client writes
-// metadata.buildtime (RFC 3339).
-type document struct {
-	Metadata struct {
-		Generated int64  `json:"generated"`
-		Buildtime string `json:"buildtime"`
-	} `json:"metadata"`
-	ROAs []roa `json:"roas"`
+// metadata is the part of the VRP JSON header that matters. Routinator
+// writes generated (Unix seconds); rpki-client writes buildtime (RFC 3339).
+type metadata struct {
+	Generated int64  `json:"generated"`
+	Buildtime string `json:"buildtime"`
 }
 
 type roa struct {
@@ -252,37 +248,113 @@ func (a *asn) UnmarshalJSON(b []byte) error {
 // the document says it was generated (zero when it does not say). A
 // payload whose prefix does not parse, or whose max length is shorter
 // than the prefix or longer than the address, fails the whole document,
-// so a broken file never replaces a good cache.
+// so a broken file never replaces a good cache. The document is read as a
+// token stream and the payloads are counted as they arrive, so at most
+// MaxVRPs entries are held, not a copy of the whole body. One oversized
+// value (metadata or a single payload) is still bounded only by maxBody.
 func parse(r io.Reader) (*rpki.VRPs, time.Time, error) {
-	var doc document
 	dec := json.NewDecoder(r)
-	if err := dec.Decode(&doc); err != nil {
+	if err := expectDelim(dec, '{'); err != nil {
 		return nil, time.Time{}, fmt.Errorf("vrp json: %w", err)
 	}
-	if len(doc.ROAs) > rpki.MaxVRPs {
-		return nil, time.Time{}, fmt.Errorf("vrp json: %d payloads exceeds %d", len(doc.ROAs), rpki.MaxVRPs)
-	}
-	changes := make([]rpki.Change, 0, len(doc.ROAs))
-	for i, v := range doc.ROAs {
-		p, err := netip.ParsePrefix(v.Prefix)
+	var meta metadata
+	var changes []rpki.Change
+	for dec.More() {
+		tok, err := dec.Token()
 		if err != nil {
-			return nil, time.Time{}, fmt.Errorf("vrp json: roas[%d]: %w", i, err)
+			return nil, time.Time{}, fmt.Errorf("vrp json: %w", err)
 		}
-		if int(v.MaxLength) < p.Bits() || int(v.MaxLength) > p.Addr().BitLen() {
-			return nil, time.Time{}, fmt.Errorf("vrp json: roas[%d]: maxLength %d does not fit %s", i, v.MaxLength, p)
+		key, _ := tok.(string)
+		switch {
+		case strings.EqualFold(key, "metadata"):
+			err = dec.Decode(&meta)
+		case strings.EqualFold(key, "roas"):
+			changes, err = readROAs(dec)
+		default:
+			err = skipValue(dec)
 		}
-		changes = append(changes, rpki.Change{Prefix: p.Masked(), MaxLen: v.MaxLength, ASN: uint32(v.ASN)})
+		if err != nil {
+			return nil, time.Time{}, fmt.Errorf("vrp json: %w", err)
+		}
+	}
+	if err := expectDelim(dec, '}'); err != nil {
+		return nil, time.Time{}, fmt.Errorf("vrp json: %w", err)
 	}
 	table := rpki.NewVRPs()
 	table.Apply(changes)
 	var generated time.Time
 	switch {
-	case doc.Metadata.Generated > 0:
-		generated = time.Unix(doc.Metadata.Generated, 0)
-	case doc.Metadata.Buildtime != "":
-		if t, err := time.Parse(time.RFC3339, doc.Metadata.Buildtime); err == nil {
+	case meta.Generated > 0:
+		generated = time.Unix(meta.Generated, 0)
+	case meta.Buildtime != "":
+		if t, err := time.Parse(time.RFC3339, meta.Buildtime); err == nil {
 			generated = t
 		}
 	}
 	return table, generated, nil
+}
+
+// readROAs reads the roas array, which may also be null.
+func readROAs(dec *json.Decoder) ([]rpki.Change, error) {
+	tok, err := dec.Token()
+	if err != nil {
+		return nil, err
+	}
+	if tok == nil {
+		return nil, nil
+	}
+	if d, ok := tok.(json.Delim); !ok || d != '[' {
+		return nil, fmt.Errorf("roas must be an array, got %v", tok)
+	}
+	var changes []rpki.Change
+	for i := 0; dec.More(); i++ {
+		if i >= rpki.MaxVRPs {
+			return nil, fmt.Errorf("more than %d payloads", rpki.MaxVRPs)
+		}
+		var v roa
+		if err := dec.Decode(&v); err != nil {
+			return nil, err
+		}
+		p, err := netip.ParsePrefix(v.Prefix)
+		if err != nil {
+			return nil, fmt.Errorf("roas[%d]: %w", i, err)
+		}
+		if int(v.MaxLength) < p.Bits() || int(v.MaxLength) > p.Addr().BitLen() {
+			return nil, fmt.Errorf("roas[%d]: maxLength %d does not fit %s", i, v.MaxLength, p)
+		}
+		changes = append(changes, rpki.Change{Prefix: p.Masked(), MaxLen: v.MaxLength, ASN: uint32(v.ASN)})
+	}
+	return changes, expectDelim(dec, ']')
+}
+
+func expectDelim(dec *json.Decoder, want json.Delim) error {
+	tok, err := dec.Token()
+	if err != nil {
+		return err
+	}
+	if d, ok := tok.(json.Delim); !ok || d != want {
+		return fmt.Errorf("expected %q, got %v", rune(want), tok)
+	}
+	return nil
+}
+
+// skipValue discards the next value without buffering it.
+func skipValue(dec *json.Decoder) error {
+	depth := 0
+	for {
+		tok, err := dec.Token()
+		if err != nil {
+			return err
+		}
+		if d, ok := tok.(json.Delim); ok {
+			if d == '{' || d == '[' {
+				depth++
+			} else {
+				depth--
+			}
+		}
+		if depth == 0 {
+			return nil
+		}
+	}
 }

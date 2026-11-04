@@ -30,6 +30,7 @@ var (
 	ErrNotFound   = errors.New("that release was not found")
 	ErrNotInstall = errors.New("that release has no signed binary for this platform")
 	ErrSame       = errors.New("that version is already running")
+	ErrOlder      = errors.New("that version is older than the running one; use rollback to return to the previous version")
 	ErrVerify     = errors.New("release verification failed")
 	ErrTrial      = errors.New("the new version did not pass its start check")
 	ErrHA         = errors.New("high availability guard")
@@ -403,6 +404,11 @@ func (m *Manager) apply(ctx context.Context, req Request) (Result, error) {
 	version := Normalize(req.Tag)
 	if version == Normalize(m.opt.Version) {
 		return Result{}, ErrSame
+	}
+	// A signed older release can carry a known vulnerability, so a
+	// downgrade goes only through rollback to the recorded previous version.
+	if c, ok := Compare(version, m.opt.Version); ok && c < 0 {
+		return Result{}, ErrOlder
 	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()

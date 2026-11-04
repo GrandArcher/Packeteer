@@ -227,6 +227,14 @@ func convIXP(p string, in ixfIXP) (plugin.IXPSite, error) {
 	return plugin.IXPSite{ID: in.ID, Shortname: in.Shortname, Name: in.Name, VLANs: vlans, Switches: sws}, nil
 }
 
+// minLANMask is the shortest mask accepted for a peering LAN prefix.
+func minLANMask(bits int) int {
+	if bits == 32 {
+		return 16
+	}
+	return 48
+}
+
 func convPfx(p string, in *ixfPfx, bits int) (string, error) {
 	if in == nil {
 		return "", nil
@@ -240,6 +248,12 @@ func convPfx(p string, in *ixfPfx, bits int) (string, error) {
 	}
 	if in.Mask < 0 || in.Mask > bits {
 		return "", fmt.Errorf("%s.mask_length is invalid", p)
+	}
+	// The fabric prober treats this prefix as its only check that a target
+	// is on the peering LAN, so a /0 from a bad export would let it ping
+	// any address.
+	if floor := minLANMask(bits); in.Mask < floor {
+		return "", fmt.Errorf("%s.mask_length %d is below the minimum /%d for a peering LAN", p, in.Mask, floor)
 	}
 	// Unmap before PrefixFrom. An IPv4-mapped address in the IPv6 object
 	// becomes IPv4: a mask above 32 is not a valid prefix, and a mask of
