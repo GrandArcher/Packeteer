@@ -3,6 +3,7 @@ package history
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/netip"
 	"path/filepath"
 	"slices"
@@ -812,5 +813,47 @@ func TestFlushKeepsPrefixAddedDuringLookup(t *testing.T) {
 	}
 	if len(store.h.Prefixes) != 2 || store.h.Prefixes[1].Prefix != pfxB || store.h.Prefixes[1].VolumeMbps != 2 {
 		t.Fatalf("second flush prefixes = %+v", store.h.Prefixes)
+	}
+}
+
+// TestRecorderRequeueIsCapped checks that a store outage cannot grow the
+// requeued records without bound (#492): a failed flush puts back at most
+// maxPending rows of each kind, and further failed flushes keep it there.
+func TestRecorderRequeueIsCapped(t *testing.T) {
+	defer func(old int) { maxPending = old }(maxPending)
+	maxPending = 4
+	store := &memStore{fail: errors.New("disk is read-only")}
+	r := New(Options{Store: store, Mode: "observe", FlushEvery: time.Hour, Now: func() time.Time { return t0 }})
+	const n = 6
+	var changes []policy.Change
+	for i := range n {
+		p := netip.PrefixFrom(netip.AddrFrom4([4]byte{198, 51, 100, byte(i * 16)}), 28)
+		id := fmt.Sprintf("rule-%d", i)
+		r.Mitigation(plugin.MitigationRecord{ID: id, Prefix: p})
+		r.Anomaly(plugin.AnomalyRecord{ID: id, Prefix: p, Start: t0})
+		changes = append(changes, policy.Change{Action: policy.ActionImprove, New: policy.Improvement{Prefix: p, Provider: "transit-b", Native: "transit-a"}})
+	}
+	r.Decision(t0, changes, nil)
+	// The first failed flush drops two of each of the four kinds. The
+	// next take logs and resets the count, and nothing more is dropped.
+	for i, wantDropped := range []int{4 * (n - 4), 0, 0} {
+		if err := r.Flush(context.Background()); err == nil {
+			t.Fatal("flush with a failing store returned nil")
+		}
+		r.mu.Lock()
+		got := []int{len(r.dirty), len(r.mits), len(r.anoms), len(r.prefixes)}
+		dropped := r.requeueDropped
+		r.mu.Unlock()
+		if !slices.Equal(got, []int{maxPending, maxPending, maxPending, maxPending}) || dropped != wantDropped {
+			t.Fatalf("flush %d: pending improvements, mitigations, anomalies, prefixes = %v dropped %d, want each %d dropped %d",
+				i, got, dropped, maxPending, wantDropped)
+		}
+	}
+	store.fail = nil
+	if err := r.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.h.Improvements) != maxPending {
+		t.Fatalf("stored %d improvements after the outage, want %d", len(store.h.Improvements), maxPending)
 	}
 }

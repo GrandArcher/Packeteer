@@ -28,10 +28,12 @@ import (
 // DefaultFlushEvery is how often pending rows are written.
 const DefaultFlushEvery = time.Minute
 
-// maxPending caps unflushed bucket keys while the store keeps failing, so
-// a dead disk cannot grow memory without bound. Extra probes are dropped
-// from history (never from decisions).
-const maxPending = 200000
+// maxPending caps each kind of unflushed row (bucket keys, improvement,
+// mitigation, anomaly and RPKI records, prefixes) while the store keeps
+// failing, so a dead disk cannot grow memory without bound. Extra rows are
+// dropped from history (never from decisions). A var so a test can lower
+// it.
+var maxPending = 200000
 
 // maxPendingRounds and maxPendingRoundBytes cap unflushed decision rounds
 // (#204) while the store keeps failing; the oldest are dropped. Each is the
@@ -130,6 +132,9 @@ type Recorder struct {
 	seq         uint64
 	dropped     int
 	rpkiDropped int
+	// requeueDropped counts records and prefixes a failed flush could not
+	// put back under maxPending.
+	requeueDropped int
 	// rounds are encoded decision rounds not yet flushed (#204).
 	rounds        []plugin.RoundRecord
 	roundBytes    int
@@ -607,6 +612,10 @@ func (r *Recorder) take() (plugin.HistoryBatch, []netip.Prefix) {
 		r.log.Warn("history: dropped RPKI route records over the pending cap", "count", r.rpkiDropped)
 		r.rpkiDropped = 0
 	}
+	if r.requeueDropped > 0 {
+		r.log.Warn("history: dropped records over the pending cap while the store was failing", "count", r.requeueDropped)
+		r.requeueDropped = 0
+	}
 	return b, ps
 }
 
@@ -635,29 +644,34 @@ func (r *Recorder) requeue(b plugin.HistoryBatch, ps []netip.Prefix) {
 		cur.JitterSum += k.JitterSum
 	}
 	for _, rec := range b.Improvements {
-		if _, newer := r.dirty[rec.ID]; !newer {
-			r.dirty[rec.ID] = rec
-		}
+		r.requeueDropped += requeueRow(r.dirty, rec.ID, rec)
 	}
 	for _, m := range b.Mitigations {
-		if _, newer := r.mits[m.ID]; !newer {
-			r.mits[m.ID] = m
-		}
+		r.requeueDropped += requeueRow(r.mits, m.ID, m)
 	}
 	for _, a := range b.Anomalies {
-		if _, newer := r.anoms[a.ID]; !newer {
-			r.anoms[a.ID] = a
-		}
+		r.requeueDropped += requeueRow(r.anoms, a.ID, a)
 	}
 	for _, rec := range b.RPKIRoutes {
-		k := rpkiRow(rec)
-		if _, newer := r.rpkiDirty[k]; !newer && len(r.rpkiDirty) < maxPending {
-			r.rpkiDirty[k] = rec
-		}
+		r.rpkiDropped += requeueRow(r.rpkiDirty, rpkiRow(rec), rec)
 	}
 	for _, p := range ps {
-		r.prefixes[p] = true
+		r.requeueDropped += requeueRow(r.prefixes, p, true)
 	}
+}
+
+// requeueRow puts v back under k unless a newer row for k arrived since
+// the take, or m is at maxPending. It returns 1 when v was dropped for the
+// cap.
+func requeueRow[K comparable, V any](m map[K]V, k K, v V) int {
+	if _, newer := m[k]; newer {
+		return 0
+	}
+	if len(m) >= maxPending {
+		return 1
+	}
+	m[k] = v
+	return 0
 }
 
 // Flush writes pending rows. On error they are kept for the next flush.
