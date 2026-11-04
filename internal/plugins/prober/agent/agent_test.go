@@ -517,8 +517,9 @@ func TestAgentSiteMismatchIsRefused(t *testing.T) {
 	if up {
 		t.Fatal("a refused agent is marked online")
 	}
-	if !strings.Contains(l.logs.String(), "probe agent refused: site mismatch") {
-		t.Fatalf("no refusal logged:\n%s", l.logs.String())
+	// Several refused polls, one warning.
+	if n := strings.Count(l.logs.String(), "probe agent refused: site mismatch"); n != 1 {
+		t.Fatalf("%d refusal warnings, want 1:\n%s", n, l.logs.String())
 	}
 	stop()
 	// The same certificate at its configured site is served.

@@ -792,7 +792,8 @@ type wireOp struct {
 	route  plugin.MitigationRoute
 	key    string
 	fs     plugin.FlowSpecRoute
-	// rule is the rule the op serves; nil for a withdraw no rule asks for.
+	// rule is the rule an announce serves; its Pending and the wire entry
+	// are set from the result.
 	rule *Rule
 	// waitOthers is set on a new unicast announcement: it waits while the
 	// outbound or inbound announcer has the prefix on the wire.
@@ -926,10 +927,10 @@ func (c *Controller) planUnicastLocked(now time.Time) []wireOp {
 		}
 	}
 	var ops []wireOp
-	withdraw := func(p netip.Prefix, r *Rule) { ops = append(ops, wireOp{kind: opWithdraw, prefix: p, rule: r}) }
+	withdraw := func(p netip.Prefix) { ops = append(ops, wireOp{kind: opWithdraw, prefix: p}) }
 	for p := range c.wire {
 		if _, ok := uni[p]; !ok {
-			withdraw(p, nil)
+			withdraw(p)
 		}
 	}
 	order := make([]netip.Prefix, 0, len(uni))
@@ -945,7 +946,7 @@ func (c *Controller) planUnicastLocked(now time.Time) []wireOp {
 				c.log.Warn("mitigation rule withdrawn: prefix not in the learned RIB for hide_window", "id", r.ID, "prefix", p, "hide_window", c.cfg.HideWindow)
 			}
 			r.Pending = pendingLeft
-			withdraw(p, r)
+			withdraw(p)
 			continue
 		}
 		if on && cur.Action == r.Action && cur.Target == r.Target {
@@ -955,7 +956,7 @@ func (c *Controller) planUnicastLocked(now time.Time) []wireOp {
 		if !netpfx.CoveredBy(c.cfg.Allowlist, p) {
 			r.Pending = "not in mitigation.allowlist"
 			if on {
-				withdraw(p, r)
+				withdraw(p)
 			}
 			continue
 		}
@@ -1019,13 +1020,13 @@ func (c *Controller) planFlowSpecLocked(now time.Time) []wireOp {
 		}
 	}
 	var ops []wireOp
-	withdraw := func(k string, r *Rule) { ops = append(ops, wireOp{kind: opWithdrawFS, key: k, rule: r}) }
+	withdraw := func(k string) { ops = append(ops, wireOp{kind: opWithdrawFS, key: k}) }
 	// leaving is the routes withdrawn above before another rule announces
 	// its own route with the same key.
 	leaving := map[string]bool{}
 	for k, w := range c.fwire {
 		if d, ok := desired[k]; !ok || d.rule.key != w.rule {
-			withdraw(k, nil)
+			withdraw(k)
 			leaving[k] = true
 		}
 	}
@@ -1041,7 +1042,7 @@ func (c *Controller) planFlowSpecLocked(now time.Time) []wireOp {
 				left[r] = true
 			}
 			r.Pending = pendingLeft
-			withdraw(k, r)
+			withdraw(k)
 			continue
 		}
 		if on && cur.route.Action == rt.Action && cur.route.Target == rt.Target && cur.route.RateMbps == rt.RateMbps {
@@ -1054,7 +1055,7 @@ func (c *Controller) planFlowSpecLocked(now time.Time) []wireOp {
 		if !netpfx.CoveredBy(c.cfg.Allowlist, r.Prefix) {
 			r.Pending = "not in mitigation.allowlist"
 			if on {
-				withdraw(k, r)
+				withdraw(k)
 			}
 			continue
 		}

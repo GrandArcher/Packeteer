@@ -474,6 +474,17 @@ func (v *View) AddNeighbors(ctx context.Context, nbrs []Neighbor) error {
 				errs = append(errs, err)
 			}
 		}
+		// DropSessions sets dropped before it lists the peers, so a peer
+		// added while it ran is either in its list or shut down here.
+		v.mu.RLock()
+		dropped := v.dropped
+		v.mu.RUnlock()
+		if dropped {
+			for _, n := range nbrs {
+				_ = v.srv.DisablePeer(ctx, &api.DisablePeerRequest{Address: n.Address.String()})
+			}
+			errs = append(errs, errors.New("rib: the sessions were dropped after a failed HA withdraw; adding neighbors needs a restart"))
+		}
 	}
 	v.notify()
 	return errors.Join(errs...)
@@ -501,7 +512,7 @@ func (v *View) stopServer() {
 	if v.srv == nil {
 		return
 	}
-	_ = v.quiesceSessions("")
+	_ = v.quiesceSessions(context.Background(), "")
 	_ = v.srv.StopBgp(context.Background(), &api.StopBgpRequest{})
 	v.srv.Stop()
 }
@@ -512,14 +523,14 @@ func (v *View) stopServer() {
 // closes, so Packeteer's routes leave the edge even though the speaker
 // still holds them. The view is not ready afterwards, so the instance is
 // never eligible to lead again, and AddNeighbors is refused.
-func (v *View) DropSessions(context.Context) error {
+func (v *View) DropSessions(ctx context.Context) error {
 	if v.srv == nil {
 		return nil
 	}
 	v.mu.Lock()
 	v.dropped = true
 	v.mu.Unlock()
-	return v.quiesceSessions("packeteer: HA standby could not withdraw its routes")
+	return v.quiesceSessions(ctx, "packeteer: HA standby could not withdraw its routes")
 }
 
 // quiesceSessions admin-downs every peer, sending why in the shutdown
@@ -527,9 +538,9 @@ func (v *View) DropSessions(context.Context) error {
 // StopBgp clears the global config without a lock that an established
 // session's receive loop also reads, so it must not run while one is still
 // receiving. A session reports a non-established state only after its
-// loops have exited.
-func (v *View) quiesceSessions(why string) error {
-	ctx := context.Background()
+// loops have exited. The wait ends at quiesceTimeout or ctx's deadline,
+// whichever is first.
+func (v *View) quiesceSessions(ctx context.Context, why string) error {
 	var addrs []string
 	if err := v.srv.ListPeer(ctx, &api.ListPeerRequest{}, func(p *api.Peer) {
 		addrs = append(addrs, p.State.NeighborAddress)
@@ -543,6 +554,9 @@ func (v *View) quiesceSessions(why string) error {
 		}
 	}
 	deadline := time.Now().Add(quiesceTimeout)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
 	for {
 		var up []string
 		_ = v.srv.ListPeer(ctx, &api.ListPeerRequest{}, func(p *api.Peer) {
@@ -554,7 +568,7 @@ func (v *View) quiesceSessions(why string) error {
 			return errors.Join(errs...)
 		}
 		if !time.Now().Before(deadline) {
-			return errors.Join(append(errs, fmt.Errorf("rib: sessions still established after %s: %s", quiesceTimeout, strings.Join(up, ", ")))...)
+			return errors.Join(append(errs, fmt.Errorf("rib: sessions still established: %s", strings.Join(up, ", ")))...)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/GrandArcher/Packeteer/internal/config"
+	"github.com/GrandArcher/Packeteer/internal/dirsync"
 )
 
 const observeYAML = `mode: observe
@@ -460,8 +461,9 @@ synthesize:
 }
 
 // TestWriteFileAtomicReportsDirectorySync checks that a directory that
-// cannot be synced after the rename is an error (#492): the change is not
-// durable, so the editor must not report it saved.
+// cannot be synced after the rename is an error (#492), and that WriteFile,
+// which the editor saves with, returns it instead of falling back to an
+// in-place rewrite that would report the change saved.
 func TestWriteFileAtomicReportsDirectorySync(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root reads a directory without the read bit")
@@ -483,5 +485,8 @@ func TestWriteFileAtomicReportsDirectorySync(t *testing.T) {
 	err := WriteFileAtomic(path, []byte("mode: suggest\n"), 0o600)
 	if err == nil || !strings.Contains(err.Error(), "sync config directory") {
 		t.Fatalf("err = %v, want a directory sync error", err)
+	}
+	if err := WriteFile(path, []byte("mode: observe\n"), []byte("mode: suggest\n")); !errors.Is(err, dirsync.ErrSync) {
+		t.Fatalf("WriteFile err = %v, want the directory sync error", err)
 	}
 }

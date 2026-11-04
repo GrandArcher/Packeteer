@@ -97,17 +97,18 @@ type task struct {
 }
 
 type agentState struct {
-	spec      Agent
-	lim       *rate.Limiter
-	providers map[string]bool
-	issuer    string // identifies the certificate last seen, for revocation
-	serial    string
-	lastSeen  time.Time
-	up        bool // last logged state
-	queue     []*task
-	inflight  map[uint64]*task
-	served    uint64
-	wake      chan struct{} // poll wake-up, buffered 1
+	spec        Agent
+	lim         *rate.Limiter
+	providers   map[string]bool
+	issuer      string // identifies the certificate last seen, for revocation
+	serial      string
+	lastSeen    time.Time
+	up          bool   // last logged state
+	refusedSite string // the other site the agent last claimed, logged once
+	queue       []*task
+	inflight    map[uint64]*task
+	served      uint64
+	wake        chan struct{} // poll wake-up, buffered 1
 }
 
 // Prober hands probes to the connected agents.
