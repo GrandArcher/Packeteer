@@ -373,11 +373,12 @@ func TestHideWindowWithdrawsUnicast(t *testing.T) {
 		t.Fatal("a waiting rule must keep holding its prefix")
 	}
 	var withdrawn bool
-	for _, ch := range c.Changes() {
+	changes := c.Changes()
+	for _, ch := range changes {
 		withdrawn = withdrawn || ch.Kind == ChangeWithdrawn && ch.Detail == pendingLeft
 	}
 	if !withdrawn {
-		t.Fatalf("no withdrawn change with the hide_window reason: %+v", c.Changes())
+		t.Fatalf("no withdrawn change with the hide_window reason: %+v", changes)
 	}
 	calls := ann.calls
 	if err := c.Sync(ctx, hidden.Add(6*time.Minute)); err != nil || ann.calls != calls || c.Status().Rules[0].Pending != pendingLeft {

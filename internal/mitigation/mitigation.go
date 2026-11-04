@@ -789,7 +789,9 @@ func (c *Controller) syncUnicastLocked(ctx context.Context, now time.Time) error
 		r := uni[p]
 		cur, on := c.wire[p]
 		if on && c.leftLocked(p, now) {
-			c.log.Warn("mitigation rule withdrawn: prefix not in the learned RIB for hide_window", "id", r.ID, "prefix", p, "hide_window", c.cfg.HideWindow)
+			if r.Pending != pendingLeft {
+				c.log.Warn("mitigation rule withdrawn: prefix not in the learned RIB for hide_window", "id", r.ID, "prefix", p, "hide_window", c.cfg.HideWindow)
+			}
 			r.Pending = pendingLeft
 			errs = append(errs, c.withdrawLocked(ctx, p))
 			continue
