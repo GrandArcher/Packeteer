@@ -7,7 +7,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 ### Changed
 
 - Audit hygiene: ENV.md and threat model gaps, release pins in quickstart, Compose and install.sh, ASCII gate on source, documentation test data, errcheck on, image and action pins (#494).
-- `-pbr linux -apply` adds rules before removing old ones and reads named tables; `make test` ends with a skip summary; fuzz targets for v5, sFlow, BMP, RTR, BER, TWAMP, pcap run in CI (#510).
+- `-pbr linux -apply` adds before it removes, rolls back a failed run, reads named tables; `make test` lists skipped tests; fuzz targets for v5, sFlow, BMP, RTR, BER, TWAMP, pcap run in CI (#510).
 ### Security
 
 - Report, what-if, blast, preflight, config-write and send-now errors return a generic message; the detail (paths, SQL text) stays in the log (#510).

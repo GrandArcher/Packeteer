@@ -54,4 +54,4 @@ A webhook `url` or `headers` value expands only `${PACKETEER_WEBHOOK_*}` variabl
 
 ## Exec plugins
 
-An `exec` plugin process gets `PATH`, `PACKETEER_PLUGIN_KIND`, and its configured `env`, and nothing else. A `grpc` plugin also gets `PACKETEER_PLUGIN_COOKIE`, the fixed handshake value the host adds. See [PLUGINS.md](PLUGINS.md).
+An `exec` plugin process gets `PATH`, `PACKETEER_PLUGIN_KIND`, and its configured `env`, and nothing else. A `grpc` plugin also gets `PACKETEER_PLUGIN_COOKIE` and the other handshake variables the plugin library adds. See [PLUGINS.md](PLUGINS.md).

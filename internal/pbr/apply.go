@@ -2,6 +2,7 @@ package pbr
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/netip"
 	"os/exec"
@@ -38,6 +39,9 @@ type Step struct {
 	// earlier and no provider needs now.
 	Remove bool
 	Args   []string
+	// Undo is the command that reverses Args; Apply runs it when a later
+	// step fails.
+	Undo []string
 }
 
 // String is the command line, as the diff shows it.
@@ -204,6 +208,11 @@ func desired(entries []Entry) (rules map[bool][]rule, routes map[bool]map[int]st
 	return rules, routes
 }
 
+// routeArgs is `ip route <verb> default via <via> table <table>`.
+func routeArgs(fam []string, verb, via string, table int) []string {
+	return append(slices.Clone(fam), "route", verb, "default", "via", via, "table", strconv.Itoa(table))
+}
+
 // Plan lists the ip commands that make the host match entries, and removes
 // what an earlier run set up for a provider that is gone. A DSCP-only
 // provider needs an nftables rule, which this package does not apply.
@@ -233,26 +242,31 @@ func Plan(ctx context.Context, run Exec, entries []Entry) ([]Step, error) {
 			h = &host{tables: map[int]string{}}
 		}
 		// Add before delete: a rule is never removed before the rules that
-		// replace it are in, so a failure part way does not leave a provider
-		// with no rule. A rule moved to another priority, or a provider
-		// renumbered by a removal, briefly has both.
+		// replace it are in. A rule moved to another priority, or a provider
+		// renumbered by a removal, briefly has both. A table that gets a new
+		// next hop is shared with the old rules that point at it until they
+		// go, which is why Apply rolls back a failed run.
 		for _, e := range entries {
 			if e.Source.Is6() != six {
 				continue
 			}
 			table := tableBase + e.N
 			if h.tables[table] != e.NextHop.String() {
-				steps = append(steps, Step{Args: append(slices.Clone(fam), "route", "replace", "default", "via", e.NextHop.String(), "table", strconv.Itoa(table))})
+				undo := routeArgs(fam, "del", e.NextHop.String(), table)
+				if prev := h.tables[table]; prev != "" {
+					undo = routeArgs(fam, "replace", prev, table)
+				}
+				steps = append(steps, Step{Args: routeArgs(fam, "replace", e.NextHop.String(), table), Undo: undo})
 			}
 		}
 		for _, r := range wantRules[six] {
 			if !slices.Contains(h.rules, r) {
-				steps = append(steps, Step{Args: r.args("add", fam)})
+				steps = append(steps, Step{Args: r.args("add", fam), Undo: r.args("del", fam)})
 			}
 		}
 		for _, r := range h.rules {
 			if !slices.Contains(wantRules[six], r) {
-				steps = append(steps, Step{Remove: true, Args: r.args("del", fam)})
+				steps = append(steps, Step{Remove: true, Args: r.args("del", fam), Undo: r.args("add", fam)})
 			}
 		}
 		var stale []int
@@ -264,24 +278,39 @@ func Plan(ctx context.Context, run Exec, entries []Entry) ([]Step, error) {
 		slices.Sort(stale)
 		for _, table := range stale {
 			if via := h.tables[table]; via != "" {
-				steps = append(steps, Step{Remove: true, Args: append(slices.Clone(fam), "route", "del", "default", "via", via, "table", strconv.Itoa(table))})
+				steps = append(steps, Step{Remove: true, Args: routeArgs(fam, "del", via, table), Undo: routeArgs(fam, "replace", via, table)})
 			}
 		}
 	}
 	return steps, nil
 }
 
-// Apply runs the steps in order and stops at the first failure. It does not
-// undo what ran; Plan puts the additions first, so the host keeps its old
-// rules until the new ones are in, and running Plan and Apply again finishes
-// the job.
+// Apply runs the steps in order. When one fails it undoes the steps that
+// already ran, newest first, so the host is back where it started rather
+// than half changed; an undo that fails is reported with the error.
 func Apply(ctx context.Context, run Exec, steps []Step) error {
-	for _, s := range steps {
+	for i, s := range steps {
 		if _, err := run(ctx, s.Args...); err != nil {
-			return err
+			return errors.Join(err, rollback(ctx, run, steps[:i]))
 		}
 	}
 	return nil
+}
+
+// rollback runs the Undo of each done step, newest first. It ignores a
+// cancelled ctx: the undo is what keeps the host consistent.
+func rollback(ctx context.Context, run Exec, done []Step) error {
+	ctx = context.WithoutCancel(ctx)
+	var errs []error
+	for i := len(done) - 1; i >= 0; i-- {
+		if done[i].Undo == nil {
+			continue
+		}
+		if _, err := run(ctx, done[i].Undo...); err != nil {
+			errs = append(errs, fmt.Errorf("rollback: %w", err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // Verify asks the kernel which way a packet from each entry's source (with

@@ -3,6 +3,7 @@ package pbr
 import (
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -264,8 +265,9 @@ func TestApplyStopsAtTheFirstFailure(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "File exists") {
 		t.Fatalf("apply = %v", err)
 	}
-	if len(h.log) != 1 || len(h.rules) != 0 {
-		t.Fatalf("ran %v after the failure, rules %v", h.log, h.rules)
+	want := []string{"route replace default via 192.0.2.1 table 1001", "route del default via 192.0.2.1 table 1001"}
+	if !slices.Equal(h.log, want) || len(h.rules) != 0 || len(h.routes) != 0 {
+		t.Fatalf("ran %v after the failure (want the first step and its undo), rules %v, routes %v", h.log, h.rules, h.routes)
 	}
 }
 
@@ -303,14 +305,16 @@ func TestParseRulesKeepsOnlyRulesItCanReadBack(t *testing.T) {
 	}
 }
 
-// rest is the entries without the first provider, numbered as Entries does.
-func rest(es []Entry) []Entry {
-	out := slices.Clone(es[1:])
-	for i := range out {
-		out[i].N = i + 1
+// without is the entries minus the one at index i, numbered as Entries does.
+func without(es []Entry, i int) []Entry {
+	out := slices.Delete(slices.Clone(es), i, i+1)
+	for j := range out {
+		out[j].N = j + 1
 	}
 	return out
 }
+
+func rest(es []Entry) []Entry { return without(es, 0) }
 
 const threeProviders = `
   - {name: transit-a, source_ip: 192.0.2.11, next_hop: 192.0.2.1}
@@ -348,27 +352,47 @@ func TestPlanAddsBeforeItDeletes(t *testing.T) {
 	}
 }
 
-// A rule add that fails part way leaves the provider that was already
-// measured through its old rule, and a rerun finishes.
-func TestFailedRuleAddKeepsTheOldRules(t *testing.T) {
+// Removing provider a gives table 1002 a new next hop while b's old rule
+// still points at it. A failure after that step puts everything back, so b is
+// never left measured through c's path.
+func TestFailedApplyRollsBack(t *testing.T) {
 	h := newHost()
-	es := entries(t, twoProviders)
+	es := entries(t, threeProviders)
 	if err := Apply(context.Background(), h.exec, mustPlan(t, h, es)); err != nil {
 		t.Fatal(err)
 	}
+	rules, routes := slices.Clone(h.rules), maps.Clone(h.routes)
+	kept := rest(es)
 	h.fail["rule add from 192.0.2.12 fwmark 7 lookup 1001 priority 2001"] = struct{}{}
-	if err := Apply(context.Background(), h.exec, mustPlan(t, h, rest(es))); err == nil {
-		t.Fatal("apply did not fail")
+	err := Apply(context.Background(), h.exec, mustPlan(t, h, kept))
+	if err == nil || !strings.Contains(err.Error(), "File exists") || strings.Contains(err.Error(), "rollback") {
+		t.Fatalf("apply = %v", err)
 	}
-	if errs := Verify(context.Background(), h.exec, rest(es)); len(errs) != 0 {
-		t.Fatalf("transit-b lost its path: %v", errs)
+	slices.Sort(rules)
+	slices.Sort(h.rules)
+	if !slices.Equal(h.rules, rules) || !maps.Equal(h.routes, routes) {
+		t.Fatalf("host not restored: rules %q routes %v, want %q %v", h.rules, h.routes, rules, routes)
+	}
+	if errs := Verify(context.Background(), h.exec, es); len(errs) != 0 {
+		t.Fatalf("a provider lost its path: %v", errs)
 	}
 	delete(h.fail, "rule add from 192.0.2.12 fwmark 7 lookup 1001 priority 2001")
-	if err := Apply(context.Background(), h.exec, mustPlan(t, h, rest(es))); err != nil {
+	if err := Apply(context.Background(), h.exec, mustPlan(t, h, kept)); err != nil {
 		t.Fatal(err)
 	}
-	if got := plan(t, h, rest(es)); len(got) != 0 {
+	if got := plan(t, h, kept); len(got) != 0 {
 		t.Fatalf("plan after the rerun = %v", got)
+	}
+}
+
+// An undo that fails is reported next to the error that started it.
+func TestFailedRollbackIsReported(t *testing.T) {
+	h := newHost()
+	h.fail["route del default via 192.0.2.1 table 1001"] = struct{}{}
+	h.fail["route replace default via 192.0.2.2 table 1002"] = struct{}{}
+	err := Apply(context.Background(), h.exec, mustPlan(t, h, entries(t, twoProviders)))
+	if err == nil || !strings.Contains(err.Error(), "rollback: ") {
+		t.Fatalf("apply = %v", err)
 	}
 }
 
@@ -415,11 +439,7 @@ func TestPlanThreeProvidersRemoveTheMiddleOne(t *testing.T) {
 	if err := Apply(context.Background(), h.exec, mustPlan(t, h, es)); err != nil {
 		t.Fatal(err)
 	}
-	kept := slices.Clone(es)
-	kept = slices.Delete(kept, 1, 2)
-	for i := range kept {
-		kept[i].N = i + 1
-	}
+	kept := without(es, 1)
 	if err := Apply(context.Background(), h.exec, mustPlan(t, h, kept)); err != nil {
 		t.Fatal(err)
 	}
