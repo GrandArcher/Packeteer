@@ -289,7 +289,7 @@ func TestCSV(t *testing.T) {
 }
 
 // TestCSVEscapesFormulas: a cell that would run as a formula gets a
-// leading ', a number does not, and the JSON rows keep the raw text.
+// leading ', a number does not, and the stored rows keep the raw text.
 func TestCSVEscapesFormulas(t *testing.T) {
 	r := Report{
 		head:  []string{"a", "b", "c", "d", "e", "f", "g"},

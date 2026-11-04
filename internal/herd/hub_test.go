@@ -690,3 +690,24 @@ func TestHubPeerNameResolvingInternalIsRefused(t *testing.T) {
 		t.Errorf("routable address refused: %v", err)
 	}
 }
+
+// TestHubPinTableIsBounded: a hub that lists new ASNs on every refresh
+// cannot grow the pin table past maxPins; pinned ASNs keep working (#493).
+func TestHubPinTableIsBounded(t *testing.T) {
+	h := &Hub{o: HubOptions{Log: slog.Default()}, pins: map[uint32]pin{}}
+	mk := func(asn uint32) Entry {
+		k := fmt.Sprintf("key-%d", asn)
+		return Entry{ASN: asn, Signer: k, Nodes: []EntryNode{{Key: k}}, Issued: t0}
+	}
+	var batch []Entry
+	for i := range uint32(maxPins) {
+		batch = append(batch, mk(4200000000+i))
+	}
+	if kept, refused := h.pin(batch); len(kept) != maxPins || refused != 0 || len(h.pins) != maxPins {
+		t.Fatalf("filling: kept %d refused %d pins %d", len(kept), refused, len(h.pins))
+	}
+	kept, refused := h.pin([]Entry{mk(4200000000), mk(4294967294)})
+	if len(kept) != 1 || kept[0].ASN != 4200000000 || refused != 1 || len(h.pins) != maxPins {
+		t.Fatalf("full table: kept %v refused %d pins %d", kept, refused, len(h.pins))
+	}
+}

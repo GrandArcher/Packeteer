@@ -30,6 +30,10 @@ var snapshot []byte
 // MaxHubEntries bounds the entries read from one list.
 const MaxHubEntries = 4096
 
+// maxPins bounds the ASNs pinned in memory, so a hub that lists new ASNs on
+// every refresh cannot grow the table. A new ASN past the limit is refused.
+const maxPins = 2 * MaxHubEntries
+
 // Where a peer came from.
 const (
 	SourceConfig   = "config"
@@ -262,6 +266,9 @@ func (h *Hub) pin(entries []Entry) ([]Entry, int) {
 	for _, e := range sorted {
 		p, ok := h.pins[e.ASN]
 		switch {
+		case !ok && len(h.pins) >= maxPins:
+			refused++
+			continue
 		case !ok:
 			fresh[e.ASN] = true
 		case p.keys[e.Signer]:
