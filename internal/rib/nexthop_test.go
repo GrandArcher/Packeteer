@@ -13,10 +13,11 @@ import (
 
 // TestShortNextHopTreatedAsWithdraw sends the GO-2026-4736 trigger (GoBGP
 // issue 3305: a NEXT_HOP shorter than 4 bytes) to the embedded speaker.
-// GoBGP v4 before v4.4.0 panics in bgp.ValidateUpdateMsg on it. v3.37.0
-// replaces the UPDATE with a withdraw of its NLRI before validating, so the
-// session stays up and only that prefix leaves the view. A GoBGP upgrade
-// that brings the panic back fails here with the panic.
+// bgp.ValidateUpdateMsg panics on it, and GoBGP v4 before v4.4.0 calls it on
+// the received UPDATE. The v3.37.0 receive path first replaces the UPDATE
+// with a withdraw of its NLRI, so the session stays up and only that prefix
+// leaves the view. A GoBGP upgrade that brings the panic back fails here
+// with the panic.
 func TestShortNextHopTreatedAsWithdraw(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -66,7 +67,8 @@ func TestShortNextHopTreatedAsWithdraw(t *testing.T) {
 	send(valid)
 	eventually(t, "prefix learned", learned)
 
-	// The same prefix with a 2-byte NEXT_HOP.
+	// The same prefix with a 2-byte NEXT_HOP: shortNextHop in
+	// internal/plugins/ribsource/bmp/malformed_test.go.
 	short := append(bytes.Repeat([]byte{0xff}, 16),
 		0x00, 0x27, bgp.BGP_MSG_UPDATE, 0x00, 0x00, 0x00, 0x0c,
 		0x40, 0x01, 0x01, 0x00,
