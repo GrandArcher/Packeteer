@@ -20,13 +20,16 @@ IMPORTS
         FROM SNMPv2-CONF;
 
 packeteer MODULE-IDENTITY
-    LAST-UPDATED "202610290000Z"
+    LAST-UPDATED "202611040000Z"
     ORGANIZATION "Packeteer project"
     CONTACT-INFO
         "https://github.com/GrandArcher/Packeteer"
     DESCRIPTION
         "Status and notifications of a Packeteer BGP performance
          controller. Nothing in this module is writable."
+    REVISION "202611040000Z"
+    DESCRIPTION
+        "Adds pktrLeakUnconfirmed."
     REVISION "202610290000Z"
     DESCRIPTION
         "First version."
@@ -996,6 +999,18 @@ pktrMedOverridden NOTIFICATION-TYPE
          AS ranks below another by MED, because the measurements beat that
          exit by more than thresholds.med_margin (#303)."
     ::= { pktrNotifications 71 }
+
+pktrLeakUnconfirmed NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event leak.unconfirmed. A public route collector relayed a route
+         that looks like a leak, but the prefix is not injected now or the
+         local ASN is not next to the collector's peer. Anyone can make a
+         collector relay such a route, so nothing is withdrawn or held until
+         an operator confirms it."
+    ::= { pktrNotifications 72 }
 -- Conformance.
 
 pktrCompliances OBJECT IDENTIFIER ::= { pktrConformance 1 }
@@ -1066,7 +1081,7 @@ pktrNotificationsGroup NOTIFICATION-GROUP
         pktrBgpSessionNotEstablished, pktrHerdRestarted, pktrRpkiStale,
         pktrRpkiFresh, pktrSteerUnverified, pktrSteerVerified,
         pktrOverloadRefused, pktrOverloadShed, pktrOverloadCleared,
-        pktrMedOverridden
+        pktrMedOverridden, pktrLeakUnconfirmed
     }
     STATUS current
     DESCRIPTION
