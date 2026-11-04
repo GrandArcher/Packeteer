@@ -95,6 +95,10 @@ type Peer struct {
 	URL string `yaml:"url"`
 	// ServerName overrides the name checked on the peer's certificate.
 	ServerName string `yaml:"server_name"`
+	// Domain pins the routing domain this peer may claim. A snapshot that
+	// names another domain is refused, so a compromised peer cannot speak
+	// for another POP's domain. Empty accepts whatever the peer claims.
+	Domain string `yaml:"domain"`
 }
 
 var nameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`)
@@ -199,6 +203,9 @@ func New(c plugin.Config, env plugin.Env) (plugin.Federation, error) {
 			return nil, fmt.Errorf("peers[%d]: duplicate name %q", i, p.Name)
 		}
 		seen[p.Name] = true
+		if p.Domain != "" && !nameRE.MatchString(p.Domain) {
+			return nil, fmt.Errorf("peers[%d] (%s): domain %q must be 1-64 characters of letters, digits, '_', '.' or '-'", i, p.Name, p.Domain)
+		}
 		u, err := url.Parse(p.URL)
 		if err != nil || u.Scheme != "https" || u.Host == "" || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.User != nil {
 			return nil, fmt.Errorf("peers[%d] (%s): url %q must be https://host:port", i, p.Name, p.URL)
@@ -241,6 +248,9 @@ func (f *Federation) clientTLS(serverName string) *tls.Config {
 	}
 }
 
+// serverReadTimeout is a variable so a test can shorten it.
+var serverReadTimeout = 30 * time.Second
+
 // Start listens (when configured) and begins polling peers.
 func (f *Federation) Start(context.Context) error {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -258,9 +268,12 @@ func (f *Federation) Start(context.Context) error {
 		f.srv = &http.Server{
 			Handler:           mux,
 			ReadHeaderTimeout: 5 * time.Second,
-			WriteTimeout:      30 * time.Second,
-			IdleTimeout:       2 * time.Minute,
-			ErrorLog:          slog.NewLogLogger(f.log.Handler(), slog.LevelDebug),
+			// Bounds the settings body read, which a peer with a valid
+			// certificate could otherwise trickle indefinitely.
+			ReadTimeout:  serverReadTimeout,
+			WriteTimeout: 30 * time.Second,
+			IdleTimeout:  2 * time.Minute,
+			ErrorLog:     slog.NewLogLogger(f.log.Handler(), slog.LevelDebug),
 			TLSConfig: &tls.Config{
 				MinVersion:   tls.VersionTLS13,
 				Certificates: []tls.Certificate{f.cert},
@@ -553,6 +566,9 @@ func (f *Federation) fetch(ctx context.Context, client *http.Client, p *peerStat
 	}
 	if snap.Time.IsZero() || snap.Domain == "" {
 		return plugin.InstanceSnapshot{}, fmt.Errorf("%s: snapshot has no time or domain", p.url)
+	}
+	if p.cfg.Domain != "" && snap.Domain != p.cfg.Domain {
+		return plugin.InstanceSnapshot{}, fmt.Errorf("%s: snapshot claims domain %q, peer is pinned to %q", p.url, snap.Domain, p.cfg.Domain)
 	}
 	return snap, nil
 }

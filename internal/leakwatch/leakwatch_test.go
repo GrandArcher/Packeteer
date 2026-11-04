@@ -54,7 +54,7 @@ func newRig(t *testing.T, onWire ...string) *rig {
 		r.onWire[netip.MustParsePrefix(s)] = true
 	}
 	r.w = New(Config{
-		ASN: localASN, Community: community, Large: "64500:1:2",
+		ASN: localASN, ASPathRule: true, Community: community, Large: "64500:1:2",
 		Injected: func(p netip.Prefix) bool { r.mu.Lock(); defer r.mu.Unlock(); return r.onWire[p] },
 		Withdraw: func(_ context.Context, p netip.Prefix) error {
 			r.mu.Lock()
@@ -264,7 +264,7 @@ func TestSinkNeverBlocksAndCountsDrops(t *testing.T) {
 func TestHeldSetIsBounded(t *testing.T) {
 	r := newRig(t)
 	for i := range maxHeld + 5 {
-		p := netip.PrefixFrom(netip.AddrFrom4([4]byte{10, byte(i >> 8), byte(i), 0}), 24)
+		p := netip.PrefixFrom(netip.AddrFrom16([16]byte{0x20, 0x01, 0x0d, 0xb8, 0, 0, byte(i >> 8), byte(i)}), 64)
 		r.feed(plugin.LeakSighting{Prefix: p, Communities: []uint32{community}})
 	}
 	if got := len(r.w.Status().Leaks); got != maxHeld {
@@ -293,7 +293,7 @@ func TestRunEvaluatesQueue(t *testing.T) {
 func TestFullHeldSetStillWithdrawsAnInjectedRoute(t *testing.T) {
 	r := newRig(t, "203.0.113.0/24")
 	for i := range maxHeld {
-		p := netip.PrefixFrom(netip.AddrFrom4([4]byte{10, byte(i >> 8), byte(i), 0}), 24)
+		p := netip.PrefixFrom(netip.AddrFrom16([16]byte{0x20, 0x01, 0x0d, 0xb8, 0, 0, byte(i >> 8), byte(i)}), 64)
 		r.feed(plugin.LeakSighting{Prefix: p, Communities: []uint32{community}})
 	}
 	r.feed(sight("203.0.113.0/24", nil, community))
@@ -302,9 +302,9 @@ func TestFullHeldSetStillWithdrawsAnInjectedRoute(t *testing.T) {
 	}
 }
 
-func TestASPathRuleIsOffWithoutASN(t *testing.T) {
+func TestASPathRuleOff(t *testing.T) {
 	r := newRig(t, "203.0.113.0/24")
-	r.w.cfg.ASN = 0
+	r.w.cfg.ASPathRule = false
 	r.feed(sight("203.0.113.0/24", []uint32{64511, localASN, 64496}))
 	if len(r.withdraw) != 0 || len(r.events) != 0 || r.w.Held(netip.MustParsePrefix("203.0.113.0/24")) {
 		t.Fatalf("transit export flagged with the AS path rule off: withdraw %v events %+v", r.withdraw, r.events)
@@ -398,5 +398,119 @@ func TestLeakLabeledWithRPKI(t *testing.T) {
 	}
 	if len(r.events) != 1 || r.events[0].Fields["rpki"] != "invalid" {
 		t.Fatalf("events %+v", r.events)
+	}
+}
+
+func collector(prefix string, path []uint32, comms ...uint32) plugin.LeakSighting {
+	s := sight(prefix, path, comms...)
+	s.PublicCollector = true
+	return s
+}
+
+// #505: a third party can announce any prefix with packeteer_community and
+// the local ASN in the path and have a public collector relay it.
+func TestCollectorSightingOfPrefixNotInjectedIsNotHeld(t *testing.T) {
+	r := newRig(t, "198.51.100.0/24")
+	s := collector("203.0.113.0/24", []uint32{64511, localASN}, community)
+	r.feed(s, s, s)
+	if len(r.withdraw) != 0 || r.w.Held(netip.MustParsePrefix("203.0.113.0/24")) || len(r.w.Status().Leaks) != 0 {
+		t.Fatalf("held or withdrawn: withdraw %v leaks %+v", r.withdraw, r.w.Status().Leaks)
+	}
+	if len(r.events) != 1 {
+		t.Fatalf("want one alert for repeated sightings, got %+v", r.events)
+	}
+	e := r.events[0]
+	if e.Kind != plugin.EventLeakUnconfirmed || e.Severity != plugin.SeverityWarning ||
+		e.Fields["prefix"] != "203.0.113.0/24" || e.Fields["action"] != ActionUnconfirmed || e.Fields["reason"] != ReasonCommunity ||
+		e.Fields["as_path"] != "64511 64500" || e.Fields["seen"] != "rrc00/192.0.2.9" {
+		t.Fatalf("event %+v", e)
+	}
+}
+
+func TestCollectorSightingFarFromLocalASNOnlyAlerts(t *testing.T) {
+	r := newRig(t, "203.0.113.0/24")
+	r.feed(
+		collector("203.0.113.0/24", []uint32{64511, 64510, localASN, 64496}, community),
+		collector("203.0.113.0/24", []uint32{64511, 64510, localASN, 64496}), // AS path rule
+	)
+	if len(r.withdraw) != 0 || r.w.Held(netip.MustParsePrefix("203.0.113.0/24")) || !r.onWire[netip.MustParsePrefix("203.0.113.0/24")] {
+		t.Fatalf("withdrawn %v", r.withdraw)
+	}
+	if len(r.events) != 1 || r.events[0].Kind != plugin.EventLeakUnconfirmed {
+		t.Fatalf("events %+v", r.events)
+	}
+}
+
+func TestCollectorSightingNextToPeerWithdraws(t *testing.T) {
+	for name, path := range map[string][]uint32{
+		"peer sent it":     {64511, 64511, localASN, 64496},
+		"local is peer":    {localASN, 64496},
+		"as path rule hit": {64511, localASN, localASN, 64496},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newRig(t, "203.0.113.0/24")
+			s := collector("203.0.113.0/24", path, community)
+			if name == "as path rule hit" {
+				s.Communities = nil
+			}
+			r.feed(s)
+			if !slices.Equal(r.withdraw, []netip.Prefix{netip.MustParsePrefix("203.0.113.0/24")}) || !r.w.Held(netip.MustParsePrefix("203.0.113.0/24")) {
+				t.Fatalf("withdrawn %v", r.withdraw)
+			}
+			if len(r.events) != 1 || r.events[0].Kind != plugin.EventLeakDetected || r.events[0].Fields["action"] != ActionWithdrawn {
+				t.Fatalf("events %+v", r.events)
+			}
+		})
+	}
+}
+
+func TestCollectorSightingOfHeldPrefixCounts(t *testing.T) {
+	r := newRig(t, "203.0.113.0/24")
+	r.feed(sight("203.0.113.0/24", nil, community)) // a router-side source
+	r.feed(collector("203.0.113.0/24", []uint32{64511, 64510, localASN}, community))
+	if got := r.w.Status().Leaks; len(got) != 1 || got[0].Sightings != 2 || len(r.events) != 1 {
+		t.Fatalf("leaks %+v events %+v", got, r.events)
+	}
+}
+
+func TestUnconfirmedAlertRepeatsAndIsBounded(t *testing.T) {
+	r := newRig(t)
+	p := netip.MustParsePrefix("203.0.113.0/24")
+	r.feed(collector("203.0.113.0/24", nil, community))
+	r.w.mu.Lock()
+	r.w.alerted[p] = time.Now().Add(-alertRepeat - time.Minute)
+	r.w.mu.Unlock()
+	r.feed(collector("203.0.113.0/24", nil, community))
+	if len(r.events) != 2 {
+		t.Fatalf("alert not repeated after %v: %d events", alertRepeat, len(r.events))
+	}
+	for i := range maxAlerted + 5 {
+		q := netip.PrefixFrom(netip.AddrFrom16([16]byte{0x20, 0x01, 0x0d, 0xb8, 0, 0, byte(i >> 8), byte(i)}), 64)
+		r.feed(plugin.LeakSighting{Prefix: q, Communities: []uint32{community}, PublicCollector: true})
+	}
+	r.w.mu.RLock()
+	n := len(r.w.alerted)
+	r.w.mu.RUnlock()
+	if n > maxAlerted || len(r.events) != 2+maxAlerted+5 || len(r.w.Status().Leaks) != 0 {
+		t.Fatalf("alerted %d events %d", n, len(r.events))
+	}
+}
+
+func TestNextToPeer(t *testing.T) {
+	for _, tc := range []struct {
+		path []uint32
+		want bool
+	}{
+		{[]uint32{localASN}, true},
+		{[]uint32{64511, localASN}, true},
+		{[]uint32{localASN, localASN, 64511}, true},
+		{[]uint32{64511, 64511, 64511, localASN}, true},
+		{[]uint32{64511, 64510, localASN}, false},
+		{[]uint32{64511, 64511, 64510, localASN}, false},
+		{nil, false},
+	} {
+		if got := nextToPeer(tc.path, localASN); got != tc.want {
+			t.Errorf("nextToPeer(%v) = %v, want %v", tc.path, got, tc.want)
+		}
 	}
 }

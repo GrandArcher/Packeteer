@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/big"
 	"net"
 	"net/http"
 	"slices"
@@ -118,6 +119,13 @@ type Prober struct {
 
 	crl     atomic.Pointer[map[string]bool]
 	crlStat atomic.Pointer[fileStamp]
+	// crlNumbers is the highest CRL Number loaded per issuer and crlNext
+	// the earliest NextUpdate among the loaded lists. crlWarned is set once
+	// that time has passed. Only start and the reap loop touch them, never
+	// at the same time.
+	crlNumbers map[string]*big.Int
+	crlNext    time.Time
+	crlWarned  bool
 
 	mu     sync.Mutex
 	agents map[string]*agentState
@@ -317,10 +325,13 @@ func (p *Prober) Probe(ctx context.Context, req plugin.ProbeRequest) (plugin.Pro
 		}
 		p.mu.Lock()
 		a := p.agents[t.agent]
-		if !p.freshLocked(a, p.now()) {
+		// The agent may have reconnected at another site while the task
+		// waited for its rate-limit slot; failLocked only covers tasks
+		// already queued, so the site is checked again here.
+		if !p.freshLocked(a, p.now()) || a.site != t.site {
 			p.mu.Unlock()
 			release()
-			return plugin.ProbeResult{}, fmt.Errorf("agent %s went away", t.agent)
+			return plugin.ProbeResult{}, fmt.Errorf("agent %s went away or changed site", t.agent)
 		}
 		p.enqueueLocked(a, t)
 		p.mu.Unlock()
@@ -408,6 +419,16 @@ func (p *Prober) failLocked(a *agentState, err error) {
 	a.queue, a.inflight = nil, map[uint64]*task{}
 }
 
+// warnStaleCRL logs once when the loaded list is past its NextUpdate. The
+// list stays in force: dropping it would un-revoke every agent.
+func (p *Prober) warnStaleCRL() {
+	if p.crlNext.IsZero() || p.crlWarned || !p.now().After(p.crlNext) {
+		return
+	}
+	p.crlWarned = true
+	p.log.Warn("probe agent CRL is past its next update; refresh crl_file", "next_update", p.crlNext)
+}
+
 // reap marks agents stale, fails their tasks, and re-reads a changed CRL.
 func (p *Prober) reap(ctx context.Context) {
 	tick := time.NewTicker(reapEvery)
@@ -423,6 +444,7 @@ func (p *Prober) reap(ctx context.Context) {
 				p.log.Error("probe agent CRL not reloaded; the previous list stays", "err", err)
 			}
 		}
+		p.warnStaleCRL()
 		p.mu.Lock()
 		now := p.now()
 		for _, a := range p.agents {

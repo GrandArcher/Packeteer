@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -287,6 +288,99 @@ func TestV3RefusesWhatTheUserIsNot(t *testing.T) {
 			t.Errorf("%s: answered %+v", name, r.Variables)
 		}
 	}
+}
+
+func TestInTimeWindow(t *testing.T) {
+	a := &Agent{started: t0, boots: 7}
+	for _, tc := range []struct {
+		name  string
+		boots uint32
+		time  uint32
+		now   time.Duration
+		want  bool
+	}{
+		{"exact", 7, 1000, 1000 * time.Second, true},
+		{"150 s behind", 7, 850, 1000 * time.Second, true},
+		{"151 s behind", 7, 849, 1000 * time.Second, false},
+		{"150 s ahead", 7, 1150, 1000 * time.Second, true},
+		{"151 s ahead", 7, 1151, 1000 * time.Second, false},
+		{"other boots", 8, 1000, 1000 * time.Second, false},
+		{"older boots", 6, 1000, 1000 * time.Second, false},
+		{"clock stepped back", 7, 0, -time.Hour, true},
+	} {
+		sp := &gosnmp.UsmSecurityParameters{AuthoritativeEngineBoots: tc.boots, AuthoritativeEngineTime: tc.time}
+		if got := a.inTimeWindow(sp, t0.Add(tc.now)); got != tc.want {
+			t.Errorf("%s: %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// A captured v3 request is not answered with data once the engine time has
+// moved past the window, and a manager that is behind resynchronizes from
+// the Report instead of timing out.
+func TestV3ReplayOutsideTheWindowGetsOnlyAReport(t *testing.T) {
+	var offset atomic.Int64
+	clock := func() time.Time { return time.Now().Add(time.Duration(offset.Load())) }
+	a, addr := newAgent(t, bothYAML, clock)
+	feed(t, a, snapshot(clock(), 1000))
+	front, rec := proxy(t, addr)
+	oid := []string{"." + snmpcfg.DefaultEnterpriseOID + ".2.2.0"}
+	c := v3(t, front, "nms", "auth-pass-123", "priv-pass-456", gosnmp.AuthPriv)
+	c.Retries = 2
+	if _, err := c.Get(oid); err != nil {
+		t.Fatal(err)
+	}
+	exs := rec.all()
+	captured := exs[len(exs)-1]
+
+	// Inside the window the same bytes are still answered.
+	if got := replay(t, addr, captured.req); got == nil || reportOID(t, a, got) != "" {
+		t.Fatalf("a request inside the window was not answered with data: %x", got)
+	}
+
+	offset.Store(int64(10 * time.Minute))
+	got := replay(t, addr, captured.req)
+	if got == nil || reportOID(t, a, got) != oidNotInTimeWindows {
+		t.Fatalf("replay outside the window: reply %x, want a notInTimeWindow Report", got)
+	}
+
+	r, err := c.Get(oid)
+	if err != nil || str(r.Variables[0].Value) != "observe" {
+		t.Fatalf("the manager did not resynchronize: %v %+v", err, r)
+	}
+}
+
+// replay sends raw bytes to the agent and returns its reply, or nil.
+func replay(t *testing.T, addr string, msg []byte) []byte {
+	t.Helper()
+	conn, err := net.Dial("udp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if _, err := conn.Write(msg); err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	buf := make([]byte, 65535)
+	n, err := conn.Read(buf)
+	if err != nil {
+		return nil
+	}
+	return buf[:n]
+}
+
+// reportOID is the single variable of a Report, or "" for any other reply.
+func reportOID(t *testing.T, a *Agent, msg []byte) string {
+	t.Helper()
+	p, err := a.ours.UnmarshalTrap(msg, false)
+	if err != nil {
+		t.Fatalf("reply does not decode: %v", err)
+	}
+	if p.PDUType != gosnmp.Report || len(p.Variables) != 1 {
+		return ""
+	}
+	return p.Variables[0].Name
 }
 
 func TestV2cOffWhenOnlyV3(t *testing.T) {

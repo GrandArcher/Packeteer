@@ -20,15 +20,16 @@ Metrics follow RFC 4737 and are computed per train from the arrival order of the
 
 A responder is a host every provider can reach. The reading is only as good as the responder, so two kinds are supported:
 
-- `twamp` (the default): a TWAMP-Light Session-Reflector (RFC 5357, unauthenticated mode) on `port` (default 862). The reflector answers each test packet at once with the sender's sequence number inside, so the order the replies come back in is the order the round trip (forward and return path) delivered them, and the reading is a measurement. Packeteer ships `packeteer-reflector`, a small standalone binary that is also in the container image (`docker run --rm --network host --entrypoint packeteer-reflector ghcr.io/grandarcher/packeteer`). Run it on a host you control that is reachable through every provider, for example a server in another network you operate, or on a herd peer whose operator runs it for you. It reads only test packets, sends only replies, and holds no Packeteer config or credentials. `lab/twamp-interop.sh` checks it against nokia/twampy, an independent TWAMP-Light sender. The reflector answers any source with a reply of at least 41 bytes, about three times a minimal 14-byte test packet, so firewall it to the controller's probe source addresses.
+- `twamp` (the default): a TWAMP-Light Session-Reflector (RFC 5357, unauthenticated mode) on `port` (default 862). The reflector answers each test packet at once with the sender's sequence number inside, so the order the replies come back in is the order the round trip (forward and return path) delivered them, and the reading is a measurement. Packeteer ships `packeteer-reflector`, a small standalone binary that is also in the container image (`docker run --rm --network host --entrypoint packeteer-reflector ghcr.io/grandarcher/packeteer`). Run it on a host you control that is reachable through every provider, for example a server in another network you operate, or on a herd peer whose operator runs it for you. It reads only test packets, sends only replies, and holds no Packeteer config or credentials. `lab/twamp-interop.sh` checks it against nokia/twampy, an independent TWAMP-Light sender. The reflector answers any source with a reply of at least 41 bytes, about three times a minimal 14-byte test packet, so set `-allow-from` to the controller's probe source addresses (and firewall them too). Without it a spoofed source gets the larger reply.
 - `icmp`: any host that answers echo requests. The train is ICMP echo with sequence numbers. Routers and servers rate-limit and deprioritize ICMP and may answer out of order themselves, so an icmp reading is an **estimate**: it is shown with that label on the API, the metrics (`estimate="true"`), and the Providers page, and it is never an input to a decision. ICMP has no ports, so an icmp responder gets one train per measurement.
 
-`packeteer-reflector` takes three flags:
+`packeteer-reflector` takes four flags:
 
 | Flag | Default | Meaning |
 |---|---|---|
 | `-listen` | `:862` | UDP address to answer on. An empty host answers on IPv4 and IPv6; a host with a port binds that address only. |
 | `-max-sessions` | `1024` | Senders (address and port) that keep a reflector sequence counter. A sender idle for 5 minutes is dropped, and a full table drops the least recently seen sender. Must be at least 1. |
+| `-allow-from` | empty | Comma-separated addresses or prefixes that may use the reflector. A packet from any other address gets no reply. Empty answers any sender and logs a warning at start. |
 | `-version` | | Print the version and exit. |
 
 Every train waits on `probe.rate_limit_pps` and `probe.per_asn_pps` like any other probe, and a responder inside `probe.exclude` gets no packet.

@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/rpki"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -240,5 +241,61 @@ func TestStartStop(t *testing.T) {
 	}
 	if err := c.Stop(t.Context()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// endless is a document whose roas array never ends.
+type endless struct {
+	head string
+	n    int64
+}
+
+func (e *endless) Read(p []byte) (int, error) {
+	const item = `{"asn":64496,"prefix":"192.0.2.0/24","maxLength":24},`
+	var b strings.Builder
+	if e.n == 0 {
+		b.WriteString(e.head)
+	}
+	for b.Len() < len(p)-len(item) {
+		b.WriteString(item)
+	}
+	e.n += int64(b.Len())
+	return copy(p, b.String()), nil
+}
+
+func TestParseStopsAtTheVRPCapWithoutBuffering(t *testing.T) {
+	e := &endless{head: `{"metadata":{"generated":1},"roas":[`}
+	_, _, err := parse(e)
+	if err == nil || !strings.Contains(err.Error(), "more than") {
+		t.Fatalf("err = %v, want the payload cap", err)
+	}
+	// About 55 bytes per payload: the parser stopped near the cap and did
+	// not try to read the unbounded rest.
+	if limit := int64(rpki.MaxVRPs) * 70; e.n > limit {
+		t.Fatalf("read %d bytes before refusing, want under %d", e.n, limit)
+	}
+}
+
+func TestParseShapes(t *testing.T) {
+	good := `{"extra":{"nested":[1,{"a":[]}]},"metadata":{"generated":1700000000},` +
+		`"roas":[{"asn":"AS64496","prefix":"192.0.2.0/24","maxLength":25},{"asn":64497,"prefix":"2001:db8::/32","maxLength":48}]}`
+	table, gen, err := parse(strings.NewReader(good))
+	if err != nil || table.Len() != 2 || gen.Unix() != 1700000000 {
+		t.Fatalf("good document: generated %v, err %v", gen, err)
+	}
+	if table, _, err := parse(strings.NewReader(`{"roas":null}`)); err != nil || table.Len() != 0 {
+		t.Fatalf("null roas: %v", err)
+	}
+	for name, doc := range map[string]string{
+		"not an object":     `[]`,
+		"roas not array":    `{"roas":{}}`,
+		"bad prefix":        `{"roas":[{"asn":1,"prefix":"x","maxLength":24}]}`,
+		"max below prefix":  `{"roas":[{"asn":1,"prefix":"192.0.2.0/24","maxLength":8}]}`,
+		"max above address": `{"roas":[{"asn":1,"prefix":"192.0.2.0/24","maxLength":33}]}`,
+		"truncated":         `{"roas":[{"asn":1,"prefix":"192.0.2.0/24","maxLength":24}`,
+	} {
+		if _, _, err := parse(strings.NewReader(doc)); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
 	}
 }

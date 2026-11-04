@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math/big"
 	"net/http"
 	"net/netip"
 	"os"
@@ -71,7 +72,25 @@ type lab struct {
 	hub  *Prober
 	url  string
 	crl  string
-	logs *bytes.Buffer
+	logs *syncBuf
+}
+
+// syncBuf is a log sink the agent's goroutines write while a test reads.
+type syncBuf struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuf) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuf) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
 }
 
 // newLab starts a controller side that allows the named agents.
@@ -98,7 +117,7 @@ agents:
 	if err != nil {
 		t.Fatal(err)
 	}
-	logs := &bytes.Buffer{}
+	logs := &syncBuf{}
 	pl, err := New(cfg, plugin.Env{Logger: slog.New(slog.NewTextHandler(logs, nil))})
 	if err != nil {
 		t.Fatal(err)
@@ -318,6 +337,69 @@ func TestRevokingARunningAgentStopsUsingIt(t *testing.T) {
 	})
 }
 
+func TestOlderCRLCannotUnrevokeAnAgent(t *testing.T) {
+	l := newLab(t, 0, "agent-a")
+	leaf := l.ca.Issue(t, "agent-a")
+	issuer, serial := rawIssuer(t, leaf), leaf.Serial.Text(16)
+	l.ca.WriteCRL(t, l.crl, 3, leaf)
+	waitFor(t, "revocation loaded", func() bool { return l.hub.revoked(issuer, serial) })
+
+	// The older list is validly signed by the same CA and revokes nothing.
+	l.ca.WriteCRL(t, l.crl, 2)
+	waitFor(t, "older CRL refused", func() bool { return strings.Contains(l.logs.String(), "lower than the loaded") })
+	if !l.hub.revoked(issuer, serial) {
+		t.Fatal("an older CRL un-revoked the agent")
+	}
+
+	// A newer list replaces it.
+	l.ca.WriteCRL(t, l.crl, 4)
+	waitFor(t, "newer CRL applied", func() bool { return !l.hub.revoked(issuer, serial) })
+}
+
+// A reload from a file that leaves one CA out keeps that CA's number, so an
+// older list from it is still refused on a later reload.
+func TestReloadKeepsNumbersOfIssuersLeftOut(t *testing.T) {
+	ca := pkitest.New(t)
+	_, cas, err := loadCAs(ca.CAFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	crl := filepath.Join(ca.Dir, "agents.crl")
+	ca.WriteCRL(t, crl, 5)
+	left := big.NewInt(7)
+	p := &Prober{cfg: Config{CRLFile: crl}, cas: cas, crlNumbers: map[string]*big.Int{"left-out-issuer": left}}
+	if err := p.reloadCRL(); err != nil {
+		t.Fatal(err)
+	}
+	if got := p.crlNumbers["left-out-issuer"]; got == nil || got.Cmp(left) != 0 {
+		t.Fatalf("number for the issuer missing from the file = %v, want 7", got)
+	}
+	if len(p.crlNumbers) != 2 {
+		t.Fatalf("numbers = %v, want the new issuer's too", p.crlNumbers)
+	}
+}
+
+func TestStaleCRLWarnsOnceAndStaysInForce(t *testing.T) {
+	logs := &bytes.Buffer{}
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	revoked := map[string]bool{"issuer/1": true}
+	p := &Prober{log: slog.New(slog.NewTextHandler(logs, nil)), now: func() time.Time { return now }, crlNext: now.Add(time.Hour)}
+	p.crl.Store(&revoked)
+	p.warnStaleCRL()
+	if logs.Len() != 0 {
+		t.Fatalf("warned before NextUpdate: %s", logs)
+	}
+	now = now.Add(2 * time.Hour)
+	p.warnStaleCRL()
+	p.warnStaleCRL()
+	if n := strings.Count(logs.String(), "past its next update"); n != 1 {
+		t.Fatalf("warned %d times, want once: %s", n, logs)
+	}
+	if !p.revoked("issuer", "1") {
+		t.Fatal("a stale CRL stopped revoking")
+	}
+}
+
 // rawIssuer is the issuer of a leaf, in the form the CRL check keys on.
 func rawIssuer(t *testing.T, l pkitest.Leaf) string {
 	t.Helper()
@@ -402,6 +484,43 @@ func TestRateLimitIsPerAgent(t *testing.T) {
 	}
 	if len(pa.requests())+len(pb.requests()) != 4 {
 		t.Fatal("a probe over the limit reached an agent")
+	}
+}
+
+// A probe waiting for its rate-limit slot must not be queued once the
+// agent has reconnected at another site: the answer would be measured
+// from the wrong place and tagged with the old site.
+func TestDelayedProbeIsNotQueuedAfterASiteChange(t *testing.T) {
+	l := newLab(t, 10, "agent-a")
+	leaf := l.ca.Issue(t, "agent-a")
+	prov := map[string]string{"carrier-a": "192.0.2.11"}
+	stopA := l.startAgentWith(leaf, "site-a", &fakeProber{}, prov)
+	full := req("carrier-a", "site-a")
+	full.Count = 50
+	probeWhenUp(t, l.hub, full)
+	probeWhenUp(t, l.hub, full) // the 100-packet burst is gone; the next probe waits about 2s
+
+	errc := make(chan error, 1)
+	go func() {
+		wait := req("carrier-a", "site-a")
+		wait.Count = 20
+		_, err := probe(t, l.hub, wait)
+		errc <- err
+	}()
+	time.Sleep(300 * time.Millisecond)
+	stopA()
+	pb := &fakeProber{}
+	l.startAgentWith(leaf, "site-b", pb, prov)
+	select {
+	case err := <-errc:
+		if err == nil || !strings.Contains(err.Error(), "changed site") {
+			t.Fatalf("err = %v, want the delayed probe refused after the site change", err)
+		}
+	case <-time.After(6 * time.Second):
+		t.Fatal("the delayed probe never finished")
+	}
+	if n := len(pb.requests()); n != 0 {
+		t.Fatalf("the agent at site-b ran %d probes meant for site-a", n)
 	}
 }
 

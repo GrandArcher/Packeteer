@@ -103,3 +103,26 @@ func Match(q netip.Prefix, asns []uint32, p netip.Prefix, origins ...uint32) (st
 	}
 	return "", false
 }
+
+// ParsePrefixOrAddr reads a prefix or a bare address (a host prefix) and
+// returns it masked. An IPv4-mapped IPv6 value comes back as IPv4, the form
+// a sender's address is compared in; ok is false for a mapped prefix
+// shorter than /96, which holds no IPv4 address, and for a zoned address.
+func ParsePrefixOrAddr(s string) (p netip.Prefix, ok bool) {
+	s = strings.TrimSpace(s)
+	p, err := netip.ParsePrefix(s)
+	if err != nil {
+		a, err := netip.ParseAddr(s)
+		if err != nil || a.Zone() != "" {
+			return netip.Prefix{}, false
+		}
+		p = netip.PrefixFrom(a, a.BitLen())
+	}
+	if p.Addr().Is4In6() {
+		if p.Bits() < 96 {
+			return netip.Prefix{}, false
+		}
+		p = netip.PrefixFrom(p.Addr().Unmap(), p.Bits()-96)
+	}
+	return p.Masked(), true
+}

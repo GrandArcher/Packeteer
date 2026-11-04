@@ -47,6 +47,11 @@ const (
 	MaxSessionTTL     = 7 * 24 * time.Hour
 	DefaultTokenTTL   = 90 * 24 * time.Hour
 	MaxTokenTTL       = 365 * 24 * time.Hour
+	// MaxSSOTokenTTL caps tokens minted from an SSO session. The role and
+	// the IdP's view of the user refresh only at the next SSO sign-in, so a
+	// user removed at the IdP keeps a token until a local disable or this
+	// expiry.
+	MaxSSOTokenTTL = 7 * 24 * time.Hour
 	// MaxTokensPerUser caps live tokens per user.
 	MaxTokensPerUser = 20
 
@@ -936,11 +941,15 @@ func (s *Service) CreateToken(ctx context.Context, p Principal, name string, rol
 	if !p.Role.Allows(role) {
 		return TokenView{}, "", fmt.Errorf("%w: a token cannot have a higher role than its user (%s)", ErrForbidden, p.Role)
 	}
-	if ttl == 0 {
-		ttl = s.tokenTTL
+	maxTTL := MaxTokenTTL
+	if p.Method == MethodSSO {
+		maxTTL = MaxSSOTokenTTL
 	}
-	if ttl < time.Minute || ttl > MaxTokenTTL {
-		return TokenView{}, "", invalid("ttl must be between 1m and %s", MaxTokenTTL)
+	if ttl == 0 {
+		ttl = min(s.tokenTTL, maxTTL)
+	}
+	if ttl < time.Minute || ttl > maxTTL {
+		return TokenView{}, "", invalid("ttl must be between 1m and %s", maxTTL)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()

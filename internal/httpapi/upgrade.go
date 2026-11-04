@@ -116,7 +116,7 @@ func (s *Server) handleUpgradeRollback(w http.ResponseWriter, r *http.Request) {
 func writeUpgradeError(w http.ResponseWriter, s *Server, err error) {
 	status := http.StatusInternalServerError
 	switch {
-	case errors.Is(err, upgrade.ErrNoConfirm), errors.Is(err, upgrade.ErrBadTag), errors.Is(err, upgrade.ErrSame):
+	case errors.Is(err, upgrade.ErrNoConfirm), errors.Is(err, upgrade.ErrBadTag), errors.Is(err, upgrade.ErrSame), errors.Is(err, upgrade.ErrOlder):
 		status = http.StatusBadRequest
 	case errors.Is(err, upgrade.ErrNotFound):
 		status = http.StatusNotFound
