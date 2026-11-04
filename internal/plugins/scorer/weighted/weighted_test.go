@@ -38,11 +38,14 @@ func TestScore(t *testing.T) {
 
 func TestConfigErrors(t *testing.T) {
 	for y, want := range map[string]string{
-		"loss_weight: -1": "must not be negative",
+		"loss_weight: -1":                                 "must not be negative",
+		"loss_weight: .nan":                               "must be a finite number",
+		"jitter_weight: -.inf":                            "must be a finite number",
+		"reorder_weight: .nan":                            "must be a finite number",
 		"loss_weight: 0\nrtt_weight: 0\njitter_weight: 0": "at least one weight",
-		"bogus: 1":                              "field bogus not found",
-		"improvement_weights: {volume: -1}":     "improvement_weights.volume -1",
-		"improvement_weights: {performance: 0}": "performance or volume must be positive",
+		"bogus: 1":                                        "field bogus not found",
+		"improvement_weights: {volume: -1}":               "improvement_weights.volume -1",
+		"improvement_weights: {performance: 0}":           "performance or volume must be positive",
 	} {
 		if _, err := build(t, y); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%q: err = %v", y, err)

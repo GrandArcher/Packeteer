@@ -291,6 +291,7 @@ type SummaryRow struct {
 	Performance       int     `json:"performance"`
 	Commit            int     `json:"commit"`
 	Cost              int     `json:"cost"`
+	Static            int     `json:"static"`
 	Active            int     `json:"active"`
 	SteeredHours      float64 `json:"steered_hours"`
 	BeforeLossPct     float64 `json:"before_loss_pct"`
@@ -323,6 +324,8 @@ func (a *agg) summary(rep *Report) {
 			s.Commit++
 		case plugin.CauseCost:
 			s.Cost++
+		case plugin.CauseStatic:
+			s.Static++
 		default:
 			s.Performance++
 		}
@@ -344,7 +347,7 @@ func (a *agg) summary(rep *Report) {
 	s.SteeredHours, s.EstSavingsRate, s.EstSavingsAccrued = round(s.SteeredHours), round(s.EstSavingsRate), round(s.EstSavingsAccrued)
 	rep.Rows = []SummaryRow{s}
 	rep.lines = [][]string{{
-		strconv.Itoa(s.Improvements), strconv.Itoa(s.Performance), strconv.Itoa(s.Commit), strconv.Itoa(s.Cost), strconv.Itoa(s.Active),
+		strconv.Itoa(s.Improvements), strconv.Itoa(s.Performance), strconv.Itoa(s.Commit), strconv.Itoa(s.Cost), strconv.Itoa(s.Static), strconv.Itoa(s.Active),
 		f(s.SteeredHours), f(s.BeforeLossPct), f(s.AfterLossPct), f(s.BeforeRTTMs), f(s.AfterRTTMs),
 		strconv.Itoa(s.Probes), strconv.Itoa(s.FailedProbes), strconv.Itoa(s.Prefixes), f(s.EstSavingsRate), f(s.EstSavingsAccrued),
 	}}
@@ -437,6 +440,7 @@ type CauseRow struct {
 	Performance int    `json:"performance"`
 	Commit      int    `json:"commit"`
 	Cost        int    `json:"cost"`
+	Static      int    `json:"static"`
 	Total       int    `json:"total"`
 }
 
@@ -457,6 +461,8 @@ func (a *agg) causes(rep *Report) {
 			row.Commit++
 		case plugin.CauseCost:
 			row.Cost++
+		case plugin.CauseStatic:
+			row.Static++
 		default:
 			row.Performance++
 		}
@@ -469,7 +475,7 @@ func (a *agg) causes(rep *Report) {
 	slices.SortFunc(rows, func(x, y CauseRow) int { return cmp.Compare(x.Day, y.Day) })
 	rep.Rows = rows
 	for _, r := range rows {
-		rep.lines = append(rep.lines, []string{r.Day, strconv.Itoa(r.Performance), strconv.Itoa(r.Commit), strconv.Itoa(r.Cost), strconv.Itoa(r.Total)})
+		rep.lines = append(rep.lines, []string{r.Day, strconv.Itoa(r.Performance), strconv.Itoa(r.Commit), strconv.Itoa(r.Cost), strconv.Itoa(r.Static), strconv.Itoa(r.Total)})
 	}
 }
 
@@ -514,7 +520,7 @@ func (a *agg) performance(rep *Report) {
 		}
 	}
 	var rows []PerformanceRow
-	for _, c := range []string{plugin.CausePerformance, plugin.CauseCommit, plugin.CauseCost} {
+	for _, c := range []string{plugin.CausePerformance, plugin.CauseCommit, plugin.CauseCost, plugin.CauseStatic} {
 		if x := by[c]; x != nil {
 			rows = append(rows, row(c, x))
 		}

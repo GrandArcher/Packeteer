@@ -64,8 +64,8 @@ func New(c plugin.Config, _ plugin.Env) (plugin.Scorer, error) {
 		if pair.in == nil {
 			continue
 		}
-		if *pair.in < 0 {
-			return nil, fmt.Errorf("%s %v must not be negative", name, *pair.in)
+		if err := weights.CheckNonNegative(name, *pair.in); err != nil {
+			return nil, err
 		}
 		*pair.out = *pair.in
 	}

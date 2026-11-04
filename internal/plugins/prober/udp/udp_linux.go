@@ -4,7 +4,6 @@ package udp
 
 import (
 	"context"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"net"
@@ -12,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/sockerr"
 	"github.com/GrandArcher/Packeteer/internal/sockmark"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 	"golang.org/x/sys/unix"
@@ -141,7 +141,7 @@ func takeReply(fd int, target netip.Addr, v6 bool, start time.Time) (time.Durati
 func readQueues(fd int, buf, oob []byte, target netip.Addr, v6 bool, start time.Time) (rtt time.Duration, ok, saw bool) {
 	_, oobn, _, _, err := unix.Recvmsg(fd, buf, oob, unix.MSG_ERRQUEUE|unix.MSG_DONTWAIT)
 	if err == nil && oobn > 0 {
-		from, typ, parsed := parseExtErr(oob[:oobn])
+		from, typ, parsed := sockerr.Parse(oob[:oobn])
 		if parsed && unreachableFromTarget(from, target, typ, v6) {
 			return time.Since(start), true, true
 		}
@@ -165,47 +165,4 @@ func unreachableFromTarget(from, target netip.Addr, icmpType byte, v6 bool) bool
 		return icmpType == 1
 	}
 	return icmpType == 3
-}
-
-func parseExtErr(oob []byte) (from netip.Addr, icmpType byte, ok bool) {
-	msgs, err := unix.ParseSocketControlMessage(oob)
-	if err != nil {
-		return netip.Addr{}, 0, false
-	}
-	for _, m := range msgs {
-		if int(m.Header.Type) != unix.IP_RECVERR && int(m.Header.Type) != unix.IPV6_RECVERR {
-			continue
-		}
-		return parseExtErrData(m.Data)
-	}
-	return netip.Addr{}, 0, false
-}
-
-func parseExtErrData(data []byte) (from netip.Addr, icmpType byte, ok bool) {
-	if len(data) < 16+8 {
-		return netip.Addr{}, 0, false
-	}
-	origin := data[4]
-	if origin != unix.SO_EE_ORIGIN_ICMP && origin != unix.SO_EE_ORIGIN_ICMP6 {
-		return netip.Addr{}, 0, false
-	}
-	icmpType = data[5]
-	sa := data[16:]
-	family := binary.LittleEndian.Uint16(sa[:2])
-	switch family {
-	case unix.AF_INET:
-		if len(sa) < 8 {
-			return netip.Addr{}, 0, false
-		}
-		addr, ok := netip.AddrFromSlice(sa[4:8])
-		return addr, icmpType, ok
-	case unix.AF_INET6:
-		if len(sa) < 24 {
-			return netip.Addr{}, 0, false
-		}
-		addr, ok := netip.AddrFromSlice(sa[8:24])
-		return addr, icmpType, ok
-	default:
-		return netip.Addr{}, 0, false
-	}
 }

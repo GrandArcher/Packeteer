@@ -273,7 +273,7 @@ func TestCSV(t *testing.T) {
 	if err := build(t, ReportCauses).CSV(&buf); err != nil {
 		t.Fatal(err)
 	}
-	want := "day,performance,commit,cost,total\n2026-09-01,1,0,0,1\n2026-09-02,1,1,1,3\n"
+	want := "day,performance,commit,cost,static,total\n2026-09-01,1,0,0,0,1\n2026-09-02,1,1,1,0,3\n"
 	if buf.String() != want {
 		t.Fatalf("csv =\n%s", buf.String())
 	}
@@ -310,5 +310,56 @@ func TestImprovementsFilter(t *testing.T) {
 		if got := ids(c.mod); got != c.want {
 			t.Errorf("%s: rows = %q, want %q", c.name, got, c.want)
 		}
+	}
+}
+
+// FAB-32: a static pin is its own cause. It used to fall into performance.
+func TestStaticPinsAreNotCountedAsPerformance(t *testing.T) {
+	d2 := from.Add(24 * time.Hour)
+	h := plugin.History{Improvements: []plugin.ImprovementRecord{
+		{ID: "p", Prefix: pfxA, Provider: "transit-b", Native: "transit-a", Cause: plugin.CausePerformance,
+			Start: d2.Add(time.Hour), HasBefore: true, BeforeLoss: 10, HasAfter: true, AfterLoss: 0},
+		{ID: "s1", Prefix: pfxB, Provider: "transit-b", Native: "transit-a", Cause: plugin.CauseStatic,
+			Start: d2.Add(2 * time.Hour), HasBefore: true, BeforeLoss: 4, HasAfter: true, AfterLoss: 2},
+		{ID: "s2", Prefix: pfxC, Provider: "transit-b", Native: "transit-a", Cause: plugin.CauseStatic, Start: d2.Add(3 * time.Hour)},
+	}}
+	q := Query{From: from, To: to, Now: now}
+
+	q.Name = ReportSummary
+	rep, err := Build(h, q)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s := rep.Rows.([]SummaryRow)[0]; s.Improvements != 3 || s.Performance != 1 || s.Static != 2 || s.Commit != 0 || s.Cost != 0 {
+		t.Fatalf("summary = %+v", s)
+	}
+
+	q.Name = ReportCauses
+	rep, err = Build(h, q)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := rep.Rows.([]CauseRow)[0]; c.Performance != 1 || c.Static != 2 || c.Total != 3 {
+		t.Fatalf("causes = %+v", c)
+	}
+	var buf bytes.Buffer
+	if err := rep.CSV(&buf); err != nil {
+		t.Fatal(err)
+	}
+	if want := "day,performance,commit,cost,static,total\n2026-09-02,1,0,0,2,3\n"; buf.String() != want {
+		t.Fatalf("csv =\n%s", buf.String())
+	}
+
+	q.Name = ReportPerformance
+	rep, err = Build(h, q)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, r := range rep.Rows.([]PerformanceRow) {
+		names = append(names, r.Cause)
+	}
+	if !slices.Equal(names, []string{"performance", "static", "all"}) {
+		t.Fatalf("performance causes = %v", names)
 	}
 }

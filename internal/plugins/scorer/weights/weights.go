@@ -33,6 +33,19 @@ type Config struct {
 	Volume *float64 `yaml:"volume"`
 }
 
+// CheckNonNegative rejects NaN, Inf and negative values for a scorer
+// coefficient. A comparison like v < 0 lets NaN through, which then poisons
+// every score.
+func CheckNonNegative(name string, v float64) error {
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return fmt.Errorf("%s %v must be a finite number", name, v)
+	}
+	if v < 0 {
+		return fmt.Errorf("%s %v must not be negative", name, v)
+	}
+	return nil
+}
+
 // Weights implements plugin.ImprovementWeigher. The zero value is off.
 type Weights struct {
 	on          bool

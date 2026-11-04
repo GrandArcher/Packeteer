@@ -120,6 +120,18 @@ type IXPConnection struct {
 	Addresses  []IXPAddress   `json:"addresses"`
 }
 
+// IXFStateUp reports whether an IX-F connection state is one that carries
+// traffic: active, connected, or operational. An empty or other state
+// (inactive, pending) does not.
+func IXFStateUp(state string) bool {
+	switch state {
+	case "active", "connected", "operational":
+		return true
+	default:
+		return false
+	}
+}
+
 // IXPInterface is one physical interface. Switch and Colo are copied from
 // the switch list of this connection's IXP when switch_id matches. A
 // missing switch, or the same id on another IXP, leaves them empty.

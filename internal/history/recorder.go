@@ -138,7 +138,13 @@ type Recorder struct {
 	// lastProbeRound is the newest probe round in a round already kept.
 	lastProbeRound time.Time
 
+	// flushMu serializes Flush calls. storeMu is held for writing only
+	// while a batch is out of memory and not yet in the store, and for
+	// reading by History, so a read never falls between the two. Neither is
+	// held across the slow steps of a flush (provider series, rounds,
+	// volume lookup).
 	flushMu sync.Mutex
+	storeMu sync.RWMutex
 	cancel  context.CancelFunc
 	done    chan struct{}
 }
@@ -664,20 +670,26 @@ func (r *Recorder) Flush(ctx context.Context) error {
 		}
 	}
 	roundsTried, roundsErr := r.flushRounds(ctx)
+	infos := r.describePending(ctx)
+	r.storeMu.Lock()
+	defer r.storeMu.Unlock()
 	b, ps := r.take()
-	if len(ps) > 0 && (r.opt.Describe != nil || r.opt.Volumes != nil) {
-		var vols map[netip.Prefix]float64
-		if r.opt.Volumes != nil {
-			vols = r.opt.Volumes(ctx)
+	var late []netip.Prefix
+	for _, p := range ps {
+		info, ok := infos[p]
+		if !ok {
+			late = append(late, p)
+			continue
 		}
-		now := r.opt.Now().UTC()
-		for _, p := range ps {
-			info := plugin.PrefixInfo{Prefix: p, VolumeMbps: vols[p], Updated: now}
-			if r.opt.Describe != nil {
-				info.OriginASN, info.Country = r.opt.Describe(p)
-			}
-			b.Prefixes = append(b.Prefixes, info)
+		b.Prefixes = append(b.Prefixes, info)
+	}
+	if len(late) > 0 && (r.opt.Describe != nil || r.opt.Volumes != nil) {
+		// Added after the lookup: described by the next flush.
+		r.mu.Lock()
+		for _, p := range late {
+			r.prefixes[p] = true
 		}
+		r.mu.Unlock()
 	}
 	if len(b.Buckets) == 0 && len(b.Improvements) == 0 && len(b.Prefixes) == 0 && len(b.Mitigations) == 0 && len(b.Anomalies) == 0 && len(b.RPKIRoutes) == 0 {
 		if roundsTried && r.opt.OnWrite != nil {
@@ -698,13 +710,45 @@ func (r *Recorder) Flush(ctx context.Context) error {
 	return err
 }
 
+// describePending looks up the origin, country and volume of the prefixes
+// waiting to be flushed, without taking them. Nothing is described when
+// neither lookup is configured.
+func (r *Recorder) describePending(ctx context.Context) map[netip.Prefix]plugin.PrefixInfo {
+	if r.opt.Describe == nil && r.opt.Volumes == nil {
+		return nil
+	}
+	r.mu.Lock()
+	ps := make([]netip.Prefix, 0, len(r.prefixes))
+	for p := range r.prefixes {
+		ps = append(ps, p)
+	}
+	r.mu.Unlock()
+	if len(ps) == 0 {
+		return nil
+	}
+	var vols map[netip.Prefix]float64
+	if r.opt.Volumes != nil {
+		vols = r.opt.Volumes(ctx)
+	}
+	now := r.opt.Now().UTC()
+	out := make(map[netip.Prefix]plugin.PrefixInfo, len(ps))
+	for _, p := range ps {
+		info := plugin.PrefixInfo{Prefix: p, VolumeMbps: vols[p], Updated: now}
+		if r.opt.Describe != nil {
+			info.OriginASN, info.Country = r.opt.Describe(p)
+		}
+		out[p] = info
+	}
+	return out
+}
+
 // History reads the store for [from, to) and merges rows not yet flushed,
 // so a report includes the last minute.
 func (r *Recorder) History(ctx context.Context, from, to time.Time) (plugin.History, error) {
-	// A flush in progress has taken rows out of memory but not written
-	// them yet; wait for it so they are not missing from this read.
-	r.flushMu.Lock()
-	defer r.flushMu.Unlock()
+	// A flush has taken rows out of memory but may not have written them
+	// yet; wait for that write so they are not missing from this read.
+	r.storeMu.RLock()
+	defer r.storeMu.RUnlock()
 	h, err := r.opt.Store.Read(ctx, plugin.HistoryQuery{From: from, To: to})
 	if err != nil {
 		return h, err

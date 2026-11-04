@@ -257,7 +257,11 @@ func (s *Scheduler) deliver(ctx context.Context, e *entry, to time.Time) error {
 func Build(ctx context.Context, src Source, sub config.ReportSubscription, to time.Time) (plugin.ReportMail, error) {
 	to = to.UTC()
 	from := to.Add(-time.Duration(sub.Days) * 24 * time.Hour)
-	rep, err := src.Report(ctx, history.Query{Name: sub.Report, From: from, To: to, Now: to})
+	q := history.Query{Name: sub.Report, From: from, To: to, Now: to}
+	if def, ok := history.Lookup(sub.Report); ok && def.Limited {
+		q.Limit = history.MaxLimit
+	}
+	rep, err := src.Report(ctx, q)
 	if err != nil {
 		return plugin.ReportMail{}, fmt.Errorf("report %s: %w", sub.Report, err)
 	}
@@ -269,7 +273,11 @@ func Build(ctx context.Context, src Source, sub config.ReportSubscription, to ti
 	var text bytes.Buffer
 	fmt.Fprintf(&text, "Packeteer %s report (%s subscription %q).\n\n", sub.Report, sub.Schedule, sub.Name)
 	fmt.Fprintf(&text, "Range: %s to %s UTC, %d day(s)\n", from.Format(time.RFC3339), to.Format(time.RFC3339), sub.Days)
-	fmt.Fprintf(&text, "Rows: %d (CSV attached)\n\n", rep.Len())
+	if rep.Total > rep.Len() {
+		fmt.Fprintf(&text, "Rows: %d of %d (CSV attached; the report row limit cut the rest)\n\n", rep.Len(), rep.Total)
+	} else {
+		fmt.Fprintf(&text, "Rows: %d (CSV attached)\n\n", rep.Len())
+	}
 	text.WriteString("The same report is on the dashboard and at /api/reports/" + sub.Report + ".\n")
 	text.WriteString("Change or remove this subscription under report_subscriptions in the config file.\n")
 	mail := plugin.ReportMail{

@@ -275,7 +275,12 @@ type Source struct {
 	connMu sync.Mutex
 	conns  []*net.UDPConn
 	gen    uint64
-	wg     sync.WaitGroup
+	// unwatch ends the goroutine that closes the listeners when the
+	// context given to Start ends. Stop calls it, so a reload that replaces
+	// the source does not leave one goroutine per Start on the daemon
+	// context.
+	unwatch context.CancelFunc
+	wg      sync.WaitGroup
 
 	// queueFull counts datagrams whose records the workers could not
 	// take because the queue was full.
@@ -690,6 +695,8 @@ func (s *Source) Start(ctx context.Context) error {
 	s.conns = conns
 	s.gen++
 	gen := s.gen
+	watch, unwatch := context.WithCancel(ctx)
+	s.unwatch = unwatch
 	s.connMu.Unlock()
 	if s.ebpf != nil {
 		s.startEBPF(ctx)
@@ -714,7 +721,7 @@ func (s *Source) Start(ctx context.Context) error {
 		close(q)
 	}()
 	go func() {
-		<-ctx.Done()
+		<-watch.Done()
 		s.closeGen(gen)
 	}()
 	return nil
@@ -725,8 +732,13 @@ func (s *Source) Start(ctx context.Context) error {
 func (s *Source) Stop(ctx context.Context) error {
 	s.connMu.Lock()
 	gen := s.gen
+	unwatch := s.unwatch
+	s.unwatch = nil
 	s.connMu.Unlock()
 	s.closeGen(gen)
+	if unwatch != nil {
+		unwatch()
+	}
 	s.stopEBPF()
 	done := make(chan struct{})
 	go func() {

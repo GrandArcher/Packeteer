@@ -20,8 +20,10 @@ const DefaultEnterpriseOID = "1.3.6.1.4.1.8072.9999.9999.7717"
 const (
 	// minPassphrase is the shortest USM passphrase (RFC 3414 section 11.2).
 	minPassphrase = 8
-	// maxUser is the longest USM user name (RFC 3414).
-	maxUser = 32
+	// MaxUser is the longest USM user name (RFC 3414).
+	MaxUser = 32
+	// MaxSecret is the longest community string or passphrase accepted.
+	MaxSecret = 255
 )
 
 var (
@@ -52,7 +54,8 @@ func EngineID(s string) (string, error) {
 }
 
 // Secret reads the environment variable the config key names. A value
-// shorter than minLen is refused.
+// shorter than minLen, longer than MaxSecret, or holding CR, LF or NUL is
+// refused: the value reaches log lines and wire fields.
 func Secret(getenv func(string) string, key, name string, minLen int) (string, error) {
 	if !envName.MatchString(name) {
 		return "", fmt.Errorf("%s is required and must be an environment variable name", key)
@@ -63,6 +66,12 @@ func Secret(getenv func(string) string, key, name string, minLen int) (string, e
 			return "", fmt.Errorf("%s: %s is not set", key, name)
 		}
 		return "", fmt.Errorf("%s: %s must be at least %d characters", key, name, minLen)
+	}
+	if len(v) > MaxSecret {
+		return "", fmt.Errorf("%s: %s is longer than %d characters", key, name, MaxSecret)
+	}
+	if strings.ContainsAny(v, "\r\n\x00") {
+		return "", fmt.Errorf("%s: %s contains a newline or NUL", key, name)
 	}
 	return v, nil
 }
@@ -85,8 +94,8 @@ func (v V3) USM(getenv func(string) string) (*gosnmp.UsmSecurityParameters, gosn
 	if usm.UserName, err = Secret(getenv, "username_env", v.UsernameEnv, 1); err != nil {
 		return nil, 0, err
 	}
-	if len(usm.UserName) > maxUser {
-		return nil, 0, fmt.Errorf("username_env: longer than %d characters", maxUser)
+	if len(usm.UserName) > MaxUser {
+		return nil, 0, fmt.Errorf("username_env: longer than %d characters", MaxUser)
 	}
 	level := v.SecurityLevel
 	if level == "" {

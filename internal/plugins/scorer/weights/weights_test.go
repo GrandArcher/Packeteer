@@ -61,3 +61,21 @@ func TestErrors(t *testing.T) {
 		}
 	}
 }
+
+func TestCheckNonNegative(t *testing.T) {
+	for _, ok := range []float64{0, 0.5, 1e9} {
+		if err := CheckNonNegative("w", ok); err != nil {
+			t.Errorf("%v: %v", ok, err)
+		}
+	}
+	for v, want := range map[float64]string{
+		-1:           "w -1 must not be negative",
+		math.NaN():   "w NaN must be a finite number",
+		math.Inf(1):  "w +Inf must be a finite number",
+		math.Inf(-1): "w -Inf must be a finite number",
+	} {
+		if err := CheckNonNegative("w", v); err == nil || err.Error() != want {
+			t.Errorf("%v: err = %v, want %q", v, err, want)
+		}
+	}
+}

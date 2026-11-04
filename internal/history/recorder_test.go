@@ -683,3 +683,134 @@ func newSQLite(cfg plugin.Config) (*sqlite.Store, error) {
 	}
 	return s, err
 }
+
+// gateStore blocks Write until released, to hold a flush in the window
+// where its batch has left memory but is not in the store.
+type gateStore struct {
+	*memStore
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (g *gateStore) Write(ctx context.Context, b plugin.HistoryBatch) error {
+	g.entered <- struct{}{}
+	<-g.release
+	return g.memStore.Write(ctx, b)
+}
+
+func historyWithin(t *testing.T, rec *Recorder, d time.Duration) (plugin.History, bool) {
+	t.Helper()
+	type out struct {
+		h   plugin.History
+		err error
+	}
+	ch := make(chan out, 1)
+	go func() {
+		h, err := rec.History(context.Background(), t0.Truncate(24*time.Hour), t0.Add(24*time.Hour))
+		ch <- out{h, err}
+	}()
+	select {
+	case o := <-ch:
+		if o.err != nil {
+			t.Error(o.err)
+		}
+		return o.h, true
+	case <-time.After(d):
+		return plugin.History{}, false
+	}
+}
+
+// FAB-29: a read does not wait for the slow steps of a flush, only for the
+// store write, and it never loses or doubles the batch that write carries.
+func TestHistoryDoesNotWaitForSlowFlushSteps(t *testing.T) {
+	clock := t0
+	volStarted, volRelease := make(chan struct{}), make(chan struct{})
+	rec := New(Options{
+		Store: &memStore{}, Mode: "observe", FlushEvery: time.Hour,
+		Now: func() time.Time { return clock },
+		Volumes: func(context.Context) map[netip.Prefix]float64 {
+			close(volStarted)
+			<-volRelease
+			return nil
+		},
+	})
+	rec.Probe(result(pfxA, "transit-a", 0, 10*time.Millisecond, t0))
+	done := make(chan error, 1)
+	go func() { done <- rec.Flush(context.Background()) }()
+	<-volStarted
+	h, ok := historyWithin(t, rec, 2*time.Second)
+	if !ok {
+		close(volRelease)
+		t.Fatal("History blocked behind the volume lookup of a flush")
+	}
+	if len(h.Buckets) != 1 || h.Buckets[0].Probes != 1 {
+		t.Fatalf("unflushed bucket missing during the flush: %+v", h.Buckets)
+	}
+	close(volRelease)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestHistoryWaitsForTheStoreWriteAndCountsRowsOnce(t *testing.T) {
+	clock := t0
+	gs := &gateStore{memStore: &memStore{}, entered: make(chan struct{}, 1), release: make(chan struct{})}
+	rec := New(Options{Store: gs, Mode: "observe", FlushEvery: time.Hour, Now: func() time.Time { return clock }})
+	rec.Probe(result(pfxA, "transit-a", 0, 10*time.Millisecond, t0))
+	done := make(chan error, 1)
+	go func() { done <- rec.Flush(context.Background()) }()
+	<-gs.entered
+	if _, ok := historyWithin(t, rec, 200*time.Millisecond); ok {
+		t.Fatal("History read the store while a batch was between memory and the store")
+	}
+	close(gs.release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	h, ok := historyWithin(t, rec, 2*time.Second)
+	if !ok {
+		t.Fatal("History still blocked after the write finished")
+	}
+	if len(h.Buckets) != 1 || h.Buckets[0].Probes != 1 {
+		t.Fatalf("bucket counted wrong after flush: %+v", h.Buckets)
+	}
+}
+
+// A prefix first seen while a flush looks up volumes is not lost: the next
+// flush describes it.
+func TestFlushKeepsPrefixAddedDuringLookup(t *testing.T) {
+	clock := t0
+	store := &memStore{}
+	started, release := make(chan struct{}, 1), make(chan struct{})
+	block := true
+	rec := New(Options{
+		Store: store, Mode: "observe", FlushEvery: time.Hour,
+		Now: func() time.Time { return clock },
+		Volumes: func(context.Context) map[netip.Prefix]float64 {
+			if block {
+				started <- struct{}{}
+				<-release
+			}
+			return map[netip.Prefix]float64{pfxA: 1, pfxB: 2}
+		},
+	})
+	rec.Probe(result(pfxA, "transit-a", 0, 10*time.Millisecond, t0))
+	done := make(chan error, 1)
+	go func() { done <- rec.Flush(context.Background()) }()
+	<-started
+	rec.Probe(result(pfxB, "transit-a", 0, 10*time.Millisecond, t0))
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if len(store.h.Prefixes) != 1 || store.h.Prefixes[0].Prefix != pfxA {
+		t.Fatalf("first flush prefixes = %+v", store.h.Prefixes)
+	}
+	block = false
+	if err := rec.Flush(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.h.Prefixes) != 2 || store.h.Prefixes[1].Prefix != pfxB || store.h.Prefixes[1].VolumeMbps != 2 {
+		t.Fatalf("second flush prefixes = %+v", store.h.Prefixes)
+	}
+}

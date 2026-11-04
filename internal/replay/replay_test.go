@@ -377,3 +377,41 @@ func TestParseWindow(t *testing.T) {
 		}
 	}
 }
+
+// finerStore keeps round times to the nanosecond and answers [from, to)
+// oldest first, as plugin.RoundStore says.
+type finerStore struct{ recs []plugin.RoundRecord }
+
+func (finerStore) RoundRetention() time.Duration                         { return time.Hour }
+func (finerStore) PutRounds(context.Context, []plugin.RoundRecord) error { return nil }
+func (f finerStore) Rounds(_ context.Context, from, to time.Time, limit int) ([]plugin.RoundRecord, error) {
+	var out []plugin.RoundRecord
+	for _, r := range f.recs {
+		if !r.At.Before(from) && r.At.Before(to) && len(out) < limit {
+			out = append(out, r)
+		}
+	}
+	return out, nil
+}
+
+// FAB-33a: rounds closer than the old 1 ms cursor step are not skipped
+// between pages.
+func TestRunPagesKeepRoundsWithinOneMillisecond(t *testing.T) {
+	const n = 3*pageSize + 5
+	var recs []plugin.RoundRecord
+	for i := 0; i < n; i++ {
+		at := t0.Add(time.Duration(i) * 100 * time.Microsecond)
+		data, err := Encode(at, round(i))
+		if err != nil {
+			t.Fatal(err)
+		}
+		recs = append(recs, plugin.RoundRecord{At: at, Input: data})
+	}
+	res, err := Run(context.Background(), finerStore{recs}, t0, t0.Add(time.Hour), []Side{{Name: "running", Cfg: cfg(), Scorer: scorer(t)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Rounds != n {
+		t.Fatalf("replayed %d rounds, want %d", res.Rounds, n)
+	}
+}

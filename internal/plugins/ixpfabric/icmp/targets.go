@@ -118,7 +118,7 @@ func selectTargets(view plugin.MemberView, vantages []plugin.FabricVantage, part
 		for _, mi := range order {
 			m := view.Members[mi]
 			for _, c := range m.Connections {
-				if c.IXPID != ixpID || !upState(c.State) {
+				if c.IXPID != ixpID || !plugin.IXFStateUp(c.State) {
 					continue
 				}
 				sw := switchesOf(c)
@@ -204,15 +204,6 @@ func sameFamily(family string, addr netip.Addr) bool {
 		return family == "ipv4"
 	}
 	return family == "ipv6"
-}
-
-func upState(s string) bool {
-	switch s {
-	case "active", "connected", "operational":
-		return true
-	default:
-		return false
-	}
 }
 
 func switchesOf(c plugin.IXPConnection) []plugin.FabricSwitch {

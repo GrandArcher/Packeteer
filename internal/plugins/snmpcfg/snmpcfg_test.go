@@ -57,8 +57,38 @@ func TestUSMReadsTheEnvironmentAndKeepsLevelsApart(t *testing.T) {
 			t.Errorf("%s accepted", name)
 		}
 	}
-	env["U"] = strings.Repeat("u", maxUser+1)
+	env["U"] = strings.Repeat("u", MaxUser+1)
 	if _, _, err := (V3{UsernameEnv: "U", AuthEnv: "A", PrivEnv: "P"}).USM(get); err == nil {
 		t.Error("a user name over 32 characters accepted")
+	}
+}
+
+func TestSecretRefusesControlCharactersAndLongValues(t *testing.T) {
+	env := map[string]string{
+		"OK":   "lab-value-123",
+		"LF":   "lab\nvalue-123",
+		"CR":   "lab\rvalue-123",
+		"NUL":  "lab\x00value-123",
+		"LONG": strings.Repeat("x", MaxSecret+1),
+		"EDGE": strings.Repeat("x", MaxSecret),
+	}
+	get := func(k string) string { return env[k] }
+	for _, name := range []string{"OK", "EDGE"} {
+		if _, err := Secret(get, "community_env", name, 1); err != nil {
+			t.Errorf("%s refused: %v", name, err)
+		}
+	}
+	for name, want := range map[string]string{"LF": "newline or NUL", "CR": "newline or NUL", "NUL": "newline or NUL", "LONG": "longer than"} {
+		_, err := Secret(get, "community_env", name, 1)
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: err = %v, want %q", name, err, want)
+		}
+		if err != nil && strings.Contains(err.Error(), "value-123") {
+			t.Errorf("%s: error leaks the value: %v", name, err)
+		}
+	}
+	// The SNMPv3 passphrases go through the same check.
+	if _, _, err := (V3{UsernameEnv: "OK", SecurityLevel: "authNoPriv", AuthEnv: "LF"}).USM(get); err == nil {
+		t.Error("v3 passphrase with a newline accepted")
 	}
 }

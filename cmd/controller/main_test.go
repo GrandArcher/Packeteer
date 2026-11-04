@@ -215,7 +215,7 @@ telemetry:
 	if code := run(context.Background(), []string{"-check", "-config", path}, noEnv, &out, &errOut); code != 1 {
 		t.Fatalf("exit %d, want 1; stderr %s", code, errOut.String())
 	}
-	if !strings.Contains(errOut.String(), "empty or unset") || strings.Contains(errOut.String(), "lab-community-value") {
+	if !strings.Contains(errOut.String(), "is not set") || strings.Contains(errOut.String(), "lab-community-value") {
 		t.Fatalf("stderr = %q", errOut.String())
 	}
 	getenv := func(k string) string {

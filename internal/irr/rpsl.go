@@ -61,6 +61,8 @@ func (o Object) All(name string) []string {
 const (
 	maxLine  = 1 << 20
 	maxAttrs = 100_000
+	// maxValue bounds one attribute value joined from continuation lines.
+	maxValue = 64 << 10
 )
 
 // ParseRPSL reads RPSL objects separated by blank lines and calls fn for
@@ -71,7 +73,17 @@ func ParseRPSL(r io.Reader, fn func(Object) error) error {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), maxLine)
 	var obj Object
+	// val collects the open attribute's value: joining by string
+	// concatenation copies the whole value for every continuation line.
+	var val strings.Builder
+	closeAttr := func() {
+		if val.Len() > 0 {
+			obj[len(obj)-1].Value = val.String()
+			val.Reset()
+		}
+	}
 	flush := func() error {
+		closeAttr()
 		if len(obj) == 0 {
 			return nil
 		}
@@ -95,8 +107,16 @@ func ParseRPSL(r io.Reader, fn func(Object) error) error {
 				continue
 			}
 			if v := uncomment(line[1:]); v != "" {
-				last := &obj[len(obj)-1]
-				last.Value = strings.TrimSpace(last.Value + " " + v)
+				if val.Len() == 0 {
+					val.WriteString(obj[len(obj)-1].Value)
+				}
+				if val.Len()+1+len(v) > maxValue {
+					return fmt.Errorf("rpsl: attribute %q longer than %d bytes", obj[len(obj)-1].Name, maxValue)
+				}
+				if val.Len() > 0 {
+					val.WriteByte(' ')
+				}
+				val.WriteString(v)
 			}
 			continue
 		}
@@ -107,6 +127,7 @@ func ParseRPSL(r io.Reader, fn func(Object) error) error {
 		if !ok {
 			return fmt.Errorf("rpsl: line without an attribute name: %.80q", line)
 		}
+		closeAttr()
 		if len(obj) >= maxAttrs {
 			return fmt.Errorf("rpsl: object has more than %d attributes", maxAttrs)
 		}

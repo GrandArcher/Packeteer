@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"net/netip"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -163,4 +164,49 @@ func TestRestartAfterStop(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, "second datagram counted", func() bool { return windowBytes(t, s) == 2000 })
+}
+
+// FAB-27: Start on a context that outlives the source (the daemon context
+// during a reload) must not leave a goroutine behind after Stop.
+func TestStopEndsTheContextWatcher(t *testing.T) {
+	daemon, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	live := func() int {
+		buf := make([]byte, 1<<20)
+		buf = buf[:runtime.Stack(buf, true)]
+		return strings.Count(string(buf), "flow.(*Source).Start.func")
+	}
+	for range 5 {
+		s := mustSource(t, "listen: 127.0.0.1:0\n")
+		if err := s.Start(daemon); err != nil {
+			t.Fatal(err)
+		}
+		stop, c := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := s.Stop(stop); err != nil {
+			t.Fatal(err)
+		}
+		c()
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for live() != 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if n := live(); n != 0 {
+		t.Fatalf("%d Start goroutines still running after Stop", n)
+	}
+
+	// A restart on the same source still works and is closed by its context.
+	s := mustSource(t, "listen: 127.0.0.1:0\n")
+	for range 2 {
+		ctx, stopCtx := context.WithCancel(context.Background())
+		if err := s.Start(ctx); err != nil {
+			t.Fatal(err)
+		}
+		stop, c := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := s.Stop(stop); err != nil {
+			t.Fatal(err)
+		}
+		c()
+		stopCtx()
+	}
 }
