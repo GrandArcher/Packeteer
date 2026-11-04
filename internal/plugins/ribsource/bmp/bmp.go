@@ -321,17 +321,11 @@ func (s *Station) serve(router netip.Addr, sess *session) {
 	if s.idle > 0 {
 		r = &idleReader{conn: sess.conn, idle: s.idle}
 	}
-	err := readMessages(r, func(msg []byte) (err error) {
-		// A panic here would end the process and every other router's
-		// session. Ending only this session drops this router's paths
-		// (RIBRouterDown above), as a read error does.
-		defer func() {
-			if p := recover(); p != nil {
-				s.log.Error("bmp: panic handling a message; dropping router", "router", router, "panic", p, "stack", string(debug.Stack()))
-				err = fmt.Errorf("bmp: panic handling a message: %v", p)
-			}
-		}()
-		evs, stop := d.message(msg)
+	err := readMessages(r, func(msg []byte) error {
+		evs, stop, err := s.decode(d, router, msg)
+		if err != nil {
+			return err
+		}
 		for _, ev := range evs {
 			s.emit(ev)
 		}
@@ -347,6 +341,22 @@ func (s *Station) serve(router netip.Addr, sess *session) {
 		return
 	}
 	s.log.Info("bmp session down", "router", router)
+}
+
+// decode runs the decoder on one message. A panic in it ends only this
+// session, whose decoder state is dropped with it (RIBRouterDown follows, as
+// for a read error). The sink is never called under this recover: a panic
+// there may leave the RIB view locked, and the process must die and withdraw
+// its routes rather than run on a frozen view.
+func (s *Station) decode(d *decoder, router netip.Addr, msg []byte) (evs []plugin.RIBEvent, stop bool, err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			s.log.Error("bmp: panic decoding a message; dropping router", "router", router, "panic", p, "stack", string(debug.Stack()))
+			evs, stop, err = nil, false, fmt.Errorf("bmp: panic decoding a message: %v", p)
+		}
+	}()
+	evs, stop = d.message(msg)
+	return evs, stop, nil
 }
 
 // idleReader sets a read deadline before every read, so a session with no

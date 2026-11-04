@@ -2,6 +2,7 @@ package bmp
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"log/slog"
 	"net/netip"
@@ -47,11 +48,16 @@ func (l *logBuffer) String() string {
 	return l.b.String()
 }
 
-func startLoggedStation(t *testing.T, fn func(plugin.RIBEvent)) (*Station, *logBuffer) {
+// wrap, when set, decorates the log handler before the station starts.
+func startLoggedStation(t *testing.T, fn func(plugin.RIBEvent), wrap func(slog.Handler) slog.Handler) (*Station, *logBuffer) {
 	t.Helper()
 	st := newStation(t, "listen: \"127.0.0.1:0\"\nrouters: [127.0.0.1]")
 	lb := &logBuffer{}
-	st.log = slog.New(slog.NewTextHandler(lb, nil))
+	var h slog.Handler = slog.NewTextHandler(lb, nil)
+	if wrap != nil {
+		h = wrap(h)
+	}
+	st.log = slog.New(h)
 	st.SetRIBSink(fn)
 	start(t, st)
 	return st, lb
@@ -74,7 +80,7 @@ func TestShortNextHopPanicsGoBGPValidator(t *testing.T) {
 
 func TestStationSurvivesShortNextHop(t *testing.T) {
 	sk := &sink{}
-	st, lb := startLoggedStation(t, sk.add)
+	st, lb := startLoggedStation(t, sk.add, nil)
 	c := dial(t, st)
 	defer c.Close()
 	msgs := recorded(t)
@@ -109,19 +115,31 @@ func TestStationSurvivesShortNextHop(t *testing.T) {
 	}
 }
 
-func TestStationRecoversPanicPerRouter(t *testing.T) {
+// panicHandler panics on the first log record whose message contains
+// trigger, standing in for a bug in the decoder.
+type panicHandler struct {
+	slog.Handler
+	trigger string
+	fired   *atomic.Bool
+}
+
+func (h panicHandler) Handle(ctx context.Context, r slog.Record) error {
+	if strings.Contains(r.Message, h.trigger) && !h.fired.Swap(true) {
+		panic("decoder bug")
+	}
+	return h.Handler.Handle(ctx, r)
+}
+
+func TestStationRecoversDecoderPanicPerRouter(t *testing.T) {
 	sk := &sink{}
-	var panicked atomic.Bool
-	st, lb := startLoggedStation(t, func(e plugin.RIBEvent) {
-		if e.Kind == plugin.RIBPaths && !panicked.Swap(true) {
-			panic("sink bug")
-		}
-		sk.add(e)
+	st, lb := startLoggedStation(t, sk.add, func(h slog.Handler) slog.Handler {
+		return panicHandler{Handler: h, trigger: "undecodable route monitoring", fired: &atomic.Bool{}}
 	})
 	msgs := recorded(t)
 	c := dial(t, st)
 	defer c.Close()
-	for _, m := range [][]byte{msgs[1], msgs[4]} {
+	a := peerHeader(t, gobmp.BMP_PEER_TYPE_GLOBAL, gobmp.BMP_PEER_FLAG_POST_POLICY, "192.0.2.21", 64496, "192.0.2.21")
+	for _, m := range [][]byte{msgs[1], msgs[4], rawMessage(t, gobmp.BMP_MSG_ROUTE_MONITORING, a, shortNextHop)} {
 		if _, err := c.Write(m); err != nil {
 			t.Fatal(err)
 		}
@@ -135,10 +153,11 @@ func TestStationRecoversPanicPerRouter(t *testing.T) {
 		evs := sk.snapshot()
 		return len(evs) > 0 && evs[len(evs)-1].Kind == plugin.RIBRouterDown
 	})
-	if logs := lb.String(); !strings.Contains(logs, "panic handling a message") || !strings.Contains(logs, "sink bug") {
+	if logs := lb.String(); !strings.Contains(logs, "panic decoding a message") || !strings.Contains(logs, "decoder bug") {
 		t.Fatalf("panic not logged:\n%s", logs)
 	}
 	// The process and the listener are still up: the router reconnects.
+	n := len(sk.snapshot())
 	c2 := dial(t, st)
 	defer c2.Close()
 	for _, m := range [][]byte{msgs[1], msgs[4]} {
@@ -148,7 +167,7 @@ func TestStationRecoversPanicPerRouter(t *testing.T) {
 	}
 	waitFor(t, "paths after reconnect", func() bool {
 		evs := sk.snapshot()
-		return evs[len(evs)-1].Kind == plugin.RIBPaths
+		return len(evs) > n && evs[len(evs)-1].Kind == plugin.RIBPaths
 	})
 }
 
