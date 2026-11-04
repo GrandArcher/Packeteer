@@ -33,7 +33,15 @@ func (l learnedRIB) Covering(p netip.Prefix) (rib.Route, bool) {
 	}
 	return best, ok
 }
-func (l learnedRIB) Routes() []rib.Route            { return l }
+func (l learnedRIB) Find(keep func(rib.Route) bool, _ func(a, b rib.Route) bool, limit int) ([]rib.Route, int) {
+	var out []rib.Route
+	for _, r := range l {
+		if keep(r) {
+			out = append(out, r)
+		}
+	}
+	return out[:min(len(out), limit)], len(out)
+}
 func (l learnedRIB) Paths(netip.Prefix) []rib.Route { return nil }
 
 // manualRig is the #126 flow in inject mode: Probe and optimize queues a

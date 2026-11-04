@@ -270,6 +270,7 @@ func probeKeys(a, b config.Probe) (restart, online []string) {
 	pair("retry_loss_pct", a.RetryLossPct, b.RetryLossPct, true)
 	pair("retry_packets", a.RetryPackets, b.RetryPackets, true)
 	pair("workers", a.Workers, b.Workers, false)
+	pair("provider_inflight", a.ProviderInflight, b.ProviderInflight, false)
 	pair("rate_limit_pps", a.RateLimitPPS, b.RateLimitPPS, false)
 	pair("per_asn_pps", a.PerASNPPS, b.PerASNPPS, false)
 	pair("exclude", a.Exclude, b.Exclude, false)

@@ -24,7 +24,7 @@ func TestDispatcherSharesWorkersAcrossProviders(t *testing.T) {
 	for i := 0; i < 4; i++ {
 		jobs = append(jobs, testJob("dead", i), testJob("live", i))
 	}
-	d := newDispatcher(jobs, nil)
+	d := newDispatcher(jobs, nil, 0)
 	// Four workers take a job each and none returns, as when the dead
 	// provider's probes hang.
 	var got []string
@@ -48,7 +48,7 @@ func TestDispatcherSharesWorkersAcrossProviders(t *testing.T) {
 }
 
 func TestDispatcherPrefersFreeProviderOverRank(t *testing.T) {
-	d := newDispatcher([]job{testJob("dead", 1), testJob("dead", 2), testJob("live", 3)}, nil)
+	d := newDispatcher([]job{testJob("dead", 1), testJob("dead", 2), testJob("live", 3)}, nil, 0)
 	first, _ := d.next() // dead
 	second, _ := d.next()
 	if first.provider.Name != "dead" || second.provider.Name != "live" {
@@ -58,7 +58,7 @@ func TestDispatcherPrefersFreeProviderOverRank(t *testing.T) {
 }
 
 func TestDispatcherLetsLastProviderTakeEveryWorker(t *testing.T) {
-	d := newDispatcher([]job{testJob("a", 1), testJob("a", 2), testJob("a", 3)}, nil)
+	d := newDispatcher([]job{testJob("a", 1), testJob("a", 2), testJob("a", 3)}, nil, 0)
 	for i := 0; i < 3; i++ {
 		if _, ok := d.next(); !ok {
 			t.Fatalf("worker %d got no job while one provider had work left", i)
@@ -70,7 +70,7 @@ func TestDispatcherLetsLastProviderTakeEveryWorker(t *testing.T) {
 }
 
 func TestDispatcherDoneFreesTheShare(t *testing.T) {
-	d := newDispatcher([]job{testJob("a", 1), testJob("b", 2), testJob("a", 3), testJob("b", 4)}, nil)
+	d := newDispatcher([]job{testJob("a", 1), testJob("b", 2), testJob("a", 3), testJob("b", 4)}, nil, 0)
 	a1, _ := d.next()
 	b2, _ := d.next()
 	d.done(b2, true)
@@ -86,7 +86,7 @@ func TestDispatcherDoneFreesTheShare(t *testing.T) {
 
 func TestDispatcherLooksDown(t *testing.T) {
 	jobs := []job{testJob("a", 1), testJob("a", 2), testJob("b", 3), testJob("b", 4), testJob("c", 5)}
-	d := newDispatcher(jobs, map[string]bool{"a": true, "b": true, "c": false})
+	d := newDispatcher(jobs, map[string]bool{"a": true, "b": true, "c": false}, 0)
 	if d.looksDown("a") {
 		t.Fatal("a provider with no finished job this round looks down")
 	}
@@ -327,4 +327,61 @@ func TestSilentHostLimitOnlyForDownProvider(t *testing.T) {
 			t.Fatalf("after a reply this round, asked %v, want every host %v", asked[pfx1], h1)
 		}
 	})
+}
+
+func TestDispatcherInflightLimitHoldsWorkerUntilDone(t *testing.T) {
+	jobs := []job{testJob("a", 1), testJob("a", 2), testJob("a", 3)}
+	d := newDispatcher(jobs, nil, 2)
+	first, _ := d.next()
+	if _, ok := d.next(); !ok {
+		t.Fatal("second job under the limit was refused")
+	}
+	got := make(chan bool, 1)
+	go func() {
+		_, ok := d.next()
+		got <- ok
+	}()
+	select {
+	case ok := <-got:
+		t.Fatalf("third job started with two in flight and a limit of 2 (ok=%v)", ok)
+	case <-time.After(50 * time.Millisecond):
+	}
+	d.done(first, true)
+	select {
+	case ok := <-got:
+		if !ok {
+			t.Fatal("waiting worker got no job after done freed a slot")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("waiting worker was not woken by done")
+	}
+}
+
+func TestDispatcherInflightLimitLetsOtherProviderRun(t *testing.T) {
+	d := newDispatcher([]job{testJob("a", 1), testJob("a", 2), testJob("b", 3)}, nil, 1)
+	first, _ := d.next()
+	second, ok := d.next()
+	if !ok || first.provider.Name != "a" || second.provider.Name != "b" {
+		t.Fatalf("got %s then %s (ok=%v), want a then b while a is at its limit", first.provider.Name, second.provider.Name, ok)
+	}
+}
+
+func TestDispatcherStopReleasesWaitingWorker(t *testing.T) {
+	d := newDispatcher([]job{testJob("a", 1), testJob("a", 2)}, nil, 1)
+	d.next()
+	got := make(chan bool, 1)
+	go func() {
+		_, ok := d.next()
+		got <- ok
+	}()
+	time.Sleep(20 * time.Millisecond)
+	d.stop()
+	select {
+	case ok := <-got:
+		if ok {
+			t.Fatal("a stopped dispatcher handed out a job")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("stop did not release the waiting worker")
+	}
 }

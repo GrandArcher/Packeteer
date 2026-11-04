@@ -7,9 +7,13 @@ import "sync"
 // whole timeout; handing the next job to the provider with the fewest jobs
 // in flight leaves the other workers to the other providers. When only one
 // provider has work left it may take them all, so the split never idles a
-// worker.
+// worker. A positive limit caps the jobs one provider may have in flight
+// (#491); a worker then waits when every provider with work is at the cap.
 type dispatcher struct {
 	mu       sync.Mutex
+	cond     *sync.Cond
+	limit    int
+	stopped  bool
 	queued   map[string][]queuedJob // per provider, in priority order
 	inflight map[string]int
 	names    []string
@@ -27,9 +31,10 @@ type queuedJob struct {
 	job job
 }
 
-func newDispatcher(jobs []job, silentBefore map[string]bool) *dispatcher {
+func newDispatcher(jobs []job, silentBefore map[string]bool, limit int) *dispatcher {
 	d := &dispatcher{queued: map[string][]queuedJob{}, inflight: map[string]int{},
-		replied: map[string]int{}, silent: map[string]int{}, silentBefore: silentBefore}
+		replied: map[string]int{}, silent: map[string]int{}, silentBefore: silentBefore, limit: limit}
+	d.cond = sync.NewCond(&d.mu)
 	for i, j := range jobs {
 		n := j.provider.Name
 		if _, ok := d.queued[n]; !ok {
@@ -42,14 +47,49 @@ func newDispatcher(jobs []job, silentBefore map[string]bool) *dispatcher {
 
 // next returns the next job and counts it in flight; the caller passes it
 // to done when it finishes. The provider with the fewest jobs in flight
-// goes first. On a tie, the provider whose next job ranks first does.
+// goes first. On a tie, the provider whose next job ranks first does. It
+// blocks while every provider with work is at the in-flight limit, and
+// returns false when no work is left or the dispatcher was stopped.
 func (d *dispatcher) next() (job, bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	best := ""
+	for {
+		if d.stopped {
+			return job{}, false
+		}
+		best, queued := d.pick()
+		if best != "" {
+			q := d.queued[best]
+			d.queued[best] = q[1:]
+			d.inflight[best]++
+			return q[0].job, true
+		}
+		if !queued {
+			return job{}, false
+		}
+		d.cond.Wait()
+	}
+}
+
+// stop releases every worker waiting in next. The round calls it at its
+// deadline, when no further job may start.
+func (d *dispatcher) stop() {
+	d.mu.Lock()
+	d.stopped = true
+	d.mu.Unlock()
+	d.cond.Broadcast()
+}
+
+// pick returns the provider that takes the next job, or "" when none may.
+// queued reports whether any provider still has jobs, capped or not.
+func (d *dispatcher) pick() (best string, queued bool) {
 	for _, n := range d.names {
 		q := d.queued[n]
 		if len(q) == 0 {
+			continue
+		}
+		queued = true
+		if d.limit > 0 && d.inflight[n] >= d.limit {
 			continue
 		}
 		if best == "" || d.inflight[n] < d.inflight[best] ||
@@ -57,13 +97,7 @@ func (d *dispatcher) next() (job, bool) {
 			best = n
 		}
 	}
-	if best == "" {
-		return job{}, false
-	}
-	q := d.queued[best]
-	d.queued[best] = q[1:]
-	d.inflight[best]++
-	return q[0].job, true
+	return best, queued
 }
 
 // done records that j finished; replied is whether any of its hosts
@@ -78,6 +112,7 @@ func (d *dispatcher) done(j job, replied bool) {
 		d.silent[n]++
 	}
 	d.mu.Unlock()
+	d.cond.Broadcast()
 }
 
 // looksDown reports whether provider got no reply in its last round, and

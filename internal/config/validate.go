@@ -542,6 +542,9 @@ func (c *Config) validateProbeBudget(add func(string, ...any)) {
 	if c.Probe.PerASNPPS < 0 || c.Probe.PerASNPPS > c.Probe.RateLimitPPS {
 		add("probe.per_asn_pps %d must be between 0 and probe.rate_limit_pps %d", c.Probe.PerASNPPS, c.Probe.RateLimitPPS)
 	}
+	if c.Probe.ProviderInflight < 0 || c.Probe.ProviderInflight > c.Probe.Workers {
+		add("probe.provider_inflight %d must be between 0 and probe.workers %d", c.Probe.ProviderInflight, c.Probe.Workers)
+	}
 	c.Probe.Exclude.validate(add, "probe.exclude")
 	if c.Probe.PerTargetConcurrency < 1 || c.Probe.PerTargetConcurrency > MaxProbePerTargetConcurrency {
 		add("probe.per_target_concurrency %d must be between 1 and %d", c.Probe.PerTargetConcurrency, MaxProbePerTargetConcurrency)

@@ -193,7 +193,9 @@ go test ./internal/policy -run xxx -bench Decide100k -benchmem
 go test ./internal/probe -run xxx -bench ProbeRound100k -benchmem
 ```
 
-On an 8-core development machine one `Decide` takes about 0.4 s and allocates about 170 MB, and one probe round against a prober that answers at once takes about 2.2 s and allocates about 2.5 GB, which the garbage collector frees. Before #387 `Decide` took 45 s here: the confirmation checks scanned every result for each prefix with a better path. `Decide` and announce/withdraw stay single-threaded to keep per-prefix order.
+On an 8-core development machine one `Decide` takes about 0.4 s and allocates about 170 MB, and one probe round against a prober that answers at once takes about 2.3 s and allocates about 3.0 GB in 9.0 million allocations, which the garbage collector frees. Since #491 the collector reads from a channel of one slot per worker instead of one `Result` slot per job (400,000 at this size), which took 3.13 GB to 2.96 GB per round here; the rest is the 400,000 stored results and their probe runs. The flow decoder (`BenchmarkDecodeV5`, about 30 ns a record) was measured for #491 and not changed: one reader per socket decodes far faster than a UDP socket delivers. Before #387 `Decide` took 45 s here: the confirmation checks scanned every result for each prefix with a better path. `Decide` and announce/withdraw stay single-threaded to keep per-prefix order.
+
+`bench.yml` (#491) runs every Go benchmark nightly (02:23 UTC, schedule only, not a pull request check) with `-benchmem -count=3` and uploads `bench.txt`, so two nights compare with `benchstat`.
 
 ## Run it yourself
 

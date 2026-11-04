@@ -64,7 +64,9 @@ type RIB interface {
 	Ready() bool
 	Exact(p netip.Prefix) (rib.Route, bool)
 	Covering(p netip.Prefix) (rib.Route, bool)
-	Routes() []rib.Route
+	// Find returns the first limit selected routes for which keep is true,
+	// ordered by before, and how many matched, without copying the table.
+	Find(keep func(rib.Route) bool, before func(a, b rib.Route) bool, limit int) ([]rib.Route, int)
 	// Paths lists every path held for exactly p (iBGP add-path and BMP
 	// paths included), not only the published best.
 	Paths(p netip.Prefix) []rib.Route
@@ -252,16 +254,21 @@ func (t *Tools) LookingGlass(p netip.Prefix) (Glass, error) {
 	if r, ok := v.Covering(p); ok {
 		g.Covering = &r
 	}
-	for _, r := range v.Routes() {
-		if r.Prefix.Bits() > p.Bits() && p.Contains(r.Prefix.Addr()) {
-			if len(g.MoreSpecifics) == maxMoreSpecifics {
-				g.Truncated = true
-				break
-			}
-			g.MoreSpecifics = append(g.MoreSpecifics, r)
-		}
-	}
+	more, matched := v.Find(func(r rib.Route) bool {
+		return r.Prefix.Bits() > p.Bits() && p.Contains(r.Prefix.Addr())
+	}, prefixBefore, maxMoreSpecifics)
+	g.MoreSpecifics = append(g.MoreSpecifics, more...)
+	g.Truncated = matched > maxMoreSpecifics
 	return g, nil
+}
+
+// prefixBefore orders routes by address, then length, the order the RIB
+// view lists them in.
+func prefixBefore(a, b rib.Route) bool {
+	if c := a.Prefix.Addr().Compare(b.Prefix.Addr()); c != 0 {
+		return c < 0
+	}
+	return a.Prefix.Bits() < b.Prefix.Bits()
 }
 
 // CheckTarget rejects addresses the active tools must never send to.

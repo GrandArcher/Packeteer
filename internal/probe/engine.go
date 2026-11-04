@@ -86,6 +86,7 @@ type Options struct {
 	Timeout              time.Duration // per-packet timeout
 	Packets              int           // packets per probe run
 	Workers              int           // concurrent probe runs
+	ProviderInflight     int           // concurrent runs per provider; 0 is no cap
 	PerTargetConcurrency int           // concurrent runs toward one target host
 	Limiter              Limiter       // nil: unlimited
 	Logger               *slog.Logger
@@ -1218,14 +1219,16 @@ func (e *Engine) runRound(ctx context.Context, allow func(plugin.Target) bool, m
 	// prefixes before a longer tail (#118, #125).
 	sortJobs(jobs, e.interval())
 
-	disp := newDispatcher(jobs, e.silentProviders())
+	disp := newDispatcher(jobs, e.silentProviders(), e.opt.ProviderInflight)
+	context.AfterFunc(roundCtx, disp.stop)
 	type outcome struct {
 		res        Result
 		sourceDown bool
 	}
-	// Buffered so a worker that finished before the deadline never blocks
-	// on the send, including after the collector has stopped reading.
-	outs := make(chan outcome, len(jobs))
+	// The channel holds a few results per worker, not one per job (400,000
+	// Result slots at 100,000 targets and 4 providers). A send gives up at
+	// the deadline, so a worker never blocks once the collector has stopped.
+	outs := make(chan outcome, e.opt.Workers)
 	var wg sync.WaitGroup
 	for i := 0; i < e.opt.Workers; i++ {
 		wg.Add(1)
@@ -1255,7 +1258,11 @@ func (e *Engine) runRound(ctx context.Context, allow func(plugin.Target) bool, m
 				if roundCtx.Err() != nil {
 					return
 				}
-				outs <- outcome{r, srcDown}
+				select {
+				case outs <- outcome{r, srcDown}:
+				case <-roundCtx.Done():
+					return
+				}
 			}
 		}()
 	}
@@ -1293,9 +1300,11 @@ func (e *Engine) runRound(ctx context.Context, allow func(plugin.Target) bool, m
 			collecting = false
 		}
 	}
-	// Workers that finished before the deadline have already sent. A
-	// round whose every job reported is complete even if the deadline
-	// fired while the collector was choosing between the two channels.
+	// Results already in the channel when the deadline fired are kept. A
+	// worker blocked on a full channel at the deadline drops its result,
+	// which only leaves that prefix on its previous result. A round whose
+	// every job reported is complete even if the deadline fired while the
+	// collector was choosing between the two channels.
 	for drain := true; drain; {
 		select {
 		case o, ok := <-outs:

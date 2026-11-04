@@ -173,8 +173,12 @@ type Controller struct {
 
 	mu     sync.Mutex
 	active map[netip.Prefix]slot // exact learned prefix -> what is on the wire
-	onWire atomic.Int64          // improvements on the wire
-	routes atomic.Int64          // routes on the wire, more-specifics included
+	// improvements counts the slots in active that are not more-specifics,
+	// kept by setActiveLocked, dropActiveLocked, and clearActiveLocked so
+	// the cap check does not walk the table (#491).
+	improvements int
+	onWire       atomic.Int64 // improvements on the wire
+	routes       atomic.Int64 // routes on the wire, more-specifics included
 	// srv is the RIB view's speaker. bound is true after a successful
 	// bind. RememberSpeaker stores srv before inject is on, so a later
 	// mode change can bind without a restart (#128).
@@ -223,20 +227,32 @@ func (s slot) moreSpecific() bool { return s.parent.IsValid() }
 
 // store publishes the on-wire counts. Caller holds mu.
 func (c *Controller) store() {
-	c.onWire.Store(int64(c.improvementsLocked()))
+	c.onWire.Store(int64(c.improvements))
 	c.routes.Store(int64(len(c.active)))
 }
 
-// improvementsLocked counts improvements on the wire, not their
-// more-specifics.
-func (c *Controller) improvementsLocked() int {
-	n := 0
-	for _, s := range c.active {
-		if !s.moreSpecific() {
-			n++
-		}
+// setActiveLocked is the only way to put a slot in active, so improvements
+// stays equal to the number of non-more-specific slots.
+func (c *Controller) setActiveLocked(p netip.Prefix, s slot) {
+	if old, on := c.active[p]; on && !old.moreSpecific() {
+		c.improvements--
 	}
-	return n
+	if !s.moreSpecific() {
+		c.improvements++
+	}
+	c.active[p] = s
+}
+
+func (c *Controller) dropActiveLocked(p netip.Prefix) {
+	if old, on := c.active[p]; on && !old.moreSpecific() {
+		c.improvements--
+	}
+	delete(c.active, p)
+}
+
+func (c *Controller) clearActiveLocked() {
+	c.active = map[netip.Prefix]slot{}
+	c.improvements = 0
 }
 
 // validateInject checks the settings inject mode needs and returns cfg with
@@ -932,7 +948,7 @@ func (c *Controller) syncMoreSpecificsLocked(ctx context.Context, p netip.Prefix
 		default:
 			s.seen, s.held = time.Time{}, false
 		}
-		c.active[m] = s
+		c.setActiveLocked(m, s)
 		visited[m] = true
 		if s.provider != par.provider || s.localPref != par.localPref || !slices.Equal(s.communities, par.communities) || !slices.Equal(s.asPath, c.asPath(m, par.provider)) {
 			if err := c.announceMoreSpecificLocked(ctx, m, p, par.provider); err != nil {
@@ -950,7 +966,7 @@ func (c *Controller) syncMoreSpecificsLocked(ctx context.Context, p netip.Prefix
 				// It moves from a shorter improvement to this one.
 				visited[m] = true
 				s.parent, s.seen, s.held = p, time.Time{}, false
-				c.active[m] = s
+				c.setActiveLocked(m, s)
 				if s.provider != par.provider || s.localPref != par.localPref || !slices.Equal(s.communities, par.communities) || !slices.Equal(s.asPath, c.asPath(m, par.provider)) {
 					if err := c.announceMoreSpecificLocked(ctx, m, p, par.provider); err != nil {
 						errs = append(errs, err)
@@ -1017,7 +1033,7 @@ func (c *Controller) announceMoreSpecificLocked(ctx context.Context, m, parent n
 	if on && old.moreSpecific() && old.parent == parent {
 		s.seen, s.held = old.seen, old.held
 	}
-	c.active[m] = s
+	c.setActiveLocked(m, s)
 	c.log.Info("injected more-specific", "prefix", m, "improvement", parent, "provider", provider, "next_hop", nh, "local_pref", lp, "as_path", fmt.Sprint(rt.ASPath), "communities", strings.Join(comms, ","))
 	return nil
 }
@@ -1040,7 +1056,7 @@ func (c *Controller) withdrawAllLocked(ctx context.Context) error {
 	if err := c.ann.WithdrawAll(ctx); err != nil {
 		return err
 	}
-	c.active = map[netip.Prefix]slot{}
+	c.clearActiveLocked()
 	return nil
 }
 
@@ -1052,7 +1068,7 @@ func (c *Controller) withdrawLocked(ctx context.Context, p netip.Prefix) error {
 	if err := c.ann.Withdraw(ctx, p); err != nil {
 		return err
 	}
-	delete(c.active, p)
+	c.dropActiveLocked(p)
 	return nil
 }
 
@@ -1081,7 +1097,7 @@ func (c *Controller) announceLocked(ctx context.Context, imp policy.Improvement)
 	// A learned more-specific becoming an improvement of its own is a new
 	// improvement for this cap. More-specifics do not count here; MaxRoutes
 	// bounds them.
-	if s, exists := c.active[p]; (!exists || s.moreSpecific()) && c.improvementsLocked()+others >= c.cfg.MaxImprovements {
+	if s, exists := c.active[p]; (!exists || s.moreSpecific()) && c.improvements+others >= c.cfg.MaxImprovements {
 		return fmt.Errorf("announce: max_improvements (%d) reached", c.cfg.MaxImprovements)
 	}
 	lp := c.localPref(imp.Provider, imp.Cause)
@@ -1097,7 +1113,7 @@ func (c *Controller) announceLocked(ctx context.Context, imp policy.Improvement)
 	if err := c.ann.Announce(ctx, rt); err != nil {
 		return err
 	}
-	c.active[p] = slot{provider: imp.Provider, asPath: rt.ASPath, localPref: lp, communities: comms, cover: imp.Covering}
+	c.setActiveLocked(p, slot{provider: imp.Provider, asPath: rt.ASPath, localPref: lp, communities: comms, cover: imp.Covering})
 	if imp.Covering.IsValid() {
 		c.log.Warn("injected synthesized more-specific; it is not in the learned RIB", "prefix", p, "covering", imp.Covering, "provider", imp.Provider, "next_hop", nh, "local_pref", lp, "as_path", fmt.Sprint(rt.ASPath), "communities", strings.Join(comms, ","))
 		return nil
@@ -1243,7 +1259,7 @@ func (c *Controller) SetRouters(ctx context.Context, routers []plugin.RouterExpo
 	err := r.SetRouters(ctx, routers)
 	// Whatever the outcome, nothing is known to be on the wire any more;
 	// the caller stops the controller on an error, which withdraws again.
-	c.active = map[netip.Prefix]slot{}
+	c.clearActiveLocked()
 	if err != nil {
 		return err
 	}
