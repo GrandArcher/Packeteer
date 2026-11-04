@@ -138,11 +138,11 @@ type Recorder struct {
 	// lastProbeRound is the newest probe round in a round already kept.
 	lastProbeRound time.Time
 
-	// flushMu serializes Flush calls. storeMu is held for writing only
-	// while a batch is out of memory and not yet in the store, and for
-	// reading by History, so a read never falls between the two. Neither is
-	// held across the slow steps of a flush (provider series, rounds,
-	// volume lookup).
+	// flushMu serializes Flush calls for their whole run. storeMu is held
+	// for writing only while a batch is out of memory and not yet in the
+	// store (take through Store.Write), and for reading by History, so a
+	// read never falls between the two. It is not held across the provider
+	// series, round and volume steps of a flush.
 	flushMu sync.Mutex
 	storeMu sync.RWMutex
 	cancel  context.CancelFunc

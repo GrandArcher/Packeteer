@@ -42,8 +42,8 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 - Scorer weights, `balance_slack` and `min_mbps` reject NaN and Inf (#509).
 - The traceroute source ends a trace only on a datagram from the target; the ICMP error parser and the SNMP secret check (no CR, LF or NUL, at most 255) are shared (#509).
 - An RPSL attribute is joined in linear time and capped at 64 KB; a stopped flow source frees its watcher goroutine (#509).
-- Report reads no longer wait for a flush's slow steps; subscription emails carry up to 10000 rows and say "N of M" when cut (#509).
-- Static pins count as `static` in the summary, causes and performance reports (new `static` column before `total` in the causes CSV) (#509).
+- Report reads wait only for a flush's store write, not its provider series, rounds or volume lookup; subscription emails carry up to 10000 rows and say "N of M" when cut (#509).
+- Static pins count as `static` in the summary, causes and performance reports (new `static` CSV column: before `total` in causes, before `active` in summary) (#509).
 - The commit planner is not offered a synthesized sub-range; replay pages lose no round within 1 ms; the PeeringDB IX-F import keeps `operational` (#509).
 
 ## [0.9.0] - 2026-11-02

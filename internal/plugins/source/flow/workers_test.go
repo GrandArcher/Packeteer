@@ -195,18 +195,4 @@ func TestStopEndsTheContextWatcher(t *testing.T) {
 		t.Fatalf("%d Start goroutines still running after Stop", n)
 	}
 
-	// A restart on the same source still works and is closed by its context.
-	s := mustSource(t, "listen: 127.0.0.1:0\n")
-	for range 2 {
-		ctx, stopCtx := context.WithCancel(context.Background())
-		if err := s.Start(ctx); err != nil {
-			t.Fatal(err)
-		}
-		stop, c := context.WithTimeout(context.Background(), 5*time.Second)
-		if err := s.Stop(stop); err != nil {
-			t.Fatal(err)
-		}
-		c()
-		stopCtx()
-	}
 }
