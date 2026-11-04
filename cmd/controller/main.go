@@ -872,6 +872,11 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	}
 	ha := newHAControl(plugins, log, haView, func(ctx context.Context) error {
 		return errors.Join(mit.WithdrawAll(ctx), inb.WithdrawAll(ctx), ctl.WithdrawAll(ctx))
+	}, func(ctx context.Context) error {
+		if view == nil {
+			return nil
+		}
+		return view.DropSessions(ctx)
 	}, poke, watch.emit)
 	if err := plugins.Start(ctx); err != nil {
 		log.Error("refusing to start", "err", err)
