@@ -2,7 +2,6 @@ package bmp
 
 import (
 	"bytes"
-	"context"
 	"io"
 	"log/slog"
 	"net/netip"
@@ -50,21 +49,16 @@ func (l *logBuffer) String() string {
 
 func startLoggedStation(t *testing.T, fn func(plugin.RIBEvent)) (*Station, *logBuffer) {
 	t.Helper()
+	st := newStation(t, "listen: \"127.0.0.1:0\"\nrouters: [127.0.0.1]")
 	lb := &logBuffer{}
-	p, err := New(cfg(t, "listen: \"127.0.0.1:0\"\nrouters: [127.0.0.1]"), plugin.Env{Logger: slog.New(slog.NewTextHandler(lb, nil))})
-	if err != nil {
-		t.Fatal(err)
-	}
-	st := p.(*Station)
+	st.log = slog.New(slog.NewTextHandler(lb, nil))
 	st.SetRIBSink(fn)
-	if err := st.Start(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Stop(context.Background()) })
+	start(t, st)
 	return st, lb
 }
 
-// The station must never reach the GoBGP code that panics on this UPDATE.
+// A tripwire: the GoBGP validator still panics on this trigger, so the
+// station must not call it. When it stops panicking, recheck GO-2026-4736.
 func TestShortNextHopPanicsGoBGPValidator(t *testing.T) {
 	m, err := bgp.ParseBGPMessage(shortNextHop)
 	if err == nil || m == nil {

@@ -259,11 +259,17 @@ func startStation(t *testing.T, routers string) (*Station, *sink) {
 	st := newStation(t, "listen: \"127.0.0.1:0\"\nrouters: ["+routers+"]")
 	sk := &sink{}
 	st.SetRIBSink(sk.add)
+	start(t, st)
+	return st, sk
+}
+
+// start starts st and stops it when the test ends.
+func start(t *testing.T, st *Station) {
+	t.Helper()
 	if err := st.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = st.Stop(context.Background()) })
-	return st, sk
 }
 
 func dial(t *testing.T, st *Station) net.Conn {
