@@ -337,8 +337,8 @@ func (s *Server) SetQuarantine(c QuarantineControl) {
 // response.
 const writeTimeout = toolTimeout + 30*time.Second
 
-// readTimeout is far longer than any request needs: bodies are capped at
-// 1 MiB.
+// readTimeout is far longer than any request needs: the largest body cap
+// is configBodyLimit, about 3 MiB.
 const readTimeout = 30 * time.Second
 
 // Handler is the read-only API and dashboard.
