@@ -126,7 +126,8 @@ func (e *Engine) probeSubranges(ctx context.Context, j job, looksDown func(strin
 // combineSubranges builds the prefix result from its sub-ranges. Loss,
 // RTT, and jitter are traffic-weighted means. Loss is over every
 // sub-range: one whose probe errored counts as full loss, so every
-// provider is scored on the same sub-ranges and one that fails where the
+// provider is scored on the same sub-ranges (except one cut off as silent,
+// #381, whose probed sub-ranges all show full loss) and one that fails where the
 // traffic goes cannot look better by leaving that sub-range out. RTT and
 // jitter are over those that answered. Sent and Received are sums.
 // Targets are the measured sub-range hosts, and Target is the busiest of

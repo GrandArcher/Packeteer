@@ -186,15 +186,21 @@ func (e *Engine) evictProberMemLocked() {
 		host netip.Addr
 		tick uint64
 	}
-	var all []named
+	count := 0
+	for _, slot := range e.proberMem {
+		if slot.name != "" {
+			count++
+		}
+	}
+	excess := count - e.opt.ProberMemory
+	if excess <= 0 {
+		return
+	}
+	all := make([]named, 0, count)
 	for h, slot := range e.proberMem {
 		if slot.name != "" {
 			all = append(all, named{h, slot.tick})
 		}
-	}
-	excess := len(all) - e.opt.ProberMemory
-	if excess <= 0 {
-		return
 	}
 	slices.SortFunc(all, func(a, b named) int {
 		if c := cmp.Compare(a.tick, b.tick); c != 0 {
