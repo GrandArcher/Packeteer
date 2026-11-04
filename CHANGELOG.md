@@ -12,7 +12,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 ### Security
 
 - Flow `exporters` allowlist and template expiry; auth lockout per IPv6 /64, basic-auth lockout, two concurrent password hashes; ops ReadTimeout; generic SSO and store errors (#493).
-- Signed `SHA256SUMS` names the version and `-version` must match exactly; herd hub pins keys per ASN and checks resolved addresses; CSV formula cells escaped; sqlite DSN via url.URL; bounded whois line (#493).
+- Signed `SHA256SUMS` names its version, `-version` must match exactly; herd hub pins keys per ASN, checks resolved addresses; CSV formulas escaped; sqlite DSN via url.URL; bounded whois line (#493).
 - Report, what-if, blast, preflight, config-write and send-now errors return a generic message; the detail (paths, SQL text) stays in the log (#510).
 - Auth lockout counts failed passwords per user and address and never refuses a valid session or token; the herd per-address table evicts instead of refusing (#506).
 - The config editor refuses a new `*_env` name outside its plugin's prefix (`PACKETEER_SNMP_*`, ...); `influxdb` and a feed with a token need https, http only to loopback (#504).
