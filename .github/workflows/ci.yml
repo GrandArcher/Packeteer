@@ -28,6 +28,10 @@ jobs:
           fi
       - name: test
         run: go test ./...
+      - name: fuzz the NetFlow v9 and IPFIX decoders (#502)
+        run: |
+          go test -run '^$' -fuzz '^FuzzDecodeIPFIX$' -fuzztime 15s ./internal/plugins/source/flow/
+          go test -run '^$' -fuzz '^FuzzDecodeV9$' -fuzztime 15s ./internal/plugins/source/flow/
       - name: upgrade e2e (#196; binary install, bad signature and checksum, upgrade in place, rollback, observe)
         run: MODE=bin bash lab/e2e-upgrade.sh
       - name: icmp prober with raw sockets (root)
