@@ -78,7 +78,8 @@ func managed(prio, table int) bool {
 }
 
 // parseRules reads `ip rule show`. A line it cannot read is skipped: an
-// unreadable rule is never one of ours to delete.
+// unreadable rule is never one of ours to delete. Table names are only
+// readable when ip printed numbers (-N); see showRules.
 func parseRules(out string) []rule {
 	var rules []rule
 	for _, line := range strings.Split(out, "\n") {
@@ -112,7 +113,11 @@ func parseRules(out string) []rule {
 			case "lookup", "table":
 				if i+1 < len(f) {
 					i++
-					r.table, _ = strconv.Atoi(f[i])
+					n, err := strconv.Atoi(f[i])
+					if err != nil {
+						other = true // a table name, when ip had no -N: not readable as ours
+					}
+					r.table = n
 				}
 			default:
 				// Any other selector (iif, to, tos, ...) is not a rule this package wrote.
@@ -144,11 +149,22 @@ type host struct {
 	tables map[int]string // default next hop by table
 }
 
+// showRules runs `ip rule show` with numeric table ids, so a table the
+// operator named in rt_tables still matches a rule Packeteer wrote. An ip
+// that does not take -N is asked again without it.
+func showRules(ctx context.Context, run Exec, fam []string) (string, error) {
+	out, err := run(ctx, append(slices.Clone(fam), "-N", "rule", "show")...)
+	if err == nil {
+		return out, nil
+	}
+	return run(ctx, append(slices.Clone(fam), "rule", "show")...)
+}
+
 func readHost(ctx context.Context, run Exec, v4, v6 bool) (map[bool]*host, error) {
 	have := map[bool]*host{}
 	for _, six := range []bool{false, true} {
 		fam := famArgs(six)
-		out, err := run(ctx, append(slices.Clone(fam), "rule", "show")...)
+		out, err := showRules(ctx, run, fam)
 		if err != nil {
 			if (six && !v6) || (!six && !v4) {
 				continue // a family nothing uses may be absent from the kernel
@@ -216,8 +232,24 @@ func Plan(ctx context.Context, run Exec, entries []Entry) ([]Step, error) {
 		if h == nil {
 			h = &host{tables: map[int]string{}}
 		}
-		// Delete first, so a rule moved to another priority never overlaps
-		// with its old copy.
+		// Add before delete: a rule is never removed before the rules that
+		// replace it are in, so a failure part way does not leave a provider
+		// with no rule. A rule moved to another priority, or a provider
+		// renumbered by a removal, briefly has both.
+		for _, e := range entries {
+			if e.Source.Is6() != six {
+				continue
+			}
+			table := tableBase + e.N
+			if h.tables[table] != e.NextHop.String() {
+				steps = append(steps, Step{Args: append(slices.Clone(fam), "route", "replace", "default", "via", e.NextHop.String(), "table", strconv.Itoa(table))})
+			}
+		}
+		for _, r := range wantRules[six] {
+			if !slices.Contains(h.rules, r) {
+				steps = append(steps, Step{Args: r.args("add", fam)})
+			}
+		}
 		for _, r := range h.rules {
 			if !slices.Contains(wantRules[six], r) {
 				steps = append(steps, Step{Remove: true, Args: r.args("del", fam)})
@@ -235,25 +267,14 @@ func Plan(ctx context.Context, run Exec, entries []Entry) ([]Step, error) {
 				steps = append(steps, Step{Remove: true, Args: append(slices.Clone(fam), "route", "del", "default", "via", via, "table", strconv.Itoa(table))})
 			}
 		}
-		for _, e := range entries {
-			if e.Source.Is6() != six {
-				continue
-			}
-			table := tableBase + e.N
-			if h.tables[table] != e.NextHop.String() {
-				steps = append(steps, Step{Args: append(slices.Clone(fam), "route", "replace", "default", "via", e.NextHop.String(), "table", strconv.Itoa(table))})
-			}
-		}
-		for _, r := range wantRules[six] {
-			if !slices.Contains(h.rules, r) {
-				steps = append(steps, Step{Args: r.args("add", fam)})
-			}
-		}
 	}
 	return steps, nil
 }
 
-// Apply runs the steps in order and stops at the first failure.
+// Apply runs the steps in order and stops at the first failure. It does not
+// undo what ran; Plan puts the additions first, so the host keeps its old
+// rules until the new ones are in, and running Plan and Apply again finishes
+// the job.
 func Apply(ctx context.Context, run Exec, steps []Step) error {
 	for _, s := range steps {
 		if _, err := run(ctx, s.Args...); err != nil {

@@ -59,6 +59,8 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/plugins/telemetry/snmp"
 	"github.com/GrandArcher/Packeteer/internal/plugins/threatfeed/httpfeed"
 	"github.com/GrandArcher/Packeteer/internal/plugins/whois/rdap"
+	"github.com/GrandArcher/Packeteer/internal/upgrade"
+	"github.com/GrandArcher/Packeteer/pkg/plugin/rpc"
 )
 
 // TestConfigDocCoversStructs fails when a yaml tag on a config struct, or an
@@ -177,7 +179,7 @@ func TestEnvDocCoversVariables(t *testing.T) {
 		ConfigEnv, PluginDirEnv, LogLevelEnv, LogFormatEnv, HTTPListenEnv, HTTPUserEnv, HTTPPassEnv,
 		AdminUserEnv, AdminPassEnv, lease.IDEnv, peeringdb.APIKeyEnv, regripe.UserEnv, regripe.PasswordEnv,
 		ixf.APIKeyEnv, geoip.UserEnv, geoip.KeyEnv, config.DefaultPolicyTokenEnv, atlas.KeyEnv,
-		netbox.TokenEnv, peeringmanager.TokenEnv,
+		netbox.TokenEnv, peeringmanager.TokenEnv, upgrade.LaunchedEnv, rpc.Handshake.MagicCookieKey,
 		"PACKETEER_AGENT_CONFIG", // cmd/agent is package main, so no constant to import
 	}
 	refs := envRef.FindAllStringSubmatch(string(example), -1)

@@ -10,7 +10,7 @@ Chat with maintainers and other contributors on the [Packeteer Discord](https://
 
 ```
 make setup   # installs golangci-lint, staticcheck, deadcode, and govulncheck, enables the pre-commit hook
-make test    # build, vet, gofmt check, go test (what CI runs)
+make test    # build, vet, gofmt check, go test, then a list of the tests that skipped here (root, node)
 make race    # go test -race ./... (the CI race job; about 3 minutes)
 make lint    # golangci-lint, staticcheck, deadcode -test, CHANGELOG line length, ASCII docs
 make vuln    # govulncheck

@@ -172,11 +172,16 @@ func (p *Plugin) Start(ctx context.Context) error {
 	return nil
 }
 
+// discover returns the provider, reading the discovery document on the
+// first call that finds none. p.mu is not held across that fetch: while the
+// IdP is down every sign-in waits its own 15 s instead of queueing behind
+// the one before it.
 func (p *Plugin) discover(ctx context.Context) (*gooidc.Provider, error) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.provider != nil {
-		return p.provider, nil
+	prov := p.provider
+	p.mu.Unlock()
+	if prov != nil {
+		return prov, nil
 	}
 	dctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
@@ -184,8 +189,12 @@ func (p *Plugin) discover(ctx context.Context) (*gooidc.Provider, error) {
 	if err != nil {
 		return nil, err
 	}
-	p.provider = prov
-	return prov, nil
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.provider == nil {
+		p.provider = prov
+	}
+	return p.provider, nil
 }
 
 func (p *Plugin) oauth(prov *gooidc.Provider) *oauth2.Config {

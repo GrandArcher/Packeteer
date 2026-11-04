@@ -47,3 +47,23 @@ func FuzzDecodeV9(f *testing.F) {
 		fuzzDecode(t, p, (*decoder).decodeV9)
 	})
 }
+
+func FuzzDecodeV5(f *testing.F) {
+	f.Add(buildV5(0, []v5rec{{netip.MustParseAddr("198.51.100.7"), 1500}, {netip.MustParseAddr("203.0.113.4"), 40}}))
+	f.Add(buildV5(0x4000|100, []v5rec{{netip.MustParseAddr("192.0.2.9"), ^uint32(0)}}))
+	f.Add(buildV5(0, []v5rec{{netip.MustParseAddr("198.51.100.7"), 1500}})[:60])
+	f.Fuzz(func(t *testing.T, p []byte) {
+		fuzzDecode(t, p, func(_ *decoder, _ netip.Addr, p []byte) ([]observation, error) { return decodeV5(p) })
+	})
+}
+
+func FuzzSFlow(f *testing.F) {
+	src, dst := netip.MustParseAddr("192.0.2.1"), netip.MustParseAddr("198.51.100.7")
+	f.Add(buildSFlowV4(512, src, dst, 1400))
+	f.Add(buildSFlowV6(1, netip.MustParseAddr("2001:db8::1"), netip.MustParseAddr("2001:db8:100::7"), 900))
+	f.Add(buildSFlowEthernet(dst, 600))
+	f.Add(sflowPackets(256, src, dst, 0x02, 0x10, 0x04))
+	f.Fuzz(func(t *testing.T, p []byte) {
+		fuzzDecode(t, p, func(_ *decoder, _ netip.Addr, p []byte) ([]observation, error) { return decodeSFlow(p) })
+	})
+}

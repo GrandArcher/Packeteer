@@ -7,8 +7,10 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 ### Changed
 
 - Audit hygiene: ENV.md and threat model gaps, release pins in quickstart, Compose and install.sh, ASCII gate on source, documentation test data, errcheck on, image and action pins (#494).
+- `-pbr linux -apply` adds rules before removing old ones and reads named tables; `make test` ends with a skip summary; fuzz targets for v5, sFlow, BMP, RTR, BER, TWAMP, pcap run in CI (#510).
 ### Security
 
+- Report, what-if, blast, preflight, config-write and send-now errors return a generic message; the detail (paths, SQL text) stays in the log (#510).
 - The config editor refuses a new `*_env` name outside its plugin's prefix (`PACKETEER_SNMP_*`, ...); `influxdb` and a feed with a token need https, http only to loopback (#504).
 - Flow decoder: IPFIX templates check their length before allocating, a bad template set ends the datagram, and sampling rates go with their last template; v9/IPFIX fuzz tests (#502).
 - A RIS Live leak sighting withdraws or holds only an injected prefix with the local ASN next to the RIS peer, else emits `leak.unconfirmed`; large communities are read from RIS (#505).
@@ -36,6 +38,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Fixed
 
+- OIDC sign-ins no longer queue behind a slow discovery; the troubleshoot probe keeps the first silent prober and reports a lost probe source like the engine; comment and doc drift fixed (#510).
 - A performance switch off a commit or cost steer passes `interface_capacity_threshold_pct`, `flap_quarantine` and the MED tie break like any performance switch (#503).
 - A mitigation route whose prefix is missing from a ready RIB for `mitigation.hide_window` (default 5m) is withdrawn; the rule waits for the prefix (#487).
 - `docs/precedence.md` documents the shipped external policy feed instead of "Not built" (#487).

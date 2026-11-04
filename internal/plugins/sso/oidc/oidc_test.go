@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -29,6 +30,8 @@ type fakeIdP struct {
 	code     string
 	claims   map[string]any
 	lastBody url.Values
+	// onDiscovery, when set, runs as a discovery request arrives.
+	onDiscovery func()
 }
 
 func newIdP(t *testing.T) *fakeIdP {
@@ -42,6 +45,9 @@ func newIdP(t *testing.T) *fakeIdP {
 	f.srv = httptest.NewServer(mux)
 	t.Cleanup(f.srv.Close)
 	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, _ *http.Request) {
+		if f.onDiscovery != nil {
+			f.onDiscovery()
+		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"issuer": f.srv.URL, "authorization_endpoint": f.srv.URL + "/authorize", "token_endpoint": f.srv.URL + "/token",
 			"jwks_uri": f.srv.URL + "/jwks", "id_token_signing_alg_values_supported": []string{"RS256"},
@@ -229,6 +235,42 @@ func TestProviderDownAtStart(t *testing.T) {
 	}
 	if _, err := p.AuthURL(context.Background(), "s", "n", "v"); err == nil {
 		t.Fatal("auth url without discovery")
+	}
+}
+
+// Sign-ins do not queue behind a slow discovery: a second one reaches the
+// IdP while the first is still waiting for its answer.
+func TestDiscoveryDoesNotSerializeSignIns(t *testing.T) {
+	idp := newIdP(t)
+	var inflight atomic.Int32
+	both := make(chan struct{})
+	idp.onDiscovery = func() {
+		if inflight.Add(1) == 2 {
+			close(both)
+		}
+		select {
+		case <-both:
+		case <-time.After(5 * time.Second):
+		}
+	}
+	p := newPlugin(t, idp.srv.URL, "default_role: viewer\n")
+	errs := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			_, err := p.AuthURL(context.Background(), "s", "n", "v")
+			errs <- err
+		}()
+	}
+	for i := 0; i < 2; i++ {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := inflight.Load(); got != 2 {
+		t.Fatalf("%d discovery requests in flight together, want 2", got)
+	}
+	if _, err := p.AuthURL(context.Background(), "s", "n", "v"); err != nil || inflight.Load() != 2 {
+		t.Fatalf("a later sign-in rediscovered: err %v, requests %d", err, inflight.Load())
 	}
 }
 

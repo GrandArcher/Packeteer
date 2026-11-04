@@ -13,6 +13,7 @@ Set these on the container (`-e NAME`). Secrets belong here, never in the config
 | `PACKETEER_HTTP_LISTEN` | Overrides `http.listen`. `off` disables the HTTP server. |
 | `PACKETEER_HTTP_USER`, `PACKETEER_HTTP_PASSWORD` | The single basic-auth account. Not allowed when `auth.enabled` is true. With these set and no `auth.enabled`, sign-in stays off and this account protects the server. |
 | `PACKETEER_ADMIN_USER`, `PACKETEER_ADMIN_PASSWORD` | First admin when `auth` is on (user defaults to `admin`). Without a password, one is generated on the first start. See [auth.md](auth.md#first-run). |
+| `PACKETEER_UPGRADE_LAUNCHED` | Internal. The launcher sets it on a staged binary it starts, so that process does not hand over again. Do not set it. |
 | `PACKETEER_HA_ID` | Instance id for the `lease` elector. See [ha.md](ha.md). |
 | `PACKETEER_PEERINGDB_API_KEY` | Optional PeeringDB API key for `lookup` type `peeringdb` (#153). Sent only as an `Authorization` header to `base_url`, never in a URL, and never in `GET /api/lookup`, a log line, or an error. Unset means anonymous, which PeeringDB rate-limits. The `registry` `peeringdb` source (#289) reads the same variable; a push needs it. |
 | `PACKETEER_RIPE_USER`, `PACKETEER_RIPE_PASSWORD` | Maintainer account for the `registry` `ripe` source (#289). Read only when a confirmed change is pushed, sent only as basic authentication to `base_url`, and never in the API, a log line, or the audit record. |
@@ -53,4 +54,4 @@ A webhook `url` or `headers` value expands only `${PACKETEER_WEBHOOK_*}` variabl
 
 ## Exec plugins
 
-An `exec` plugin process gets `PATH`, `PACKETEER_PLUGIN_KIND`, and its configured `env`, and nothing else. See [PLUGINS.md](PLUGINS.md).
+An `exec` plugin process gets `PATH`, `PACKETEER_PLUGIN_KIND`, and its configured `env`, and nothing else. A `grpc` plugin also gets `PACKETEER_PLUGIN_COOKIE`, the fixed handshake value the host adds. See [PLUGINS.md](PLUGINS.md).

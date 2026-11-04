@@ -76,6 +76,14 @@ A consumer must drop every route when `expires_in_ms` runs out without a newer d
 
 The consumer is the one that enforces this on your daemon. If it dies, nothing removes the routes it applied (in render mode the file stays on disk) until it starts again and applies the empty set, so run it under your daemon's supervisor.
 
+## With a pair of instances
+
+The feed is per instance. The standby serves a fresh, empty set (it announces nothing), and only the active instance's feed lists routes ([ha.md](ha.md)). A consumer pointed at one fixed instance sees every route drop when that instance steps down or dies, and never learns the routes of the one that takes over.
+
+Make the consumer follow the active instance: reach the feed through an address you move to whichever instance holds the lease, or run one consumer per instance. Give each consumer its own daemon or its own `-out` file: two consumers that write the same file or session let the standby's empty set remove the active's routes.
+
+Routes are absent from the old active's last renewal until the new active's first decision round that lists them. After a crash that is at least the takeover wait in [ha.md](ha.md#failover) plus one round, and the consumer keeps the last set for no longer than `ttl`.
+
 ## Reference consumer
 
 `packeteer-policy` ships in the image (`docker run ... --entrypoint packeteer-policy ghcr.io/grandarcher/packeteer`). It long-polls the JSON document and applies each change at once. It applies the empty set before it first reads the feed, so a file left by an earlier run is emptied. It keeps the last good set while the feed is unreachable until the expiry (a fetch never waits past it), then applies the empty set, and applies the empty set when stopped. A reload that runs longer than 30 s is killed and retried at the next poll.

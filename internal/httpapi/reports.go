@@ -170,7 +170,7 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 	rep, err := s.reports.Report(ctx, q)
 	if err != nil {
 		s.log.Warn("report", "name", name, "err", err)
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "the report failed"})
 		return
 	}
 	if format == "csv" || format == "xlsx" {
