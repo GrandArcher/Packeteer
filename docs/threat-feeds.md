@@ -20,7 +20,7 @@ Packeteer can fetch lists of networks from a threat-intelligence feed and, for a
 - **No stale intent.** State is in memory only. A restart drops every rule; the feeds are fetched again and their rules added again from that fresh list.
 - **Withdraw on failure.** Feed rules are ordinary mitigation rules: SIGTERM withdraws them while the session is up, RIB session loss and the hide window withdraw them, and a crash drops them with the session (no graceful restart).
 - **HA.** A standby fetches but adds no rule.
-- **Credentials.** A feed token comes from an environment variable (`token_env`), never from the config file. The URL may not carry credentials.
+- **Credentials.** A feed token comes from an environment variable (`token_env`), never from the config file. The URL may not carry credentials, and with a token it must be `https` (`http` only to a loopback host).
 - In-process only. There is no `exec` feed.
 
 ## Config

@@ -89,3 +89,22 @@ func TestPost(t *testing.T) {
 		t.Fatal("a closed sink must be an error")
 	}
 }
+
+func TestTokenURL(t *testing.T) {
+	for raw, ok := range map[string]bool{
+		"https://sink.example.net/x": true,
+		"http://127.0.0.1:8086":      true,
+		"http://[::1]:8086":          true,
+		"http://localhost:8086":      true,
+		"http://sink.example.net/x":  false,
+		"http://192.0.2.10:8086":     false,
+	} {
+		u, err := HTTPURL(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := TokenURL(u); (err == nil) != ok {
+			t.Errorf("%s: err = %v, want accepted %v", raw, err, ok)
+		}
+	}
+}

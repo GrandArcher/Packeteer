@@ -388,7 +388,7 @@ Weights only order moves Decide already accepted: a prefix not in the learned RI
 
 The FRR lab (`lab/e2e-weights.sh`) proves the heavier learned prefix wins the one slot, a heavier prefix the edge never advertises is never announced, a RIB leave withdraws and hands the slot over, a returning heavier prefix does not displace, SIGTERM, restart, and SIGKILL. **Config editor and first-run wizard**: with `http.config_editor: true` and auth or basic auth, an admin reads, validates, and writes the mounted config file (`/api/config`, `/settings.html`).
 
-A write needs the hash of the file it edits, passes the same checks as a start (loader, environment, every plugin's config, cross-checks), never runs an `exec` or `grpc` plugin and refuses one that is added or changed (or a changed `plugin_dir`), needs `confirm_inject` to turn inject on, is read back through `config.Load`, and is audited by hash. It is not applied to the running controller: restart (or SIGHUP for `bgp.neighbors`).
+A write needs the hash of the file it edits, passes the same checks as a start (loader, environment, every plugin's config, cross-checks), never runs an `exec` or `grpc` plugin and refuses one that is added or changed (or a changed `plugin_dir`), refuses a new `*_env` name outside its plugin's prefix (#504, [ENV.md](ENV.md#referenced-from-config)), needs `confirm_inject` to turn inject on, is read back through `config.Load`, and is audited by hash. It is not applied to the running controller: restart (or SIGHUP for `bgp.neighbors`).
 
 The wizard (`POST /api/config/wizard`) renders an observe-mode config with an empty allowlist for review in the editor. **Custom dashboards**: per-user layouts of read-only widgets in the `sqlite` store (`/api/dashboards`, `/dashboards.html`).
 

@@ -77,6 +77,9 @@ func New(c plugin.Config, env plugin.Env) (plugin.ThreatFeed, error) {
 		return nil, fmt.Errorf("format %q is invalid (want %s or %s)", cfg.Format, FormatCIDR, FormatJSON)
 	}
 	if cfg.TokenEnv != "" {
+		if err := sinkcfg.TokenURL(u); err != nil {
+			return nil, fmt.Errorf("url %w", err)
+		}
 		if f.token, err = sinkcfg.Secret(env.Getenv, "token_env", cfg.TokenEnv); err != nil {
 			return nil, err
 		}

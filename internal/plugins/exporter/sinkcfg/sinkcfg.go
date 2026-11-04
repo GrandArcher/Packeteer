@@ -16,6 +16,8 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+
+	"github.com/GrandArcher/Packeteer/internal/config"
 )
 
 var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
@@ -90,6 +92,16 @@ func HTTPURL(raw string) (*url.URL, error) {
 		return nil, errors.New("must be an absolute http(s) URL without credentials or query")
 	}
 	return u, nil
+}
+
+// TokenURL refuses a plain http endpoint for a request that carries a
+// token, except to a loopback host (a lab sink on the same machine), as
+// the kafka, nats and smtp plugins refuse credentials without TLS (#504).
+func TokenURL(u *url.URL) error {
+	if !config.SecureURL(u) {
+		return errors.New("must be https when a token is sent (http only to a loopback host)")
+	}
+	return nil
 }
 
 // Post sends body and treats any status outside 2xx as an error. The

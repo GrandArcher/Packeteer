@@ -2,6 +2,7 @@
 // Page driver for the UI smoke test (#174). Headless Chrome cannot click, so
 // uiproxy adds this script to /settings.html. It walks the Commit setup:
 // picks the commit scorer, tries a community instead of a variable name,
+// then the admin password's variable (#504),
 // adds a new SNMP host, tracks a commit on a provider that has no binding,
 // sets a group, renames a just-added provider after ticking its commit,
 // applies, and writes what it sees into the page for
@@ -72,6 +73,11 @@ var steps = [
   },
   function () {
     note("cs-refused", "refused: " + texts("#cs-errors li") + " | step 2 shown: " + !byId("cs-2").hidden);
+    set(field(newHost(), "Community variable (name only)"), "PACKETEER_ADMIN_PASSWORD");
+    byId("cs-next-2").click();
+  },
+  function () {
+    note("cs-refused-env", "refused env: " + texts("#cs-errors li") + " | step 2 shown: " + !byId("cs-2").hidden);
     set(field(newHost(), "Community variable (name only)"), "PACKETEER_SNMP_COMMUNITY");
     set(providerRow("lab-d").querySelector("input[type=checkbox]"), true, "change");
   },

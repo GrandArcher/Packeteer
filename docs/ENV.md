@@ -26,6 +26,23 @@ Set these on the container (`-e NAME`). Secrets belong here, never in the config
 
 Plugins read secrets from variables whose names you choose in the config (`community_env`, `password_env`, `client_secret_env`, `routing_key_env`, ...). The names used in the docs and examples are `PACKETEER_SNMP_COMMUNITY`, `PACKETEER_SNMP_USER`, `PACKETEER_SNMP_AUTH`, `PACKETEER_SNMP_PRIV`, `PACKETEER_SMTP_USER`, `PACKETEER_SMTP_PASSWORD`, `PACKETEER_OIDC_CLIENT_SECRET`, `PACKETEER_TRAP_COMMUNITY` (`snmptrap` notifier), `PAGERDUTY_ROUTING_KEY` (`webhook` preset `pagerduty`), `INFLUX_TOKEN` (`influxdb` exporter), and `PACKETEER_FEED_TOKEN` (`threat_feeds` source). The config holds the variable name; the value stays in the environment.
 
+A `*_env` key set through the config editor (raw YAML, the form, or a federation settings push) must name a variable that starts with the prefix for its place, or one the running config already names there; anything else, such as `PACKETEER_ADMIN_PASSWORD`, is refused (#504). The mounted file is not checked.
+
+| Place | Prefixes |
+|---|---|
+| `telemetry` `snmp`, `exporters` `snmpagent` | `PACKETEER_SNMP_` |
+| `notifiers` `snmptrap` | `PACKETEER_SNMP_`, `PACKETEER_TRAP_` |
+| `notifiers` `smtp` | `PACKETEER_SMTP_` |
+| `notifiers` `webhook` | `PACKETEER_WEBHOOK_`, `PAGERDUTY_` |
+| `exporters` `influxdb` | `PACKETEER_INFLUX_`, `INFLUX_` |
+| `exporters` `kafka` | `PACKETEER_KAFKA_` |
+| `exporters` `nats` | `PACKETEER_NATS_` |
+| `auth.sso` `oidc` | `PACKETEER_OIDC_` |
+| `threat_feeds.feeds` `http` | `PACKETEER_FEED_` |
+| `external_policy` | `PACKETEER_POLICY_` |
+
+Any other plugin takes only names the running config already uses there.
+
 ## Probe agent
 
 | Variable | Effect |

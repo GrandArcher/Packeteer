@@ -127,9 +127,17 @@ func TestNewRefuses(t *testing.T) {
 		{"url: https://feeds.example.net/x\nformat: csv\n", `format "csv" is invalid`},
 		{"url: https://feeds.example.net/x\ntoken_env: LAB_FEED_TOKEN\n", "LAB_FEED_TOKEN is not set"},
 		{"url: https://feeds.example.net/x\ntoken: secret\n", "token"},
+		{"url: http://feeds.example.net/x\ntoken_env: LAB_FEED_TOKEN\n", "url must be https when a token is sent"},
 	} {
 		if _, err := newFeed(t, c.yaml, nil); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%q: %v, want %q", c.yaml, err, c.want)
+		}
+	}
+	env := map[string]string{"LAB_FEED_TOKEN": "lab-only-token"}
+	for _, y := range []string{"url: http://feeds.example.net/x\n", "url: http://127.0.0.1:8080/x\ntoken_env: LAB_FEED_TOKEN\n",
+		"url: http://[::1]:8080/x\ntoken_env: LAB_FEED_TOKEN\n"} {
+		if _, err := newFeed(t, y, env); err != nil {
+			t.Errorf("%q: %v", y, err)
 		}
 	}
 	if !plugin.ThreatFeeds.Has(TypeName) {

@@ -243,7 +243,7 @@ providers:
 exporters:
   - type: influxdb
     name: tsdb
-    config: {url: "http://influxdb.example.net:8086", org: ops, bucket: packeteer, token_env: INFLUX_TOKEN, streams: ` + streams + `}
+    config: {url: "https://influxdb.example.net:8086", org: ops, bucket: packeteer, token_env: INFLUX_TOKEN, streams: ` + streams + `}
 `
 	}
 	env := func(k string) string {

@@ -26,7 +26,7 @@ func build(t *testing.T, y string) (plugin.Exporter, error) {
 	}})
 }
 
-const base = "url: http://influxdb.example.net:8086\norg: ops\nbucket: packeteer\ntoken_env: INFLUX_TOKEN\n"
+const base = "url: https://influxdb.example.net:8086\norg: ops\nbucket: packeteer\ntoken_env: INFLUX_TOKEN\n"
 
 func TestConfigValidation(t *testing.T) {
 	x, err := build(t, base)
@@ -43,17 +43,31 @@ func TestConfigValidation(t *testing.T) {
 		"no url":         "org: o\nbucket: b\ntoken_env: INFLUX_TOKEN\n",
 		"not http":       "url: udp://h:8089\norg: o\nbucket: b\ntoken_env: INFLUX_TOKEN\n",
 		"credentials":    "url: http://u:p@h:8086\norg: o\nbucket: b\ntoken_env: INFLUX_TOKEN\n",
-		"no org":         "url: http://h:8086\nbucket: b\ntoken_env: INFLUX_TOKEN\n",
-		"no bucket":      "url: http://h:8086\norg: o\ntoken_env: INFLUX_TOKEN\n",
-		"no token_env":   "url: http://h:8086\norg: o\nbucket: b\n",
-		"token unset":    "url: http://h:8086\norg: o\nbucket: b\ntoken_env: NOPE\n",
-		"token is a key": "url: http://h:8086\norg: o\nbucket: b\ntoken_env: \"a b\"\n",
-		"ca on http":     base + "ca_file: /x.pem\n",
+		"no org":         "url: https://h:8086\nbucket: b\ntoken_env: INFLUX_TOKEN\n",
+		"no bucket":      "url: https://h:8086\norg: o\ntoken_env: INFLUX_TOKEN\n",
+		"no token_env":   "url: https://h:8086\norg: o\nbucket: b\n",
+		"token unset":    "url: https://h:8086\norg: o\nbucket: b\ntoken_env: NOPE\n",
+		"token is a key": "url: https://h:8086\norg: o\nbucket: b\ntoken_env: \"a b\"\n",
+		"ca on http":     "url: http://127.0.0.1:8086\norg: o\nbucket: b\ntoken_env: INFLUX_TOKEN\nca_file: /x.pem\n",
 		"flows":          base + "streams: [flows]\n",
 		"unknown field":  base + "interval: 5s\n",
 	} {
 		if _, err := build(t, y); err == nil {
 			t.Errorf("%s: want an error", name)
+		}
+	}
+}
+
+// The token is sent on every write, so plain http is refused unless the
+// server is on a loopback address (#504).
+func TestTokenNeedsHTTPS(t *testing.T) {
+	_, err := build(t, "url: http://influxdb.example.net:8086\norg: o\nbucket: b\ntoken_env: INFLUX_TOKEN\n")
+	if err == nil || !strings.Contains(err.Error(), "must be https when a token is sent") {
+		t.Fatalf("http with a token: err = %v", err)
+	}
+	for _, u := range []string{"http://127.0.0.1:8086", "http://[::1]:8086", "http://localhost:8086"} {
+		if _, err := build(t, "url: "+u+"\norg: o\nbucket: b\ntoken_env: INFLUX_TOKEN\n"); err != nil {
+			t.Errorf("%s: %v", u, err)
 		}
 	}
 }
