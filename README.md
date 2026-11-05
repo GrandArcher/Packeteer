@@ -357,13 +357,16 @@ The Settings page can also upgrade in place (#196). It is off by default. It nee
 - `allowlist.prefixes` no longer accepts `0.0.0.0/0` or `::/0`; a config with one does not load (#486). An entry shorter than /8 loads with a warning. An IX-F export with a peering LAN wider than /16 (v4) or /48 (v6) is refused (#508).
 - A `bmp` RIB or leak source without `listen` binds `127.0.0.1` (`:11019`, leak `:11020`). Set `listen` to the address your routers connect to, or `:11019` for every interface (#490).
 - `influxdb` exporters need an `https` `url`, and so does a threat feed with `token_env`; `http` is only for a loopback host (#504). In the config editor a new `*_env` name must use its plugin's prefix, such as `PACKETEER_SNMP_` ([ENV.md](docs/ENV.md#referenced-from-config)), and `upgrade.*` cannot be changed there (#501).
-- Every `agent` prober `agents` entry needs a `site`, and each provider probed by agents needs the `site` that agent declares; an agent that polls for another site gets 403 (#492).
+- Every `agent` prober `agents` entry needs a `site`, and each provider probed by agents needs the `site` that agent declares. `-check` does not compare the two: a provider whose site matches no agent loads, then fails closed while running ("no usable probe agent at site"). An agent that polls for another site gets 403 (#492).
 - List your flow routers under the flow source's `exporters`. Without it every source is still accepted and a warning is logged (#493).
 - Webhook and `otlp` `${VAR}` expansion reads only `PACKETEER_WEBHOOK_*` and `PACKETEER_OTLP_*` variables; rename the others, or the start fails. Cross-host redirects are refused by the webhook, exporters, feed, RPKI, OIDC, RIS Live, and agent (#489).
 - OIDC with the default `username_claim: email` needs `email_verified: true` in the ID token; use `username_claim: sub` for a provider that omits it (#489). The first-run admin password is only in its 0600 file, not in the log.
 - `packeteer-policy` exits with code 2 without `-community` (your `packeteer_community`) or with a non-loopback `http` `-url`; add `-community`, and `-allow` with your allowlist (#488).
 - On an iBGP-only RIB view, a mitigation route is withdrawn briefly every `mitigation.hide_window` (default 5m) while its prefix is missing from the RIB (#487).
-- `upgrade/apply` refuses an older version; use rollback (#508). The signed `SHA256SUMS` names its version, and `-version` must match it exactly (#493).
+- `upgrade/apply` refuses an older version; use rollback (#508). The signed `SHA256SUMS` names its version, and the new binary's `-version` output must name that version exactly (`packeteer 0.9.10` does not satisfy 0.9.1) (#493).
+- Report CSVs have a new `static` column: before `total` in causes and before `active` in summary, so a reader that uses column positions shifts by one (#509). A cell that starts with `=`, `+`, `-` or `@` now begins with a `'`, which changes the cell value (#493).
+- A token minted from an SSO session is capped at 7 days; a `ttl` above that returns 400, so lower it in any script that mints one (#508).
+- `packeteer-policy` templates no longer get `.Provider`, `.Cause` or `.Reason` on a route; they are empty. Only `.Prefix`, `.NextHop`, `.LocalPref`, `.Communities` and `.ASPath` are passed on, so remove the others from a custom template (#488).
 - Failed passwords are counted per user and address and never lock out a valid session or token (#506). Report, what-if, and config-write errors return a generic message; the detail is in the log (#510).
 
 ### From 0.8 to 0.9
