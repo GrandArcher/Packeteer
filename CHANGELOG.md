@@ -21,7 +21,7 @@ The v1.0 release is the pre-release audit and review pass over v0.9: the fixes f
 
 - HA step-down drops the BGP sessions after 3 failed withdraws; each probe agent needs a `site`, another is refused; mitigation announces outside its lock (#492).
 - Flow `exporters` allowlist and template expiry; auth lockout per IPv6 /64, basic-auth lockout, two concurrent password checks; ops ReadTimeout; generic SSO and store errors (#493).
-- Signed `SHA256SUMS` names its version, the new binary's `-version` output must name that version exactly; herd hub pins keys per ASN, checks resolved addresses; CSV formulas escaped; sqlite DSN via url.URL; bounded whois line (#493).
+- Signed `SHA256SUMS` names its version, `-version` must match exactly; herd hub pins keys per ASN, checks resolved addresses; CSV formulas escaped; sqlite DSN via url.URL; bounded whois line (#493).
 - Report, what-if, blast, preflight, config-write and send-now errors return a generic message; the detail (paths, SQL text) stays in the log (#510).
 - Auth lockout counts failed passwords per user and address and never refuses a valid session or token; the herd per-address table evicts instead of refusing (#506).
 - BMP stations bind `127.0.0.1` without `listen`; a decoder panic ends only that router's session; a partly decoded peer up drops the peer; GO-2026-4736 exposure documented (#490).
@@ -47,7 +47,8 @@ The v1.0 release is the pre-release audit and review pass over v0.9: the fixes f
 - Rename webhook/`otlp` variables to `PACKETEER_WEBHOOK_*`/`PACKETEER_OTLP_*` (others fail at start); use final URLs; OIDC without `email_verified`: `username_claim: sub` (#489).
 - Remove `0.0.0.0/0` or `::/0` from `allowlist.prefixes`; a config with one no longer loads (#486).
 - An IX-F export with a peering LAN wider than /16 (v4) or /48 (v6) is now refused; `upgrade/apply` to an older tag returns 400, use rollback (#508).
-- Report CSVs gain a `static` column (before `total` in causes, before `active` in summary), so read them by column name, not position; a cell starting with `=`, `+`, `-` or `@` now begins with `'` (#509, #493).
+- Report CSVs gain a `static` column (before `total` in causes, before `active` in summary), so read them by column name, not position (#509).
+- A report CSV text cell starting with `=`, `+`, `-` or `@` now begins with `'` (#493).
 - A token minted from an SSO session is capped at 7 days; a longer `ttl` returns 400 (#508).
 - `packeteer-policy` templates no longer get `.Provider`, `.Cause` or `.Reason` (they are empty); use only `.Prefix`, `.NextHop`, `.LocalPref`, `.Communities` and `.ASPath` (#488).
 - On an iBGP-only RIB view a mitigation route is now off the wire briefly every `mitigation.hide_window` (5m); raise it to keep the route on the wire longer (#487).
