@@ -18,6 +18,7 @@ Milestones:
 - **v0.7**: exchange (IX) visibility for an edge network: the exchange view, IX LAN health, route-server vs bilateral views, offload and potential-peers reports, and the dashboard pages.
 - **v0.8**: Internet exchanges and shared measurements: IXP observe-only mode (member import, fabric probes, route-server history and signals, incident correlation, member pages, multi-site health), RPKI labels, probe multiplexing and the path check, the shared IX port, PeeringDB lookup, events from measured health, settings forms for most config blocks, and the opt-in herd and its hub. Partial rows say what is missing.
 - **v0.9**: evidence and explanations (decision checks, probe confidence, steer verification, reordering, the `https` prober, probe agents, `probe.exclude`), registries (RPKI and IRR per provider path, registry hygiene, NetBox and Peering Manager), outputs (exporters, an SNMP agent, syslog, an external policy feed, BMP alone), plugin work (gRPC plugins, the author guide), opt-in outside sources (herd page, Atlas, NLNOG RING, threat feeds, GeoIP), MED and overload protection, `synthesize`, and the UI refresh. Lab only; partial rows say what is missing.
+- **v1.0**: no new rows. The pre-release audit and review pass over v0.9 (#486-#494, #501-#510, review #215): fixes to the allowlist and announce path, the BMP, flow, and policy-feed inputs, sign-in, probe agents, HA, and the signed upgrade, and probe and RIB cost at 100k targets. The counts below are unchanged. Lab only; nothing is field-proven (#54).
 
 ## Summary
 

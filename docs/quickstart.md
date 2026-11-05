@@ -16,15 +16,15 @@ Addresses on this page are documentation ranges (RFC 5737) and loopback. The ASN
 
 ```sh
 mkdir -p packeteer && cd packeteer
-curl -fsSLo config.yaml https://raw.githubusercontent.com/GrandArcher/Packeteer/v0.9.0/config.example.yaml
-IMAGE=ghcr.io/grandarcher/packeteer:0.9.0
+curl -fsSLo config.yaml https://raw.githubusercontent.com/GrandArcher/Packeteer/v1.0.0/config.example.yaml
+IMAGE=ghcr.io/grandarcher/packeteer:1.0.0
 docker run --rm -v "$PWD/config.yaml:/etc/packeteer/config.yaml:ro" "$IMAGE" -check
 ```
 <!-- ci-expect: mode: observe -->
 <!-- ci-expect: announce: disabled -->
 <!-- ci-expect: check: ok -->
 
-`-check` loads the file, validates every plugin block, prints a summary, and exits. It ends with `check: ok (no probes sent, no BGP sessions opened)`. The image and the example config come from the same tag, 0.9.0, the last release: the file on `main` can carry keys a release does not know yet. `:edge` is the build from `main` (see the tags in the [README](../README.md#install)).
+`-check` loads the file, validates every plugin block, prints a summary, and exits. It ends with `check: ok (no probes sent, no BGP sessions opened)`. The image and the example config come from the same tag, 1.0.0, the last release: the file on `main` can carry keys a release does not know yet. `:edge` is the build from `main` (see the tags in the [README](../README.md#install)).
 
 ## 2. A first run on loopback
 
@@ -179,7 +179,7 @@ docker compose logs packeteer
 <!-- ci-expect: "mode":"observe" -->
 <!-- ci-expect: packeteer running -->
 
-The Compose file pins the same flags: host networking, the two capabilities, the config and plugin mounts, a data volume, and `restart: unless-stopped`. It passes `PACKETEER_ADMIN_PASSWORD` from your shell when set; leave it unset to get a generated password in `docker compose logs packeteer`. Its `image` line pins the release, 0.9.0, like step 1.
+The Compose file pins the same flags: host networking, the two capabilities, the config and plugin mounts, a data volume, and `restart: unless-stopped`. It passes `PACKETEER_ADMIN_PASSWORD` from your shell when set; leave it unset to get a generated password, which is in `/var/lib/packeteer/first-run-admin-password` (read it with `docker compose exec packeteer cat /var/lib/packeteer/first-run-admin-password`); the log names that file but never shows the password. Its `image` line pins the release, 1.0.0, like step 1.
 
 ## 6. Stop
 

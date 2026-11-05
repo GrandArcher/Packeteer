@@ -1,8 +1,12 @@
 # Changelog
 
-All notable changes to Packeteer are documented here. Versions are Git tags on `main`. The image tags `ghcr.io/grandarcher/packeteer:<version>` (for example `:0.9.0`) and `:latest` are published from each `v<version>` tag. `:edge` tracks `main`.
+All notable changes to Packeteer are documented here. Versions are Git tags on `main`. The image tags `ghcr.io/grandarcher/packeteer:<version>` (for example `:1.0.0`) and `:latest` are published from each `v<version>` tag. `:edge` tracks `main`.
 
 ## [Unreleased]
+
+## [1.0.0] - 2026-11-04
+
+The v1.0 release is the pre-release audit and review pass over v0.9: the fixes from the audit (#486-#494, #501-#510) and the review (#215), with no new capability rows. Nothing is field-proven (#54). The shipped config stays `mode: observe`, sign-in stays on by default, and injection stays off by default. Read the upgrade notes below before moving from 0.9.
 
 ### Changed
 
@@ -11,6 +15,8 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 - Audit hygiene: ENV.md and threat model gaps, release pins in quickstart, Compose and install.sh, ASCII gate on source, documentation test data, errcheck on, image and action pins (#494).
 - History requeue capped per row kind; lease and config writes check the directory fsync; failed TrafficMix/Volumes reads warn and count in `packeteer_source_read_errors_total` (#492).
 - `-pbr linux -apply` adds before it removes, rolls back a failed run, reads named tables; `make test` lists skipped tests; fuzz targets for v5, sFlow, BMP, RTR, BER, TWAMP, pcap run in CI (#510).
+- `allowlist.prefixes` rejects `0.0.0.0/0` and `::/0` (a config with one no longer loads) and logs a warning for an entry shorter than /8 (#486).
+
 ### Security
 
 - HA step-down drops the BGP sessions after 3 failed withdraws; each probe agent needs a `site`, another is refused; mitigation announces outside its lock (#492).
@@ -41,11 +47,11 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 - Rename webhook/`otlp` variables to `PACKETEER_WEBHOOK_*`/`PACKETEER_OTLP_*` (others fail at start); use final URLs; OIDC without `email_verified`: `username_claim: sub` (#489).
 - Remove `0.0.0.0/0` or `::/0` from `allowlist.prefixes`; a config with one no longer loads (#486).
 - An IX-F export with a peering LAN wider than /16 (v4) or /48 (v6) is now refused; `upgrade/apply` to an older tag returns 400, use rollback (#508).
+- Report CSVs gain a `static` column (before `total` in causes, before `active` in summary), so read them by column name, not position (#509).
+- A report CSV text cell starting with `=`, `+`, `-` or `@` now begins with `'` (#493).
+- A token minted from an SSO session is capped at 7 days; a longer `ttl` returns 400 (#508).
+- `packeteer-policy` templates no longer get `.Provider`, `.Cause` or `.Reason` (they are empty); use only `.Prefix`, `.NextHop`, `.LocalPref`, `.Communities` and `.ASPath` (#488).
 - On an iBGP-only RIB view a mitigation route is now off the wire briefly every `mitigation.hide_window` (5m); raise it to keep the route on the wire longer (#487).
-
-### Changed
-
-- `allowlist.prefixes` rejects `0.0.0.0/0` and `::/0` (a config with one no longer loads) and logs a warning for an entry shorter than /8 (#486).
 
 ### Fixed
 
@@ -439,7 +445,8 @@ First release. An observe-first BGP path performance controller in one container
 - Communities are RFC 1997 (two 16-bit integers). `router_id` is IPv4.
 - RouterOS, Junos, and IOS snippets are documentation. The automated BGP test is the FRR lab.
 
-[Unreleased]: https://github.com/GrandArcher/Packeteer/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/GrandArcher/Packeteer/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/GrandArcher/Packeteer/compare/v0.9.0...v1.0.0
 [0.9.0]: https://github.com/GrandArcher/Packeteer/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/GrandArcher/Packeteer/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/GrandArcher/Packeteer/compare/v0.6.0...v0.7.0
