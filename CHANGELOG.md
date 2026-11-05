@@ -4,6 +4,10 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ## [Unreleased]
 
+### Fixed
+
+- Flow exporter allowlists normalize IPv4-mapped CIDRs before matching senders (#533).
+
 ## [1.0.0] - 2026-11-04
 
 The v1.0 release is the pre-release audit and review pass over v0.9: the fixes from the audit (#486-#494, #501-#510) and the review (#215), with no new capability rows. Nothing is field-proven (#54). The shipped config stays `mode: observe`, sign-in stays on by default, and injection stays off by default. Read the upgrade notes below before moving from 0.9.
