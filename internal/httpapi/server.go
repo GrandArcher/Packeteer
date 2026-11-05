@@ -248,6 +248,12 @@ type Server struct {
 	// writeTimeout bounds a request from the end of its headers to the last
 	// byte written, so a client that stops reading cannot hold a connection.
 	writeTimeout time.Duration
+	// readTimeout bounds reading a whole request, headers and body, so a
+	// client that sends its body slowly cannot hold a handler (#493).
+	readTimeout time.Duration
+	// basicFails counts failed basic-auth attempts for the single
+	// PACKETEER_HTTP_USER account (#493). Nil when that account is off.
+	basicFails *auth.Throttle
 }
 
 // SetSetup replaces the facts the overview's setup checklist reads. An
@@ -285,6 +291,10 @@ func New(opt Options) (*Server, error) {
 		s.linkouts = linkout.New(linkout.Config{})
 	}
 	s.writeTimeout = writeTimeout
+	s.readTimeout = readTimeout
+	if s.user != "" {
+		s.basicFails = auth.NewThrottle(s.log)
+	}
 	s.handler = s.routes()
 	return s, nil
 }
@@ -332,6 +342,10 @@ func (s *Server) SetQuarantine(c QuarantineControl) {
 // response.
 const writeTimeout = toolTimeout + 30*time.Second
 
+// readTimeout is far longer than any request needs: the largest body cap
+// is configBodyLimit, about 3 MiB.
+const readTimeout = 30 * time.Second
+
 // Handler is the read-only API and dashboard.
 func (s *Server) Handler() http.Handler { return s.handler }
 
@@ -349,6 +363,7 @@ func (s *Server) Start() error {
 	s.http = &http.Server{
 		Handler:           s.handler,
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       s.readTimeout,
 		WriteTimeout:      s.writeTimeout,
 		IdleTimeout:       2 * time.Minute,
 		ErrorLog:          slog.NewLogLogger(s.log.Handler(), slog.LevelWarn),
@@ -692,17 +707,25 @@ type bgpBody struct {
 	Peers      []Peer `json:"peers"`
 }
 
+// withAuth checks the single basic-auth account. Failures are counted per
+// user name and client network like the auth service's (#493).
 func (s *Server) withAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user, pass, ok := r.BasicAuth()
 		if !ok {
 			user, pass = "", ""
 		}
+		ip, now := auth.RemoteIP(r), time.Now()
+		if s.basicFails.Throttled(user, ip, now) {
+			writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": auth.ErrThrottled.Error()})
+			return
+		}
 		// Both compares always run. SHA-256 makes the cost independent of
 		// the secret length, which ConstantTimeCompare does not.
 		matchUser := secretEqual(user, s.user)
 		matchPass := secretEqual(pass, s.password)
 		if !ok || !matchUser || !matchPass {
+			s.basicFails.Fail(user, ip, now)
 			w.Header().Set("WWW-Authenticate", `Basic realm="packeteer"`)
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 			return

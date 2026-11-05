@@ -405,3 +405,21 @@ func TestRouteObjects(t *testing.T) {
 		t.Fatal("access denied read as no objects")
 	}
 }
+
+// TestReadIRRdBoundsStatusLine: a status line past the reader's buffer is
+// refused instead of read until the deadline; a framed answer still
+// parses (#493).
+func TestReadIRRdBoundsStatusLine(t *testing.T) {
+	long := bufio.NewReader(strings.NewReader("A" + strings.Repeat("9", 8192) + "\n"))
+	if _, _, err := readIRRd(long); err == nil || !strings.Contains(err.Error(), "longer than 4096 bytes") {
+		t.Fatalf("long status line: %v", err)
+	}
+	noEnd := bufio.NewReader(strings.NewReader("A3\nabc" + strings.Repeat("C", 5000)))
+	if _, _, err := readIRRd(noEnd); err == nil {
+		t.Fatal("unterminated end line accepted")
+	}
+	body, found, err := readIRRd(bufio.NewReader(strings.NewReader("A16\nAS64500 AS64501\nC\r\n")))
+	if err != nil || !found || body != "AS64500 AS64501\n" {
+		t.Fatalf("answer = %q %v %v", body, found, err)
+	}
+}

@@ -16,7 +16,7 @@ import (
 
 // truncatedLimits are the caps packeteer_truncated_total reports, in the
 // order they are written. Zero when the source that owns a cap is absent.
-var truncatedLimits = []string{"max_prefixes", "max_flows", "workers", "ebpf_ring_full"}
+var truncatedLimits = []string{"max_prefixes", "max_flows", "workers", "ebpf_ring_full", "exporters"}
 
 // Canonical BGP FSM states from the GoBGP session enum. A state outside
 // this list is emitted as well so a future name is still visible.

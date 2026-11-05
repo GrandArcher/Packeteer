@@ -68,7 +68,7 @@ jobs:
               go build -trimpath -ldflags "-s -w -X main.version=${version}" \
               -o "dist/packeteer-linux-${arch}" ./cmd/controller
           done
-          go run ./cmd/relsign sign dist dist/packeteer-linux-amd64 dist/packeteer-linux-arm64
+          go run ./cmd/relsign sign "$version" dist dist/packeteer-linux-amd64 dist/packeteer-linux-arm64
       - name: upload to the release
         env:
           GH_TOKEN: ${{ github.token }}

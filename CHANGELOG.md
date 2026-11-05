@@ -14,6 +14,8 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 ### Security
 
 - HA step-down drops the BGP sessions after 3 failed withdraws; each probe agent needs a `site`, another is refused; mitigation announces outside its lock (#492).
+- Flow `exporters` allowlist and template expiry; auth lockout per IPv6 /64, basic-auth lockout, two concurrent password checks; ops ReadTimeout; generic SSO and store errors (#493).
+- Signed `SHA256SUMS` names its version, `-version` must match exactly; herd hub pins keys per ASN, checks resolved addresses; CSV formulas escaped; sqlite DSN via url.URL; bounded whois line (#493).
 - Report, what-if, blast, preflight, config-write and send-now errors return a generic message; the detail (paths, SQL text) stays in the log (#510).
 - Auth lockout counts failed passwords per user and address and never refuses a valid session or token; the herd per-address table evicts instead of refusing (#506).
 - BMP stations bind `127.0.0.1` without `listen`; a decoder panic ends only that router's session; a partly decoded peer up drops the peer; GO-2026-4736 exposure documented (#490).
@@ -32,6 +34,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 ### Upgrade notes
 
 - Give every `agent` prober `agents` entry a `site` (the site that agent declares); a config without one no longer loads (#492).
+- List your flow routers in the flow source's new `exporters` key; without it every source is still accepted and a warning is logged (#493).
 - A `bmp` RIB or leak source without `listen` now binds `127.0.0.1`; set `listen` to the address the routers connect to (`:11019` for every interface) (#490).
 - Use an `https` `url` for `influxdb` and for an `http` threat feed with `token_env` (http only to loopback); in the editor, name new secrets with the prefixes in docs/ENV.md (#504).
 - `packeteer-policy` exits with code 2 without `-community` (your `packeteer_community`) or with a non-loopback `http` `-url`; add `-community`, and `-allow` with your allowlist (#488).

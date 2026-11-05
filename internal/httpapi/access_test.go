@@ -391,7 +391,8 @@ func TestAuthThrottleAndStoreDown(t *testing.T) {
 
 type testSSO struct {
 	plugin.Base
-	id plugin.SSOIdentity
+	id  plugin.SSOIdentity
+	err error
 }
 
 func (f *testSSO) AuthURL(_ context.Context, state, _, _ string) (string, error) {
@@ -399,7 +400,7 @@ func (f *testSSO) AuthURL(_ context.Context, state, _, _ string) (string, error)
 }
 
 func (f *testSSO) Exchange(context.Context, string, string, string) (plugin.SSOIdentity, error) {
-	return f.id, nil
+	return f.id, f.err
 }
 
 func TestAuthSSOFlow(t *testing.T) {

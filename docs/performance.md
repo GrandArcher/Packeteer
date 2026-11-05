@@ -95,7 +95,7 @@ Passive measurement keeps bounded tables. Each cap, its default at 5M paths, and
 | `max_improvements` | 50 | 10000 | Unchanged. It caps routes Packeteer announces, a safety limit rather than a size limit. |
 | history `maxPending` | 200000 | none | Unchanged. It bounds unflushed rollups only while the store keeps failing, so it does not follow the table. |
 
-`packeteer_truncated_total{limit}` counts cap events since start, not distinct prefixes: `max_prefixes` is cells a full flow or span window bucket refused (flow also counts the cells it evicts for a larger prefix; counter keys are not counted); `max_flows` is span connections not tracked; `workers` is flow datagrams dropped because the worker queue was full (#385). A reload that replaces a source restarts its count. A value that stays at 0 means the cap is not binding.
+`packeteer_truncated_total{limit}` counts cap events since start, not distinct prefixes: `max_prefixes` is cells a full flow or span window bucket refused (flow also counts the cells it evicts for a larger prefix; counter keys are not counted); `max_flows` is span connections not tracked; `workers` is flow datagrams dropped because the worker queue was full (#385); `exporters` is flow datagrams from a source not in `exporters` (#493). A reload that replaces a source restarts its count. A value that stays at 0 means the cap is not binding.
 
 ## Multi-session inject soak (#383)
 

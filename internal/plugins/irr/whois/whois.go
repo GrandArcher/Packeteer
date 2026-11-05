@@ -327,12 +327,24 @@ func (c *Client) irrd(ctx context.Context, query string) (string, bool, error) {
 	return body, found, nil
 }
 
+// readLine reads one status line. A line longer than the reader's buffer
+// (4096 bytes) is an error rather than a read until the deadline (#493).
+func readLine(br *bufio.Reader) (string, error) {
+	b, err := br.ReadSlice('\n')
+	if errors.Is(err, bufio.ErrBufferFull) {
+		return "", fmt.Errorf("status line longer than %d bytes", br.Size())
+	}
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimRight(string(b), "\r\n"), nil
+}
+
 func readIRRd(br *bufio.Reader) (string, bool, error) {
-	line, err := br.ReadString('\n')
+	line, err := readLine(br)
 	if err != nil {
 		return "", false, err
 	}
-	line = strings.TrimRight(line, "\r\n")
 	switch {
 	case line == "C" || line == "D":
 		return "", false, nil
@@ -347,11 +359,11 @@ func readIRRd(br *bufio.Reader) (string, bool, error) {
 		if _, err := io.ReadFull(br, buf); err != nil {
 			return "", false, err
 		}
-		end, err := br.ReadString('\n')
+		end, err := readLine(br)
 		if err != nil {
 			return "", false, err
 		}
-		if strings.TrimRight(end, "\r\n") != "C" {
+		if end != "C" {
 			return "", false, fmt.Errorf("answer not ended by C: %.40q", end)
 		}
 		return string(buf), true, nil

@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sync"
@@ -301,12 +302,20 @@ func addImprovementExplain(ctx context.Context, db *sql.DB) error {
 	return err
 }
 
+// dsn is the SQLite URI for path. url.URL escapes a ? or # in the path,
+// so a path cannot add its own _pragma or other parameters (#493).
+func dsn(path string) string {
+	u := url.URL{Scheme: "file", OmitHost: true, Path: path,
+		RawQuery: "_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)"}
+	return u.String()
+}
+
 // Start opens (or creates) the database and starts the daily prune.
 func (s *Store) Start(ctx context.Context) error {
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o750); err != nil {
 		return fmt.Errorf("storage dir: %w", err)
 	}
-	db, err := sql.Open("sqlite", "file:"+s.path+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)")
+	db, err := sql.Open("sqlite", dsn(s.path))
 	if err != nil {
 		return err
 	}
