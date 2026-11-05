@@ -95,6 +95,8 @@ Prometheus metrics are `packeteer_up`, `packeteer_ready`, `packeteer_build_info`
 
 When an `exporters` entry is configured (#207), `/metrics` also has `packeteer_export_records_total{exporter,stream,result}` (`sent`, `failed`, `dropped`). The `metrics` export stream pushes every series on this page every 30 seconds. Grafana dashboards for these metrics are in `deploy/grafana` ([export.md](export.md#dashboards)).
 
+After a target source's `TrafficMix` or `Volumes` read has failed (#492), `/metrics` has `packeteer_source_read_errors_total{source,read}` (`read` is `traffic_mix` or `volumes`). That input is left out of the decision; the log has a warning per source and read at most once a minute.
+
 When `probe.reorder` is configured (#224), `/metrics` also has `packeteer_reorder_success` (labels `provider`, `responder`, `type`, `estimate`) and, per flow of the latest train that got a reply, `packeteer_reorder_ratio` (the RFC 4737 reordered ratio, 0 to 1), `packeteer_reorder_extent`, and `packeteer_reorder_n` with the same labels plus `flow`.
 
 After the preflight checks have run, `/metrics` has `packeteer_preflight_ready`, `packeteer_preflight_check{check,status}`, and `packeteer_preflight_last_run_timestamp_seconds`.

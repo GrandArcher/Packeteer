@@ -34,6 +34,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/dirsync"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -593,9 +594,10 @@ func writeAtomic(path string, data []byte, durable bool) error {
 	if !durable {
 		return nil
 	}
-	if d, err := os.Open(dir); err == nil {
-		_ = d.Sync()
-		_ = d.Close()
+	// Without the directory fsync the rename can be lost on a crash, and
+	// the other instance would read the previous holder's record.
+	if err := dirsync.Sync(dir); err != nil {
+		return fmt.Errorf("sync lease directory: %w", err)
 	}
 	return nil
 }

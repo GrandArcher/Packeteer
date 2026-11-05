@@ -178,14 +178,24 @@ func (p *Prober) servePoll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p.mu.Lock()
-	if a.site != req.Site || !a.up {
+	if req.Site != a.spec.Site {
+		// A certificate is good for its configured site only: an agent
+		// that claims another one would get that site's tasks and feed
+		// its decisions with measurements taken elsewhere. The agent
+		// retries every few seconds, so each claimed site is logged once.
+		if a.refusedSite != req.Site {
+			a.refusedSite = req.Site
+			p.log.Warn("probe agent refused: site mismatch", "agent", a.spec.Name, "site", req.Site, "configured_site", a.spec.Site)
+		}
+		p.mu.Unlock()
+		http.Error(w, fmt.Sprintf("agent %s is configured for site %s", a.spec.Name, a.spec.Site), http.StatusForbidden)
+		return
+	}
+	a.refusedSite = ""
+	if !a.up {
 		p.log.Info("probe agent online", "agent", a.spec.Name, "site", req.Site, "providers", req.Providers)
 	}
-	if a.site != req.Site {
-		// Tasks queued for the old site would be measured from the wrong one.
-		p.failLocked(a, fmt.Errorf("agent %s changed site", a.spec.Name))
-	}
-	a.site, a.providers, a.up = req.Site, map[string]bool{}, true
+	a.providers, a.up = map[string]bool{}, true
 	for _, n := range req.Providers {
 		a.providers[n] = true
 	}

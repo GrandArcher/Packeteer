@@ -355,3 +355,31 @@ func TestUnreadableRecordIsWaitedOut(t *testing.T) {
 		t.Fatalf("wait for an unknown holder is %s", w)
 	}
 }
+
+// TestWriteAtomicReportsDirectorySync checks that a lease write whose
+// directory cannot be synced fails (#492), so a renewal that may not
+// survive a crash is not counted.
+func TestWriteAtomicReportsDirectorySync(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a directory without the read bit")
+	}
+	dir := filepath.Join(t.TempDir(), "ha")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "lease.json")
+	if err := writeAtomic(path, []byte("{}"), true); err != nil {
+		t.Fatalf("readable directory: %v", err)
+	}
+	if err := os.Chmod(dir, 0o300); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	if err := writeAtomic(path, []byte("{}"), true); err == nil || !strings.Contains(err.Error(), "sync lease directory") {
+		t.Fatalf("err = %v, want a directory sync error", err)
+	}
+	// Tests skip fsync; then the directory is not opened either.
+	if err := writeAtomic(path, []byte("{}"), false); err != nil {
+		t.Fatalf("durable=false: %v", err)
+	}
+}

@@ -221,12 +221,23 @@ type Controller struct {
 	inbound  func(netip.Prefix) bool
 	log      *slog.Logger
 
-	mu    sync.Mutex
-	rules map[string]*Rule
+	// wireMu serializes every change to the wire (Sync, WithdrawAll,
+	// ApplyRuntime) and is taken before mu. mu guards the state and is
+	// never held across an announcer call or a call into the outbound or
+	// inbound controller: they call Holds under their own locks, so
+	// holding mu there would invert the lock order (#492), and Status,
+	// Add and Holds must not wait on network I/O.
+	wireMu sync.Mutex
+	mu     sync.Mutex
+	rules  map[string]*Rule
 	// wire is what the announcer has for each RTBH/redirect prefix, fwire
-	// its FlowSpec routes by route key.
+	// its FlowSpec routes by route key. Only a holder of wireMu changes
+	// them, under mu.
 	wire  map[netip.Prefix]Rule
 	fwire map[string]fsWire
+	// inflight is the unicast prefixes a Sync is announcing now, so Holds
+	// stays true while the call is out even if the rule is removed.
+	inflight map[netip.Prefix]bool
 	// gone is since when each prefix with a route on the wire has been
 	// missing from the ready RIB.
 	gone    map[netip.Prefix]time.Time
@@ -260,7 +271,7 @@ func New(cfg Config, ann plugin.MitigationAnnouncer, log *slog.Logger) (*Control
 		log = slog.Default()
 	}
 	c := &Controller{cfg: cfg, ann: ann, log: log, rules: map[string]*Rule{}, wire: map[netip.Prefix]Rule{}, fwire: map[string]fsWire{},
-		gone: map[netip.Prefix]time.Time{}}
+		inflight: map[netip.Prefix]bool{}, gone: map[netip.Prefix]time.Time{}}
 	c.catalog.Targets = []plugin.MitigationTarget{}
 	c.fsCat.Targets = []plugin.FlowSpecTarget{}
 	if ann != nil {
@@ -307,7 +318,7 @@ func (c *Controller) checkEnterLocked() error {
 }
 
 // ApplyRuntime changes the mode while running (#233). Leaving inject
-// withdraws every route before the mode changes, under the lock Sync takes,
+// withdraws every route before the mode changes, while no Sync can run,
 // and keeps the rules as a dry run. Entering inject drops the rules held
 // outside it: a rule added as a dry run must not reach the edge because a
 // mode flipped. A failed withdraw leaves the mode as it was.
@@ -315,16 +326,25 @@ func (c *Controller) ApplyRuntime(ctx context.Context, mode string) error {
 	if c == nil {
 		return nil
 	}
+	c.wireMu.Lock()
+	defer c.wireMu.Unlock()
+	now := time.Now()
+	c.mu.Lock()
+	leaving := c.cfg.Mode == config.ModeInject && mode != config.ModeInject
+	c.mu.Unlock()
+	var err error
+	if leaving {
+		err = c.withdrawAllWire(ctx)
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	now := time.Now()
 	defer c.settleLocked(now)
-	switch {
-	case c.cfg.Mode == config.ModeInject && mode != config.ModeInject:
-		if err := c.withdrawAllLocked(ctx); err != nil {
-			return err
-		}
-	case c.cfg.Mode != config.ModeInject && mode == config.ModeInject:
+	if err != nil {
+		return err
+	}
+	if c.cfg.Mode != config.ModeInject && mode == config.ModeInject {
+		// Under one hold of mu with the mode change, so a dry-run rule
+		// added in between cannot survive into inject.
 		if err := c.checkEnterLocked(); err != nil {
 			return err
 		}
@@ -422,7 +442,7 @@ func (c *Controller) Holds(p netip.Prefix) bool {
 	}
 	_, r := c.rules[unicastKey(p)]
 	_, w := c.wire[p]
-	return r || w
+	return r || w || c.inflight[p]
 }
 
 // Add validates req and holds it as a rule. A rule with the same key (the
@@ -701,14 +721,16 @@ func (c *Controller) Remove(id string) bool {
 }
 
 // Sync expires rules and, in inject, makes the routes on the wire match
-// the rules. Outside inject it only expires rules.
+// the rules. Outside inject it only expires rules. It plans under mu, makes
+// the announcer calls and the outbound and inbound checks with mu released,
+// and records the results under mu again.
 func (c *Controller) Sync(ctx context.Context, now time.Time) error {
 	if c == nil {
 		return nil
 	}
+	c.wireMu.Lock()
+	defer c.wireMu.Unlock()
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	defer c.settleLocked(now)
 	for k, r := range c.rules {
 		if !now.Before(r.Expires) {
 			delete(c.rules, k)
@@ -717,22 +739,150 @@ func (c *Controller) Sync(ctx context.Context, now time.Time) error {
 		}
 	}
 	if c.cfg.Mode != config.ModeInject {
+		c.settleLocked(now)
+		c.mu.Unlock()
 		return nil
 	}
-	if c.cfg.Leader != nil && !c.cfg.Leader() {
-		if len(c.wire)+len(c.fwire) > 0 {
-			c.log.Warn("ha standby; withdrawing mitigation routes")
-		}
-		return c.withdrawAllLocked(ctx)
+	var why string
+	switch {
+	case c.cfg.Leader != nil && !c.cfg.Leader():
+		why = "ha standby; withdrawing mitigation routes"
+	case c.rib == nil || !c.rib.Ready():
+		why = "rib not ready; withdrawing mitigation routes"
 	}
-	if c.rib == nil || !c.rib.Ready() {
+	if why != "" {
 		if len(c.wire)+len(c.fwire) > 0 {
-			c.log.Warn("rib not ready; withdrawing mitigation routes")
+			c.log.Warn(why)
 		}
-		return c.withdrawAllLocked(ctx)
+		c.mu.Unlock()
+		err := c.withdrawAllWire(ctx)
+		c.mu.Lock()
+		c.settleLocked(now)
+		c.mu.Unlock()
+		return err
 	}
 	c.trackGoneLocked(now)
-	return errors.Join(c.syncUnicastLocked(ctx, now), c.syncFlowSpecLocked(ctx, now))
+	ops := append(c.planUnicastLocked(now), c.planFlowSpecLocked(now)...)
+	outbound, inbound := c.outbound, c.inbound
+	c.mu.Unlock()
+
+	c.runOps(ctx, ops, outbound, inbound)
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	err := c.commitLocked(ops)
+	c.settleLocked(now)
+	return err
+}
+
+// Kinds of wireOp.
+const (
+	opWithdraw = iota
+	opAnnounce
+	opWithdrawFS
+	opAnnounceFS
+)
+
+// wireOp is one announcer call that Sync plans under mu and makes with mu
+// released.
+type wireOp struct {
+	kind int
+	// prefix and route are the unicast route; key and fs the FlowSpec one.
+	prefix netip.Prefix
+	route  plugin.MitigationRoute
+	key    string
+	fs     plugin.FlowSpecRoute
+	// rule is the rule an announce serves; its Pending and the wire entry
+	// are set from the result.
+	rule *Rule
+	// waitOthers is set on a new unicast announcement: it waits while the
+	// outbound or inbound announcer has the prefix on the wire.
+	waitOthers bool
+	// Results.
+	err     error
+	pending string
+}
+
+// runOps makes the planned calls in order. The caller holds wireMu and not
+// mu.
+func (c *Controller) runOps(ctx context.Context, ops []wireOp, outbound, inbound func(netip.Prefix) bool) {
+	for i := range ops {
+		op := &ops[i]
+		switch op.kind {
+		case opWithdraw:
+			op.err = c.ann.Withdraw(ctx, op.prefix)
+		case opAnnounce:
+			// A rule added after this round's outbound or inbound Sync
+			// meets that route here. It is announced next round, once the
+			// other controller has released the prefix, which it does
+			// when it sees Holds.
+			switch {
+			case op.waitOthers && outbound != nil && outbound(op.prefix):
+				op.pending = pendingOutbound
+			case op.waitOthers && inbound != nil && inbound(op.prefix):
+				op.pending = pendingInbound
+			default:
+				op.err = c.ann.Announce(ctx, op.route)
+			}
+		case opWithdrawFS:
+			if c.fs == nil {
+				op.err = errors.New("mitigation: flowspec route on the wire without a flowspec announcer")
+				continue
+			}
+			op.err = c.fs.WithdrawFlowSpec(ctx, op.key)
+		case opAnnounceFS:
+			op.err = c.fs.AnnounceFlowSpec(ctx, op.fs)
+		}
+	}
+}
+
+// commitLocked records the results of ops in the wire state and the
+// rules. The caller holds wireMu and mu.
+func (c *Controller) commitLocked(ops []wireOp) error {
+	var errs []error
+	for _, op := range ops {
+		switch op.kind {
+		case opWithdraw:
+			if op.err != nil {
+				errs = append(errs, op.err)
+				continue
+			}
+			delete(c.wire, op.prefix)
+			c.log.Info("mitigation withdrawn", "prefix", op.prefix)
+		case opAnnounce:
+			delete(c.inflight, op.prefix)
+			r := op.rule
+			switch {
+			case op.pending != "":
+				r.Pending = op.pending
+			case op.err != nil:
+				r.Pending = op.err.Error()
+				errs = append(errs, op.err)
+			default:
+				r.Pending = ""
+				c.wire[op.prefix] = *r
+				c.log.Info("mitigation announced", "id", r.ID, "prefix", op.prefix, "action", r.Action, "target", r.Target, "next_hop", r.NextHop, "expires", r.Expires.UTC().Format(time.RFC3339))
+			}
+		case opWithdrawFS:
+			if op.err != nil {
+				errs = append(errs, op.err)
+				continue
+			}
+			delete(c.fwire, op.key)
+			c.log.Info("mitigation flowspec withdrawn", "rule", op.key)
+		case opAnnounceFS:
+			r := op.rule
+			if op.err != nil {
+				r.Pending = op.err.Error()
+				errs = append(errs, op.err)
+				continue
+			}
+			c.fwire[op.key] = fsWire{rule: r.key, route: op.fs}
+			c.log.Info("mitigation flowspec announced", "id", r.ID, "rule", op.key, "action", r.Action, "target", r.Target,
+				"rate_mbps", r.RateMbps, "expires", r.Expires.UTC().Format(time.RFC3339))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // trackGoneLocked updates gone for the prefixes with a route on the wire.
@@ -767,17 +917,20 @@ func (c *Controller) leftLocked(p netip.Prefix, now time.Time) bool {
 	return ok && now.Sub(since) >= c.cfg.HideWindow
 }
 
-func (c *Controller) syncUnicastLocked(ctx context.Context, now time.Time) error {
+// planUnicastLocked plans the RTBH and redirect routes. The caller holds
+// wireMu and mu.
+func (c *Controller) planUnicastLocked(now time.Time) []wireOp {
 	uni := map[netip.Prefix]*Rule{}
 	for _, r := range c.rules {
 		if !r.FlowSpec() {
 			uni[r.Prefix] = r
 		}
 	}
-	var errs []error
+	var ops []wireOp
+	withdraw := func(p netip.Prefix) { ops = append(ops, wireOp{kind: opWithdraw, prefix: p}) }
 	for p := range c.wire {
 		if _, ok := uni[p]; !ok {
-			errs = append(errs, c.withdrawLocked(ctx, p))
+			withdraw(p)
 		}
 	}
 	order := make([]netip.Prefix, 0, len(uni))
@@ -793,7 +946,7 @@ func (c *Controller) syncUnicastLocked(ctx context.Context, now time.Time) error
 				c.log.Warn("mitigation rule withdrawn: prefix not in the learned RIB for hide_window", "id", r.ID, "prefix", p, "hide_window", c.cfg.HideWindow)
 			}
 			r.Pending = pendingLeft
-			errs = append(errs, c.withdrawLocked(ctx, p))
+			withdraw(p)
 			continue
 		}
 		if on && cur.Action == r.Action && cur.Target == r.Target {
@@ -803,7 +956,7 @@ func (c *Controller) syncUnicastLocked(ctx context.Context, now time.Time) error
 		if !netpfx.CoveredBy(c.cfg.Allowlist, p) {
 			r.Pending = "not in mitigation.allowlist"
 			if on {
-				errs = append(errs, c.withdrawLocked(ctx, p))
+				withdraw(p)
 			}
 			continue
 		}
@@ -820,33 +973,16 @@ func (c *Controller) syncUnicastLocked(ctx context.Context, now time.Time) error
 			r.Pending = pendingRIB
 			continue
 		}
-		// A rule added after this round's outbound or inbound Sync meets
-		// that route here. It is announced next round, once the other
-		// controller has released the prefix. The checks run under c.mu,
-		// so neither controller may call into this one while Sync runs;
-		// all three are driven from the one decision loop.
-		if !on && c.outbound != nil && c.outbound(p) {
-			r.Pending = pendingOutbound
-			continue
-		}
-		if !on && c.inbound != nil && c.inbound(p) {
-			r.Pending = pendingInbound
-			continue
-		}
-		mr := plugin.MitigationRoute{Prefix: p, Action: r.Action, Target: r.Target, LocalPref: c.cfg.LocalPref, Community: c.cfg.Community}
-		if err := c.ann.Announce(ctx, mr); err != nil {
-			r.Pending = err.Error()
-			errs = append(errs, err)
-			continue
-		}
-		r.Pending = ""
-		c.wire[p] = *r
-		c.log.Info("mitigation announced", "id", r.ID, "prefix", p, "action", r.Action, "target", r.Target, "next_hop", r.NextHop, "expires", r.Expires.UTC().Format(time.RFC3339))
+		c.inflight[p] = true
+		ops = append(ops, wireOp{kind: opAnnounce, prefix: p, rule: r, waitOthers: !on,
+			route: plugin.MitigationRoute{Prefix: p, Action: r.Action, Target: r.Target, LocalPref: c.cfg.LocalPref, Community: c.cfg.Community}})
 	}
-	return errors.Join(errs...)
+	return ops
 }
 
-func (c *Controller) syncFlowSpecLocked(ctx context.Context, now time.Time) error {
+// planFlowSpecLocked plans the FlowSpec routes. The caller holds wireMu and
+// mu.
+func (c *Controller) planFlowSpecLocked(now time.Time) []wireOp {
 	type want struct {
 		rule  *Rule
 		route plugin.FlowSpecRoute
@@ -883,10 +1019,15 @@ func (c *Controller) syncFlowSpecLocked(ctx context.Context, now time.Time) erro
 			desired[k] = want{rule: r, route: rt}
 		}
 	}
-	var errs []error
+	var ops []wireOp
+	withdraw := func(k string) { ops = append(ops, wireOp{kind: opWithdrawFS, key: k}) }
+	// leaving is the routes withdrawn above before another rule announces
+	// its own route with the same key.
+	leaving := map[string]bool{}
 	for k, w := range c.fwire {
 		if d, ok := desired[k]; !ok || d.rule.key != w.rule {
-			errs = append(errs, c.withdrawFlowSpecLocked(ctx, k))
+			withdraw(k)
+			leaving[k] = true
 		}
 	}
 	sort.Strings(keys)
@@ -894,13 +1035,14 @@ func (c *Controller) syncFlowSpecLocked(ctx context.Context, now time.Time) erro
 		d := desired[k]
 		r, rt := d.rule, d.route
 		cur, on := c.fwire[k]
+		on = on && !leaving[k]
 		if on && c.leftLocked(r.Prefix, now) {
 			if !left[r] {
 				c.log.Warn("mitigation flowspec rule withdrawn: prefix not in the learned RIB for hide_window", "id", r.ID, "prefix", r.Prefix, "hide_window", c.cfg.HideWindow)
 				left[r] = true
 			}
 			r.Pending = pendingLeft
-			errs = append(errs, c.withdrawFlowSpecLocked(ctx, k))
+			withdraw(k)
 			continue
 		}
 		if on && cur.route.Action == rt.Action && cur.route.Target == rt.Target && cur.route.RateMbps == rt.RateMbps {
@@ -913,7 +1055,7 @@ func (c *Controller) syncFlowSpecLocked(ctx context.Context, now time.Time) erro
 		if !netpfx.CoveredBy(c.cfg.Allowlist, r.Prefix) {
 			r.Pending = "not in mitigation.allowlist"
 			if on {
-				errs = append(errs, c.withdrawFlowSpecLocked(ctx, k))
+				withdraw(k)
 			}
 			continue
 		}
@@ -932,16 +1074,9 @@ func (c *Controller) syncFlowSpecLocked(ctx context.Context, now time.Time) erro
 			r.Pending = pendingRIB
 			continue
 		}
-		if err := c.fs.AnnounceFlowSpec(ctx, rt); err != nil {
-			r.Pending = err.Error()
-			errs = append(errs, err)
-			continue
-		}
-		c.fwire[k] = fsWire{rule: r.key, route: rt}
-		c.log.Info("mitigation flowspec announced", "id", r.ID, "rule", k, "action", r.Action, "target", r.Target,
-			"rate_mbps", r.RateMbps, "expires", r.Expires.UTC().Format(time.RFC3339))
+		ops = append(ops, wireOp{kind: opAnnounceFS, key: k, fs: rt, rule: r})
 	}
-	return errors.Join(errs...)
+	return ops
 }
 
 // settleLocked records announced/withdrawn transitions and the wire
@@ -993,48 +1128,39 @@ func (c *Controller) WithdrawAll(ctx context.Context) error {
 	if c == nil || c.ann == nil {
 		return nil
 	}
+	c.wireMu.Lock()
+	defer c.wireMu.Unlock()
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	defer c.settleLocked(time.Now())
-	if c.cfg.Mode != config.ModeInject {
-		return nil
+	inject := c.cfg.Mode == config.ModeInject
+	c.mu.Unlock()
+	var err error
+	if inject {
+		err = c.withdrawAllWire(ctx)
 	}
-	return c.withdrawAllLocked(ctx)
+	c.mu.Lock()
+	c.settleLocked(time.Now())
+	c.mu.Unlock()
+	return err
 }
 
-func (c *Controller) withdrawAllLocked(ctx context.Context) error {
-	if len(c.wire)+len(c.fwire) == 0 {
+// withdrawAllWire withdraws every route on the wire. The caller holds
+// wireMu and not mu.
+func (c *Controller) withdrawAllWire(ctx context.Context) error {
+	c.mu.Lock()
+	n := len(c.wire) + len(c.fwire)
+	c.mu.Unlock()
+	if n == 0 {
 		return nil
 	}
 	if err := c.ann.WithdrawAll(ctx); err != nil {
 		return err
 	}
-	n := len(c.wire) + len(c.fwire)
+	c.mu.Lock()
 	c.wire = map[netip.Prefix]Rule{}
 	c.fwire = map[string]fsWire{}
 	c.gone = map[netip.Prefix]time.Time{}
+	c.mu.Unlock()
 	c.log.Info("mitigation routes withdrawn", "routes", n)
-	return nil
-}
-
-func (c *Controller) withdrawLocked(ctx context.Context, p netip.Prefix) error {
-	if err := c.ann.Withdraw(ctx, p); err != nil {
-		return err
-	}
-	delete(c.wire, p)
-	c.log.Info("mitigation withdrawn", "prefix", p)
-	return nil
-}
-
-func (c *Controller) withdrawFlowSpecLocked(ctx context.Context, key string) error {
-	if c.fs == nil {
-		return errors.New("mitigation: flowspec route on the wire without a flowspec announcer")
-	}
-	if err := c.fs.WithdrawFlowSpec(ctx, key); err != nil {
-		return err
-	}
-	delete(c.fwire, key)
-	c.log.Info("mitigation flowspec withdrawn", "rule", key)
 	return nil
 }
 

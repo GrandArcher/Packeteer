@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/export"
+	"github.com/GrandArcher/Packeteer/internal/pluginhost"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -181,6 +182,21 @@ func TestExportMetrics(t *testing.T) {
 		`packeteer_export_records_total{exporter="k",stream="events",result="failed"} 2`,
 		`packeteer_export_records_total{exporter="k",stream="events",result="dropped"} 1`,
 		"# TYPE packeteer_export_records_total counter",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in\n%s", want, out)
+		}
+	}
+}
+
+func TestSourceErrorMetrics(t *testing.T) {
+	if got := SourceErrorMetrics(nil); len(got) != 0 {
+		t.Fatalf("no failed read must render nothing, got %q", got)
+	}
+	out := string(SourceErrorMetrics([]pluginhost.SourceReadErrors{{Source: "flow", Read: pluginhost.ReadVolumes, Count: 4}}))
+	for _, want := range []string{
+		`packeteer_source_read_errors_total{source="flow",read="volumes"} 4`,
+		"# TYPE packeteer_source_read_errors_total counter",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in\n%s", want, out)

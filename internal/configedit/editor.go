@@ -23,6 +23,7 @@ import (
 	"sync"
 
 	"github.com/GrandArcher/Packeteer/internal/config"
+	"github.com/GrandArcher/Packeteer/internal/dirsync"
 )
 
 // MaxSize bounds a config file written through the editor.
@@ -291,8 +292,9 @@ func WriteFile(path string, data, old []byte) error {
 	if st, err := os.Stat(path); err == nil {
 		mode = st.Mode().Perm()
 	}
-	if err := WriteFileAtomic(path, data, mode); err == nil {
-		return nil
+	if err := WriteFileAtomic(path, data, mode); err == nil || errors.Is(err, dirsync.ErrSync) {
+		// After the rename an in-place rewrite would not make it durable.
+		return err
 	}
 	werr := overwrite(path, data)
 	if werr == nil {
@@ -364,6 +366,12 @@ func WriteFileAtomic(path string, data []byte, mode os.FileMode) error {
 		return err
 	}
 	ok = true
+	// The rename is durable only once the directory is synced; without it
+	// a crash can bring back the old config after the editor reported the
+	// change saved.
+	if err := dirsync.Sync(filepath.Dir(path)); err != nil {
+		return fmt.Errorf("sync config directory: %w", err)
+	}
 	return nil
 }
 

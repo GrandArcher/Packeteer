@@ -37,6 +37,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/federation"
 	"github.com/GrandArcher/Packeteer/internal/inbound"
 	"github.com/GrandArcher/Packeteer/internal/linkout"
+	"github.com/GrandArcher/Packeteer/internal/pluginhost"
 	"github.com/GrandArcher/Packeteer/internal/ringlg"
 	"github.com/GrandArcher/Packeteer/internal/threatfeed"
 	"github.com/GrandArcher/Packeteer/internal/troubleshoot"
@@ -96,6 +97,9 @@ type Options struct {
 	// Export reports exporter delivery counts (#207). Nil means no
 	// exporter is configured and /metrics has no packeteer_export_* series.
 	Export func() []export.Stat
+	// SourceErrors reports failed optional source reads (#492). Nil
+	// leaves packeteer_source_read_errors_total out.
+	SourceErrors func() []pluginhost.SourceReadErrors
 	// ConfigEditor is the validated config editor (#34). Nil when
 	// http.config_editor is off.
 	ConfigEditor ConfigEditor
@@ -155,6 +159,7 @@ type Server struct {
 	fedPush    FederationPusher
 	ha         func() plugin.ElectorStatus
 	export     func() []export.Stat
+	srcErrs    func() []pluginhost.SourceReadErrors
 	editor     ConfigEditor
 	firstRun   FirstRun
 	dashboards plugin.DashboardStore
@@ -271,7 +276,7 @@ func New(opt Options) (*Server, error) {
 	if opt.Logger == nil {
 		opt.Logger = slog.Default()
 	}
-	s := &Server{addr: opt.Addr, user: opt.User, password: opt.Password, auth: opt.Auth, audit: opt.Audit, events: opt.Events, allowFrom: opt.AllowFrom, snap: opt.Snapshot, maint: opt.Maintenance, reports: opt.Reports, tools: opt.Tools, inbound: opt.Inbound, verification: opt.Verification, mitigation: opt.Mitigation, anomaly: opt.Anomaly, threatFeeds: opt.ThreatFeeds, leaks: opt.Leaks, federation: opt.Federation, fedPush: opt.FederationPush, ha: opt.HA, export: opt.Export,
+	s := &Server{addr: opt.Addr, user: opt.User, password: opt.Password, auth: opt.Auth, audit: opt.Audit, events: opt.Events, allowFrom: opt.AllowFrom, snap: opt.Snapshot, maint: opt.Maintenance, reports: opt.Reports, tools: opt.Tools, inbound: opt.Inbound, verification: opt.Verification, mitigation: opt.Mitigation, anomaly: opt.Anomaly, threatFeeds: opt.ThreatFeeds, leaks: opt.Leaks, federation: opt.Federation, fedPush: opt.FederationPush, ha: opt.HA, export: opt.Export, srcErrs: opt.SourceErrors,
 		editor: opt.ConfigEditor, firstRun: opt.FirstRun, dashboards: opt.Dashboards, subs: opt.Subscriptions, upgrade: opt.Upgrade, log: opt.Logger}
 	setup := opt.Setup
 	s.setup.Store(&setup)
@@ -462,6 +467,9 @@ func (s *Server) metricsText(ctx context.Context) []byte {
 	}
 	if s.export != nil {
 		_, _ = w.Write(ExportMetrics(s.export()))
+	}
+	if s.srcErrs != nil {
+		_, _ = w.Write(SourceErrorMetrics(s.srcErrs()))
 	}
 	if p := s.preflightControl(); p != nil {
 		if rep, ok := p.Latest(); ok {

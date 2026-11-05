@@ -20,7 +20,7 @@ func (s staticTargets) Targets(context.Context) ([]plugin.Target, error) { retur
 // The lab from the issue: a controller and two agents at different sites,
 // driven by the real probe engine.
 func TestEngineSplitsProvidersAcrossSitesAndStopsUsingADeadAgent(t *testing.T) {
-	l := newLab(t, 0, "agent-a", "agent-b")
+	l := newLab(t, 0, "agent-a@site-a", "agent-b@site-b")
 	l.startAgent("agent-a", "site-a", &fakeProber{rtt: 10 * time.Millisecond}, map[string]string{"carrier-a": "192.0.2.11"})
 	stopB := l.startAgent("agent-b", "site-b", &fakeProber{rtt: 30 * time.Millisecond}, map[string]string{"carrier-b": "192.0.2.12"})
 	waitFor(t, "both agents online", func() bool {

@@ -361,6 +361,42 @@ func TestSessionLossDropsOnlyThatNeighbor(t *testing.T) {
 	}
 }
 
+// DropSessions (#492) takes every session down at once and keeps it down:
+// the router sees the session close, the view is not ready, and a neighbor
+// added later is refused rather than brought up.
+func TestDropSessionsKeepsEverySessionDown(t *testing.T) {
+	r := newRouter(t)
+	r.add(t, "198.51.100.0/24", "192.0.2.1")
+	v := newView(t, r)
+	eventually(t, "session", func() bool { return v.Ready() && v.Len() == 1 })
+	if err := v.DropSessions(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	routerUp := func() bool {
+		up := false
+		_ = r.srv.ListPeer(context.Background(), &api.ListPeerRequest{}, func(p *api.Peer) {
+			up = up || p.State.SessionState == api.PeerState_ESTABLISHED
+		})
+		return up
+	}
+	if routerUp() {
+		t.Fatal("the router still has the session established after DropSessions returned")
+	}
+	eventually(t, "view not ready", func() bool { return !v.Ready() && v.Len() == 0 })
+	// The router would accept the session again; it must stay down.
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if v.Ready() || routerUp() {
+			t.Fatal("a dropped session came back")
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	err := v.AddNeighbors(context.Background(), []Neighbor{{Address: netip.MustParseAddr("127.0.0.3"), Port: uint16(r.port)}})
+	if err == nil || !strings.Contains(err.Error(), "sessions were dropped") {
+		t.Fatalf("AddNeighbors after DropSessions: %v", err)
+	}
+}
+
 func TestLocalPrefChangeUpdatesRoute(t *testing.T) {
 	p := netip.MustParsePrefix("198.51.100.0/24")
 	nbr := netip.MustParseAddr("192.0.2.254")

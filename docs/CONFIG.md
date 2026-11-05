@@ -1147,7 +1147,7 @@ The controller side of the probe agents (#230, [agents.md](agents.md)). It serve
 | `cert_file`, `key_file` | required | PEM certificate and key the controller presents. |
 | `ca_file` | required | PEM CA that signs the controller's and every agent's certificate. |
 | `crl_file` | none | PEM CRL signed by a CA in `ca_file`. Read at start (an unreadable or unsigned list is an error) and again within a second of a change. A listed agent is refused and not used. A reload with a lower CRL Number than the loaded list from the same issuer is refused. |
-| `agents` | required | Agents that may connect, 1-256: `name` (the certificate CN or a DNS SAN, unique) and `max_pps` (packets per second sent to that agent, 1-100000, default 100). |
+| `agents` | required | Agents that may connect, 1-256: `name` (the certificate CN or a DNS SAN, unique), `site` (required: the only site the agent may declare; a poll that names another site is refused with 403), and `max_pps` (packets per second sent to that agent, 1-100000, default 100). |
 | `poll_wait` | `5s` | How long an idle agent's poll is held, 100ms-30s. It is the agent's heartbeat. |
 | `max_age` | 3 x `poll_wait` | How long an agent stays usable after it last called, longer than `poll_wait`, at most 10m. |
 

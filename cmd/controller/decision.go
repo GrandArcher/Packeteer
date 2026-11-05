@@ -540,6 +540,9 @@ func collectTraffic(ctx context.Context, plugins *pluginhost.Set) map[netip.Pref
 		}
 		rows, err := tc.TrafficMix(ctx)
 		if err != nil {
+			if !errors.Is(err, context.Canceled) {
+				plugins.SourceReadFailed(src.Name, pluginhost.ReadTrafficMix, err)
+			}
 			continue
 		}
 		for _, row := range rows {
@@ -618,6 +621,9 @@ func collectVolumeRows(ctx context.Context, plugins *pluginhost.Set) map[netip.P
 		}
 		rows, err := vs.Volumes(ctx)
 		if err != nil {
+			if !errors.Is(err, context.Canceled) {
+				plugins.SourceReadFailed(src.Name, pluginhost.ReadVolumes, err)
+			}
 			continue
 		}
 		for _, row := range rows {

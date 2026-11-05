@@ -9,9 +9,11 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 - Probe/RIB at 100k targets: bounded probe outcome channel, `probe.provider_inflight` cap, looking glass via `Find`, RIB copies rebuilt at most every 5 s, improvement counter, nightly bench (#491).
 - Prober memory evicts in one sort-based pass instead of a scan per host; sub-range jobs stop after two silent hosts of a down provider; job order uses the reloaded interval (#507).
 - Audit hygiene: ENV.md and threat model gaps, release pins in quickstart, Compose and install.sh, ASCII gate on source, documentation test data, errcheck on, image and action pins (#494).
+- History requeue capped per row kind; lease and config writes check the directory fsync; failed TrafficMix/Volumes reads warn and count in `packeteer_source_read_errors_total` (#492).
 - `-pbr linux -apply` adds before it removes, rolls back a failed run, reads named tables; `make test` lists skipped tests; fuzz targets for v5, sFlow, BMP, RTR, BER, TWAMP, pcap run in CI (#510).
 ### Security
 
+- HA step-down drops the BGP sessions after 3 failed withdraws; each probe agent needs a `site`, another is refused; mitigation announces outside its lock (#492).
 - Flow `exporters` allowlist and template expiry; auth lockout per IPv6 /64, basic-auth lockout, two concurrent password checks; ops ReadTimeout; generic SSO and store errors (#493).
 - Signed `SHA256SUMS` names its version, `-version` must match exactly; herd hub pins keys per ASN, checks resolved addresses; CSV formulas escaped; sqlite DSN via url.URL; bounded whois line (#493).
 - Report, what-if, blast, preflight, config-write and send-now errors return a generic message; the detail (paths, SQL text) stays in the log (#510).
@@ -25,12 +27,13 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 - Webhook/`otlp` `${VAR}` expand only `PACKETEER_WEBHOOK_*`/`PACKETEER_OTLP_*`; webhook, exporter, feed, RPKI, OIDC, RIS Live, agent refuse cross-host redirects (RDAP: https, Accept only) (#489).
 - First-run admin password is no longer logged, only its 0600 file; troubleshoot POSTs need auth; OIDC requires `email_verified: true` with the email claim (#489).
 - SSO sessions mint tokens of at most 7 days; federation peers can pin a `domain` and implausible peer measurements are dropped; the federation listener has a read timeout (#508).
-- `upgrade/apply` refuses an older version (use rollback); the probe-agent hub refuses a CRL with a lower Number; a delayed probe re-checks the agent's site (#508).
+- `upgrade/apply` refuses an older version (use rollback); the probe-agent hub refuses a CRL with a lower Number (#508).
 - RTR and VRP JSON: max length is range-checked, VRP JSON is stream-decoded under the `MaxVRPs` cap; IX-F peering LANs need at least /16 (v4) or /48 (v6) (#508).
 - `packeteer-reflector -allow-from` limits who is answered; the SNMPv3 agent enforces the RFC 3414 150 s time window and answers with a notInTimeWindow Report (#508).
 
 ### Upgrade notes
 
+- Give every `agent` prober `agents` entry a `site` (the site that agent declares); a config without one no longer loads (#492).
 - List your flow routers in the flow source's new `exporters` key; without it every source is still accepted and a warning is logged (#493).
 - A `bmp` RIB or leak source without `listen` now binds `127.0.0.1`; set `listen` to the address the routers connect to (`:11019` for every interface) (#490).
 - Use an `https` `url` for `influxdb` and for an `http` threat feed with `token_env` (http only to loopback); in the editor, name new secrets with the prefixes in docs/ENV.md (#504).

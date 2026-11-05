@@ -35,6 +35,7 @@ import (
 	"slices"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -215,6 +216,7 @@ type View struct {
 	provNH    map[string]netip.Addr                // provider -> next hop
 	anyBMP    bool                                 // some provider uses BMP (prefer or only)
 	bmpAlone  bool                                 // no iBGP neighbors: readiness comes from BMP (#237)
+	dropped   bool                                 // DropSessions ran; no session comes back
 	peers     map[netip.Addr]PeerState
 	neighbors map[netip.Addr]bool
 	addPath   map[netip.Addr]bool // neighbors configured to receive add-path
@@ -444,6 +446,10 @@ func (v *View) AddNeighbors(ctx context.Context, nbrs []Neighbor) error {
 		v.mu.Unlock()
 		return errors.New("rib: the view is learned over BMP alone; adding iBGP neighbors needs a restart")
 	}
+	if v.dropped {
+		v.mu.Unlock()
+		return errors.New("rib: the sessions were dropped after a failed HA withdraw; adding neighbors needs a restart")
+	}
 	for _, n := range nbrs {
 		a := n.Address.Unmap()
 		if !a.IsValid() || v.neighbors[a] {
@@ -467,6 +473,19 @@ func (v *View) AddNeighbors(ctx context.Context, nbrs []Neighbor) error {
 			if err := v.addPeer(ctx, n); err != nil {
 				errs = append(errs, err)
 			}
+		}
+		// DropSessions sets dropped before it lists the peers, so a peer
+		// added while it ran is either in its list or shut down here.
+		v.mu.RLock()
+		dropped := v.dropped
+		v.mu.RUnlock()
+		if dropped {
+			for _, n := range nbrs {
+				if err := v.srv.DisablePeer(ctx, &api.DisablePeerRequest{Address: n.Address.String(), Communication: dropMessage}); err != nil {
+					errs = append(errs, fmt.Errorf("rib: shut down session to %s: %w", n.Address, err))
+				}
+			}
+			errs = append(errs, errors.New("rib: the sessions were dropped after a failed HA withdraw; adding neighbors needs a restart"))
 		}
 	}
 	v.notify()
@@ -495,35 +514,66 @@ func (v *View) stopServer() {
 	if v.srv == nil {
 		return
 	}
-	v.quiesceSessions()
+	_ = v.quiesceSessions(context.Background(), "")
 	_ = v.srv.StopBgp(context.Background(), &api.StopBgpRequest{})
 	v.srv.Stop()
 }
 
-// quiesceSessions admin-downs every peer and waits for established sessions
-// to leave that state. StopBgp clears the global config without a lock that
-// an established session's receive loop also reads, so it must not run while
-// one is still receiving. A session reports a non-established state only
-// after its loops have exited.
-func (v *View) quiesceSessions() {
-	ctx := context.Background()
+// DropSessions shuts every iBGP session down and keeps it down until the
+// process restarts. It is the backstop for an HA standby whose withdraw
+// failed (#492): a router drops every route it learned over a session that
+// closes, so Packeteer's routes leave the edge even though the speaker
+// still holds them. The view is not ready afterwards, so the instance is
+// never eligible to lead again, and AddNeighbors is refused.
+func (v *View) DropSessions(ctx context.Context) error {
+	if v.srv == nil {
+		return nil
+	}
+	v.mu.Lock()
+	v.dropped = true
+	v.mu.Unlock()
+	return v.quiesceSessions(ctx, dropMessage)
+}
+
+// dropMessage is the shutdown communication DropSessions sends.
+const dropMessage = "packeteer: HA standby could not withdraw its routes"
+
+// quiesceSessions admin-downs every peer, sending why in the shutdown
+// NOTIFICATION, and waits for established sessions to leave that state.
+// StopBgp clears the global config without a lock that an established
+// session's receive loop also reads, so it must not run while one is still
+// receiving. A session reports a non-established state only after its
+// loops have exited. The wait ends at quiesceTimeout or ctx's deadline,
+// whichever is first.
+func (v *View) quiesceSessions(ctx context.Context, why string) error {
 	var addrs []string
-	_ = v.srv.ListPeer(ctx, &api.ListPeerRequest{}, func(p *api.Peer) {
+	if err := v.srv.ListPeer(ctx, &api.ListPeerRequest{}, func(p *api.Peer) {
 		addrs = append(addrs, p.State.NeighborAddress)
-	})
+	}); err != nil {
+		return fmt.Errorf("rib: list peers: %w", err)
+	}
+	var errs []error
 	for _, a := range addrs {
-		_ = v.srv.DisablePeer(ctx, &api.DisablePeerRequest{Address: a})
+		if err := v.srv.DisablePeer(ctx, &api.DisablePeerRequest{Address: a, Communication: why}); err != nil {
+			errs = append(errs, fmt.Errorf("rib: shut down session to %s: %w", a, err))
+		}
 	}
 	deadline := time.Now().Add(quiesceTimeout)
-	for time.Now().Before(deadline) {
-		up := false
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+	for {
+		var up []string
 		_ = v.srv.ListPeer(ctx, &api.ListPeerRequest{}, func(p *api.Peer) {
 			if p.State.SessionState == api.PeerState_ESTABLISHED {
-				up = true
+				up = append(up, p.State.NeighborAddress)
 			}
 		})
-		if !up {
-			return
+		if len(up) == 0 {
+			return errors.Join(errs...)
+		}
+		if !time.Now().Before(deadline) {
+			return errors.Join(append(errs, fmt.Errorf("rib: sessions still established: %s", strings.Join(up, ", ")))...)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}

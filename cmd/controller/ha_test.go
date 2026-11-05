@@ -3,7 +3,10 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/netip"
 	"os"
@@ -18,6 +21,10 @@ import (
 	api "github.com/osrg/gobgp/v3/api"
 	"github.com/osrg/gobgp/v3/pkg/server"
 	"google.golang.org/protobuf/types/known/anypb"
+
+	gobgpann "github.com/GrandArcher/Packeteer/internal/plugins/announcer/gobgp"
+	"github.com/GrandArcher/Packeteer/internal/rib"
+	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
 // haEdgeHold is the edge's negotiated hold time. It is shorter than
@@ -439,4 +446,134 @@ func TestDaemonHAActiveStandby(t *testing.T) {
 
 	a.stop(t)
 	waitOnly("no Packeteer routes after both stopped", "")
+}
+
+// haTestElector is an elector held in one role. It counts resignations.
+type haTestElector struct {
+	plugin.Base
+	active  bool
+	resigns atomic.Int32
+}
+
+func (e *haTestElector) SetCandidate(func() plugin.Candidacy) {}
+func (e *haTestElector) OnChange(func())                      {}
+func (e *haTestElector) Active() bool                         { return e.active }
+func (e *haTestElector) Resign(context.Context) error {
+	e.resigns.Add(1)
+	return nil
+}
+func (e *haTestElector) Status() plugin.ElectorStatus { return plugin.ElectorStatus{ID: "pk-a"} }
+
+// A step-down whose withdraw keeps failing drops the BGP sessions (#492).
+// The route is on a simulated edge from a real speaker and announcer; the
+// withdraw fails as a DeletePath failure would. The edge must lose the
+// route with the session, the instance must not resign or come back as
+// eligible, and the session must stay down.
+func TestHAStandbyWithdrawFailureDropsSessions(t *testing.T) {
+	defer func(old time.Duration) { haWithdrawSettle = old }(haWithdrawSettle)
+	haWithdrawSettle = 10 * time.Millisecond
+	edge := newHAEdge(t)
+	view, err := rib.New(rib.Options{
+		ASN: 64512, RouterID: netip.MustParseAddr("192.0.2.10"), ListenPort: -1, OwnCommunity: 64512<<16 | 666,
+		Neighbors: []rib.Neighbor{{Address: netip.MustParseAddr("127.0.0.1"), Port: uint16(edge.port), LocalAddress: netip.MustParseAddr("127.0.0.2")}},
+		Providers: map[netip.Addr]string{netip.MustParseAddr("192.0.2.1"): "transit-a", netip.MustParseAddr("192.0.2.2"): "transit-b"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := view.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = view.Stop(context.Background()) })
+	deadline := time.Now().Add(20 * time.Second)
+	for !view.Ready() || view.Len() != 1 {
+		if time.Now().After(deadline) {
+			t.Fatal("the view never learned the edge's prefix")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	ann, err := gobgpann.New(plugin.Config{}, plugin.Env{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ga := ann.(*gobgpann.Announcer)
+	if err := ga.Bind(view.Server(), "64512:666"); err != nil {
+		t.Fatal(err)
+	}
+	if err := ga.Announce(context.Background(), plugin.Route{Prefix: netip.MustParsePrefix(haLearned), NextHop: netip.MustParseAddr("192.0.2.2"),
+		Provider: "transit-b", LocalPref: 250, Communities: []string{"64512:666"}}); err != nil {
+		t.Fatal(err)
+	}
+	for !onlyFrom(edge.routes(), "127.0.0.2") {
+		if time.Now().After(deadline) {
+			t.Fatalf("the edge never got the route: %v", edge.routes())
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	el := &haTestElector{}
+	var logs syncBuf
+	var tries atomic.Int32
+	h := &haControl{el: el, typ: "lease", log: slog.New(slog.NewTextHandler(&logs, nil)),
+		withdraw: func(context.Context) error {
+			tries.Add(1)
+			return errors.New("gobgp announcer: DeletePath 198.51.100.0/24: injected failure")
+		},
+		dropSessions: view.DropSessions,
+		poke:         func() {},
+		emit:         func(time.Time, string, string, map[string]string) {},
+		was:          true,
+	}
+	h.changed()
+	if n := tries.Load(); n != haWithdrawTries {
+		t.Fatalf("withdraw tried %d times, want %d", n, haWithdrawTries)
+	}
+	// The edge drops the route when the NOTIFICATION arrives, which can
+	// trail DropSessions by a moment; no withdraw UPDATE was sent.
+	gone := time.Now().Add(5 * time.Second)
+	for r := edge.routes(); len(r) != 0; r = edge.routes() {
+		if time.Now().After(gone) {
+			t.Fatalf("the edge still holds %v after the sessions were dropped", r)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if view.Ready() {
+		t.Fatal("the view is ready after its sessions were dropped; the instance could lead again")
+	}
+	if n := el.resigns.Load(); n != 0 {
+		t.Fatalf("resigned %d times after a failed withdraw", n)
+	}
+	if !strings.Contains(logs.String(), "dropping the BGP sessions") {
+		t.Fatalf("logs:\n%s", logs.String())
+	}
+	// The edge would take the session again; it stays down.
+	time.Sleep(2 * time.Second)
+	if r := edge.routes(); len(r) != 0 || view.Ready() {
+		t.Fatalf("the session came back: edge %v, view ready %v", r, view.Ready())
+	}
+}
+
+// A withdraw that fails once and then succeeds resigns as usual and keeps
+// the sessions.
+func TestHAStandbyWithdrawRetrySucceeds(t *testing.T) {
+	defer func(old time.Duration) { haWithdrawSettle = old }(haWithdrawSettle)
+	haWithdrawSettle = 10 * time.Millisecond
+	el := &haTestElector{}
+	var tries, drops atomic.Int32
+	h := &haControl{el: el, typ: "lease", log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		withdraw: func(context.Context) error {
+			if tries.Add(1) == 1 {
+				return errors.New("injected failure")
+			}
+			return nil
+		},
+		dropSessions: func(context.Context) error { drops.Add(1); return nil },
+		poke:         func() {},
+		emit:         func(time.Time, string, string, map[string]string) {},
+		was:          true,
+	}
+	h.changed()
+	if tries.Load() != 2 || drops.Load() != 0 || el.resigns.Load() != 1 {
+		t.Fatalf("tries %d, drops %d, resigns %d; want 2, 0, 1", tries.Load(), drops.Load(), el.resigns.Load())
+	}
 }

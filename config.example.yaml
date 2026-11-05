@@ -185,6 +185,7 @@ probers:
   #     crl_file: /etc/packeteer/certs/agents.crl   # optional revocation list
   #     agents:
   #       - name: agent-b     # certificate CN or DNS SAN
+  #         site: dc-b        # the only site this agent may declare
   #         max_pps: 100
   # - type: udp               # optional fallback. A reply or ICMP port-unreachable counts.
   #   config:

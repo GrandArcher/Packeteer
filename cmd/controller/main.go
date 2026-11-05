@@ -668,7 +668,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			Addr: addr, User: httpUser, Password: httpPass, Snapshot: col.Snapshot, Logger: log,
 			Auth: authSvc, Audit: audit, Events: evlog, AllowFrom: cfg.HTTPAllowFrom(),
 			Maintenance: maint, Reports: reports, Tools: tools, Inbound: inboundStatus, Verification: verificationStatus, Mitigation: mitAPI, Anomaly: anomAPI, ThreatFeeds: feedsAPI, Leaks: leakAPI,
-			Federation: fed.status, FederationPush: fedPush, HA: haStatus, Export: exportStats(exp),
+			Federation: fed.status, FederationPush: fedPush, HA: haStatus, Export: exportStats(exp), SourceErrors: plugins.SourceReadErrors,
 			ConfigEditor: editorAPI, FirstRun: firstRunAPI, Dashboards: dashboardStore(plugins), Subscriptions: subsAPI,
 			Setup: setupInfo(cfg, plugins, geo), Upgrade: upgradeAPI, Linkouts: linkout.New(cfg.Linkouts), RingLG: ringlg.New(cfg.RingLG, version), Atlas: atl,
 			System: systemFacts(plugins, &sysEngine, health, irrChecker, atl), Usage: usageReader(plugins),
@@ -872,6 +872,11 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	}
 	ha := newHAControl(plugins, log, haView, func(ctx context.Context) error {
 		return errors.Join(mit.WithdrawAll(ctx), inb.WithdrawAll(ctx), ctl.WithdrawAll(ctx))
+	}, func(ctx context.Context) error {
+		if view == nil {
+			return nil
+		}
+		return view.DropSessions(ctx)
 	}, poke, watch.emit)
 	if err := plugins.Start(ctx); err != nil {
 		log.Error("refusing to start", "err", err)

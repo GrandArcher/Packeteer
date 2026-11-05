@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/GrandArcher/Packeteer/internal/config"
+	"github.com/GrandArcher/Packeteer/internal/dirsync"
 )
 
 const observeYAML = `mode: observe
@@ -456,5 +457,36 @@ synthesize:
 	res := e.Check([]byte(synth))
 	if !res.Valid || res.SynthesizeWarning != config.SynthesizeWarning || !strings.Contains(res.SynthesizeWarning, "NOT in the learned RIB") {
 		t.Fatalf("synthesize = %+v", res)
+	}
+}
+
+// TestWriteFileAtomicReportsDirectorySync checks that a directory that
+// cannot be synced after the rename is an error (#492), and that WriteFile,
+// which the editor saves with, returns it instead of falling back to an
+// in-place rewrite that would report the change saved.
+func TestWriteFileAtomicReportsDirectorySync(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a directory without the read bit")
+	}
+	dir := filepath.Join(t.TempDir(), "conf")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "config.yaml")
+	if err := WriteFileAtomic(path, []byte("mode: observe\n"), 0o600); err != nil {
+		t.Fatalf("readable directory: %v", err)
+	}
+	// Write and search only: the temporary file and the rename work, the
+	// directory cannot be opened to sync it.
+	if err := os.Chmod(dir, 0o300); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	err := WriteFileAtomic(path, []byte("mode: suggest\n"), 0o600)
+	if err == nil || !strings.Contains(err.Error(), "sync config directory") {
+		t.Fatalf("err = %v, want a directory sync error", err)
+	}
+	if err := WriteFile(path, []byte("mode: observe\n"), []byte("mode: suggest\n")); !errors.Is(err, dirsync.ErrSync) {
+		t.Fatalf("WriteFile err = %v, want the directory sync error", err)
 	}
 }
