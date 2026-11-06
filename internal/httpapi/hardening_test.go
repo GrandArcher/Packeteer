@@ -48,9 +48,9 @@ func TestLegacyBasicAuthThrottled(t *testing.T) {
 }
 
 // The basic-auth account is counted per network, whatever user name is
-// sent: failures under other names lock it out, and more failures under
-// new names than the auth table holds (10,000) do not evict that lockout
-// (#527).
+// sent: failures under other names lock it out, and 10,001 more attempts
+// under new names (more than the 10,000-entry throttle table) are refused
+// without adding entries, so the lockout holds (#527).
 func TestLegacyBasicAuthThrottleIgnoresUserName(t *testing.T) {
 	s, err := New(Options{User: "ops", Password: "secret", Snapshot: func() Snapshot { return Snapshot{} }})
 	if err != nil {
