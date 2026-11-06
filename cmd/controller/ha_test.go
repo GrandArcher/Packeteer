@@ -577,3 +577,102 @@ func TestHAStandbyWithdrawRetrySucceeds(t *testing.T) {
 		t.Fatalf("tries %d, drops %d, resigns %d; want 2, 0, 1", tries.Load(), drops.Load(), el.resigns.Load())
 	}
 }
+
+// A withdraw try that runs out its time leaves the next try a full
+// timeout of its own (#528): a slow speaker or a mitigation Sync holding
+// the wire must not use up the step-down and end in dropped sessions.
+func TestHAStandbySlowWithdrawGetsFreshTimeout(t *testing.T) {
+	defer func(old, oldTimeout time.Duration) { haWithdrawSettle, haWithdrawTimeout = old, oldTimeout }(haWithdrawSettle, haWithdrawTimeout)
+	haWithdrawSettle = 10 * time.Millisecond
+	haWithdrawTimeout = 200 * time.Millisecond
+	el := &haTestElector{}
+	var tries, drops atomic.Int32
+	var left time.Duration
+	h := &haControl{el: el, typ: "lease", log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		withdraw: func(ctx context.Context) error {
+			if tries.Add(1) == 1 {
+				<-ctx.Done()
+				return ctx.Err()
+			}
+			dl, ok := ctx.Deadline()
+			if !ok {
+				return errors.New("withdraw try without a deadline")
+			}
+			left = time.Until(dl)
+			return nil
+		},
+		dropSessions: func(context.Context) error { drops.Add(1); return nil },
+		poke:         func() {},
+		emit:         func(time.Time, string, string, map[string]string) {},
+		was:          true,
+	}
+	h.changed()
+	if tries.Load() != 2 || drops.Load() != 0 || el.resigns.Load() != 1 {
+		t.Fatalf("tries %d, drops %d, resigns %d; want 2, 0, 1", tries.Load(), drops.Load(), el.resigns.Load())
+	}
+	if left <= haWithdrawTimeout/2 {
+		t.Fatalf("the second try had %v left of a %v timeout", left, haWithdrawTimeout)
+	}
+}
+
+// All withdraw tries together stay inside haStepDownBudget (#528): the
+// standby takes over a bounded time after this instance steps down, so a
+// hung withdraw must not keep routes on the edge past that.
+func TestHAStandbyWithdrawTriesStayInBudget(t *testing.T) {
+	defer func(a, b, c time.Duration) { haWithdrawSettle, haWithdrawTimeout, haStepDownBudget = a, b, c }(haWithdrawSettle, haWithdrawTimeout, haStepDownBudget)
+	haWithdrawSettle = 10 * time.Millisecond
+	haWithdrawTimeout = 200 * time.Millisecond
+	haStepDownBudget = 300 * time.Millisecond
+	el := &haTestElector{}
+	var drops atomic.Int32
+	var dropAt time.Duration
+	start := time.Now()
+	h := &haControl{el: el, typ: "lease", log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		withdraw: func(ctx context.Context) error {
+			<-ctx.Done()
+			return ctx.Err()
+		},
+		dropSessions: func(context.Context) error { drops.Add(1); dropAt = time.Since(start); return nil },
+		poke:         func() {},
+		emit:         func(time.Time, string, string, map[string]string) {},
+		was:          true,
+	}
+	h.changed()
+	if drops.Load() != 1 {
+		t.Fatalf("drops %d, want 1", drops.Load())
+	}
+	if dropAt < haStepDownBudget || dropAt > 500*time.Millisecond {
+		t.Fatalf("sessions dropped after %v, want within [%v, 500ms]; three uncapped tries would take 620ms", dropAt, haStepDownBudget)
+	}
+}
+
+// An instance that holds the lease again by the time its step-down
+// withdraw has failed keeps its BGP sessions (#528): it is the active
+// instance, and dropped sessions stay down until a restart.
+func TestHAStandbyWithdrawFailureActiveAgainKeepsSessions(t *testing.T) {
+	defer func(old time.Duration) { haWithdrawSettle = old }(haWithdrawSettle)
+	haWithdrawSettle = 10 * time.Millisecond
+	el := &haTestElector{}
+	var logs syncBuf
+	var tries, drops atomic.Int32
+	h := &haControl{el: el, typ: "lease", log: slog.New(slog.NewTextHandler(&logs, nil)),
+		withdraw: func(context.Context) error {
+			if tries.Add(1) == haWithdrawTries {
+				// The lease comes back during the last try.
+				el.active = true
+			}
+			return errors.New("injected failure")
+		},
+		dropSessions: func(context.Context) error { drops.Add(1); return nil },
+		poke:         func() {},
+		emit:         func(time.Time, string, string, map[string]string) {},
+		was:          true,
+	}
+	h.changed()
+	if tries.Load() != haWithdrawTries || drops.Load() != 0 || el.resigns.Load() != 0 {
+		t.Fatalf("tries %d, drops %d, resigns %d; want %d, 0, 0", tries.Load(), drops.Load(), el.resigns.Load(), haWithdrawTries)
+	}
+	if !strings.Contains(logs.String(), "active again after a failed standby withdraw") {
+		t.Fatalf("logs:\n%s", logs.String())
+	}
+}
