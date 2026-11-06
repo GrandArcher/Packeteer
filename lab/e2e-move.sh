@@ -12,7 +12,8 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"
 compose=(docker compose -f lab/docker-compose.yml)
 prefix=198.51.100.0/24
-updates_log=/tmp/bgp-updates.log
+updates_dir=/var/lib/packeteer-lab
+updates_log=$updates_dir/bgp-updates.log
 
 lab_dir=$(mktemp -d)
 trap 'rc=$?; if [ "$rc" -ne 0 ]; then echo "---- lab logs ----"; "${compose[@]}" logs --no-color || true; "${compose[@]}" ps || true; fi; "${compose[@]}" down -v --remove-orphans || true; rm -rf "$lab_dir"; exit "$rc"' EXIT
@@ -93,7 +94,11 @@ echo "transit-b is faster: one Packeteer path via 192.0.2.2"
 wait_via 192.0.2.2
 
 echo "logging every UPDATE the edge receives"
-vtysh -c 'configure terminal' -c "log file $updates_log debugging" -c 'end' -c 'debug bgp updates in' >/dev/null
+# On ubuntu-26.04 runners FRR failed with "can't open logfile
+# /tmp/bgp-updates.log". The file is made up front, writable by the frr
+# daemons, outside sticky /tmp.
+"${compose[@]}" exec -T edge sh -c "mkdir -p $updates_dir && : >$updates_log && chmod 0666 $updates_log"
+out=$(vtysh -c 'configure terminal' -c "log file $updates_log debugging" -c 'end' -c 'debug bgp updates in' 2>&1) || fail "FRR update log setup failed: $out"
 dbg=$(vtysh -c 'show debugging' 2>&1 || true)
 [[ "$dbg" == *"updates"* ]] || fail "FRR update debugging did not turn on: $dbg"
 
