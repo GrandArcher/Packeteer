@@ -197,10 +197,24 @@ func checkEndpoint(s string) error {
 	return nil
 }
 
+// specialUse is special-purpose space the netip predicates in unroutable
+// do not cover. NAT64 prefixes are refused because a NAT64 gateway turns an
+// address in them into any IPv4 address, internal ones included (#532).
+var specialUse = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"),
+	netip.MustParsePrefix("100.64.0.0/10"),
+	netip.MustParsePrefix("198.18.0.0/15"),
+	netip.MustParsePrefix("64:ff9b::/96"),
+	netip.MustParsePrefix("64:ff9b:1::/48"),
+}
+
 // unroutable reports an address no herd peer could be at.
 func unroutable(a netip.Addr) bool {
 	a = a.Unmap()
-	return a.IsLoopback() || a.IsUnspecified() || a.IsLinkLocalUnicast() || a.IsMulticast() || a.IsPrivate()
+	if a.IsLoopback() || a.IsUnspecified() || a.IsLinkLocalUnicast() || a.IsMulticast() || a.IsPrivate() {
+		return true
+	}
+	return slices.ContainsFunc(specialUse, func(p netip.Prefix) bool { return p.Contains(a) })
 }
 
 // refuseUnroutable is the dialer check for hub peers. It runs on the
