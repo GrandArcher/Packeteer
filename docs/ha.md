@@ -24,7 +24,7 @@ An elector plugin (`ha:`, [PLUGINS.md](PLUGINS.md)) decides which instance is ac
 |---|---|---|
 | Active stops cleanly (SIGTERM) | It withdraws every Packeteer route, waits 1s, and releases the lease. | The standby's next renewal (`renew`, default 2s), plus 1s. |
 | Active loses every iBGP session | Its RIB view is not ready: it withdraws, steps down, and releases the lease. Its routes are gone with the sessions anyway. | Next renewal of a standby whose own sessions are up. |
-| A step-down withdraw keeps failing (#492) | The instance tries 3 times, 1s apart, then drops its BGP sessions (shutdown NOTIFICATION), so each router removes its routes. It does not resign, its view is not ready, and it never leads again until restarted. | After the standby's wait (below). |
+| A step-down withdraw keeps failing (#492) | The instance tries 3 times, 1s apart, each try with its own 10s timeout (#528). Then, unless it holds the lease again by then, it drops its BGP sessions (shutdown NOTIFICATION), so each router removes its routes. It does not resign, its view is not ready, and it never leads again until restarted. | After the standby's wait (below). |
 | Active cannot renew the lease (storage lost) | It stops announcing and withdraws `ttl`/2 after its last renewal. | After the standby's wait (below). |
 | Active crashes (SIGKILL, host loss) or freezes | Nothing is withdrawn. Graceful restart is never enabled, so each router drops its routes when the session's hold timer expires. | After the standby's wait (below). |
 

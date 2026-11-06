@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"log/slog"
 	"strconv"
 	"sync"
@@ -31,6 +30,10 @@ var haWithdrawSettle = time.Second
 // haWithdrawTries is how many times a step-down tries the withdraw before
 // it treats the failure as persistent and drops the BGP sessions.
 const haWithdrawTries = 3
+
+// haWithdrawTimeout bounds one withdraw try. Each try gets its own, so a
+// slow first try does not leave the next ones without time (#528).
+var haWithdrawTimeout = 10 * time.Second
 
 // haRIB is the RIB surface candidacy reads (*rib.View).
 type haRIB interface {
@@ -108,9 +111,7 @@ func (h *haControl) changed() {
 	}
 	// Withdraw now, not at the next decision round: the other instance
 	// may take over as soon as this one resigns.
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	err := h.withdrawTries(ctx)
+	err := h.withdrawTries()
 	h.mu.Lock()
 	was := h.was
 	h.was = false
@@ -122,6 +123,14 @@ func (h *haControl) changed() {
 			map[string]string{"id": st.ID, "holder": st.Holder, "detail": st.Detail, "withdrawn": strconv.FormatBool(err == nil)})
 	}
 	h.poke()
+	if err != nil && h.el.Active() {
+		// The lease came back while the withdraw failed. This instance is
+		// the holder again and its routes are its own; the change handler
+		// runs again for the new role. Dropping the sessions now would
+		// leave the active instance without them until a restart.
+		h.log.Warn("ha: active again after a failed standby withdraw; keeping the BGP sessions", "err", err)
+		return
+	}
 	if err != nil {
 		// The other instance takes over once the lease runs out, on the
 		// assumption that this one's routes are gone, which holds only
@@ -142,30 +151,35 @@ func (h *haControl) changed() {
 		return
 	}
 	time.Sleep(haWithdrawSettle)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 	if err := h.el.Resign(ctx); err != nil {
 		h.log.Warn("ha: resign", "err", err)
 	}
 }
 
 // withdrawTries runs the withdraw up to haWithdrawTries times,
-// haWithdrawSettle apart, and returns the last error.
-func (h *haControl) withdrawTries(ctx context.Context) error {
+// haWithdrawSettle apart, each with its own haWithdrawTimeout, and returns
+// the last error.
+func (h *haControl) withdrawTries() error {
 	var err error
 	for i := range haWithdrawTries {
-		if err = h.withdraw(ctx); err == nil {
+		if err = h.withdrawOnce(); err == nil {
 			return nil
 		}
 		if i == haWithdrawTries-1 {
 			break
 		}
 		h.log.Warn("ha: withdraw on standby failed; trying again", "err", err, "try", i+1)
-		select {
-		case <-time.After(haWithdrawSettle):
-		case <-ctx.Done():
-			return errors.Join(err, ctx.Err())
-		}
+		time.Sleep(haWithdrawSettle)
 	}
 	return err
+}
+
+func (h *haControl) withdrawOnce() error {
+	ctx, cancel := context.WithTimeout(context.Background(), haWithdrawTimeout)
+	defer cancel()
+	return h.withdraw(ctx)
 }
 
 // shutdown resigns after the shutdown withdraw, so the standby takes over

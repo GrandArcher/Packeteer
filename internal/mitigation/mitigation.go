@@ -226,8 +226,10 @@ type Controller struct {
 	// never held across an announcer call or a call into the outbound or
 	// inbound controller: they call Holds under their own locks, so
 	// holding mu there would invert the lock order (#492), and Status,
-	// Add and Holds must not wait on network I/O.
-	wireMu sync.Mutex
+	// Add and Holds must not wait on network I/O. wireMu is a one-slot
+	// channel so a waiter gives up when its context ends: an HA step-down
+	// must not spend its withdraw time behind a slow Sync (#528).
+	wireMu chan struct{}
 	mu     sync.Mutex
 	rules  map[string]*Rule
 	// wire is what the announcer has for each RTBH/redirect prefix, fwire
@@ -271,7 +273,7 @@ func New(cfg Config, ann plugin.MitigationAnnouncer, log *slog.Logger) (*Control
 		log = slog.Default()
 	}
 	c := &Controller{cfg: cfg, ann: ann, log: log, rules: map[string]*Rule{}, wire: map[netip.Prefix]Rule{}, fwire: map[string]fsWire{},
-		inflight: map[netip.Prefix]bool{}, gone: map[netip.Prefix]time.Time{}}
+		inflight: map[netip.Prefix]bool{}, gone: map[netip.Prefix]time.Time{}, wireMu: make(chan struct{}, 1)}
 	c.catalog.Targets = []plugin.MitigationTarget{}
 	c.fsCat.Targets = []plugin.FlowSpecTarget{}
 	if ann != nil {
@@ -326,8 +328,10 @@ func (c *Controller) ApplyRuntime(ctx context.Context, mode string) error {
 	if c == nil {
 		return nil
 	}
-	c.wireMu.Lock()
-	defer c.wireMu.Unlock()
+	if err := c.lockWire(ctx); err != nil {
+		return err
+	}
+	defer c.unlockWire()
 	now := time.Now()
 	c.mu.Lock()
 	leaving := c.cfg.Mode == config.ModeInject && mode != config.ModeInject
@@ -728,8 +732,10 @@ func (c *Controller) Sync(ctx context.Context, now time.Time) error {
 	if c == nil {
 		return nil
 	}
-	c.wireMu.Lock()
-	defer c.wireMu.Unlock()
+	if err := c.lockWire(ctx); err != nil {
+		return err
+	}
+	defer c.unlockWire()
 	c.mu.Lock()
 	for k, r := range c.rules {
 		if !now.Before(r.Expires) {
@@ -1123,13 +1129,16 @@ func (c *Controller) announcedLocked(r *Rule) bool {
 }
 
 // WithdrawAll removes every mitigation route and keeps the rules. It is
-// safe to call more than once and in every mode.
+// safe to call more than once and in every mode. If a Sync holds the wire
+// until ctx ends, it returns ctx's error and changes nothing.
 func (c *Controller) WithdrawAll(ctx context.Context) error {
 	if c == nil || c.ann == nil {
 		return nil
 	}
-	c.wireMu.Lock()
-	defer c.wireMu.Unlock()
+	if err := c.lockWire(ctx); err != nil {
+		return err
+	}
+	defer c.unlockWire()
 	c.mu.Lock()
 	inject := c.cfg.Mode == config.ModeInject
 	c.mu.Unlock()
@@ -1142,6 +1151,18 @@ func (c *Controller) WithdrawAll(ctx context.Context) error {
 	c.mu.Unlock()
 	return err
 }
+
+// lockWire takes wireMu or returns when ctx ends first.
+func (c *Controller) lockWire(ctx context.Context) error {
+	select {
+	case c.wireMu <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("mitigation: waiting for the wire lock: %w", ctx.Err())
+	}
+}
+
+func (c *Controller) unlockWire() { <-c.wireMu }
 
 // withdrawAllWire withdraws every route on the wire. The caller holds
 // wireMu and not mu.
