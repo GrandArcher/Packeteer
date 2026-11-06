@@ -94,7 +94,9 @@ func (t *Throttle) fail(k failKey, now time.Time) {
 
 // evict makes room for one count: expired ones first, else the one with
 // the oldest window. Resetting a count that way takes maxFailKeys other
-// failures, each a full password check, inside one window.
+// failures inside one window: in the auth service each is a full password
+// check; the basic-auth account counts per network only, so those
+// failures must come from other networks (#527).
 func (t *Throttle) evict(now time.Time) {
 	var oldest failKey
 	var of *failures
