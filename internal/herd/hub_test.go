@@ -681,7 +681,8 @@ func TestHubPeerNameResolvingInternalIsRefused(t *testing.T) {
 	if len(st) != 1 || st[0].Failures != 1 || !strings.Contains(st[0].LastError, "is not a routable address") || len(pulledRows(t, b, a.node)) != 0 {
 		t.Fatalf("hub peer at a name for loopback: %+v", st)
 	}
-	for _, addr := range []string{"127.0.0.1:443", "[::1]:443", "10.0.0.1:443", "[fe80::1]:443", "[::ffff:192.168.0.1]:443"} {
+	for _, addr := range []string{"127.0.0.1:443", "[::1]:443", "10.0.0.1:443", "[fe80::1]:443", "[::ffff:192.168.0.1]:443",
+		"0.1.2.3:443", "100.64.0.1:443", "198.19.255.1:443", "[64:ff9b::7f00:1]:443", "[64:ff9b:1::a00:1]:443"} {
 		if refuseUnroutable("tcp", addr, nil) == nil {
 			t.Errorf("%s dialed", addr)
 		}

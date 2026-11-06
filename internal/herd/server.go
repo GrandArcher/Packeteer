@@ -237,8 +237,7 @@ func (s *Server) acceptLoop() {
 // connection to a handshake goroutine. A connection over a limit is closed
 // before any TLS or HTTP work is done for it.
 func (s *Server) admit(c net.Conn) {
-	ip := remoteIP(c.RemoteAddr())
-	if ok, _ := s.byIP.reserve(ip, 1, s.o.Now()); !ok {
+	if ok, _ := s.byIP.reserve(addressKey(c.RemoteAddr()), 1, s.o.Now()); !ok {
 		s.trip("rate_per_address", "")
 		_ = c.Close()
 		return
@@ -280,7 +279,7 @@ func (s *Server) handshake(c net.Conn) {
 		return
 	}
 	_ = c.SetDeadline(time.Time{})
-	s.byIP.markPinned(remoteIP(c.RemoteAddr()))
+	s.byIP.markPinned(addressKey(c.RemoteAddr()))
 	id := KeyID(tc.ConnectionState().PeerCertificates[0].PublicKey.(ed25519.PublicKey))
 	s.mu.Lock()
 	over := s.perID[id] >= s.lim.MaxConnsPerPeer
@@ -311,6 +310,21 @@ func remoteIP(a net.Addr) string {
 		return a.String()
 	}
 	return h
+}
+
+// addressKey is the per-address rate limit key. An IPv6 client is counted
+// per /64: one host usually holds the whole /64, so a key per address would
+// give it a fresh bucket per address and let it flush the table (#532).
+func addressKey(a net.Addr) string {
+	h := remoteIP(a)
+	ip, err := netip.ParseAddr(h)
+	if err != nil {
+		return h
+	}
+	if ip = ip.Unmap(); ip.Is6() {
+		return netip.PrefixFrom(ip, 64).Masked().String()
+	}
+	return ip.String()
 }
 
 // pinned reports whether id is a static peer or a current hub peer.
@@ -382,7 +396,7 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 // admitRequest charges the source address, the peer identity, and the
 // global budget. Over any of them the caller gets 429 and Retry-After.
 func (s *Server) admitRequest(w http.ResponseWriter, tc *tconn, cost int, now time.Time) bool {
-	if ok, d := s.byIP.reserve(remoteIP(tc.RemoteAddr()), cost, now); !ok {
+	if ok, d := s.byIP.reserve(addressKey(tc.RemoteAddr()), cost, now); !ok {
 		s.trip("rate_per_address", tc.id)
 		tooMany(w, d)
 		return false

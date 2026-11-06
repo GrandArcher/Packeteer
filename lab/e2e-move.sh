@@ -93,9 +93,17 @@ echo "transit-b is faster: one Packeteer path via 192.0.2.2"
 wait_via 192.0.2.2
 
 echo "logging every UPDATE the edge receives"
-vtysh -c 'configure terminal' -c "log file $updates_log debugging" -c 'end' -c 'debug bgp updates in' >/dev/null
-dbg=$(vtysh -c 'show debugging' 2>&1 || true)
-[[ "$dbg" == *"updates"* ]] || fail "FRR update debugging did not turn on: $dbg"
+# This step once failed with no message under set -e; retry and report the
+# vtysh error instead.
+dbg=
+for _ in $(seq 1 10); do
+	if out=$(vtysh -c 'configure terminal' -c "log file $updates_log debugging" -c 'end' -c 'debug bgp updates in' 2>&1); then
+		dbg=$(vtysh -c 'show debugging' 2>&1 || true)
+		[[ "$dbg" == *"updates"* ]] && break
+	fi
+	sleep 1
+done
+[[ "$dbg" == *"updates"* ]] || fail "FRR update debugging did not turn on: ${out:-} $dbg"
 
 echo "transit-c becomes faster: the improvement moves"
 flip lab/probes/move-c.yaml

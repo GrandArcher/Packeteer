@@ -3,6 +3,7 @@ package herd
 import (
 	"crypto/tls"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"strings"
@@ -231,6 +232,54 @@ func TestGlobalRateAndPerAddressRate(t *testing.T) {
 	}
 	if refused == 0 || tripCount(addr.trips, "rate_per_address") == 0 {
 		t.Errorf("refused %d, trips %+v", refused, addr.trips.Snapshot())
+	}
+}
+
+// fromConn is a connection that reports raddr as its peer.
+type fromConn struct {
+	net.Conn
+	raddr net.Addr
+}
+
+func (c fromConn) RemoteAddr() net.Addr { return c.raddr }
+
+// TestPerAddressRateGroupsIPv6By64: an IPv6 client that changes its
+// interface identifier stays in one per-address bucket and one table
+// entry; another /64 and each IPv4 address have their own (#532).
+func TestPerAddressRateGroupsIPv6By64(t *testing.T) {
+	srv := newMember(t, 64501, func(h *config.Herd) { h.Limits.RatePerAddress = 4 })
+	srv.serve()
+	admitFrom := func(ip string) {
+		c, peer := net.Pipe()
+		_ = peer.Close()
+		srv.srv.admit(fromConn{Conn: c, raddr: &net.TCPAddr{IP: net.ParseIP(ip), Port: 40000}})
+	}
+	for i := range 8 {
+		admitFrom(fmt.Sprintf("2001:db8:0:1::%x", i+1))
+	}
+	if n := tripCount(srv.trips, "rate_per_address"); n != 4 {
+		t.Fatalf("rate_per_address trips = %d, want 4", n)
+	}
+	l := srv.srv.byIP
+	l.mu.Lock()
+	keys := len(l.m)
+	_, grouped := l.m["2001:db8:0:1::/64"]
+	l.mu.Unlock()
+	if keys != 1 || !grouped {
+		t.Fatalf("table holds %d keys, /64 key present %v", keys, grouped)
+	}
+	for _, ip := range []string{"2001:db8:0:2::1", "192.0.2.1", "192.0.2.2", "::ffff:192.0.2.3"} {
+		admitFrom(ip)
+	}
+	if n := tripCount(srv.trips, "rate_per_address"); n != 4 {
+		t.Fatalf("other networks refused: rate_per_address trips = %d", n)
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, k := range []string{"2001:db8:0:2::/64", "192.0.2.1", "192.0.2.2", "192.0.2.3"} {
+		if l.m[k] == nil {
+			t.Errorf("no bucket for %s", k)
+		}
 	}
 }
 
