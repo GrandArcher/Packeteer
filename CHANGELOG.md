@@ -6,7 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Fixed
 
-- HA step-down gives each withdraw try its own timeout, a mitigation withdraw stops waiting behind a slow Sync at its deadline, and an instance active again keeps its BGP sessions (#528).
+- HA step-down gives each withdraw try its own timeout inside a 10s total, a mitigation withdraw stops at its deadline, and an instance active again keeps its BGP sessions (#528).
 
 ## [1.0.0] - 2026-11-04
 

@@ -632,6 +632,21 @@ func (a slowAnn) Announce(ctx context.Context, r plugin.MitigationRoute) error {
 	return a.fakeAnn.Announce(ctx, r)
 }
 
+// An already-ended context never takes the free wire lock (#528).
+func TestWithdrawAllEndedContextFails(t *testing.T) {
+	c, err := New(testConfig(config.ModeInject), newFakeAnn(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	for range 50 {
+		if err := c.WithdrawAll(ctx); !errors.Is(err, context.Canceled) {
+			t.Fatalf("WithdrawAll with an ended context: %v, want context.Canceled", err)
+		}
+	}
+}
+
 // A WithdrawAll behind a slow Sync gives up when its context ends (#528),
 // so an HA step-down can try again with a fresh deadline instead of
 // spending it all on the wait.
@@ -658,7 +673,7 @@ func TestWithdrawAllHonorsContextBehindSlowSync(t *testing.T) {
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("WithdrawAll behind a held wire: %v, want a deadline error", err)
 	}
-	if d := time.Since(start); d > 5*time.Second {
+	if d := time.Since(start); d > 500*time.Millisecond {
 		t.Fatalf("WithdrawAll returned after %v, not at its deadline", d)
 	}
 

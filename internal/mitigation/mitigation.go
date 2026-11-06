@@ -1154,6 +1154,10 @@ func (c *Controller) WithdrawAll(ctx context.Context) error {
 
 // lockWire takes wireMu or returns when ctx ends first.
 func (c *Controller) lockWire(ctx context.Context) error {
+	// Checked first: select picks at random when the lock is free and ctx has ended.
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("mitigation: waiting for the wire lock: %w", err)
+	}
 	select {
 	case c.wireMu <- struct{}{}:
 		return nil

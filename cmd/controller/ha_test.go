@@ -615,6 +615,37 @@ func TestHAStandbySlowWithdrawGetsFreshTimeout(t *testing.T) {
 	}
 }
 
+// All withdraw tries together stay inside haStepDownBudget (#528): the
+// standby takes over a bounded time after this instance steps down, so a
+// hung withdraw must not keep routes on the edge past that.
+func TestHAStandbyWithdrawTriesStayInBudget(t *testing.T) {
+	defer func(a, b, c time.Duration) { haWithdrawSettle, haWithdrawTimeout, haStepDownBudget = a, b, c }(haWithdrawSettle, haWithdrawTimeout, haStepDownBudget)
+	haWithdrawSettle = 10 * time.Millisecond
+	haWithdrawTimeout = 200 * time.Millisecond
+	haStepDownBudget = 300 * time.Millisecond
+	el := &haTestElector{}
+	var drops atomic.Int32
+	var dropAt time.Duration
+	start := time.Now()
+	h := &haControl{el: el, typ: "lease", log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		withdraw: func(ctx context.Context) error {
+			<-ctx.Done()
+			return ctx.Err()
+		},
+		dropSessions: func(context.Context) error { drops.Add(1); dropAt = time.Since(start); return nil },
+		poke:         func() {},
+		emit:         func(time.Time, string, string, map[string]string) {},
+		was:          true,
+	}
+	h.changed()
+	if drops.Load() != 1 {
+		t.Fatalf("drops %d, want 1", drops.Load())
+	}
+	if dropAt < haStepDownBudget || dropAt > 500*time.Millisecond {
+		t.Fatalf("sessions dropped after %v, want within [%v, 500ms]; three uncapped tries would take 620ms", dropAt, haStepDownBudget)
+	}
+}
+
 // An instance that holds the lease again by the time its step-down
 // withdraw has failed keeps its BGP sessions (#528): it is the active
 // instance, and dropped sessions stay down until a restart.
@@ -627,8 +658,7 @@ func TestHAStandbyWithdrawFailureActiveAgainKeepsSessions(t *testing.T) {
 	h := &haControl{el: el, typ: "lease", log: slog.New(slog.NewTextHandler(&logs, nil)),
 		withdraw: func(context.Context) error {
 			if tries.Add(1) == haWithdrawTries {
-				// changed calls withdraw and Active on one goroutine,
-				// so this needs no lock.
+				// The lease comes back during the last try.
 				el.active = true
 			}
 			return errors.New("injected failure")
