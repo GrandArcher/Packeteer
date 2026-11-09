@@ -7,6 +7,8 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 ### Fixed
 
 - HA step-down gives each withdraw try its own timeout inside a 10s total, a mitigation withdraw stops at its deadline, and an instance active again keeps its BGP sessions (#528).
+- Flow exporter allowlists normalize IPv4-mapped CIDRs before matching senders (#533).
+
 ### Security
 
 - Herd per-address rate limit counts an IPv6 client per /64; hub endpoints in 0.0.0.0/8, 100.64.0.0/10, 198.18.0.0/15 or NAT64 prefixes are refused (#532).
