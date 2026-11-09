@@ -269,6 +269,13 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		}
 		fmt.Fprintf(stdout, "registry: scan every %s, push %s (never announces)\n", cfg.Registry.Interval, push)
 	}
+	if cfg.OnlyInvalidOn() {
+		slurm := "off"
+		if s := cfg.RPKI.OnlyInvalid.SLURM; s != nil {
+			slurm = s.Path + " (each exception needs an admin to approve it)"
+		}
+		fmt.Fprintf(stdout, "rpki only_invalid: report RPKI-invalid only paths, hijack_feeds=%d, slurm exceptions %s (never announces)\n", len(cfg.RPKI.OnlyInvalid.HijackFeeds), slurm)
+	}
 	if cfg.Lookup != nil {
 		fmt.Fprintf(stdout, "lookup: %s (read-only, never announces)\n", cfg.Lookup.Type)
 	}
@@ -861,6 +868,8 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	wireLookup(plugins, httpSrv)
 	regSvc := newRegistry(cfg, plugins, view, rpkiSet, log)
 	wireRegistry(regSvc, httpSrv)
+	onlyInvalid := newOnlyInvalid(cfg, plugins, view, rpkiSet, irrChecker, dispatch.Emit, audit, log)
+	wireOnlyInvalid(onlyInvalid, httpSrv)
 	wireIXPMembers(plugins, httpSrv, dispatch.Emit)
 	wireIXPFabric(cfg, plugins, httpSrv)
 	wireIXPRouteServers(plugins, httpSrv, dispatch.Emit)
@@ -952,6 +961,13 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		go func() {
 			defer loopWG.Done()
 			regSvc.Run(loopCtx)
+		}()
+	}
+	if onlyInvalid != nil {
+		loopWG.Add(1)
+		go func() {
+			defer loopWG.Done()
+			onlyInvalid.Run(loopCtx)
 		}()
 	}
 	if reorderMon != nil {

@@ -1568,6 +1568,73 @@ jobs:
             'title="tcp, 1/4 replies, traceroute hop">low</span><span class="muted"> tcp, 1/4 replies, traceroute hop</span>' \
             'lab-b path from AS64511: invalid (source routinator)' 'lab-b path from AS64511: unknown (no source had fresh data)' \
             --absent 'Cannot reach' 'mode-inject'
+      - name: UI RPKI-invalid only path smoke (#401; the case and evidence on the prefix page, propose and review on the Registry page, observe)
+        run: |
+          set -euo pipefail
+          base=http://127.0.0.1:18401
+          cat > /tmp/ui401.yaml <<'YAML'
+          mode: observe
+          asn: 64512
+          router_id: 192.0.2.10
+          auth: {enabled: false}
+          http:
+            listen: "127.0.0.1:18401"
+          providers:
+            - name: lab-a
+              source_ip: 127.0.0.1
+              next_hop: 192.0.2.1
+          rpki:
+            enabled: true
+            sources:
+              - type: rtr
+                config: {address: "127.0.0.1:3323"}
+            only_invalid:
+              enabled: true
+              slurm:
+                path: /var/lib/packeteer/slurm/slurm.json
+                prefixes: [198.51.100.0/24]
+          YAML
+          docker run -d --name pkui401 --network host --cap-add NET_RAW --cap-add NET_ADMIN \
+            -v /tmp/ui401.yaml:/etc/packeteer/config.yaml:ro packeteer:ci
+          proxy=""
+          cleanup() {
+            if [ -n "$proxy" ]; then kill "$proxy" 2>/dev/null || true; fi
+            docker stop -t 15 pkui401 >/dev/null || true
+            docker logs pkui401 2>&1 | tail -n 40
+            code="$(docker inspect -f '{{.State.ExitCode}}' pkui401)"
+            docker rm pkui401 >/dev/null || true
+            test "$code" = "0"
+          }
+          trap cleanup EXIT
+          ok=0
+          for _ in $(seq 1 30); do
+            if curl -fsS "$base/healthz" >/dev/null 2>&1; then ok=1; break; fi
+            sleep 1
+          done
+          test "$ok" = 1
+          # uiproxy answers /api/rpki/only-invalid and the proposal from
+          # lab/ui-fixtures/only-invalid (documentation prefixes and ASNs,
+          # recorded from the API in the Go tests) and drives the Registry
+          # page: it presses Propose exception and never Approve. The
+          # propose, approve, write, and audit path is checked against the
+          # real API in TestOnlyInvalidProposeApprove.
+          go build -o /tmp/uiproxy ./lab/uiproxy
+          /tmp/uiproxy -listen 127.0.0.1:18402 -upstream "$base" -user lab -password lab-only \
+            -fixtures lab/ui-fixtures/only-invalid >/tmp/uiproxy401.log 2>&1 &
+          proxy=$!
+          for _ in $(seq 1 20); do
+            curl -fsS http://127.0.0.1:18402/healthz >/dev/null 2>&1 && break
+            sleep 0.2
+          done
+          curl -fsS http://127.0.0.1:18402/healthz >/dev/null
+          bash lab/ui-smoke.sh 'http://127.0.0.1:18402/prefix/198.51.100.0%2F24' 'mode-observe' 'RPKI-invalid only path' \
+            'Likely a stale ROA or misconfiguration (score 6) for AS64500.' 'ROA 198.51.100.0/22 maxLength 22 authorizes AS64500' \
+            'Covering ROAs: 198.51.100.0/22 maxLength 22 AS64500. RPKI source: routinator.' 'Propose a SLURM exception on the Registry page' \
+            --absent 'Cannot reach' 'mode-inject'
+          bash lab/ui-smoke.sh 'http://127.0.0.1:18402/registry.html' 'mode-observe' 'RPKI-invalid only paths' 'stale_roa' \
+            'the route goes from invalid to valid. Approving adds exactly this to /var/lib/packeteer/slurm/slurm.json. Nothing is written until an admin approves.' \
+            '"maxPrefixLength": 24' 'Digest a0263b1da076ee36, audit 5a1e0f2c3b4d6e7f.' 'driver: review box shown, nothing approved' \
+            --absent 'Cannot reach' 'mode-inject' 'Could not load the RPKI-invalid only paths'
       - name: UI Why panel smoke (#201; the gate table for one decision, the stored checks on the timeline, a prefix with no decision)
         run: |
           set -euo pipefail

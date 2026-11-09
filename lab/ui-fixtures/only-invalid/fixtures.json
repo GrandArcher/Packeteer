@@ -1,0 +1,7 @@
+{
+  "inject": {"page": "/registry.html", "script": "driver.js"},
+  "stubs": [
+    {"method": "GET", "path": "/api/rpki/only-invalid", "contains": "", "file": "only-invalid.json"},
+    {"method": "POST", "path": "/api/rpki/only-invalid/propose", "contains": "198.51.100.0/24", "file": "propose.json"}
+  ]
+}

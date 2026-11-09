@@ -256,6 +256,62 @@ function loadRing() {
   });
 }
 
+// The RPKI-invalid only path panel (#401): the case and its evidence. It
+// is read-only like the rest of the page; exceptions are proposed and
+// approved on the Registry page.
+var ONLY_INVALID_CLASS = {
+  stale_roa: "Likely a stale ROA or misconfiguration",
+  hijack: "Likely a hijack",
+  unclear: "Unclear"
+};
+
+function onlyInvalidView(c, slurm) {
+  var box = el("div", "");
+  box.appendChild(el("p", c.class === "hijack" ? "reason bad" : "reason",
+    (ONLY_INVALID_CLASS[c.class] || c.class) + " (score " + c.score + ") for AS" + c.origin + ". " + c.action));
+  var t = el("table", "");
+  var head = el("tr", "");
+  ["Evidence", "Points", "Detail"].forEach(function (h) { head.appendChild(el("th", "", h)); });
+  t.appendChild(head);
+  (c.signals || []).forEach(function (s) {
+    var tr = el("tr", "");
+    tr.appendChild(el("td", "mono", s.name));
+    tr.appendChild(el("td", "", (s.points > 0 ? "+" : "") + s.points));
+    tr.appendChild(el("td", "", s.detail));
+    t.appendChild(tr);
+  });
+  box.appendChild(t);
+  var roas = (c.vrps || []).map(function (v) { return v.prefix + " maxLength " + v.max_length + " AS" + v.asn; });
+  box.appendChild(el("p", "tag", "Covering ROAs: " + (roas.length ? roas.join(", ") : "none") + ". RPKI source: " + (c.rpki_source || "-") + ". First seen " + fmtTime(c.first) + "."));
+  var held = (slurm.exceptions || []).filter(function (x) { return x.prefix === c.prefix; });
+  held.forEach(function (x) {
+    box.appendChild(el("p", "tag", "SLURM exception " + x.id + " (" + x.kind + ") is in " + slurm.path + (x.audit_id ? ", audit " + x.audit_id : "") + (x.review_due ? ". Due for review." : ".")));
+  });
+  if (!slurm.enabled) {
+    box.appendChild(el("p", "tag", "SLURM exceptions are off (rpki.only_invalid.slurm)."));
+  } else if (c.class === "stale_roa" && !held.length) {
+    var a = el("a", "", "Propose a SLURM exception on the Registry page");
+    a.href = "/registry.html";
+    box.appendChild(a);
+  }
+  return box;
+}
+
+function renderOnlyInvalid(data) {
+  var c = data && data.enabled && (data.cases || [])[0];
+  document.getElementById("only-invalid-panel").hidden = !c;
+  if (!c) return;
+  var body = document.getElementById("only-invalid-body");
+  clear(body);
+  body.appendChild(onlyInvalidView(c, data.slurm || {}));
+}
+
+function loadOnlyInvalid() {
+  getJSON("/api/rpki/only-invalid?prefix=" + encodeURIComponent(thisPrefix)).then(renderOnlyInvalid, function () {
+    document.getElementById("only-invalid-panel").hidden = true;
+  });
+}
+
 function initPrefixPage() {
   var title = document.getElementById("prefix-title");
   if (!title) return;
@@ -267,6 +323,7 @@ function initPrefixPage() {
   document.getElementById("prefix-days").addEventListener("change", loadTimeline);
   loadTimeline();
   loadRing();
+  loadOnlyInvalid();
 }
 
 window.addEventListener("DOMContentLoaded", initPrefixPage);

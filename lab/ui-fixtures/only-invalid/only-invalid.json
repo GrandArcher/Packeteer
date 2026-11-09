@@ -1,0 +1,77 @@
+{
+  "enabled": true,
+  "scanned": "2026-11-09T12:00:00Z",
+  "cases": [
+    {
+      "prefix": "198.51.100.0/24",
+      "origin": 64500,
+      "class": "stale_roa",
+      "score": 6,
+      "signals": [
+        {
+          "name": "irr_route",
+          "points": 2,
+          "detail": "AS64500 has a route object for 198.51.100.0/24 (radb-file RADB)"
+        },
+        {
+          "name": "origin_stable",
+          "points": 2,
+          "detail": "AS64500 has originated it here for 2160h0m0s (stable_after 720h0m0s)"
+        },
+        {
+          "name": "roa_same_origin",
+          "points": 1,
+          "detail": "ROA 198.51.100.0/22 maxLength 22 authorizes AS64500; 198.51.100.0/24 is longer, so only the max length is short"
+        },
+        {
+          "name": "providers",
+          "points": 1,
+          "detail": "2 providers agree on AS64500 (transit-a, transit-b)"
+        },
+        {
+          "name": "hijack_feeds",
+          "points": 0,
+          "detail": "no hijack_feeds configured"
+        }
+      ],
+      "paths": [
+        {
+          "provider": "transit-a",
+          "as_path": [
+            64496,
+            64500
+          ],
+          "since": "2026-08-11T12:00:00Z"
+        },
+        {
+          "provider": "transit-b",
+          "as_path": [
+            64497,
+            64500
+          ],
+          "since": "2026-08-11T12:00:00Z"
+        }
+      ],
+      "vrps": [
+        {
+          "prefix": "198.51.100.0/22",
+          "max_length": 22,
+          "asn": 64500
+        }
+      ],
+      "rpki_source": "routinator",
+      "action": "Contact the holder of 198.51.100.0/24 to fix the ROA for AS64500. Until it is fixed, a SLURM exception can accept this route; an admin must approve it.",
+      "first": "2026-11-09T12:00:00Z",
+      "seen": "2026-11-09T12:00:00Z"
+    }
+  ],
+  "slurm": {
+    "enabled": true,
+    "writable": true,
+    "path": "/var/lib/packeteer/slurm/slurm.json",
+    "prefixes": [
+      "198.51.100.0/24"
+    ],
+    "exceptions": []
+  }
+}

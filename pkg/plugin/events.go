@@ -116,6 +116,15 @@ const (
 	EventRPKIStale = "rpki.stale"
 	// EventRPKIFresh resolves EventRPKIStale.
 	EventRPKIFresh = "rpki.fresh"
+	// EventRPKIOnlyInvalid fires when every learned route of a prefix is
+	// RPKI-invalid and nothing valid covers it, and again when its class
+	// changes (#401).
+	EventRPKIOnlyInvalid = "rpki.only_invalid"
+	// EventRPKIOnlyInvalidCleared resolves EventRPKIOnlyInvalid.
+	EventRPKIOnlyInvalidCleared = "rpki.only_invalid_cleared"
+	// EventRPKISLURMReview fires once per run when an approved SLURM
+	// exception is older than its review_after (#401).
+	EventRPKISLURMReview = "rpki.slurm_review"
 	// EventAudit is one audit log record (#32): a change or sign-in on
 	// the ops API, or a config reload.
 	EventAudit = "audit.recorded"
@@ -268,6 +277,12 @@ var eventCatalog = []EventSpec{
 		Summary: "An RPKI source that was answering has no fresh data (stale past its staleness, or empty). Its lookups are unknown, which fails open: decisions continue and withdraws never wait on RPKI."},
 	{Kind: EventRPKIFresh, Severity: SeverityInfo, Group: "rpki", Keys: []string{"source"}, TrapID: 65, Resolves: true,
 		Summary: "The RPKI source has fresh data again. Resolves rpki.stale."},
+	{Kind: EventRPKIOnlyInvalid, Severity: SeverityWarning, Group: "rpki_only_invalid", Keys: []string{"prefix"}, TrapID: 73,
+		Summary: "Every learned route of a prefix is RPKI-invalid and no valid or not-found route covers it; strict ROV would black-hole it. Classed as a likely stale ROA, a likely hijack, or unclear, with the evidence. Report only."},
+	{Kind: EventRPKIOnlyInvalidCleared, Severity: SeverityInfo, Group: "rpki_only_invalid", Keys: []string{"prefix"}, TrapID: 74, Resolves: true,
+		Summary: "The prefix is no longer an RPKI-invalid only path. Resolves rpki.only_invalid."},
+	{Kind: EventRPKISLURMReview, Severity: SeverityInfo, Group: "rpki_slurm", Keys: []string{"id"}, TrapID: 75,
+		Summary: "An approved SLURM exception is older than rpki.only_invalid.slurm.review_after and is due for review."},
 }
 
 // EventCatalog returns a copy of every event kind the controller emits.
