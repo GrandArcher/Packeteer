@@ -63,7 +63,7 @@ http:
 
 `auth: {enabled: true}` refuses to start together with `PACKETEER_HTTP_USER`: the single basic-auth account is replaced.
 
-Passwords are 12 to 256 characters and stored as PBKDF2-HMAC-SHA256 hashes (600,000 iterations). Local users sign in on the sign-in page (below), or with HTTP basic auth from scripts. Put a TLS proxy in front, or keep `http.listen` on loopback, when the network between you and Packeteer is not trusted. Failed passwords are throttled per user name and client address (below). At most two password checks run at once; one that finds no free slot within 5 seconds gets `429` (`too many sign-ins in progress`), so guesses cannot keep every core hashing (#493).
+Passwords are 12 to 256 characters and stored as PBKDF2-HMAC-SHA256 hashes (600,000 iterations). Local users sign in on the sign-in page (below), or with HTTP basic auth from scripts. Put a TLS proxy in front, or keep `http.listen` on loopback, when the network between you and Packeteer is not trusted. Failed passwords are throttled per user name and client address (below). At most two password checks run at once, and at most one per client address (one IPv6 /64); one that finds no free slot within 5 seconds gets `429` (`too many sign-ins in progress`), so guesses cannot keep every core hashing (#493) and one client cannot take both slots (#534). Behind a reverse proxy every client shares the proxy's address and so one slot.
 
 ## Roles
 
