@@ -1,0 +1,44 @@
+! Packeteer on FRR. Generated for review: nothing is applied. Paste it into
+! vtysh (configure terminal) after checking it against your own config.
+! This router: AS {{.ASN}}, {{.Router}}. Packeteer: {{.Packeteer}}.
+!
+{{if .Large}}bgp large-community-list standard packeteer permit {{.Community}}{{else}}bgp community-list standard packeteer permit {{.Community}}{{end}}
+!
+! From Packeteer: only routes that carry the Packeteer community.
+route-map packeteer-in permit 10
+ match {{if .Large}}large-community{{else}}community{{end}} packeteer
+route-map packeteer-in deny 100
+!
+! Toward every eBGP neighbor, customers and peers included: never a route
+! with the Packeteer community. Put this deny first in the outbound
+! route-map each eBGP neighbor already uses (rename ebgp-out to it); your
+! existing terms follow.
+route-map ebgp-out deny 10
+ match {{if .Large}}large-community{{else}}community{{end}} packeteer
+!
+router bgp {{.ASN}}
+ neighbor {{.Packeteer}} remote-as {{.ASN}}
+ neighbor {{.Packeteer}} description packeteer
+ ! Packeteer never offers graceful restart; this keeps it off here too.
+ neighbor {{.Packeteer}} graceful-restart-disable
+ ! Keepalive 10s, hold time 30s: a crashed Packeteer's routes go within 30s.
+ neighbor {{.Packeteer}} timers 10 30
+ !
+ address-family ipv4 unicast
+  neighbor {{.Packeteer}} activate
+  neighbor {{.Packeteer}} route-map packeteer-in in
+{{- if .AddPath}}
+  neighbor {{.Packeteer}} addpath-tx-all-paths
+{{- end}}
+ exit-address-family
+{{- if .IPv6}}
+ !
+ address-family ipv6 unicast
+  neighbor {{.Packeteer}} activate
+  neighbor {{.Packeteer}} route-map packeteer-in in
+{{- if .AddPath}}
+  neighbor {{.Packeteer}} addpath-tx-all-paths
+{{- end}}
+ exit-address-family
+{{- end}}
+!

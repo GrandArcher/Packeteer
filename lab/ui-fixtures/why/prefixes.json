@@ -1,0 +1,13 @@
+{
+ "version": "fixture",
+ "mode": "observe",
+ "ready": true,
+ "generated_at": "2026-10-22T12:00:00Z",
+ "total": 0,
+ "measured": 0,
+ "offset": 0,
+ "limit": 1,
+ "asn_map": [],
+ "asn_total": 0,
+ "prefixes": []
+}

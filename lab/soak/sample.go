@@ -1,0 +1,327 @@
+package main
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"strconv"
+	"strings"
+	"time"
+)
+
+// userHZ is the clock tick of /proc/<pid>/stat CPU times. Linux fixes it at
+// 100 for userspace on every architecture.
+const userHZ = 100
+
+// proc is one read of the Packeteer process from /proc. The container
+// runs with --network host but its own PID namespace; the host PID comes
+// from `docker inspect`.
+type proc struct {
+	RSS     uint64  // bytes
+	HWM     uint64  // peak RSS, bytes
+	Threads int     //
+	CPU     float64 // user+system seconds since start
+}
+
+func readProc(root string, pid int) (proc, error) {
+	var p proc
+	status, err := os.ReadFile(fmt.Sprintf("%s/%d/status", root, pid))
+	if err != nil {
+		return p, err
+	}
+	if p, err = parseStatus(string(status)); err != nil {
+		return p, err
+	}
+	stat, err := os.ReadFile(fmt.Sprintf("%s/%d/stat", root, pid))
+	if err != nil {
+		return p, err
+	}
+	p.CPU, err = parseStatCPU(string(stat))
+	return p, err
+}
+
+func parseStatus(s string) (proc, error) {
+	var p proc
+	var seen int
+	for line := range strings.Lines(s) {
+		k, v, ok := strings.Cut(line, ":")
+		if !ok {
+			continue
+		}
+		f := strings.Fields(v)
+		if len(f) == 0 {
+			continue
+		}
+		n, err := strconv.ParseUint(f[0], 10, 64)
+		if err != nil {
+			continue
+		}
+		switch k {
+		case "VmRSS":
+			p.RSS, seen = n*1024, seen|1
+		case "VmHWM":
+			p.HWM, seen = n*1024, seen|2
+		case "Threads":
+			p.Threads, seen = int(n), seen|4
+		}
+	}
+	if seen != 7 {
+		return p, errors.New("status: VmRSS, VmHWM, or Threads missing")
+	}
+	return p, nil
+}
+
+// parseStatCPU returns utime+stime in seconds. The command name in field
+// 2 may contain spaces, so fields are counted after its closing ")".
+func parseStatCPU(s string) (float64, error) {
+	i := strings.LastIndexByte(s, ')')
+	if i < 0 {
+		return 0, errors.New("stat: no command")
+	}
+	f := strings.Fields(s[i+1:])
+	// f[0] is field 3 (state); utime and stime are fields 14 and 15.
+	if len(f) < 13 {
+		return 0, errors.New("stat: short")
+	}
+	u, err1 := strconv.ParseUint(f[11], 10, 64)
+	st, err2 := strconv.ParseUint(f[12], 10, 64)
+	if err1 != nil || err2 != nil {
+		return 0, errors.New("stat: bad cpu times")
+	}
+	return float64(u+st) / userHZ, nil
+}
+
+// udpStats is the host's UDP counters. Packeteer's flow socket is in the
+// host network namespace, so a datagram the collector was too slow to
+// read shows up as RcvbufErrors.
+type udpStats struct {
+	In, RcvbufErrors uint64
+}
+
+func readUDP(path string) (udpStats, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return udpStats{}, err
+	}
+	return parseSNMP(string(b))
+}
+
+func parseSNMP(s string) (udpStats, error) {
+	in, err := snmpCounter(s, "Udp:", "InDatagrams")
+	if err != nil {
+		return udpStats{}, err
+	}
+	drop, err := snmpCounter(s, "Udp:", "RcvbufErrors")
+	return udpStats{In: in, RcvbufErrors: drop}, err
+}
+
+// snmpCounter reads one column of /proc/net/snmp: a header line names the
+// columns of the line after it.
+func snmpCounter(s, proto, name string) (uint64, error) {
+	var names []string
+	for line := range strings.Lines(s) {
+		f := strings.Fields(line)
+		if len(f) == 0 || f[0] != proto {
+			continue
+		}
+		if names == nil {
+			names = f[1:]
+			continue
+		}
+		for j, n := range names {
+			if n == name && j+1 < len(f) {
+				return strconv.ParseUint(f[j+1], 10, 64)
+			}
+		}
+		break
+	}
+	return 0, fmt.Errorf("snmp: %s %s missing", proto, name)
+}
+
+// metrics is what the harness reads from Packeteer's /metrics.
+type metrics struct {
+	Ready               bool
+	SessionUp           bool
+	RIBPrefixes         int
+	ProbePrefixCommits  float64
+	FlowPrefixesTracked float64
+	MutexWaitSeconds    float64
+}
+
+func parseMetrics(r io.Reader) (metrics, error) {
+	var m metrics
+	seen := 0
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 64<<10), 4<<20)
+	for sc.Scan() {
+		line := sc.Text()
+		if line == "" || line[0] == '#' {
+			continue
+		}
+		name, val, ok := strings.Cut(line, " ")
+		if !ok {
+			continue
+		}
+		v, err := strconv.ParseFloat(strings.TrimSpace(val), 64)
+		if err != nil {
+			continue
+		}
+		switch {
+		case name == "packeteer_ready":
+			m.Ready, seen = v == 1, seen|1
+		case name == "packeteer_rib_prefixes":
+			m.RIBPrefixes, seen = int(v), seen|2
+		case name == "packeteer_probe_prefix_commits":
+			m.ProbePrefixCommits = v
+		case name == "packeteer_flow_prefixes_tracked":
+			m.FlowPrefixesTracked = v
+		case name == "packeteer_go_mutex_wait_seconds_total":
+			m.MutexWaitSeconds = v
+		case strings.HasPrefix(name, "packeteer_bgp_session_up{"), strings.HasPrefix(name, "packeteer_bmp_peer_up{"):
+			m.SessionUp = m.SessionUp || v == 1
+		}
+	}
+	if err := sc.Err(); err != nil {
+		return m, err
+	}
+	if seen != 3 {
+		return m, errors.New("metrics: packeteer_ready or packeteer_rib_prefixes missing")
+	}
+	return m, nil
+}
+
+// overview is the part of /api/overview the harness checks.
+type overview struct {
+	Mode   string `json:"mode"`
+	Counts struct {
+		Prefixes int `json:"prefixes"`
+		Measured int `json:"measured"`
+		InRIB    int `json:"in_rib"`
+	} `json:"counts"`
+}
+
+type opsAPI struct {
+	base   string
+	client *http.Client
+}
+
+func newAPI(base string) *opsAPI {
+	return &opsAPI{base: strings.TrimRight(base, "/"), client: &http.Client{Timeout: 10 * time.Second}}
+}
+
+// get fetches path and returns the body read time.
+func (a *opsAPI) get(ctx context.Context, path string, fn func(io.Reader) error) (time.Duration, error) {
+	start := time.Now()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.base+path, nil)
+	if err != nil {
+		return 0, err
+	}
+	rsp, err := a.client.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer rsp.Body.Close()
+	if rsp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("GET %s: %s", path, rsp.Status)
+	}
+	err = fn(rsp.Body)
+	return time.Since(start), err
+}
+
+func (a *opsAPI) metrics(ctx context.Context) (metrics, time.Duration, error) {
+	var m metrics
+	d, err := a.get(ctx, "/metrics", func(r io.Reader) (err error) {
+		m, err = parseMetrics(r)
+		return err
+	})
+	return m, d, err
+}
+
+func (a *opsAPI) overview(ctx context.Context) (overview, time.Duration, error) {
+	var o overview
+	d, err := a.get(ctx, "/api/overview", func(r io.Reader) error {
+		return json.NewDecoder(r).Decode(&o)
+	})
+	return o, d, err
+}
+
+// decided is decided_at from /api/decisions: when the decide loop last
+// evaluated. Zero before the first evaluation.
+func (a *opsAPI) decided(ctx context.Context) (time.Time, error) {
+	var body struct {
+		DecidedAt time.Time `json:"decided_at"`
+	}
+	_, err := a.get(ctx, "/api/decisions", func(r io.Reader) error {
+		return json.NewDecoder(r).Decode(&body)
+	})
+	return body.DecidedAt, err
+}
+
+// outageIncidents counts outage.as and outage.circuit events in the event
+// log.
+func (a *opsAPI) outageIncidents(ctx context.Context) (int, error) {
+	var body struct {
+		Events []struct {
+			Kind string `json:"kind"`
+		} `json:"events"`
+	}
+	_, err := a.get(ctx, "/api/events?q=outage&limit=500", func(r io.Reader) error {
+		return json.NewDecoder(r).Decode(&body)
+	})
+	n := 0
+	for _, e := range body.Events {
+		if e.Kind == "outage.as" || e.Kind == "outage.circuit" {
+			n++
+		}
+	}
+	return n, err
+}
+
+// loopWatch follows the decide and probe loops and lock wait over the
+// samples of a soak (#383). A loop that stops shows as a gap that keeps
+// growing until it moves again.
+type loopWatch struct {
+	started   bool
+	commits   float64
+	commitAt  time.Time // last sample that saw commits rise
+	probeGap  float64   // seconds
+	decideGap float64   // seconds
+
+	wait0, wait     float64 // mutex wait seconds: first and latest sample
+	waitAt0, waitAt time.Time
+	waitMax         float64 // worst wait per second between two samples
+}
+
+func (w *loopWatch) sample(now time.Time, commits, mutexWait float64, decided time.Time) {
+	if !decided.IsZero() {
+		w.decideGap = max(w.decideGap, now.Sub(decided).Seconds())
+	}
+	if !w.started {
+		w.started = true
+		w.commits, w.commitAt = commits, now
+		w.wait0, w.waitAt0, w.wait, w.waitAt = mutexWait, now, mutexWait, now
+		return
+	}
+	w.probeGap = max(w.probeGap, now.Sub(w.commitAt).Seconds())
+	if commits > w.commits {
+		w.commits, w.commitAt = commits, now
+	}
+	if dt := now.Sub(w.waitAt).Seconds(); dt > 0 {
+		w.waitMax = max(w.waitMax, (mutexWait-w.wait)/dt)
+	}
+	w.wait, w.waitAt = mutexWait, now
+}
+
+// waitRate is mutex wait seconds per second over the samples.
+func (w *loopWatch) waitRate() float64 {
+	dt := w.waitAt.Sub(w.waitAt0).Seconds()
+	if dt <= 0 {
+		return 0
+	}
+	return max(0, (w.wait-w.wait0)/dt)
+}

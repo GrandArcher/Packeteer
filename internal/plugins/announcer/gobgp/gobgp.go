@@ -1,0 +1,688 @@
+// Package gobgp is the in-process announcer. It publishes routes on the
+// embedded GoBGP speaker owned by the RIB view (the same iBGP sessions), and
+// it never opens a second session.
+//
+// Every announced route carries the configured community and the well-known
+// NO_EXPORT community. The community is a standard community or a large
+// community (RFC 8092). Extra communities on the route are sent as well.
+// The speaker's export policy accepts only local routes that have the
+// configured community and rejects everything else, so learned routes are
+// never reflected and an extra community alone never matches. Graceful
+// restart is not enabled: each announcer's Stop withdraws its own routes,
+// and a dead process drops the session.
+package gobgp
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net/netip"
+	"slices"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+
+	api "github.com/osrg/gobgp/v3/api"
+	"github.com/osrg/gobgp/v3/pkg/server"
+	"google.golang.org/protobuf/types/known/anypb"
+
+	"github.com/GrandArcher/Packeteer/pkg/plugin"
+)
+
+// TypeName is the plugin type used in config.
+const TypeName = "gobgp"
+
+// noExport is the well-known NO_EXPORT community (RFC 1997).
+const noExport uint32 = 0xFFFFFF01
+
+const (
+	setName    = "packeteer-community"
+	policyName = "packeteer-export"
+	// routersName is the per-router export policy (#27). It runs before
+	// policyName and only rewrites or rejects; policyName still accepts.
+	routersName = "packeteer-routers"
+	// passSetName holds the inbound announcer's marker. Inbound steer
+	// routes carry it and are not matched to a provider by next hop.
+	passSetName = "packeteer-routers-pass"
+)
+
+func init() { plugin.Announcers.Register(TypeName, New) }
+
+// Config is the gobgp announcer's config block. It is empty on purpose:
+// local-pref and the community are controller settings (see docs/PLUGINS.md),
+// and the plugin refuses routes that do not carry them. The announced
+// prefix is the exact one the controller learned from the RIB.
+type Config struct{}
+
+// Announcer publishes routes on an existing GoBGP speaker.
+type Announcer struct {
+	plugin.Base
+	log *slog.Logger
+
+	mu        sync.Mutex
+	srv       *server.BgpServer
+	community string
+	paths     map[netip.Prefix]announced
+	// routers is the installed per-router export policy (#27): its name
+	// ("" when none), its neighbor sets, and how many times it was
+	// replaced. SetRouters installs a new one before it drops the old.
+	routers routerPolicy
+}
+
+// announced is one route on the speaker: its AddPath UUID and next hop.
+type announced struct {
+	uuid    []byte
+	nextHop netip.Addr
+}
+
+// routerPolicy is one installed per-router export policy.
+type routerPolicy struct {
+	name string
+	sets []string
+	gen  int
+	// blocked holds each router's rejected next hops, unmapped.
+	blocked [][]netip.Addr
+}
+
+// blocksMove reports whether some router accepts a route via next hop
+// from and rejects it via to. An implicit replace would leave the old
+// route on that router: GoBGP decides whether to withdraw the old path
+// from a router by evaluating it with the new path's next hop
+// (PolicyOptions.OldNextHop), so the reject matches and no withdraw goes
+// out.
+func (rp routerPolicy) blocksMove(from, to netip.Addr) bool {
+	if from == to {
+		return false
+	}
+	for _, b := range rp.blocked {
+		if slices.Contains(b, to) && !slices.Contains(b, from) {
+			return true
+		}
+	}
+	return false
+}
+
+// New is the plugin factory. It does not open a BGP session.
+func New(c plugin.Config, env plugin.Env) (plugin.Announcer, error) {
+	var cfg Config
+	if err := c.Decode(&cfg); err != nil {
+		return nil, err
+	}
+	log := env.Logger
+	if log == nil {
+		log = slog.Default()
+	}
+	return &Announcer{log: log, paths: map[netip.Prefix]announced{}}, nil
+}
+
+// Bind attaches the announcer to the RIB view's speaker and installs an
+// export policy that accepts only local routes tagged with community.
+// community is the configured packeteer community: "asn:value", or a large
+// community "global:data1:data2" (RFC 8092). The defined set lists only
+// that community.
+func (a *Announcer) Bind(srv any, community string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	pc, err := parseAnyCommunity(community)
+	if err != nil {
+		return fmt.Errorf("gobgp announcer: community: %w", err)
+	}
+	community = pc.text
+	s, ok := srv.(*server.BgpServer)
+	if !ok || s == nil {
+		return errors.New("gobgp announcer: embedded speaker is required")
+	}
+	if a.srv != nil {
+		if a.community != community || a.srv != s {
+			return errors.New("gobgp announcer: already bound")
+		}
+		return nil
+	}
+	if err := installExportPolicy(context.Background(), s, pc); err != nil {
+		return err
+	}
+	a.srv = s
+	a.community = community
+	a.log.Info("announcer bound", "community", community)
+	return nil
+}
+
+// BindRouters is Bind for several edge routers (#27). Before the accept
+// statement it installs, per router, a reject for routes toward providers
+// the router cannot reach and a next-hop rewrite for providers it reaches
+// through another router. Routes are matched to a provider by next hop.
+// Inbound steer routes (they carry the inbound marker) skip these rules.
+func (a *Announcer) BindRouters(srv any, community string, routers []plugin.RouterExport) error {
+	s, ok := srv.(*server.BgpServer)
+	if !ok || s == nil {
+		return errors.New("gobgp announcer: embedded speaker is required")
+	}
+	a.mu.Lock()
+	bound := a.srv != nil
+	a.mu.Unlock()
+	if bound {
+		return errors.New("gobgp announcer: already bound")
+	}
+	rp, err := installRouterPolicy(context.Background(), s, routers, 0)
+	if err != nil {
+		return err
+	}
+	if err := a.Bind(srv, community); err != nil {
+		return err
+	}
+	a.mu.Lock()
+	a.routers = rp
+	a.mu.Unlock()
+	a.logRouters(routers)
+	return nil
+}
+
+func (a *Announcer) logRouters(routers []plugin.RouterExport) {
+	for _, r := range routers {
+		via := make([]string, 0, len(r.Via))
+		for pnh, nh := range r.Via {
+			via = append(via, pnh.String()+"->"+nh.String())
+		}
+		sort.Strings(via)
+		a.log.Info("announcer router", "neighbor", r.Neighbor, "blocked", r.Blocked, "via", strings.Join(via, " "))
+	}
+}
+
+// SetRouters replaces the per-router export table on the bound speaker
+// (online reconfiguration, #27). It first withdraws every announced
+// route: GoBGP decides where a withdraw goes with the current export
+// policy, so a route withdrawn after the swap could stay on a router the
+// new table blocks. The caller announces again on its next sync. Inbound
+// steer routes are not touched; they skip the per-router rules. Empty
+// routers removes the table, so every neighbor gets every route.
+func (a *Announcer) SetRouters(ctx context.Context, routers []plugin.RouterExport) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.srv == nil {
+		return errors.New("gobgp announcer: not bound to the iBGP speaker")
+	}
+	// Only this announcer's paths: the inbound announcer's steer routes
+	// share the speaker and are not affected by the table.
+	for p, on := range a.paths {
+		if err := a.srv.DeletePath(ctx, &api.DeletePathRequest{Uuid: on.uuid, Family: familyOf(p)}); err != nil {
+			return fmt.Errorf("gobgp announcer: withdraw %s before the table swap: %w", p, err)
+		}
+		delete(a.paths, p)
+	}
+	old := a.routers
+	next := routerPolicy{gen: old.gen + 1}
+	if len(routers) > 0 {
+		rp, err := installRouterPolicy(ctx, a.srv, routers, old.gen+1)
+		if err != nil {
+			return err
+		}
+		next = rp
+	}
+	pols := []*api.Policy{{Name: policyName}}
+	if next.name != "" {
+		pols = []*api.Policy{{Name: next.name}, {Name: policyName}}
+	}
+	if err := a.srv.SetPolicyAssignment(ctx, &api.SetPolicyAssignmentRequest{Assignment: &api.PolicyAssignment{
+		Name: "global", Direction: api.PolicyDirection_EXPORT, Policies: pols, DefaultAction: api.RouteAction_REJECT,
+	}}); err != nil {
+		return fmt.Errorf("gobgp announcer: export policy: %w", err)
+	}
+	a.routers = next
+	// The old policy is no longer assigned; leftovers are harmless.
+	if old.name != "" {
+		if err := a.srv.DeletePolicy(ctx, &api.DeletePolicyRequest{Policy: &api.Policy{Name: old.name}, All: true}); err != nil {
+			a.log.Warn("gobgp announcer: removing the old router policy", "policy", old.name, "err", err)
+		}
+	}
+	for _, set := range old.sets {
+		if err := a.srv.DeleteDefinedSet(ctx, &api.DeleteDefinedSetRequest{
+			DefinedSet: &api.DefinedSet{DefinedType: api.DefinedType_NEIGHBOR, Name: set}, All: true,
+		}); err != nil {
+			a.log.Warn("gobgp announcer: removing an old router set", "set", set, "err", err)
+		}
+	}
+	a.log.Info("announcer routers replaced", "routers", len(routers), "policy", next.name)
+	a.logRouters(routers)
+	return nil
+}
+
+// Announce advertises r. It replaces any route already announced for the
+// same prefix. The route must carry the bound community and a non-zero
+// local preference; NO_EXPORT is always added.
+//
+// A replace is make-before-break (#386): the old path is not deleted
+// first. GoBGP takes a local path with the same prefix and path identifier
+// as an implicit withdraw of the one before it and re-keys the UUID, so
+// the edge gets one UPDATE with the new next hop and never a gap. When
+// AddPath fails the old route stays on the wire and in paths. The one
+// exception is a move onto a next hop that a router blocks while it took
+// the old one (blocksMove): that move withdraws first, so the router
+// loses the route instead of keeping the old one.
+func (a *Announcer) Announce(ctx context.Context, r plugin.Route) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.srv == nil {
+		return errors.New("gobgp announcer: not bound to the iBGP speaker")
+	}
+	if err := a.validate(r); err != nil {
+		return err
+	}
+	path, err := buildPath(r)
+	if err != nil {
+		return err
+	}
+	nh := r.NextHop.Unmap()
+	if old, ok := a.paths[r.Prefix]; ok && a.routers.blocksMove(old.nextHop, nh) {
+		if err := a.srv.DeletePath(ctx, &api.DeletePathRequest{Uuid: old.uuid, Family: familyOf(r.Prefix)}); err != nil {
+			return fmt.Errorf("gobgp announcer: replace %s: %w", r.Prefix, err)
+		}
+		delete(a.paths, r.Prefix)
+	}
+	resp, err := a.srv.AddPath(ctx, &api.AddPathRequest{Path: path})
+	if err != nil {
+		return fmt.Errorf("gobgp announcer: announce %s: %w", r.Prefix, err)
+	}
+	a.paths[r.Prefix] = announced{uuid: resp.GetUuid(), nextHop: nh}
+	a.log.Info("announced", "prefix", r.Prefix, "next_hop", r.NextHop, "local_pref", r.LocalPref, "provider", r.Provider, "as_path", asPathString(r.ASPath))
+	return nil
+}
+
+// Withdraw removes one announced prefix. Withdrawing a prefix that was not
+// announced is a no-op.
+func (a *Announcer) Withdraw(ctx context.Context, p netip.Prefix) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.srv == nil {
+		return errors.New("gobgp announcer: not bound to the iBGP speaker")
+	}
+	p = p.Masked()
+	on, ok := a.paths[p]
+	if !ok {
+		return nil
+	}
+	if err := a.srv.DeletePath(ctx, &api.DeletePathRequest{Uuid: on.uuid, Family: familyOf(p)}); err != nil {
+		return fmt.Errorf("gobgp announcer: withdraw %s: %w", p, err)
+	}
+	delete(a.paths, p)
+	a.log.Info("withdrew", "prefix", p)
+	return nil
+}
+
+// WithdrawAll removes every route this announcer published, by UUID.
+// Inbound steer and mitigation routes share the speaker and are left to
+// their own controllers (#486): a family-wide delete would remove them
+// while those controllers still count them as on the wire. A failed
+// delete keeps its prefix, so the next call tries it again.
+func (a *Announcer) WithdrawAll(ctx context.Context) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.srv == nil {
+		return nil
+	}
+	var errs []error
+	n := 0
+	for p, on := range a.paths {
+		if err := a.srv.DeletePath(ctx, &api.DeletePathRequest{Uuid: on.uuid, Family: familyOf(p)}); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", p, err))
+			continue
+		}
+		delete(a.paths, p)
+		n++
+	}
+	a.log.Info("withdrew all", "prefixes", n)
+	if err := errors.Join(errs...); err != nil {
+		return fmt.Errorf("gobgp announcer: withdraw all: %w", err)
+	}
+	return nil
+}
+
+// Stop withdraws the routes this announcer published. The BGP session
+// belongs to the RIB view and is not shut down here. Graceful restart is
+// never enabled.
+func (a *Announcer) Stop(ctx context.Context) error { return a.WithdrawAll(ctx) }
+
+func (a *Announcer) validate(r plugin.Route) error {
+	if !r.Prefix.IsValid() || r.Prefix != r.Prefix.Masked() {
+		return fmt.Errorf("gobgp announcer: prefix %s is not a valid masked prefix", r.Prefix)
+	}
+	if !r.NextHop.IsValid() || r.NextHop.Is4() != r.Prefix.Addr().Is4() {
+		return fmt.Errorf("gobgp announcer: next hop %s does not match %s", r.NextHop, r.Prefix)
+	}
+	if r.LocalPref == 0 {
+		return errors.New("gobgp announcer: local_pref is required")
+	}
+	if slices.Contains(r.ASPath, 0) {
+		return fmt.Errorf("gobgp announcer: as path for %s contains AS 0", r.Prefix)
+	}
+	if len(r.Communities) == 0 {
+		return errors.New("gobgp announcer: refusing to announce a route with no community")
+	}
+	seen := false
+	for _, c := range r.Communities {
+		pc, err := parseAnyCommunity(c)
+		if err != nil {
+			return fmt.Errorf("gobgp announcer: community %q: %w", c, err)
+		}
+		if pc.text == a.community {
+			seen = true
+		}
+	}
+	if !seen {
+		return fmt.Errorf("gobgp announcer: route for %s is missing community %s", r.Prefix, a.community)
+	}
+	return nil
+}
+
+var (
+	v4Family = &api.Family{Afi: api.Family_AFI_IP, Safi: api.Family_SAFI_UNICAST}
+	v6Family = &api.Family{Afi: api.Family_AFI_IP6, Safi: api.Family_SAFI_UNICAST}
+)
+
+func familyOf(p netip.Prefix) *api.Family {
+	if p.Addr().Is4() {
+		return v4Family
+	}
+	return v6Family
+}
+
+func buildPath(r plugin.Route) (*api.Path, error) {
+	nlri, err := anypb.New(&api.IPAddressPrefix{Prefix: r.Prefix.Addr().String(), PrefixLen: uint32(r.Prefix.Bits())})
+	if err != nil {
+		return nil, err
+	}
+	origin, err := anypb.New(&api.OriginAttribute{Origin: 0}) // IGP
+	if err != nil {
+		return nil, err
+	}
+	lp, err := anypb.New(&api.LocalPrefAttribute{LocalPref: r.LocalPref})
+	if err != nil {
+		return nil, err
+	}
+	comms := []uint32{}
+	var large []*api.LargeCommunity
+	seen := map[uint32]bool{}
+	seenLarge := map[string]bool{}
+	for _, c := range r.Communities {
+		pc, err := parseAnyCommunity(c)
+		if err != nil {
+			return nil, err
+		}
+		if pc.large {
+			if !seenLarge[pc.text] {
+				large = append(large, &api.LargeCommunity{GlobalAdmin: pc.ga, LocalData1: pc.d1, LocalData2: pc.d2})
+				seenLarge[pc.text] = true
+			}
+			continue
+		}
+		if !seen[pc.std] {
+			comms = append(comms, pc.std)
+			seen[pc.std] = true
+		}
+	}
+	if !seen[noExport] {
+		comms = append(comms, noExport)
+	}
+	cattr, err := anypb.New(&api.CommunitiesAttribute{Communities: comms})
+	if err != nil {
+		return nil, err
+	}
+	var lattr *anypb.Any
+	if len(large) > 0 {
+		lattr, err = anypb.New(&api.LargeCommunitiesAttribute{Communities: large})
+		if err != nil {
+			return nil, err
+		}
+	}
+	fam := familyOf(r.Prefix)
+	var nh *anypb.Any
+	if r.Prefix.Addr().Is4() {
+		nh, err = anypb.New(&api.NextHopAttribute{NextHop: r.NextHop.String()})
+	} else {
+		// Nlris has to be non-empty or GoBGP rejects the attribute as invalid.
+		// The path NLRI above is what is actually advertised.
+		nh, err = anypb.New(&api.MpReachNLRIAttribute{Family: fam, NextHops: []string{r.NextHop.String()}, Nlris: []*anypb.Any{nlri}})
+	}
+	if err != nil {
+		return nil, err
+	}
+	attrs := []*anypb.Any{origin, nh, lp, cattr}
+	if lattr != nil {
+		attrs = append(attrs, lattr)
+	}
+	if len(r.ASPath) > 0 {
+		// AS_SEQUENCE segments hold at most 255 ASNs each.
+		var segs []*api.AsSegment
+		for rest := r.ASPath; len(rest) > 0; {
+			n := min(len(rest), 255)
+			segs = append(segs, &api.AsSegment{Type: 2, Numbers: slices.Clone(rest[:n])})
+			rest = rest[n:]
+		}
+		asp, err := anypb.New(&api.AsPathAttribute{Segments: segs})
+		if err != nil {
+			return nil, err
+		}
+		attrs = append(attrs, asp)
+	}
+	return &api.Path{Family: fam, Nlri: nlri, Pattrs: attrs}, nil
+}
+
+func asPathString(as []uint32) string {
+	out := make([]string, len(as))
+	for i, n := range as {
+		out[i] = strconv.FormatUint(uint64(n), 10)
+	}
+	return strings.Join(out, " ")
+}
+
+func parseCommunity(s string) (uint32, error) {
+	hi, lo, ok := strings.Cut(s, ":")
+	if !ok || strings.Contains(lo, ":") {
+		return 0, errors.New(`must be "asn:value"`)
+	}
+	a, err1 := strconv.ParseUint(hi, 10, 16)
+	b, err2 := strconv.ParseUint(lo, 10, 16)
+	if err1 != nil || err2 != nil {
+		return 0, errors.New("each half must be an integer 0-65535")
+	}
+	return uint32(a)<<16 | uint32(b), nil
+}
+
+// parsedCommunity is one standard or large community in canonical text.
+type parsedCommunity struct {
+	text  string
+	large bool
+	std   uint32
+	ga    uint32
+	d1    uint32
+	d2    uint32
+}
+
+// parseAnyCommunity accepts a standard community or a large community
+// (RFC 8092). A two-part value above 16 bits stays rejected: a 4-byte ASN
+// is written as a large community ("65536:1:0").
+func parseAnyCommunity(s string) (parsedCommunity, error) {
+	parts := strings.Split(s, ":")
+	switch len(parts) {
+	case 2:
+		a, err1 := strconv.ParseUint(parts[0], 10, 16)
+		b, err2 := strconv.ParseUint(parts[1], 10, 16)
+		if err1 != nil || err2 != nil || parts[0] == "" || parts[1] == "" {
+			return parsedCommunity{}, errors.New("each half must be an integer 0-65535")
+		}
+		return parsedCommunity{text: fmt.Sprintf("%d:%d", a, b), std: uint32(a)<<16 | uint32(b)}, nil
+	case 3:
+		ga, err1 := strconv.ParseUint(parts[0], 10, 32)
+		d1, err2 := strconv.ParseUint(parts[1], 10, 32)
+		d2, err3 := strconv.ParseUint(parts[2], 10, 32)
+		if err1 != nil || err2 != nil || err3 != nil || parts[0] == "" || parts[1] == "" || parts[2] == "" {
+			return parsedCommunity{}, errors.New("each part must be an integer 0-4294967295")
+		}
+		return parsedCommunity{
+			text: fmt.Sprintf("%d:%d:%d", ga, d1, d2), large: true,
+			ga: uint32(ga), d1: uint32(d1), d2: uint32(d2),
+		}, nil
+	default:
+		return parsedCommunity{}, errors.New(`must be "asn:value" or a large community "global:data1:data2" (RFC 8092)`)
+	}
+}
+
+// installExportPolicy accepts only routes we originated that carry community,
+// and rejects everything else (including routes learned from the edge and
+// local routes that carry only an extra community). The defined set lists
+// only that one community.
+func installExportPolicy(ctx context.Context, srv *server.BgpServer, pc parsedCommunity) error {
+	defType := api.DefinedType_COMMUNITY
+	cond := &api.Conditions{
+		CommunitySet: &api.MatchSet{Type: api.MatchSet_ANY, Name: setName},
+		RouteType:    api.Conditions_ROUTE_TYPE_LOCAL,
+	}
+	if pc.large {
+		defType = api.DefinedType_LARGE_COMMUNITY
+		cond = &api.Conditions{
+			LargeCommunitySet: &api.MatchSet{Type: api.MatchSet_ANY, Name: setName},
+			RouteType:         api.Conditions_ROUTE_TYPE_LOCAL,
+		}
+	}
+	if err := srv.AddDefinedSet(ctx, &api.AddDefinedSetRequest{DefinedSet: &api.DefinedSet{
+		DefinedType: defType,
+		Name:        setName,
+		List:        []string{pc.text},
+	}}); err != nil {
+		return fmt.Errorf("gobgp announcer: community set: %w", err)
+	}
+	pol := &api.Policy{
+		Name: policyName,
+		Statements: []*api.Statement{{
+			Name:       "packeteer-accept",
+			Conditions: cond,
+			Actions:    &api.Actions{RouteAction: api.RouteAction_ACCEPT},
+		}},
+	}
+	if err := srv.AddPolicy(ctx, &api.AddPolicyRequest{Policy: pol}); err != nil {
+		return fmt.Errorf("gobgp announcer: policy: %w", err)
+	}
+	// Replaces the learn-only assignment (default reject, no policies) with
+	// the same default plus the one accept statement above, after the
+	// per-router rules when BindRouters installed them.
+	pols := []*api.Policy{{Name: policyName}}
+	if hasPolicy(ctx, srv, routersName) {
+		pols = []*api.Policy{{Name: routersName}, {Name: policyName}}
+	}
+	if err := srv.SetPolicyAssignment(ctx, &api.SetPolicyAssignmentRequest{Assignment: &api.PolicyAssignment{
+		Name:          "global",
+		Direction:     api.PolicyDirection_EXPORT,
+		Policies:      pols,
+		DefaultAction: api.RouteAction_REJECT,
+	}}); err != nil {
+		return fmt.Errorf("gobgp announcer: export policy: %w", err)
+	}
+	return nil
+}
+
+func hasPolicy(ctx context.Context, srv *server.BgpServer, name string) bool {
+	found := false
+	err := srv.ListPolicy(ctx, &api.ListPolicyRequest{Name: name}, func(p *api.Policy) {
+		if p.GetName() == name {
+			found = true
+		}
+	})
+	return err == nil && found
+}
+
+// installRouterPolicy adds the per-router export rules. Rejects come first,
+// so a rewritten next hop is never matched again. Neither kind accepts:
+// a rewritten route still needs the accept statement of policyName. gen
+// 0 is the policy bound at startup (routersName); a replacement gets its
+// own names so it can be installed next to the one it replaces. It
+// returns the installed policy, with no name when no rule was needed.
+func installRouterPolicy(ctx context.Context, srv *server.BgpServer, routers []plugin.RouterExport, gen int) (routerPolicy, error) {
+	rp := routerPolicy{gen: gen}
+	if len(routers) == 0 {
+		return rp, errors.New("gobgp announcer: no routers")
+	}
+	prefix, name := "packeteer-router", routersName
+	if gen > 0 {
+		prefix, name = fmt.Sprintf("packeteer-router-g%d", gen), fmt.Sprintf("%s-g%d", routersName, gen)
+	}
+	// Starts empty; the inbound announcer adds its marker on Bind.
+	if err := srv.AddDefinedSet(ctx, &api.AddDefinedSetRequest{DefinedSet: &api.DefinedSet{
+		DefinedType: api.DefinedType_COMMUNITY, Name: passSetName,
+	}}); err != nil {
+		return rp, fmt.Errorf("gobgp announcer: inbound pass set: %w", err)
+	}
+	outbound := &api.MatchSet{Type: api.MatchSet_INVERT, Name: passSetName}
+	var rejects, rewrites []*api.Statement
+	seen := map[netip.Addr]bool{}
+	for i, r := range routers {
+		n := r.Neighbor.Unmap()
+		if !n.IsValid() || seen[n] {
+			return rp, fmt.Errorf("gobgp announcer: router %d: invalid or duplicate neighbor %s", i, r.Neighbor)
+		}
+		seen[n] = true
+		nset := fmt.Sprintf("%s-%d", prefix, i)
+		if err := srv.AddDefinedSet(ctx, &api.AddDefinedSetRequest{DefinedSet: &api.DefinedSet{
+			DefinedType: api.DefinedType_NEIGHBOR, Name: nset, List: []string{netip.PrefixFrom(n, n.BitLen()).String()},
+		}}); err != nil {
+			return rp, fmt.Errorf("gobgp announcer: neighbor set %s: %w", n, err)
+		}
+		rp.sets = append(rp.sets, nset)
+		blocked := make([]netip.Addr, 0, len(r.Blocked))
+		for _, nh := range r.Blocked {
+			blocked = append(blocked, nh.Unmap())
+		}
+		rp.blocked = append(rp.blocked, blocked)
+		cond := func(nhs ...netip.Addr) *api.Conditions {
+			list := make([]string, 0, len(nhs))
+			for _, nh := range nhs {
+				list = append(list, nh.Unmap().String())
+			}
+			return &api.Conditions{
+				NeighborSet:   &api.MatchSet{Type: api.MatchSet_ANY, Name: nset},
+				CommunitySet:  outbound,
+				NextHopInList: list,
+				RouteType:     api.Conditions_ROUTE_TYPE_LOCAL,
+			}
+		}
+		if len(r.Blocked) > 0 {
+			for _, nh := range r.Blocked {
+				if !nh.IsValid() {
+					return rp, fmt.Errorf("gobgp announcer: router %s: invalid blocked next hop", n)
+				}
+			}
+			rejects = append(rejects, &api.Statement{
+				Name:       fmt.Sprintf("%s-%d-blocked", prefix, i),
+				Conditions: cond(r.Blocked...),
+				Actions:    &api.Actions{RouteAction: api.RouteAction_REJECT},
+			})
+		}
+		pnhs := make([]netip.Addr, 0, len(r.Via))
+		for pnh := range r.Via {
+			pnhs = append(pnhs, pnh)
+		}
+		slices.SortFunc(pnhs, netip.Addr.Compare)
+		for j, pnh := range pnhs {
+			nh := r.Via[pnh]
+			if !pnh.IsValid() || !nh.IsValid() || pnh.Is4() != nh.Is4() {
+				return rp, fmt.Errorf("gobgp announcer: router %s: invalid next hop rewrite %s -> %s", n, pnh, nh)
+			}
+			// No route action: the rewritten path goes on to policyName.
+			rewrites = append(rewrites, &api.Statement{
+				Name:       fmt.Sprintf("%s-%d-via-%d", prefix, i, j),
+				Conditions: cond(pnh),
+				Actions:    &api.Actions{Nexthop: &api.NexthopAction{Address: nh.Unmap().String()}},
+			})
+		}
+	}
+	if len(rejects)+len(rewrites) == 0 {
+		return rp, nil
+	}
+	if err := srv.AddPolicy(ctx, &api.AddPolicyRequest{Policy: &api.Policy{
+		Name: name, Statements: append(rejects, rewrites...),
+	}}); err != nil {
+		return rp, fmt.Errorf("gobgp announcer: router policy: %w", err)
+	}
+	rp.name = name
+	return rp, nil
+}

@@ -1,0 +1,31 @@
+! Packeteer on FRR. Generated for review: nothing is applied. Paste it into
+! vtysh (configure terminal) after checking it against your own config.
+! This router: AS 64512, 192.0.2.254. Packeteer: 192.0.2.10.
+!
+bgp community-list standard packeteer permit 64512:666
+!
+! From Packeteer: only routes that carry the Packeteer community.
+route-map packeteer-in permit 10
+ match community packeteer
+route-map packeteer-in deny 100
+!
+! Toward every eBGP neighbor, customers and peers included: never a route
+! with the Packeteer community. Put this deny first in the outbound
+! route-map each eBGP neighbor already uses (rename ebgp-out to it); your
+! existing terms follow.
+route-map ebgp-out deny 10
+ match community packeteer
+!
+router bgp 64512
+ neighbor 192.0.2.10 remote-as 64512
+ neighbor 192.0.2.10 description packeteer
+ ! Packeteer never offers graceful restart; this keeps it off here too.
+ neighbor 192.0.2.10 graceful-restart-disable
+ ! Keepalive 10s, hold time 30s: a crashed Packeteer's routes go within 30s.
+ neighbor 192.0.2.10 timers 10 30
+ !
+ address-family ipv4 unicast
+  neighbor 192.0.2.10 activate
+  neighbor 192.0.2.10 route-map packeteer-in in
+ exit-address-family
+!

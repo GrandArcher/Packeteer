@@ -1,0 +1,1414 @@
+{
+ "version": "fixture",
+ "mode": "observe",
+ "ready": true,
+ "generated_at": "2026-10-11T12:00:00Z",
+ "prefixes": [
+  {
+   "prefix": "2001:db8:1a::/48",
+   "native": "lab-a",
+   "current": "lab-a",
+   "recommended": "lab-a",
+   "action": "keep",
+   "in_rib": true,
+   "next_hop": "192.0.2.1",
+   "rib_provider": "lab-a",
+   "probes": [
+    {
+     "provider": "lab-a",
+     "prefix": "2001:db8:1a::/48",
+     "prober": "icmp",
+     "ok": true,
+     "loss_pct": 2.0,
+     "rtt_min_ms": 44.0,
+     "rtt_avg_ms": 46.0,
+     "rtt_max_ms": 49.0,
+     "jitter_ms": 1.5,
+     "sent": 10,
+     "received": 10
+    },
+    {
+     "provider": "lab-b",
+     "prefix": "2001:db8:1a::/48",
+     "prober": "icmp",
+     "ok": true,
+     "loss_pct": 0.0,
+     "rtt_min_ms": 8.0,
+     "rtt_avg_ms": 10.0,
+     "rtt_max_ms": 12.0,
+     "jitter_ms": 0.5,
+     "sent": 10,
+     "received": 10
+    }
+   ],
+   "exit_loss_pct": 2.0,
+   "exit_rtt_ms": 46.0,
+   "paths": [
+    {
+     "provider": "lab-a",
+     "next_hop": "192.0.2.1",
+     "as_path": [
+      64496,
+      64502
+     ],
+     "selected": true,
+     "med": 100,
+     "med_from": "iBGP 192.0.2.254, lab-a",
+     "via": "bilateral"
+    }
+   ]
+  },
+  {
+   "prefix": "2001:db8:1b::/48",
+   "native": "lab-a",
+   "current": "lab-a",
+   "recommended": "lab-a",
+   "action": "keep",
+   "in_rib": true,
+   "next_hop": "192.0.2.1",
+   "rib_provider": "lab-a",
+   "probes": [
+    {
+     "provider": "lab-a",
+     "prefix": "2001:db8:1b::/48",
+     "prober": "icmp",
+     "ok": true,
+     "loss_pct": 3.0,
+     "rtt_min_ms": 45.0,
+     "rtt_avg_ms": 47.0,
+     "rtt_max_ms": 50.0,
+     "jitter_ms": 1.5,
+     "sent": 10,
+     "received": 10
+    },
+    {
+     "provider": "lab-b",
+     "prefix": "2001:db8:1b::/48",
+     "prober": "icmp",
+     "ok": true,
+     "loss_pct": 0.0,
+     "rtt_min_ms": 8.0,
+     "rtt_avg_ms": 10.0,
+     "rtt_max_ms": 12.0,
+     "jitter_ms": 0.5,
+     "sent": 10,
+     "received": 10
+    }
+   ],
+   "exit_loss_pct": 3.0,
+   "exit_rtt_ms": 47.0,
+   "paths": [
+    {
+     "provider": "lab-a",
+     "next_hop": "192.0.2.1",
+     "as_path": [
+      64496,
+      64500
+     ],
+     "selected": true,
+     "med": 100,
+     "med_from": "iBGP 192.0.2.254, lab-a",
+     "via": "bilateral"
+    }
+   ]
+  },
+  {
+   "prefix": "2001:db8:1c::/48",
+   "native": "lab-a",
+   "current": "lab-a",
+   "recommended": "lab-b",
+   "action": "improve",
+   "in_rib": true,
+   "next_hop": "192.0.2.1",
+   "rib_provider": "lab-a",
+   "probes": [
+    {
+     "provider": "lab-a",
+     "prefix": "2001:db8:1c::/48",
+     "prober": "icmp",
+     "ok": true,
+     "loss_pct": 0.0,
+     "rtt_min_ms": 46.0,
+     "rtt_avg_ms": 48.0,
+     "rtt_max_ms": 51.0,
+     "jitter_ms": 1.5,
+     "sent": 10,
+     "received": 10
+    },
+    {
+     "provider": "lab-b",
+     "prefix": "2001:db8:1c::/48",
+     "prober": "icmp",
+     "ok": true,
+     "loss_pct": 0.0,
+     "rtt_min_ms": 8.0,
+     "rtt_avg_ms": 10.0,
+     "rtt_max_ms": 12.0,
+     "jitter_ms": 0.5,
+     "sent": 10,
+     "received": 10
+    }
+   ],
+   "exit_loss_pct": 0.0,
+   "exit_rtt_ms": 48.0,
+   "paths": [
+    {
+     "provider": "lab-a",
+     "next_hop": "192.0.2.1",
+     "as_path": [
+      64496,
+      64501
+     ],
+     "selected": true,
+     "med": 100,
+     "med_from": "iBGP 192.0.2.254, lab-a",
+     "via": "bilateral"
+    }
+   ],
+   "gain": 2.0,
+   "reason": "lab-b beats lab-a on loss"
+  },
+  {
+   "prefix": "2001:db8:1d::/48",
+   "native": "lab-a",
+   "current": "lab-a",
+   "recommended": "lab-a",
+   "action": "keep",
+   "in_rib": true,
+   "next_hop": "192.0.2.1",
+   "rib_provider": "lab-a",
+   "probes": [
+    {
+     "provider": "lab-a",
+     "prefix": "2001:db8:1d::/48",
+     "prober": "icmp",
+     "ok": true,
+     "loss_pct": 1.0,
+     "rtt_min_ms": 47.0,
+     "rtt_avg_ms": 49.0,
+     "rtt_max_ms": 52.0,
+     "jitter_ms": 1.5,
+     "sent": 10,
+     "received": 10
+    },
+    {
+     "provider": "lab-b",
+     "prefix": "2001:db8:1d::/48",
+     "prober": "icmp",
+     "ok": true,
+     "loss_pct": 0.0,
+     "rtt_min_ms": 8.0,
+     "rtt_avg_ms": 10.0,
+     "rtt_max_ms": 12.0,
+     "jitter_ms": 0.5,
+     "sent": 10,
+     "received": 10
+    }
+   ],
+   "exit_loss_pct": 1.0,
+   "exit_rtt_ms": 49.0,
+   "paths": [
+    {
+     "provider": "lab-a",
+     "next_hop": "192.0.2.1",
+     "as_path": [
+      64496,
+      64502
+     ],
+     "selected": true,
+     "med": 100,
+     "med_from": "iBGP 192.0.2.254, lab-a",
+     "via": "bilateral"
+    }
+   ]
+  },
+  {
+   "prefix": "2001:db8:1e::/48",
+   "native": "lab-a",
+   "current": "lab-a",
+   "recommended": "lab-a",
+   "action": "keep",
+   "in_rib": true,
+   "next_hop": "192.0.2.1",
+   "rib_provider": "lab-a",
+   "probes": [
+    {
+     "provider": "lab-a",
+     "prefix": "2001:db8:1e::/48",
+     "prober": "icmp",
+     "ok": true,
+     "loss_pct": 2.0,
+     "rtt_min_ms": 48.0,
+     "rtt_avg_ms": 50.0,
+     "rtt_max_ms": 53.0,
+     "jitter_ms": 1.5,
+     "sent": 10,
+     "received": 10
+    },
+    {
+     "provider": "lab-b",
+     "prefix": "2001:db8:1e::/48",
+     "prober": "icmp",
+     "ok": true,
+     "loss_pct": 0.0,
+     "rtt_min_ms": 8.0,
+     "rtt_avg_ms": 10.0,
+     "rtt_max_ms": 12.0,
+     "jitter_ms": 0.5,
+     "sent": 10,
+     "received": 10
+    }
+   ],
+   "exit_loss_pct": 2.0,
+   "exit_rtt_ms": 50.0,
+   "paths": [
+    {
+     "provider": "lab-a",
+     "next_hop": "192.0.2.1",
+     "as_path": [
+      64496,
+      64500
+     ],
+     "selected": true,
+     "med": 100,
+     "med_from": "iBGP 192.0.2.254, lab-a",
+     "via": "bilateral"
+    }
+   ]
+  },
+  {
+   "prefix": "2001:db8:1f::/48",
+   "native": "lab-a",
+   "current": "lab-a",
+   "recommended": "lab-b",
+   "action": "improve",
+   "in_rib": true,
+   "next_hop": "192.0.2.1",
+   "rib_provider": "lab-a",
+   "probes": [
+    {
+     "provider": "lab-a",
+     "prefix": "2001:db8:1f::/48",
+     "prober": "icmp",
+     "ok": true,
+     "loss_pct": 3.0,
+     "rtt_min_ms": 49.0,
+     "rtt_avg_ms": 51.0,
+     "rtt_max_ms": 54.0,
+     "jitter_ms": 1.5,
+     "sent": 10,
+     "received": 10
+    },
+    {
+     "provider": "lab-b",
+     "prefix": "2001:db8:1f::/48",
+     "prober": "icmp",
+     "ok": true,
+     "loss_pct": 0.0,
+     "rtt_min_ms": 8.0,
+     "rtt_avg_ms": 10.0,
+     "rtt_max_ms": 12.0,
+     "jitter_ms": 0.5,
+     "sent": 10,
+     "received": 10
+    }
+   ],
+   "exit_loss_pct": 3.0,
+   "exit_rtt_ms": 51.0,
+   "paths": [
+    {
+     "provider": "lab-a",
+     "next_hop": "192.0.2.1",
+     "as_path": [
+      64496,
+      64501
+     ],
+     "selected": true,
+     "med": 100,
+     "med_from": "iBGP 192.0.2.254, lab-a",
+     "via": "bilateral"
+    }
+   ],
+   "gain": -1.0,
+   "reason": "lab-b beats lab-a on loss"
+  },
+  {
+   "prefix": "2001:db8:20::/48",
+   "native": "lab-a",
+   "current": "lab-a",
+   "recommended": "lab-a",
+   "action": "keep",
+   "in_rib": true,
+   "next_hop": "192.0.2.1",
+   "rib_provider": "lab-a",
+   "probes": [
+    {
+     "provider": "lab-a",
+     "prefix": "2001:db8:20::/48",
+     "prober": "icmp",
+     "ok": true,
+     "loss_pct": 0.0,
+     "rtt_min_ms": 50.0,
+     "rtt_avg_ms": 52.0,
+     "rtt_max_ms": 55.0,
+     "jitter_ms": 1.5,
+     "sent": 10,
+     "received": 10
+    },
+    {
+     "provider": "lab-b",
+     "prefix": "2001:db8:20::/48",
+     "prober": "icmp",
+     "ok": true,
+     "loss_pct": 0.0,
+     "rtt_min_ms": 8.0,
+     "rtt_avg_ms": 10.0,
+     "rtt_max_ms": 12.0,
+     "jitter_ms": 0.5,
+     "sent": 10,
+     "received": 10
+    }
+   ],
+   "exit_loss_pct": 0.0,
+   "exit_rtt_ms": 52.0,
+   "paths": [
+    {
+     "provider": "lab-a",
+     "next_hop": "192.0.2.1",
+     "as_path": [
+      64496,
+      64502
+     ],
+     "selected": true,
+     "med": 100,
+     "med_from": "iBGP 192.0.2.254, lab-a",
+     "via": "bilateral"
+    }
+   ]
+  },
+  {
+   "prefix": "2001:db8:21::/48",
+   "native": "lab-a",
+   "current": "lab-a",
+   "recommended": "lab-a",
+   "action": "keep",
+   "in_rib": true,
+   "next_hop": "192.0.2.1",
+   "rib_provider": "lab-a",
+   "probes": [
+    {
+     "provider": "lab-a",
+     "prefix": "2001:db8:21::/48",
+     "prober": "icmp",
+     "ok": true,
+     "loss_pct": 1.0,
+     "rtt_min_ms": 51.0,
+     "rtt_avg_ms": 53.0,
+     "rtt_max_ms": 56.0,
+     "jitter_ms": 1.5,
+     "sent": 10,
+     "received": 10
+    },
+    {
+     "provider": "lab-b",
+     "prefix": "2001:db8:21::/48",
+     "prober": "icmp",
+     "ok": true,
+     "loss_pct": 0.0,
+     "rtt_min_ms": 8.0,
+     "rtt_avg_ms": 10.0,
+     "rtt_max_ms": 12.0,
+     "jitter_ms": 0.5,
+     "sent": 10,
+     "received": 10
+    }
+   ],
+   "exit_loss_pct": 1.0,
+   "exit_rtt_ms": 53.0,
+   "paths": [
+    {
+     "provider": "lab-a",
+     "next_hop": "192.0.2.1",
+     "as_path": [
+      64496,
+      64500
+     ],
+     "selected": true,
+     "med": 100,
+     "med_from": "iBGP 192.0.2.254, lab-a",
+     "via": "bilateral"
+    }
+   ]
+  },
+  {
+   "prefix": "2001:db8:22::/48",
+   "native": "lab-a",
+   "current": "lab-a",
+   "recommended": "lab-b",
+   "action": "improve",
+   "in_rib": true,
+   "next_hop": "192.0.2.1",
+   "rib_provider": "lab-a",
+   "probes": [
+    {
+     "provider": "lab-a",
+     "prefix": "2001:db8:22::/48",
+     "prober": "icmp",
+     "ok": true,
+     "loss_pct": 2.0,
+     "rtt_min_ms": 52.0,
+     "rtt_avg_ms": 54.0,
+     "rtt_max_ms": 57.0,
+     "jitter_ms": 1.5,
+     "sent": 10,
+     "received": 10
+    },
+    {
+     "provider": "lab-b",
+     "prefix": "2001:db8:22::/48",
+     "prober": "icmp",
+     "ok": true,
+     "loss_pct": 0.0,
+     "rtt_min_ms": 8.0,
+     "rtt_avg_ms": 10.0,
+     "rtt_max_ms": 12.0,
+     "jitter_ms": 0.5,
+     "sent": 10,
+     "received": 10
+    }
+   ],
+   "exit_loss_pct": 2.0,
+   "exit_rtt_ms": 54.0,
+   "paths": [
+    {
+     "provider": "lab-a",
+     "next_hop": "192.0.2.1",
+     "as_path": [
+      64496,
+      64501
+     ],
+     "selected": true,
+     "med": 100,
+     "med_from": "iBGP 192.0.2.254, lab-a",
+     "via": "bilateral"
+    }
+   ],
+   "gain": -4.0,
+   "reason": "lab-b beats lab-a on loss"
+  },
+  {
+   "prefix": "2001:db8:23::/48",
+   "native": "lab-a",
+   "current": "lab-a",
+   "recommended": "lab-a",
+   "action": "keep",
+   "in_rib": true,
+   "next_hop": "192.0.2.1",
+   "rib_provider": "lab-a",
+   "probes": [
+    {
+     "provider": "lab-a",
+     "prefix": "2001:db8:23::/48",
+     "prober": "icmp",
+     "ok": true,
+     "loss_pct": 3.0,
+     "rtt_min_ms": 53.0,
+     "rtt_avg_ms": 55.0,
+     "rtt_max_ms": 58.0,
+     "jitter_ms": 1.5,
+     "sent": 10,
+     "received": 10
+    },
+    {
+     "provider": "lab-b",
+     "prefix": "2001:db8:23::/48",
+     "prober": "icmp",
+     "ok": true,
+     "loss_pct": 0.0,
+     "rtt_min_ms": 8.0,
+     "rtt_avg_ms": 10.0,
+     "rtt_max_ms": 12.0,
+     "jitter_ms": 0.5,
+     "sent": 10,
+     "received": 10
+    }
+   ],
+   "exit_loss_pct": 3.0,
+   "exit_rtt_ms": 55.0,
+   "paths": [
+    {
+     "provider": "lab-a",
+     "next_hop": "192.0.2.1",
+     "as_path": [
+      64496,
+      64502
+     ],
+     "selected": true,
+     "med": 100,
+     "med_from": "iBGP 192.0.2.254, lab-a",
+     "via": "bilateral"
+    }
+   ]
+  },
+  {
+   "prefix": "2001:db8:24::/48",
+   "native": "lab-a",
+   "current": "lab-a",
+   "recommended": "lab-a",
+   "action": "keep",
+   "in_rib": true,
+   "next_hop": "192.0.2.1",
+   "rib_provider": "lab-a",
+   "probes": [
+    {
+     "provider": "lab-a",
+     "prefix": "2001:db8:24::/48",
+     "prober": "icmp",
+     "ok": true,
+     "loss_pct": 0.0,
+     "rtt_min_ms": 54.0,
+     "rtt_avg_ms": 56.0,
+     "rtt_max_ms": 59.0,
+     "jitter_ms": 1.5,
+     "sent": 10,
+     "received": 10
+    },
+    {
+     "provider": "lab-b",
+     "prefix": "2001:db8:24::/48",
+     "prober": "icmp",
+     "ok": true,
+     "loss_pct": 0.0,
+     "rtt_min_ms": 8.0,
+     "rtt_avg_ms": 10.0,
+     "rtt_max_ms": 12.0,
+     "jitter_ms": 0.5,
+     "sent": 10,
+     "received": 10
+    }
+   ],
+   "exit_loss_pct": 0.0,
+   "exit_rtt_ms": 56.0,
+   "paths": [
+    {
+     "provider": "lab-a",
+     "next_hop": "192.0.2.1",
+     "as_path": [
+      64496,
+      64500
+     ],
+     "selected": true,
+     "med": 100,
+     "med_from": "iBGP 192.0.2.254, lab-a",
+     "via": "bilateral"
+    }
+   ]
+  },
+  {
+   "prefix": "2001:db8:25::/48",
+   "native": "lab-a",
+   "current": "lab-a",
+   "recommended": "lab-b",
+   "action": "improve",
+   "in_rib": true,
+   "next_hop": "192.0.2.1",
+   "rib_provider": "lab-a",
+   "probes": [
+    {
+     "provider": "lab-a",
+     "prefix": "2001:db8:25::/48",
+     "prober": "icmp",
+     "ok": true,
+     "loss_pct": 1.0,
+     "rtt_min_ms": 55.0,
+     "rtt_avg_ms": 57.0,
+     "rtt_max_ms": 60.0,
+     "jitter_ms": 1.5,
+     "sent": 10,
+     "received": 10
+    },
+    {
+     "provider": "lab-b",
+     "prefix": "2001:db8:25::/48",
+     "prober": "icmp",
+     "ok": true,
+     "loss_pct": 0.0,
+     "rtt_min_ms": 8.0,
+     "rtt_avg_ms": 10.0,
+     "rtt_max_ms": 12.0,
+     "jitter_ms": 0.5,
+     "sent": 10,
+     "received": 10
+    }
+   ],
+   "exit_loss_pct": 1.0,
+   "exit_rtt_ms": 57.0,
+   "paths": [
+    {
+     "provider": "lab-a",
+     "next_hop": "192.0.2.1",
+     "as_path": [
+      64496,
+      64501
+     ],
+     "selected": true,
+     "med": 100,
+     "med_from": "iBGP 192.0.2.254, lab-a",
+     "via": "bilateral"
+    }
+   ],
+   "gain": -7.0,
+   "reason": "lab-b beats lab-a on loss"
+  },
+  {
+   "prefix": "2001:db8:26::/48",
+   "native": "lab-a",
+   "current": "lab-a",
+   "recommended": "lab-a",
+   "action": "keep",
+   "in_rib": true,
+   "next_hop": "192.0.2.1",
+   "rib_provider": "lab-a",
+   "probes": [
+    {
+     "provider": "lab-a",
+     "prefix": "2001:db8:26::/48",
+     "prober": "icmp",
+     "ok": true,
+     "loss_pct": 2.0,
+     "rtt_min_ms": 56.0,
+     "rtt_avg_ms": 58.0,
+     "rtt_max_ms": 61.0,
+     "jitter_ms": 1.5,
+     "sent": 10,
+     "received": 10
+    },
+    {
+     "provider": "lab-b",
+     "prefix": "2001:db8:26::/48",
+     "prober": "icmp",
+     "ok": true,
+     "loss_pct": 0.0,
+     "rtt_min_ms": 8.0,
+     "rtt_avg_ms": 10.0,
+     "rtt_max_ms": 12.0,
+     "jitter_ms": 0.5,
+     "sent": 10,
+     "received": 10
+    }
+   ],
+   "exit_loss_pct": 2.0,
+   "exit_rtt_ms": 58.0,
+   "paths": [
+    {
+     "provider": "lab-a",
+     "next_hop": "192.0.2.1",
+     "as_path": [
+      64496,
+      64502
+     ],
+     "selected": true,
+     "med": 100,
+     "med_from": "iBGP 192.0.2.254, lab-a",
+     "via": "bilateral"
+    }
+   ]
+  },
+  {
+   "prefix": "2001:db8:27::/48",
+   "native": "lab-a",
+   "current": "lab-a",
+   "recommended": "lab-a",
+   "action": "keep",
+   "in_rib": true,
+   "next_hop": "192.0.2.1",
+   "rib_provider": "lab-a",
+   "probes": [
+    {
+     "provider": "lab-a",
+     "prefix": "2001:db8:27::/48",
+     "prober": "icmp",
+     "ok": true,
+     "loss_pct": 3.0,
+     "rtt_min_ms": 57.0,
+     "rtt_avg_ms": 59.0,
+     "rtt_max_ms": 62.0,
+     "jitter_ms": 1.5,
+     "sent": 10,
+     "received": 10
+    },
+    {
+     "provider": "lab-b",
+     "prefix": "2001:db8:27::/48",
+     "prober": "icmp",
+     "ok": true,
+     "loss_pct": 0.0,
+     "rtt_min_ms": 8.0,
+     "rtt_avg_ms": 10.0,
+     "rtt_max_ms": 12.0,
+     "jitter_ms": 0.5,
+     "sent": 10,
+     "received": 10
+    }
+   ],
+   "exit_loss_pct": 3.0,
+   "exit_rtt_ms": 59.0,
+   "paths": [
+    {
+     "provider": "lab-a",
+     "next_hop": "192.0.2.1",
+     "as_path": [
+      64496,
+      64500
+     ],
+     "selected": true,
+     "med": 100,
+     "med_from": "iBGP 192.0.2.254, lab-a",
+     "via": "bilateral"
+    }
+   ]
+  },
+  {
+   "prefix": "2001:db8:28::/48",
+   "native": "lab-a",
+   "current": "lab-a",
+   "recommended": "lab-b",
+   "action": "improve",
+   "in_rib": true,
+   "next_hop": "192.0.2.1",
+   "rib_provider": "lab-a",
+   "probes": [
+    {
+     "provider": "lab-a",
+     "prefix": "2001:db8:28::/48",
+     "prober": "icmp",
+     "ok": true,
+     "loss_pct": 0.0,
+     "rtt_min_ms": 58.0,
+     "rtt_avg_ms": 60.0,
+     "rtt_max_ms": 63.0,
+     "jitter_ms": 1.5,
+     "sent": 10,
+     "received": 10
+    },
+    {
+     "provider": "lab-b",
+     "prefix": "2001:db8:28::/48",
+     "prober": "icmp",
+     "ok": true,
+     "loss_pct": 0.0,
+     "rtt_min_ms": 8.0,
+     "rtt_avg_ms": 10.0,
+     "rtt_max_ms": 12.0,
+     "jitter_ms": 0.5,
+     "sent": 10,
+     "received": 10
+    }
+   ],
+   "exit_loss_pct": 0.0,
+   "exit_rtt_ms": 60.0,
+   "paths": [
+    {
+     "provider": "lab-a",
+     "next_hop": "192.0.2.1",
+     "as_path": [
+      64496,
+      64501
+     ],
+     "selected": true,
+     "med": 100,
+     "med_from": "iBGP 192.0.2.254, lab-a",
+     "via": "bilateral"
+    }
+   ],
+   "gain": -10.0,
+   "reason": "lab-b beats lab-a on loss"
+  },
+  {
+   "prefix": "2001:db8:29::/48",
+   "native": "lab-a",
+   "current": "lab-a",
+   "recommended": "lab-a",
+   "action": "keep",
+   "in_rib": true,
+   "next_hop": "192.0.2.1",
+   "rib_provider": "lab-a",
+   "probes": [
+    {
+     "provider": "lab-a",
+     "prefix": "2001:db8:29::/48",
+     "prober": "icmp",
+     "ok": true,
+     "loss_pct": 1.0,
+     "rtt_min_ms": 59.0,
+     "rtt_avg_ms": 61.0,
+     "rtt_max_ms": 64.0,
+     "jitter_ms": 1.5,
+     "sent": 10,
+     "received": 10
+    },
+    {
+     "provider": "lab-b",
+     "prefix": "2001:db8:29::/48",
+     "prober": "icmp",
+     "ok": true,
+     "loss_pct": 0.0,
+     "rtt_min_ms": 8.0,
+     "rtt_avg_ms": 10.0,
+     "rtt_max_ms": 12.0,
+     "jitter_ms": 0.5,
+     "sent": 10,
+     "received": 10
+    }
+   ],
+   "exit_loss_pct": 1.0,
+   "exit_rtt_ms": 61.0,
+   "paths": [
+    {
+     "provider": "lab-a",
+     "next_hop": "192.0.2.1",
+     "as_path": [
+      64496,
+      64502
+     ],
+     "selected": true,
+     "med": 100,
+     "med_from": "iBGP 192.0.2.254, lab-a",
+     "via": "bilateral"
+    }
+   ]
+  },
+  {
+   "prefix": "2001:db8:2a::/48",
+   "native": "lab-a",
+   "current": "lab-a",
+   "recommended": "lab-a",
+   "action": "keep",
+   "in_rib": true,
+   "next_hop": "192.0.2.1",
+   "rib_provider": "lab-a",
+   "probes": [
+    {
+     "provider": "lab-a",
+     "prefix": "2001:db8:2a::/48",
+     "prober": "icmp",
+     "ok": true,
+     "loss_pct": 2.0,
+     "rtt_min_ms": 60.0,
+     "rtt_avg_ms": 62.0,
+     "rtt_max_ms": 65.0,
+     "jitter_ms": 1.5,
+     "sent": 10,
+     "received": 10
+    },
+    {
+     "provider": "lab-b",
+     "prefix": "2001:db8:2a::/48",
+     "prober": "icmp",
+     "ok": true,
+     "loss_pct": 0.0,
+     "rtt_min_ms": 8.0,
+     "rtt_avg_ms": 10.0,
+     "rtt_max_ms": 12.0,
+     "jitter_ms": 0.5,
+     "sent": 10,
+     "received": 10
+    }
+   ],
+   "exit_loss_pct": 2.0,
+   "exit_rtt_ms": 62.0,
+   "paths": [
+    {
+     "provider": "lab-a",
+     "next_hop": "192.0.2.1",
+     "as_path": [
+      64496,
+      64500
+     ],
+     "selected": true,
+     "med": 100,
+     "med_from": "iBGP 192.0.2.254, lab-a",
+     "via": "bilateral"
+    }
+   ]
+  },
+  {
+   "prefix": "2001:db8:2b::/48",
+   "native": "lab-a",
+   "current": "lab-a",
+   "recommended": "lab-b",
+   "action": "improve",
+   "in_rib": true,
+   "next_hop": "192.0.2.1",
+   "rib_provider": "lab-a",
+   "probes": [
+    {
+     "provider": "lab-a",
+     "prefix": "2001:db8:2b::/48",
+     "prober": "icmp",
+     "ok": true,
+     "loss_pct": 3.0,
+     "rtt_min_ms": 61.0,
+     "rtt_avg_ms": 63.0,
+     "rtt_max_ms": 66.0,
+     "jitter_ms": 1.5,
+     "sent": 10,
+     "received": 10
+    },
+    {
+     "provider": "lab-b",
+     "prefix": "2001:db8:2b::/48",
+     "prober": "icmp",
+     "ok": true,
+     "loss_pct": 0.0,
+     "rtt_min_ms": 8.0,
+     "rtt_avg_ms": 10.0,
+     "rtt_max_ms": 12.0,
+     "jitter_ms": 0.5,
+     "sent": 10,
+     "received": 10
+    }
+   ],
+   "exit_loss_pct": 3.0,
+   "exit_rtt_ms": 63.0,
+   "paths": [
+    {
+     "provider": "lab-a",
+     "next_hop": "192.0.2.1",
+     "as_path": [
+      64496,
+      64501
+     ],
+     "selected": true,
+     "med": 100,
+     "med_from": "iBGP 192.0.2.254, lab-a",
+     "via": "bilateral"
+    }
+   ],
+   "gain": -13.0,
+   "reason": "lab-b beats lab-a on loss"
+  },
+  {
+   "prefix": "2001:db8:2c::/48",
+   "native": "lab-a",
+   "current": "lab-a",
+   "recommended": "lab-a",
+   "action": "keep",
+   "in_rib": true,
+   "next_hop": "192.0.2.1",
+   "rib_provider": "lab-a",
+   "probes": [
+    {
+     "provider": "lab-a",
+     "prefix": "2001:db8:2c::/48",
+     "prober": "icmp",
+     "ok": true,
+     "loss_pct": 0.0,
+     "rtt_min_ms": 62.0,
+     "rtt_avg_ms": 64.0,
+     "rtt_max_ms": 67.0,
+     "jitter_ms": 1.5,
+     "sent": 10,
+     "received": 10
+    },
+    {
+     "provider": "lab-b",
+     "prefix": "2001:db8:2c::/48",
+     "prober": "icmp",
+     "ok": true,
+     "loss_pct": 0.0,
+     "rtt_min_ms": 8.0,
+     "rtt_avg_ms": 10.0,
+     "rtt_max_ms": 12.0,
+     "jitter_ms": 0.5,
+     "sent": 10,
+     "received": 10
+    }
+   ],
+   "exit_loss_pct": 0.0,
+   "exit_rtt_ms": 64.0,
+   "paths": [
+    {
+     "provider": "lab-a",
+     "next_hop": "192.0.2.1",
+     "as_path": [
+      64496,
+      64502
+     ],
+     "selected": true,
+     "med": 100,
+     "med_from": "iBGP 192.0.2.254, lab-a",
+     "via": "bilateral"
+    }
+   ]
+  },
+  {
+   "prefix": "2001:db8:2d::/48",
+   "native": "lab-a",
+   "current": "lab-a",
+   "recommended": "lab-a",
+   "action": "keep",
+   "in_rib": true,
+   "next_hop": "192.0.2.1",
+   "rib_provider": "lab-a",
+   "probes": [
+    {
+     "provider": "lab-a",
+     "prefix": "2001:db8:2d::/48",
+     "prober": "icmp",
+     "ok": true,
+     "loss_pct": 1.0,
+     "rtt_min_ms": 63.0,
+     "rtt_avg_ms": 65.0,
+     "rtt_max_ms": 68.0,
+     "jitter_ms": 1.5,
+     "sent": 10,
+     "received": 10
+    },
+    {
+     "provider": "lab-b",
+     "prefix": "2001:db8:2d::/48",
+     "prober": "icmp",
+     "ok": true,
+     "loss_pct": 0.0,
+     "rtt_min_ms": 8.0,
+     "rtt_avg_ms": 10.0,
+     "rtt_max_ms": 12.0,
+     "jitter_ms": 0.5,
+     "sent": 10,
+     "received": 10
+    }
+   ],
+   "exit_loss_pct": 1.0,
+   "exit_rtt_ms": 65.0,
+   "paths": [
+    {
+     "provider": "lab-a",
+     "next_hop": "192.0.2.1",
+     "as_path": [
+      64496,
+      64500
+     ],
+     "selected": true,
+     "med": 100,
+     "med_from": "iBGP 192.0.2.254, lab-a",
+     "via": "bilateral"
+    }
+   ]
+  },
+  {
+   "prefix": "2001:db8:2e::/48",
+   "native": "lab-a",
+   "current": "lab-a",
+   "recommended": "lab-b",
+   "action": "improve",
+   "in_rib": true,
+   "next_hop": "192.0.2.1",
+   "rib_provider": "lab-a",
+   "probes": [
+    {
+     "provider": "lab-a",
+     "prefix": "2001:db8:2e::/48",
+     "prober": "icmp",
+     "ok": true,
+     "loss_pct": 2.0,
+     "rtt_min_ms": 64.0,
+     "rtt_avg_ms": 66.0,
+     "rtt_max_ms": 69.0,
+     "jitter_ms": 1.5,
+     "sent": 10,
+     "received": 10
+    },
+    {
+     "provider": "lab-b",
+     "prefix": "2001:db8:2e::/48",
+     "prober": "icmp",
+     "ok": true,
+     "loss_pct": 0.0,
+     "rtt_min_ms": 8.0,
+     "rtt_avg_ms": 10.0,
+     "rtt_max_ms": 12.0,
+     "jitter_ms": 0.5,
+     "sent": 10,
+     "received": 10
+    }
+   ],
+   "exit_loss_pct": 2.0,
+   "exit_rtt_ms": 66.0,
+   "paths": [
+    {
+     "provider": "lab-a",
+     "next_hop": "192.0.2.1",
+     "as_path": [
+      64496,
+      64501
+     ],
+     "selected": true,
+     "med": 100,
+     "med_from": "iBGP 192.0.2.254, lab-a",
+     "via": "bilateral"
+    }
+   ],
+   "gain": -16.0,
+   "reason": "lab-b beats lab-a on loss"
+  },
+  {
+   "prefix": "2001:db8:2f::/48",
+   "native": "lab-a",
+   "current": "lab-a",
+   "recommended": "lab-a",
+   "action": "keep",
+   "in_rib": true,
+   "next_hop": "192.0.2.1",
+   "rib_provider": "lab-a",
+   "probes": [
+    {
+     "provider": "lab-a",
+     "prefix": "2001:db8:2f::/48",
+     "prober": "icmp",
+     "ok": true,
+     "loss_pct": 3.0,
+     "rtt_min_ms": 65.0,
+     "rtt_avg_ms": 67.0,
+     "rtt_max_ms": 70.0,
+     "jitter_ms": 1.5,
+     "sent": 10,
+     "received": 10
+    },
+    {
+     "provider": "lab-b",
+     "prefix": "2001:db8:2f::/48",
+     "prober": "icmp",
+     "ok": true,
+     "loss_pct": 0.0,
+     "rtt_min_ms": 8.0,
+     "rtt_avg_ms": 10.0,
+     "rtt_max_ms": 12.0,
+     "jitter_ms": 0.5,
+     "sent": 10,
+     "received": 10
+    }
+   ],
+   "exit_loss_pct": 3.0,
+   "exit_rtt_ms": 67.0,
+   "paths": [
+    {
+     "provider": "lab-a",
+     "next_hop": "192.0.2.1",
+     "as_path": [
+      64496,
+      64502
+     ],
+     "selected": true,
+     "med": 100,
+     "med_from": "iBGP 192.0.2.254, lab-a",
+     "via": "bilateral"
+    }
+   ]
+  },
+  {
+   "prefix": "2001:db8:30::/48",
+   "native": "lab-a",
+   "current": "lab-a",
+   "recommended": "lab-a",
+   "action": "keep",
+   "in_rib": true,
+   "next_hop": "192.0.2.1",
+   "rib_provider": "lab-a",
+   "probes": [
+    {
+     "provider": "lab-a",
+     "prefix": "2001:db8:30::/48",
+     "prober": "icmp",
+     "ok": true,
+     "loss_pct": 0.0,
+     "rtt_min_ms": 66.0,
+     "rtt_avg_ms": 68.0,
+     "rtt_max_ms": 71.0,
+     "jitter_ms": 1.5,
+     "sent": 10,
+     "received": 10
+    },
+    {
+     "provider": "lab-b",
+     "prefix": "2001:db8:30::/48",
+     "prober": "icmp",
+     "ok": true,
+     "loss_pct": 0.0,
+     "rtt_min_ms": 8.0,
+     "rtt_avg_ms": 10.0,
+     "rtt_max_ms": 12.0,
+     "jitter_ms": 0.5,
+     "sent": 10,
+     "received": 10
+    }
+   ],
+   "exit_loss_pct": 0.0,
+   "exit_rtt_ms": 68.0,
+   "paths": [
+    {
+     "provider": "lab-a",
+     "next_hop": "192.0.2.1",
+     "as_path": [
+      64496,
+      64500
+     ],
+     "selected": true,
+     "med": 100,
+     "med_from": "iBGP 192.0.2.254, lab-a",
+     "via": "bilateral"
+    }
+   ]
+  },
+  {
+   "prefix": "2001:db8:31::/48",
+   "native": "lab-a",
+   "current": "lab-a",
+   "recommended": "lab-b",
+   "action": "improve",
+   "in_rib": true,
+   "next_hop": "192.0.2.1",
+   "rib_provider": "lab-a",
+   "probes": [
+    {
+     "provider": "lab-a",
+     "prefix": "2001:db8:31::/48",
+     "prober": "icmp",
+     "ok": true,
+     "loss_pct": 1.0,
+     "rtt_min_ms": 67.0,
+     "rtt_avg_ms": 69.0,
+     "rtt_max_ms": 72.0,
+     "jitter_ms": 1.5,
+     "sent": 10,
+     "received": 10
+    },
+    {
+     "provider": "lab-b",
+     "prefix": "2001:db8:31::/48",
+     "prober": "icmp",
+     "ok": true,
+     "loss_pct": 0.0,
+     "rtt_min_ms": 8.0,
+     "rtt_avg_ms": 10.0,
+     "rtt_max_ms": 12.0,
+     "jitter_ms": 0.5,
+     "sent": 10,
+     "received": 10
+    }
+   ],
+   "exit_loss_pct": 1.0,
+   "exit_rtt_ms": 69.0,
+   "paths": [
+    {
+     "provider": "lab-a",
+     "next_hop": "192.0.2.1",
+     "as_path": [
+      64496,
+      64501
+     ],
+     "selected": true,
+     "med": 100,
+     "med_from": "iBGP 192.0.2.254, lab-a",
+     "via": "bilateral"
+    }
+   ],
+   "gain": -19.0,
+   "reason": "lab-b beats lab-a on loss"
+  },
+  {
+   "prefix": "2001:db8:32::/48",
+   "native": "lab-a",
+   "current": "lab-a",
+   "recommended": "lab-a",
+   "action": "keep",
+   "in_rib": true,
+   "next_hop": "192.0.2.1",
+   "rib_provider": "lab-a",
+   "probes": [
+    {
+     "provider": "lab-a",
+     "prefix": "2001:db8:32::/48",
+     "prober": "icmp",
+     "ok": true,
+     "loss_pct": 2.0,
+     "rtt_min_ms": 68.0,
+     "rtt_avg_ms": 70.0,
+     "rtt_max_ms": 73.0,
+     "jitter_ms": 1.5,
+     "sent": 10,
+     "received": 10
+    },
+    {
+     "provider": "lab-b",
+     "prefix": "2001:db8:32::/48",
+     "prober": "icmp",
+     "ok": true,
+     "loss_pct": 0.0,
+     "rtt_min_ms": 8.0,
+     "rtt_avg_ms": 10.0,
+     "rtt_max_ms": 12.0,
+     "jitter_ms": 0.5,
+     "sent": 10,
+     "received": 10
+    }
+   ],
+   "exit_loss_pct": 2.0,
+   "exit_rtt_ms": 70.0,
+   "paths": [
+    {
+     "provider": "lab-a",
+     "next_hop": "192.0.2.1",
+     "as_path": [
+      64496,
+      64502
+     ],
+     "selected": true,
+     "med": 100,
+     "med_from": "iBGP 192.0.2.254, lab-a",
+     "via": "bilateral"
+    }
+   ]
+  }
+ ],
+ "total": 100000,
+ "measured": 100000,
+ "offset": 25,
+ "limit": 25,
+ "asn_map": [
+  {
+   "asn": 64500,
+   "sites": [
+    {
+     "provider": "lab-a",
+     "next_hop": "192.0.2.1",
+     "prefixes": [
+      "2001:db8:1::/48",
+      "2001:db8:2::/48",
+      "2001:db8:3::/48",
+      "2001:db8:4::/48",
+      "2001:db8:5::/48",
+      "2001:db8:6::/48",
+      "2001:db8:7::/48",
+      "2001:db8:8::/48"
+     ],
+     "count": 33334
+    }
+   ]
+  },
+  {
+   "asn": 64501,
+   "sites": [
+    {
+     "provider": "lab-a",
+     "next_hop": "192.0.2.1",
+     "prefixes": [
+      "2001:db8:2::/48"
+     ],
+     "count": 1
+    }
+   ]
+  }
+ ],
+ "asn_total": 1234
+}

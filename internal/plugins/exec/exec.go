@@ -1,0 +1,251 @@
+// Package exec implements the out-of-process "exec" plugin type for
+// probers, target sources, and notifiers.
+//
+// Protocol (packeteer-exec/v1): for every call Packeteer starts the
+// configured command, writes ONE JSON request to its stdin, closes stdin,
+// and reads ONE JSON response from stdout. Stderr is logged. A non-zero
+// exit status, a timeout, or {"error": "..."} is a failure. See
+// docs/PLUGINS.md for the message shapes.
+//
+// Exec plugins can never be announcers.
+package exec
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	osexec "os/exec"
+	"strings"
+	"time"
+
+	"github.com/GrandArcher/Packeteer/internal/plugins/oop"
+	"github.com/GrandArcher/Packeteer/pkg/plugin"
+)
+
+// TypeName is the plugin type used in config.
+const TypeName = oop.ExecType
+
+// Protocol is the protocol identifier sent with every request.
+const Protocol = "packeteer-exec/v1"
+
+const maxOutput = 1 << 20 // 1 MiB of stdout/stderr per call
+
+func init() {
+	plugin.Probers.Register(TypeName, func(c plugin.Config, e plugin.Env) (plugin.Prober, error) {
+		r, err := newRunner(plugin.KindProber, c, e)
+		if err != nil {
+			return nil, err
+		}
+		return &Prober{r: r}, nil
+	})
+	plugin.Sources.Register(TypeName, func(c plugin.Config, e plugin.Env) (plugin.TargetSource, error) {
+		r, err := newRunner(plugin.KindSource, c, e)
+		if err != nil {
+			return nil, err
+		}
+		return &Source{r: r}, nil
+	})
+	plugin.Notifiers.Register(TypeName, func(c plugin.Config, e plugin.Env) (plugin.Notifier, error) {
+		r, err := newRunner(plugin.KindNotifier, c, e)
+		if err != nil {
+			return nil, err
+		}
+		return &Notifier{r: r}, nil
+	})
+}
+
+// Config is the exec plugin's config block.
+type Config struct {
+	oop.Launch `yaml:",inline"`
+
+	// EventFilter (events, min_severity, rate_limit, rate_window) is
+	// accepted only for notifiers.
+	plugin.EventFilter `yaml:",inline"`
+}
+
+type request struct {
+	Protocol string `json:"protocol"`
+	Kind     string `json:"kind"`
+	Method   string `json:"method"`
+	Name     string `json:"name"`
+	Config   any    `json:"config,omitempty"`
+	Params   any    `json:"params,omitempty"`
+}
+
+type response struct {
+	Result json.RawMessage `json:"result"`
+	Error  string          `json:"error"`
+}
+
+type runner struct {
+	kind plugin.Kind
+	name string
+	oop.Spec
+	log *slog.Logger
+	// checkOnly runners were built by a config check; they never run
+	// the command.
+	checkOnly bool
+}
+
+func newRunner(kind plugin.Kind, c plugin.Config, e plugin.Env) (*runner, error) {
+	var cfg Config
+	if err := c.Decode(&cfg); err != nil {
+		return nil, err
+	}
+	spec, err := oop.NewSpec(kind, e, cfg.Launch, cfg.EventFilter)
+	if err != nil {
+		return nil, err
+	}
+	logger := e.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	r := &runner{kind: kind, name: e.Name, Spec: spec, log: logger, checkOnly: e.CheckOnly}
+	if e.CheckOnly {
+		// A config check (the config editor) never runs the command:
+		// the candidate file is untrusted until it is the mounted file.
+		return r, nil
+	}
+
+	// Init handshake: lets the plugin validate its own config at load time.
+	ctx, cancel := context.WithTimeout(context.Background(), r.Timeout)
+	defer cancel()
+	if err := r.call(ctx, "init", nil, nil); err != nil {
+		return nil, fmt.Errorf("init: %w", err)
+	}
+	return r, nil
+}
+
+type limitedBuffer struct {
+	bytes.Buffer
+	overflow bool
+}
+
+func (b *limitedBuffer) Write(p []byte) (int, error) {
+	if room := maxOutput - b.Len(); len(p) > room {
+		b.overflow = true
+		if room > 0 {
+			b.Buffer.Write(p[:room])
+		}
+		return len(p), nil
+	}
+	return b.Buffer.Write(p)
+}
+
+// call runs one request/response exchange and decodes the result into out.
+func (r *runner) call(ctx context.Context, method string, params, out any) error {
+	if r.checkOnly {
+		return fmt.Errorf("%s: plugin was built for a config check and does not run", method)
+	}
+	ctx, cancel := context.WithTimeout(ctx, r.Timeout)
+	defer cancel()
+	in, err := json.Marshal(request{Protocol: Protocol, Kind: string(r.kind), Method: method,
+		Name: r.name, Config: r.Config, Params: params})
+	if err != nil {
+		return err
+	}
+	cmd := osexec.CommandContext(ctx, r.Path, r.Args...)
+	cmd.Env = r.Env
+	cmd.Stdin = bytes.NewReader(in)
+	var stdout, stderr limitedBuffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	cmd.WaitDelay = time.Second
+	runErr := cmd.Run()
+	if s := strings.TrimSpace(stderr.String()); s != "" {
+		r.log.Debug("exec plugin stderr", "method", method, "stderr", s)
+	}
+	if ctx.Err() != nil {
+		return fmt.Errorf("%s: timed out after %s", method, r.Timeout)
+	}
+	if runErr != nil {
+		return fmt.Errorf("%s: %v: %s", method, runErr, tail(stderr.String()))
+	}
+	if stdout.overflow {
+		return fmt.Errorf("%s: response larger than %d bytes", method, maxOutput)
+	}
+	var resp response
+	dec := json.NewDecoder(&stdout)
+	if err := dec.Decode(&resp); err != nil {
+		if errors.Is(err, io.EOF) {
+			return fmt.Errorf("%s: plugin wrote no response", method)
+		}
+		return fmt.Errorf("%s: invalid JSON response: %w", method, err)
+	}
+	if resp.Error != "" {
+		return fmt.Errorf("%s: plugin error: %s", method, resp.Error)
+	}
+	if out != nil {
+		if len(resp.Result) == 0 || string(resp.Result) == "null" {
+			return fmt.Errorf("%s: response has no result", method)
+		}
+		if err := json.Unmarshal(resp.Result, out); err != nil {
+			return fmt.Errorf("%s: bad result: %w", method, err)
+		}
+	}
+	return nil
+}
+
+func tail(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) > 512 {
+		s = "..." + s[len(s)-512:]
+	}
+	return s
+}
+
+// ---- Prober ----
+
+// Prober is an exec-backed plugin.Prober.
+type Prober struct {
+	plugin.Base
+	r *runner
+}
+
+// Probe implements plugin.Prober.
+func (p *Prober) Probe(ctx context.Context, req plugin.ProbeRequest) (plugin.ProbeResult, error) {
+	var res oop.ProbeResult
+	if err := p.r.call(ctx, "probe", oop.NewProbeParams(req), &res); err != nil {
+		return plugin.ProbeResult{}, err
+	}
+	return res.Result()
+}
+
+// ---- Target source ----
+
+// Source is an exec-backed plugin.TargetSource.
+type Source struct {
+	plugin.Base
+	r *runner
+}
+
+// Targets implements plugin.TargetSource.
+func (s *Source) Targets(ctx context.Context) ([]plugin.Target, error) {
+	var res oop.TargetsResult
+	if err := s.r.call(ctx, "targets", nil, &res); err != nil {
+		return nil, err
+	}
+	return res.Parse()
+}
+
+// ---- Notifier ----
+
+// Notifier is an exec-backed plugin.Notifier.
+type Notifier struct {
+	plugin.Base
+	r *runner
+}
+
+// EventGate implements plugin.Gated.
+func (n *Notifier) EventGate() *plugin.EventGate { return n.r.Gate }
+
+// Notify implements plugin.Notifier.
+func (n *Notifier) Notify(ctx context.Context, e plugin.Event) error {
+	if !n.r.Gate.Match(e) {
+		return nil
+	}
+	return n.r.call(ctx, "notify", e, nil)
+}

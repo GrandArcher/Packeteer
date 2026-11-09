@@ -1,0 +1,9 @@
+# x-a at 60 of its own 100 is under its own commit. With x-b at 60 in
+# POP B, carrier X is at 120 of its shared 100.
+providers:
+  - name: x-a
+    commit_mbps: 100
+    usage_mbps: 60
+  - name: y-a
+    commit_mbps: 100
+    usage_mbps: 10

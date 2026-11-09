@@ -1,0 +1,766 @@
+// Package bmp is a BMP monitoring station (RFC 7854, Loc-RIB per RFC 9069).
+// Edge routers connect to it and stream their post-policy Adj-RIB-In, so
+// Packeteer sees every provider's accepted paths, including ones the router
+// did not select, without a full iBGP feed. Pre-policy Adj-RIB-In is never
+// read: it holds routes the router's import policy rejects, and those must
+// not make a prefix learned. It is learn-only: it never sends BGP, never announces,
+// and only feeds the RIB view through the plugin.RIBSource sink.
+//
+// Only configured router addresses may connect. When a router's session
+// ends (TCP close, termination, a read error, or Stop) every path from that
+// router is dropped; so is a session that stays silent past idle_timeout,
+// and TCP keepalive notices a dead router within about keepAliveBound. A
+// peer whose messages cannot be decoded is treated as down and its paths
+// are dropped until the router sends a new peer up.
+//
+// A peer that negotiated add-path (RFC 7911) with the router, such as an
+// IX route server sending every member's path, is decoded with path
+// identifiers: each of its paths for a prefix is kept, and a withdraw
+// removes only the path with the same identifier.
+package bmp
+
+import (
+	"context"
+	"encoding/binary"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"net"
+	"net/netip"
+	"runtime/debug"
+	"slices"
+	"strconv"
+	"sync"
+	"time"
+
+	"github.com/GrandArcher/Packeteer/pkg/plugin"
+	"github.com/osrg/gobgp/v3/pkg/packet/bgp"
+	gobmp "github.com/osrg/gobgp/v3/pkg/packet/bmp"
+)
+
+// Defaults and bounds.
+const (
+	// DefaultPort is the IANA BMP port.
+	DefaultPort = gobmp.BMP_DEFAULT_PORT
+	// maxMessage bounds one BMP message: a 42-byte peer header plus a BGP
+	// extended message (RFC 8654) with room for peer up's two OPENs.
+	maxMessage = 1 << 18
+	// TCP keepalive: probe after keepAliveIdle of silence, every
+	// keepAliveInterval, and drop the session after keepAliveCount
+	// unanswered probes. A dead router is noticed within keepAliveBound.
+	keepAliveIdle     = 15 * time.Second
+	keepAliveInterval = 5 * time.Second
+	keepAliveCount    = 3
+	keepAliveBound    = keepAliveIdle + keepAliveCount*keepAliveInterval
+	// minIdleTimeout keeps idle_timeout above a sane statistics interval.
+	minIdleTimeout = 10 * time.Second
+)
+
+// Config is the plugin config.
+type Config struct {
+	// Listen is host:port for the station (default "127.0.0.1:11019").
+	// BMP has no authentication, so binding every interface is opt-in.
+	Listen string `yaml:"listen"`
+	// Routers lists the router addresses allowed to connect. Required.
+	Routers []string `yaml:"routers"`
+	// Policy is which Adj-RIB-In to read. Only post (the default) is
+	// accepted: pre-policy paths include routes the router rejects.
+	Policy string `yaml:"policy"`
+	// LocRIB reads Loc-RIB (RFC 9069) messages as the router's selected
+	// path (default true).
+	LocRIB *bool `yaml:"loc_rib"`
+	// IdleTimeout drops a router's session (and its paths) when no BMP
+	// message arrives for this long. 0 (default) leaves it to TCP
+	// keepalive. Set it above the router's statistics interval.
+	IdleTimeout time.Duration `yaml:"idle_timeout"`
+}
+
+// Station is the plugin.
+type Station struct {
+	listen  string
+	routers map[netip.Addr]bool
+	locRIB  bool
+	// adjOut also decodes post-policy Adj-RIB-Out (RFC 8671). Only the
+	// leak source sets it: the RIB view never reads routes a router sends.
+	adjOut bool
+	idle   time.Duration
+	log    *slog.Logger
+
+	mu    sync.Mutex
+	sink  func(plugin.RIBEvent)
+	ln    net.Listener
+	conns map[netip.Addr]*session
+	wg    sync.WaitGroup
+	done  bool
+}
+
+type session struct {
+	conn net.Conn
+	done chan struct{}
+}
+
+func init() {
+	plugin.RIBSources.Register("bmp", New)
+}
+
+// New validates the config. It does not listen.
+func New(c plugin.Config, env plugin.Env) (plugin.RIBSource, error) {
+	var cfg Config
+	if err := c.Decode(&cfg); err != nil {
+		return nil, err
+	}
+	s := &Station{listen: cfg.Listen, routers: map[netip.Addr]bool{}, locRIB: true, log: env.Logger,
+		conns: map[netip.Addr]*session{}}
+	if s.log == nil {
+		s.log = slog.Default()
+	}
+	if s.listen == "" {
+		s.listen = loopbackListen(DefaultPort)
+	}
+	if err := checkListen(s.listen); err != nil {
+		return nil, err
+	}
+	if len(cfg.Routers) == 0 {
+		return nil, errors.New("bmp: routers is required (addresses allowed to connect)")
+	}
+	addrs, err := parseRouters("routers", cfg.Routers)
+	if err != nil {
+		return nil, err
+	}
+	for _, a := range addrs {
+		s.routers[a] = true
+	}
+	switch cfg.Policy {
+	case "", "post":
+	case "pre":
+		return nil, errors.New("bmp: policy pre is not supported: pre-policy Adj-RIB-In includes routes the router's import policy rejects; use post (the default) and have the router send post-policy")
+	default:
+		return nil, fmt.Errorf("bmp: policy %q is invalid (want post)", cfg.Policy)
+	}
+	if cfg.LocRIB != nil {
+		s.locRIB = *cfg.LocRIB
+	}
+	if cfg.IdleTimeout < 0 || (cfg.IdleTimeout > 0 && cfg.IdleTimeout < minIdleTimeout) {
+		return nil, fmt.Errorf("bmp: idle_timeout %s: want 0 (off) or at least %s", cfg.IdleTimeout, minIdleTimeout)
+	}
+	s.idle = cfg.IdleTimeout
+	return s, nil
+}
+
+// loopbackListen is the default listen address for port.
+func loopbackListen(port int) string {
+	return net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
+}
+
+// checkListen validates a host:port listen address.
+func checkListen(listen string) error {
+	host, port, err := net.SplitHostPort(listen)
+	if err != nil {
+		return fmt.Errorf("bmp: listen %q: %w", listen, err)
+	}
+	if n, err := strconv.Atoi(port); err != nil || n < 0 || n > 65535 {
+		return fmt.Errorf("bmp: listen %q: port must be 0-65535", listen)
+	}
+	if host != "" {
+		if _, err := netip.ParseAddr(host); err != nil {
+			return fmt.Errorf("bmp: listen %q: host must be an IP address", listen)
+		}
+	}
+	return nil
+}
+
+// parseRouters parses a list of router addresses and rejects duplicates.
+func parseRouters(field string, list []string) ([]netip.Addr, error) {
+	var out []netip.Addr
+	for i, r := range list {
+		a, err := netip.ParseAddr(r)
+		if err != nil {
+			return nil, fmt.Errorf("bmp: %s[%d]: %q is not an IP address", field, i, r)
+		}
+		a = a.Unmap()
+		if slices.Contains(out, a) {
+			return nil, fmt.Errorf("bmp: %s[%d]: duplicate %s", field, i, a)
+		}
+		out = append(out, a)
+	}
+	return out, nil
+}
+
+// SetRIBSink implements plugin.RIBSource.
+func (s *Station) SetRIBSink(fn func(plugin.RIBEvent)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sink = fn
+}
+
+// sessions is the number of routers with an open session.
+func (s *Station) sessions() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.conns)
+}
+
+// Addr is the bound listener address, once started.
+func (s *Station) Addr() net.Addr {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.ln == nil {
+		return nil
+	}
+	return s.ln.Addr()
+}
+
+// Start listens and accepts router sessions in the background.
+func (s *Station) Start(context.Context) error {
+	ln, err := net.Listen("tcp", s.listen)
+	if err != nil {
+		return fmt.Errorf("bmp: listen: %w", err)
+	}
+	s.mu.Lock()
+	s.ln = ln
+	s.done = false
+	s.mu.Unlock()
+	s.log.Info("bmp station listening", "addr", ln.Addr().String())
+	s.wg.Add(1)
+	go s.accept(ln)
+	return nil
+}
+
+// Stop closes the listener and every session. Each session's paths are
+// dropped (RIBRouterDown) before Stop returns.
+func (s *Station) Stop(ctx context.Context) error {
+	s.mu.Lock()
+	s.done = true
+	if s.ln != nil {
+		_ = s.ln.Close()
+	}
+	for _, c := range s.conns {
+		_ = c.conn.Close()
+	}
+	s.mu.Unlock()
+	ch := make(chan struct{})
+	go func() { s.wg.Wait(); close(ch) }()
+	select {
+	case <-ch:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (s *Station) accept(ln net.Listener) {
+	defer s.wg.Done()
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			if !errors.Is(err, net.ErrClosed) {
+				s.log.Warn("bmp accept", "err", err)
+			}
+			return
+		}
+		ap, err := netip.ParseAddrPort(conn.RemoteAddr().String())
+		router := ap.Addr().Unmap()
+		if err != nil || !s.routers[router] {
+			s.log.Warn("bmp: refusing session from an unlisted address", "remote", conn.RemoteAddr().String())
+			_ = conn.Close()
+			continue
+		}
+		if tc, ok := conn.(*net.TCPConn); ok {
+			_ = tc.SetKeepAliveConfig(net.KeepAliveConfig{Enable: true, Idle: keepAliveIdle,
+				Interval: keepAliveInterval, Count: keepAliveCount})
+		}
+		s.mu.Lock()
+		if s.done {
+			s.mu.Unlock()
+			_ = conn.Close()
+			return
+		}
+		old := s.conns[router]
+		sess := &session{conn: conn, done: make(chan struct{})}
+		s.conns[router] = sess
+		s.wg.Add(1)
+		s.mu.Unlock()
+		go func() {
+			defer s.wg.Done()
+			if old != nil {
+				// A router reconnecting replaces its old session. The old
+				// one drops its paths before the new one reports any.
+				_ = old.conn.Close()
+				<-old.done
+			}
+			s.serve(router, sess)
+		}()
+	}
+}
+
+func (s *Station) emit(ev plugin.RIBEvent) {
+	s.mu.Lock()
+	fn := s.sink
+	s.mu.Unlock()
+	if fn != nil {
+		fn(ev)
+	}
+}
+
+func (s *Station) serve(router netip.Addr, sess *session) {
+	defer close(sess.done)
+	defer func() {
+		s.mu.Lock()
+		if s.conns[router] == sess {
+			delete(s.conns, router)
+		}
+		s.mu.Unlock()
+	}()
+	defer s.emit(plugin.RIBEvent{Kind: plugin.RIBRouterDown, Router: router})
+	defer sess.conn.Close()
+	s.log.Info("bmp session up", "router", router)
+	d := newDecoder(router, s.locRIB, s.log)
+	d.adjOut = s.adjOut
+	var r io.Reader = sess.conn
+	if s.idle > 0 {
+		r = &idleReader{conn: sess.conn, idle: s.idle}
+	}
+	err := readMessages(r, func(msg []byte) error {
+		evs, stop, err := s.decode(d, router, msg)
+		if err != nil {
+			return err
+		}
+		for _, ev := range evs {
+			s.emit(ev)
+		}
+		if stop {
+			return io.EOF
+		}
+		return nil
+	})
+	// readMessages only returns on an error, so EOF and a closed conn are
+	// the clean ends.
+	if !errors.Is(err, io.EOF) && !errors.Is(err, net.ErrClosed) {
+		s.log.Warn("bmp session ended", "router", router, "err", err)
+		return
+	}
+	s.log.Info("bmp session down", "router", router)
+}
+
+// decode runs the decoder on one message. A panic in it ends only this
+// session, whose decoder state is dropped with it (RIBRouterDown follows, as
+// for a read error). The sink is never called under this recover: a panic
+// there may leave the RIB view locked, and the process must die and withdraw
+// its routes rather than run on a frozen view.
+func (s *Station) decode(d *decoder, router netip.Addr, msg []byte) (evs []plugin.RIBEvent, stop bool, err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			s.log.Error("bmp: panic decoding a message; dropping router", "router", router, "panic", p, "stack", string(debug.Stack()))
+			evs, stop, err = nil, false, fmt.Errorf("bmp: panic decoding a message: %v", p)
+		}
+	}()
+	evs, stop = d.message(msg)
+	return evs, stop, nil
+}
+
+// idleReader sets a read deadline before every read, so a session with no
+// traffic for idle ends with a timeout error.
+type idleReader struct {
+	conn net.Conn
+	idle time.Duration
+}
+
+func (r *idleReader) Read(b []byte) (int, error) {
+	if err := r.conn.SetReadDeadline(time.Now().Add(r.idle)); err != nil {
+		return 0, err
+	}
+	return r.conn.Read(b)
+}
+
+// readMessages reads whole BMP messages from r and hands each to fn. A bad
+// version or length ends the stream: framing cannot be recovered.
+func readMessages(r io.Reader, fn func([]byte) error) error {
+	hdr := make([]byte, gobmp.BMP_HEADER_SIZE)
+	for {
+		if _, err := io.ReadFull(r, hdr); err != nil {
+			if errors.Is(err, io.ErrUnexpectedEOF) {
+				return fmt.Errorf("bmp: truncated header: %w", err)
+			}
+			return err
+		}
+		if hdr[0] != gobmp.BMP_VERSION {
+			return fmt.Errorf("bmp: unsupported version %d", hdr[0])
+		}
+		n := binary.BigEndian.Uint32(hdr[1:5])
+		if n < gobmp.BMP_HEADER_SIZE || n > maxMessage {
+			return fmt.Errorf("bmp: bad message length %d", n)
+		}
+		msg := make([]byte, n)
+		copy(msg, hdr)
+		if _, err := io.ReadFull(r, msg[gobmp.BMP_HEADER_SIZE:]); err != nil {
+			return fmt.Errorf("bmp: truncated message: %w", err)
+		}
+		if err := fn(msg); err != nil {
+			return err
+		}
+	}
+}
+
+// decoder turns one router's BMP messages into RIB events.
+type decoder struct {
+	router netip.Addr
+	locRIB bool
+	adjOut bool
+	log    *slog.Logger
+	// skip holds peers whose routes are ignored until the next peer up.
+	skip map[plugin.RIBPeer]string
+	// addPath holds, per peer, the families whose NLRI carry add-path
+	// identifiers in the routes the router receives. Set at peer up.
+	addPath map[plugin.RIBPeer]map[bgp.RouteFamily]bgp.BGPAddPathMode
+}
+
+func newDecoder(router netip.Addr, locRIB bool, log *slog.Logger) *decoder {
+	return &decoder{router: router, locRIB: locRIB, log: log, skip: map[plugin.RIBPeer]string{},
+		addPath: map[plugin.RIBPeer]map[bgp.RouteFamily]bgp.BGPAddPathMode{}}
+}
+
+// options gives the parser the add-path families negotiated for the peer
+// in a per-peer header. Only Adj-RIB-In routes use them: those are routes
+// the router received. The Loc-RIB and Adj-RIB-Out are never add-path
+// decoded here.
+func (d *decoder) options(h gobmp.BMPPeerHeader) []*bgp.MarshallingOption {
+	if h.PeerType != gobmp.BMP_PEER_TYPE_GLOBAL || h.IsAdjRIBOut() {
+		return nil
+	}
+	peer, ok := d.peer(h, false)
+	if !ok {
+		return nil
+	}
+	if m := d.addPath[peer]; len(m) > 0 {
+		return []*bgp.MarshallingOption{{AddPath: m}}
+	}
+	return nil
+}
+
+// message decodes one BMP message. stop is true on a termination message.
+func (d *decoder) message(raw []byte) (evs []plugin.RIBEvent, stop bool) {
+	msg, err := gobmp.ParseBMPMessageWithOptions(raw, d.options)
+	// The parser recovers its own panics (a body shorter than its fields)
+	// and then returns the partly decoded message with the error. Only a
+	// route monitoring error is handled below; any other type would be
+	// read as if it were whole, such as a peer up with no OPENs.
+	if msg == nil || (err != nil && msg.Header.Type != gobmp.BMP_MSG_ROUTE_MONITORING) {
+		return d.undecodable(raw, err), false
+	}
+	switch msg.Header.Type {
+	case gobmp.BMP_MSG_INITIATION:
+		return nil, false
+	case gobmp.BMP_MSG_TERMINATION:
+		return nil, true
+	case gobmp.BMP_MSG_ROUTE_MIRRORING:
+		return nil, false
+	}
+	peer, ok := d.peer(msg.PeerHeader, msg.Header.Type == gobmp.BMP_MSG_ROUTE_MONITORING)
+	if !ok {
+		d.log.Debug("bmp: skipping table", "router", d.router, "type", msg.Header.Type, "peer_type", msg.PeerHeader.PeerType, "flags", msg.PeerHeader.Flags)
+		return nil, false
+	}
+	ev := plugin.RIBEvent{Router: d.router, Peer: peer}
+	switch body := msg.Body.(type) {
+	case *gobmp.BMPPeerUpNotification:
+		delete(d.skip, peer)
+		ap := addPath(body)
+		if len(ap) > 0 {
+			d.addPath[peer] = ap
+		} else {
+			delete(d.addPath, peer)
+		}
+		d.log.Info("bmp peer up", "router", d.router, "peer", peer.Address, "asn", peer.ASN, "loc_rib", peer.LocRIB, "add_path", len(ap) > 0)
+		ev.Kind = plugin.RIBPeerUp
+		return []plugin.RIBEvent{ev}, false
+	case *gobmp.BMPPeerDownNotification:
+		delete(d.skip, peer)
+		delete(d.addPath, peer)
+		reason := peerDownReason(body)
+		d.log.Info("bmp peer down", "router", d.router, "peer", peer.Address, "loc_rib", peer.LocRIB, "reason", reason)
+		ev.Kind = plugin.RIBPeerDown
+		ev.Reason = reason
+		return []plugin.RIBEvent{ev}, false
+	case *gobmp.BMPStatisticsReport:
+		// The Adj-RIB-In count is the router's own tally for the session
+		// (RFC 7854 type 7). Loc-RIB counts are not a per-peer count.
+		if peer.LocRIB {
+			return nil, false
+		}
+		for _, t := range body.Stats {
+			s, ok := t.(*gobmp.BMPStatsTLV64)
+			if !ok || s.Type != gobmp.BMP_STAT_TYPE_ADJ_RIB_IN {
+				continue
+			}
+			ev.Kind = plugin.RIBPrefixCount
+			ev.Prefixes = int(s.Value)
+			return []plugin.RIBEvent{ev}, false
+		}
+		return nil, false
+	case *gobmp.BMPRouteMonitoring:
+		if _, skipped := d.skip[peer]; skipped {
+			return nil, false
+		}
+		if err != nil || body.BGPUpdate == nil {
+			// A path we cannot read could be a withdraw we would miss, so
+			// the whole peer is dropped until it comes up again.
+			d.skip[peer] = "decode error"
+			d.log.Warn("bmp: undecodable route monitoring; dropping peer", "router", d.router, "peer", peer.Address, "err", err)
+			ev.Kind = plugin.RIBPeerDown
+			ev.Reason = "undecodable route monitoring"
+			return []plugin.RIBEvent{ev}, false
+		}
+		upd, ok := body.BGPUpdate.Body.(*bgp.BGPUpdate)
+		if !ok {
+			return nil, false
+		}
+		ev.Kind = plugin.RIBPaths
+		ev.AdjRIBOut = msg.PeerHeader.IsAdjRIBOut()
+		ev.PostPolicy = !peer.LocRIB && !ev.AdjRIBOut
+		ev.Paths = paths(upd)
+		d.log.Debug("bmp route monitoring", "router", d.router, "peer", peer.Address, "loc_rib", peer.LocRIB, "paths", len(ev.Paths))
+		if len(ev.Paths) == 0 {
+			return nil, false
+		}
+		return []plugin.RIBEvent{ev}, false
+	}
+	return nil, false
+}
+
+// undecodable handles a message the parser rejected. A per-peer message
+// that could be a peer down or carry a withdraw drops that peer until its
+// next peer up. Other types (statistics variants, future messages) are
+// skipped; the framing is already known to be intact.
+func (d *decoder) undecodable(raw []byte, err error) []plugin.RIBEvent {
+	switch raw[5] {
+	case gobmp.BMP_MSG_ROUTE_MONITORING, gobmp.BMP_MSG_PEER_UP_NOTIFICATION, gobmp.BMP_MSG_PEER_DOWN_NOTIFICATION:
+	default:
+		d.log.Debug("bmp: skipping message", "router", d.router, "type", raw[5], "err", err)
+		return nil
+	}
+	if len(raw) < gobmp.BMP_HEADER_SIZE+gobmp.BMP_PEER_HEADER_SIZE {
+		d.log.Warn("bmp: short per-peer message", "router", d.router, "type", raw[5])
+		return nil
+	}
+	var h gobmp.BMPPeerHeader
+	if h.DecodeFromBytes(raw[gobmp.BMP_HEADER_SIZE:]) != nil {
+		return nil
+	}
+	peer, ok := d.peer(h, raw[5] == gobmp.BMP_MSG_ROUTE_MONITORING)
+	if !ok {
+		return nil
+	}
+	d.skip[peer] = "decode error"
+	d.log.Warn("bmp: undecodable message; dropping peer", "router", d.router, "peer", peer.Address, "type", raw[5], "err", err)
+	return []plugin.RIBEvent{{Kind: plugin.RIBPeerDown, Router: d.router, Peer: peer, Reason: "undecodable message"}}
+}
+
+// peerDownReason decodes an RFC 7854 peer-down reason. When the router
+// carried the session's BGP Notification, that error code and subcode are
+// appended: a Cease subcode 1 is the peer's maximum-prefix limit, which is
+// the reason that matters for an IX session.
+func peerDownReason(b *gobmp.BMPPeerDownNotification) string {
+	var where string
+	switch b.Reason {
+	case gobmp.BMP_PEER_DOWN_REASON_LOCAL_BGP_NOTIFICATION,
+		gobmp.BMP_PEER_DOWN_REASON_LOCAL_NO_NOTIFICATION:
+		where = "local system closed"
+	case gobmp.BMP_PEER_DOWN_REASON_REMOTE_BGP_NOTIFICATION,
+		gobmp.BMP_PEER_DOWN_REASON_REMOTE_NO_NOTIFICATION:
+		where = "remote system closed"
+	case gobmp.BMP_PEER_DOWN_REASON_PEER_DE_CONFIGURED:
+		return "peer de-configured"
+	default:
+		return fmt.Sprintf("unknown reason %d", b.Reason)
+	}
+	if n := bgpNotification(b.BGPNotification); n != "" {
+		return where + ": " + n
+	}
+	return where
+}
+
+// bgpNotification names the error in a BGP Notification carried by a
+// peer-down message. Cease subcode 1 (maximum prefixes) is spelled out; the
+// rest are reported as code/subcode (RFC 4271, RFC 4486).
+func bgpNotification(m *bgp.BGPMessage) string {
+	if m == nil {
+		return ""
+	}
+	n, ok := m.Body.(*bgp.BGPNotification)
+	if !ok {
+		return ""
+	}
+	if n.ErrorCode == bgp.BGP_ERROR_CEASE && n.ErrorSubcode == bgp.BGP_ERROR_SUB_MAXIMUM_NUMBER_OF_PREFIXES_REACHED {
+		return "Cease subcode 1 (maximum number of prefixes reached)"
+	}
+	return fmt.Sprintf("notification %d/%d", n.ErrorCode, n.ErrorSubcode)
+}
+
+// peer maps a per-peer header to a RIBPeer, or false when this station
+// does not read that table (pre-policy routes, Adj-RIB-Out unless adjOut,
+// L3VPN).
+// Only route monitoring is filtered by the L and O flags: peer up and
+// peer down describe the session, and routers (FRR) send them with the
+// flags clear whichever table is monitored. A peer down must never be
+// missed, or that peer's paths would go stale.
+func (d *decoder) peer(h gobmp.BMPPeerHeader, routes bool) (plugin.RIBPeer, bool) {
+	switch h.PeerType {
+	case gobmp.BMP_PEER_TYPE_GLOBAL:
+		if routes && (!h.IsPostPolicy() || (h.IsAdjRIBOut() && !d.adjOut)) {
+			return plugin.RIBPeer{}, false
+		}
+		a, ok := netip.AddrFromSlice(h.PeerAddress)
+		if !ok {
+			return plugin.RIBPeer{}, false
+		}
+		id, _ := netip.AddrFromSlice(h.PeerBGPID.To4())
+		return plugin.RIBPeer{Address: a.Unmap(), ASN: h.PeerAS, BGPID: id}, true
+	case gobmp.BMP_PEER_TYPE_LOCAL_RIB:
+		if !d.locRIB {
+			return plugin.RIBPeer{}, false
+		}
+		return plugin.RIBPeer{LocRIB: true}, true
+	}
+	return plugin.RIBPeer{}, false
+}
+
+// addPath lists the families (IPv4 and IPv6 unicast) where add-path was
+// negotiated for routes the router receives from the peer: the router's
+// OPEN offers Receive and the peer's OPEN offers Send. Those NLRI carry
+// path identifiers. A Receive-only offer on both sides (FRR's default)
+// changes nothing.
+func addPath(b *gobmp.BMPPeerUpNotification) map[bgp.RouteFamily]bgp.BGPAddPathMode {
+	local, remote := addPathModes(b.SentOpenMsg), addPathModes(b.ReceivedOpenMsg)
+	var out map[bgp.RouteFamily]bgp.BGPAddPathMode
+	for _, rf := range []bgp.RouteFamily{bgp.RF_IPv4_UC, bgp.RF_IPv6_UC} {
+		if local[rf]&bgp.BGP_ADD_PATH_RECEIVE != 0 && remote[rf]&bgp.BGP_ADD_PATH_SEND != 0 {
+			if out == nil {
+				out = map[bgp.RouteFamily]bgp.BGPAddPathMode{}
+			}
+			out[rf] = bgp.BGP_ADD_PATH_RECEIVE
+		}
+	}
+	return out
+}
+
+// addPathModes collects the add-path mode per family from an OPEN.
+func addPathModes(m *bgp.BGPMessage) map[bgp.RouteFamily]bgp.BGPAddPathMode {
+	out := map[bgp.RouteFamily]bgp.BGPAddPathMode{}
+	if m == nil {
+		return out
+	}
+	open, ok := m.Body.(*bgp.BGPOpen)
+	if !ok {
+		return out
+	}
+	for _, p := range open.OptParams {
+		cp, ok := p.(*bgp.OptionParameterCapability)
+		if !ok {
+			continue
+		}
+		for _, c := range cp.Capability {
+			ap, ok := c.(*bgp.CapAddPath)
+			if !ok {
+				continue
+			}
+			for _, t := range ap.Tuples {
+				out[t.RouteFamily] |= t.Mode
+			}
+		}
+	}
+	return out
+}
+
+// paths flattens an UPDATE into announcements and withdrawals for IPv4 and
+// IPv6 unicast. Other families are ignored.
+func paths(u *bgp.BGPUpdate) []plugin.RIBPath {
+	var out []plugin.RIBPath
+	for _, w := range u.WithdrawnRoutes {
+		if p, ok := prefixOf(w); ok {
+			out = append(out, plugin.RIBPath{Prefix: p, PathID: w.PathIdentifier(), Withdraw: true})
+		}
+	}
+	var nh netip.Addr
+	var asPath, comms []uint32
+	var large []string
+	var med *uint32
+	var mpNLRI []bgp.AddrPrefixInterface
+	var mpNH netip.Addr
+	for _, a := range u.PathAttributes {
+		switch attr := a.(type) {
+		case *bgp.PathAttributeNextHop:
+			if x, ok := netip.AddrFromSlice(attr.Value); ok {
+				nh = x.Unmap()
+			}
+		case *bgp.PathAttributeAsPath:
+			for _, seg := range attr.Value {
+				asPath = append(asPath, seg.GetAS()...)
+			}
+		case *bgp.PathAttributeCommunities:
+			comms = append(comms, attr.Value...)
+		case *bgp.PathAttributeLargeCommunities:
+			for _, c := range attr.Values {
+				large = append(large, c.String())
+			}
+		case *bgp.PathAttributeMultiExitDisc:
+			m := attr.Value
+			med = &m
+		case *bgp.PathAttributeMpReachNLRI:
+			if !unicast(attr.AFI, attr.SAFI) {
+				continue
+			}
+			if x, ok := netip.AddrFromSlice(attr.Nexthop); ok {
+				mpNH = x.Unmap()
+			}
+			mpNLRI = append(mpNLRI, attr.Value...)
+		case *bgp.PathAttributeMpUnreachNLRI:
+			if !unicast(attr.AFI, attr.SAFI) {
+				continue
+			}
+			for _, w := range attr.Value {
+				if p, ok := prefixOf(w); ok {
+					out = append(out, plugin.RIBPath{Prefix: p, PathID: w.PathIdentifier(), Withdraw: true})
+				}
+			}
+		}
+	}
+	for _, n := range u.NLRI {
+		if p, ok := prefixOf(n); ok && nh.IsValid() {
+			out = append(out, plugin.RIBPath{Prefix: p, NextHop: nh, ASPath: asPath, Communities: comms, LargeCommunities: large, PathID: n.PathIdentifier(), MED: med})
+		}
+	}
+	for _, n := range mpNLRI {
+		if p, ok := prefixOf(n); ok && mpNH.IsValid() {
+			out = append(out, plugin.RIBPath{Prefix: p, NextHop: mpNH, ASPath: asPath, Communities: comms, LargeCommunities: large, PathID: n.PathIdentifier(), MED: med})
+		}
+	}
+	return out
+}
+
+func unicast(afi uint16, safi uint8) bool {
+	return (afi == bgp.AFI_IP || afi == bgp.AFI_IP6) && safi == bgp.SAFI_UNICAST
+}
+
+func prefixOf(a bgp.AddrPrefixInterface) (netip.Prefix, bool) {
+	var ip net.IP
+	var bits uint8
+	switch n := a.(type) {
+	case *bgp.IPAddrPrefix:
+		ip, bits = n.Prefix, n.Length
+	case *bgp.IPv6AddrPrefix:
+		ip, bits = n.Prefix, n.Length
+	default:
+		return netip.Prefix{}, false
+	}
+	addr, ok := netip.AddrFromSlice(ip)
+	if !ok {
+		return netip.Prefix{}, false
+	}
+	addr = addr.Unmap()
+	p, err := addr.Prefix(int(bits))
+	if err != nil {
+		return netip.Prefix{}, false
+	}
+	return p, true
+}

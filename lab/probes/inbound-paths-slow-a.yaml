@@ -1,0 +1,7 @@
+# transit-a is 240 ms slower than transit-b: the worst performer.
+sent: 4
+paths:
+  - provider: transit-a
+    rtt_ms: 250
+  - provider: transit-b
+    rtt_ms: 10

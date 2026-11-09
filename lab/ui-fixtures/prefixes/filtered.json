@@ -1,0 +1,203 @@
+{
+ "version": "fixture",
+ "mode": "observe",
+ "ready": true,
+ "generated_at": "2026-10-11T12:00:00Z",
+ "prefixes": [
+  {
+   "prefix": "2001:db8:1::/48",
+   "native": "lab-a",
+   "current": "lab-a",
+   "recommended": "lab-b",
+   "action": "improve",
+   "in_rib": true,
+   "next_hop": "192.0.2.1",
+   "rib_provider": "lab-a",
+   "probes": [
+    {
+     "provider": "lab-a",
+     "prefix": "2001:db8:1::/48",
+     "prober": "icmp",
+     "ok": true,
+     "loss_pct": 1.0,
+     "rtt_min_ms": 19.0,
+     "rtt_avg_ms": 21.0,
+     "rtt_max_ms": 24.0,
+     "jitter_ms": 1.5,
+     "sent": 10,
+     "received": 10
+    },
+    {
+     "provider": "lab-b",
+     "prefix": "2001:db8:1::/48",
+     "prober": "icmp",
+     "ok": true,
+     "loss_pct": 0.0,
+     "rtt_min_ms": 8.0,
+     "rtt_avg_ms": 10.0,
+     "rtt_max_ms": 12.0,
+     "jitter_ms": 0.5,
+     "sent": 10,
+     "received": 10
+    }
+   ],
+   "exit_loss_pct": 1.0,
+   "exit_rtt_ms": 21.0,
+   "paths": [
+    {
+     "provider": "lab-a",
+     "next_hop": "192.0.2.1",
+     "as_path": [
+      64496,
+      64501
+     ],
+     "selected": true,
+     "med": 100,
+     "med_from": "iBGP 192.0.2.254, lab-a",
+     "via": "bilateral"
+    }
+   ],
+   "gain": 29.0,
+   "reason": "lab-b beats lab-a on loss"
+  },
+  {
+   "prefix": "2001:db8:4::/48",
+   "native": "lab-a",
+   "current": "lab-a",
+   "recommended": "lab-b",
+   "action": "improve",
+   "in_rib": true,
+   "next_hop": "192.0.2.1",
+   "rib_provider": "lab-a",
+   "probes": [
+    {
+     "provider": "lab-a",
+     "prefix": "2001:db8:4::/48",
+     "prober": "icmp",
+     "ok": true,
+     "loss_pct": 0.0,
+     "rtt_min_ms": 22.0,
+     "rtt_avg_ms": 24.0,
+     "rtt_max_ms": 27.0,
+     "jitter_ms": 1.5,
+     "sent": 10,
+     "received": 10
+    },
+    {
+     "provider": "lab-b",
+     "prefix": "2001:db8:4::/48",
+     "prober": "icmp",
+     "ok": true,
+     "loss_pct": 0.0,
+     "rtt_min_ms": 8.0,
+     "rtt_avg_ms": 10.0,
+     "rtt_max_ms": 12.0,
+     "jitter_ms": 0.5,
+     "sent": 10,
+     "received": 10
+    }
+   ],
+   "exit_loss_pct": 0.0,
+   "exit_rtt_ms": 24.0,
+   "paths": [
+    {
+     "provider": "lab-a",
+     "next_hop": "192.0.2.1",
+     "as_path": [
+      64496,
+      64501
+     ],
+     "selected": true,
+     "med": 100,
+     "med_from": "iBGP 192.0.2.254, lab-a",
+     "via": "bilateral"
+    }
+   ],
+   "gain": 26.0,
+   "reason": "lab-b beats lab-a on loss"
+  },
+  {
+   "prefix": "2001:db8:7::/48",
+   "native": "lab-a",
+   "current": "lab-a",
+   "recommended": "lab-b",
+   "action": "improve",
+   "in_rib": true,
+   "next_hop": "192.0.2.1",
+   "rib_provider": "lab-a",
+   "probes": [
+    {
+     "provider": "lab-a",
+     "prefix": "2001:db8:7::/48",
+     "prober": "icmp",
+     "ok": true,
+     "loss_pct": 3.0,
+     "rtt_min_ms": 25.0,
+     "rtt_avg_ms": 27.0,
+     "rtt_max_ms": 30.0,
+     "jitter_ms": 1.5,
+     "sent": 10,
+     "received": 10
+    },
+    {
+     "provider": "lab-b",
+     "prefix": "2001:db8:7::/48",
+     "prober": "icmp",
+     "ok": true,
+     "loss_pct": 0.0,
+     "rtt_min_ms": 8.0,
+     "rtt_avg_ms": 10.0,
+     "rtt_max_ms": 12.0,
+     "jitter_ms": 0.5,
+     "sent": 10,
+     "received": 10
+    }
+   ],
+   "exit_loss_pct": 3.0,
+   "exit_rtt_ms": 27.0,
+   "paths": [
+    {
+     "provider": "lab-a",
+     "next_hop": "192.0.2.1",
+     "as_path": [
+      64496,
+      64501
+     ],
+     "selected": true,
+     "med": 100,
+     "med_from": "iBGP 192.0.2.254, lab-a",
+     "via": "bilateral"
+    }
+   ],
+   "gain": 23.0,
+   "reason": "lab-b beats lab-a on loss"
+  }
+ ],
+ "total": 3,
+ "measured": 100000,
+ "offset": 0,
+ "limit": 25,
+ "asn_map": [
+  {
+   "asn": 64500,
+   "sites": [
+    {
+     "provider": "lab-a",
+     "next_hop": "192.0.2.1",
+     "prefixes": [
+      "2001:db8:1::/48",
+      "2001:db8:2::/48",
+      "2001:db8:3::/48",
+      "2001:db8:4::/48",
+      "2001:db8:5::/48",
+      "2001:db8:6::/48",
+      "2001:db8:7::/48",
+      "2001:db8:8::/48"
+     ],
+     "count": 33334
+    }
+   ]
+  }
+ ],
+ "asn_total": 1
+}

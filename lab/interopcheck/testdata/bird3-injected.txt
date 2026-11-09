@@ -1,0 +1,36 @@
+BIRD 3.1.7 ready.
+Table master4:
+198.51.100.0/24      unicast [packeteer 22:53:49.421 from 192.0.2.10] * (100) [i]
+	via 192.0.2.22 on eth0
+	preference: 100
+	igp_metric: 0
+	from: 192.0.2.10
+	source: BGP
+	bgp_origin: IGP
+	bgp_path: 
+	bgp_next_hop: 192.0.2.22
+	bgp_local_pref: 250
+	bgp_community: (64512,666) (65535,65281)
+	Internal route handling values: 0L 5G 0S id 4
+                     unicast [transit_a 22:53:07.653] (100) [AS64496?]
+	via 192.0.2.21 on eth0
+	preference: 100
+	igp_metric: 0
+	from: 192.0.2.21
+	source: BGP
+	bgp_origin: Incomplete
+	bgp_path: 64496
+	bgp_next_hop: 192.0.2.21
+	bgp_local_pref: 100
+	Internal route handling values: 0L 6G 0S id 2
+                     unicast [transit_b 22:53:47.828] (100) [AS64497?]
+	via 192.0.2.22 on eth0
+	preference: 100
+	igp_metric: 0
+	from: 192.0.2.22
+	source: BGP
+	bgp_origin: Incomplete
+	bgp_path: 64497 64497 64497
+	bgp_next_hop: 192.0.2.22
+	bgp_local_pref: 100
+	Internal route handling values: 0L 7G 0S id 3

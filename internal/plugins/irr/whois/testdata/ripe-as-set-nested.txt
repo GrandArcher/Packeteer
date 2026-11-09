@@ -1,0 +1,12 @@
+% This is the RIPE Database query service.
+
+% Information related to 'AS64500:AS-CUSTOMERS'
+
+as-set:         AS64500:AS-CUSTOMERS
+descr:          Nested customers, one member loops back
+members:        AS64502,
+                AS64503
+members:        AS-EXAMPLE
+mnt-by:         MAINT-EXAMPLE
+source:         RIPE # Filtered
+

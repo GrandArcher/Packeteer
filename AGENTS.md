@@ -1,0 +1,58 @@
+# Agent rules for Packeteer
+
+This repository controls BGP in real networks when injection is enabled. Treat every change as if it will run on a multi-homed edge.
+
+## Scope
+
+- Implement one GitHub issue per pull request.
+- Do not expand scope. Do not refactor unrelated packages.
+- Default language is Go. Do not add a second implementation language.
+- Do not commit secrets, production prefixes, live RIBs, SNMP communities, or customer data.
+
+## Safety (non-negotiable)
+
+- Default operating mode is `observe`.
+- Injection requires explicit `mode: inject` and an allowlist.
+- Never announce a prefix that was not present in the local RIB view. One exception, off by default: the opt-in `synthesize` block may announce a sub-range of a covering prefix that a neighbor currently advertises exactly in the RIB view, and only under the rails in docs/design/more-specific.md (inject only, its own covering-prefix allowlist inside the allowlist, `max_bits` and a route cap counted on the router, community plus NO_EXPORT plus a marker community, withdrawn when the covering prefix leaves the RIB or the session drops, no graceful restart). `more_specific_bits` stays rejected.
+- Cap active improvements. Start at 50 unless an issue says otherwise.
+- Require hold time and loss/latency thresholds before flipping a path.
+- Tag every injected route with the configured community.
+- Controller crash or probe-source loss must withdraw Packeteer-originated routes or leave native BGP untouched. No stale intent.
+- Tests are required for announce, withdraw, and crash/withdraw behavior before any inject-path code merges.
+
+## IXP mode
+
+An `ixp:` block is an Internet exchange operator observing the fabric, route servers, and members. It is not the `exchanges` block (an edge network's own peering). Design: docs/design/ixp.md.
+
+- IXP mode is observe-only and never announces. Nothing in it changes member routing. `mode: suggest` is allowed and announces nothing. Validation refuses `mode: inject`, `announcer`, `mitigation`, `inbound`, `synthesize`, and `more_specific`.
+- IXP mode does not need `bgp.neighbors` or the RIB view. Route-server data lives in a separate read-only store that never feeds the RIB view or `Decide`.
+- IXP Manager and Birdseye are read with GET only, from the fixed endpoint allowlist in docs/design/ixp.md. The API key comes from an environment variable, never from the URL or the config file. A warning fires before it expires. The customers nagios document is the one superuser-group GET on that list. Honor IXP Manager's per-interface "Can Ping" opt-out.
+- Member data is never committed. Lab fixtures use documentation prefixes and documentation or private ASNs only.
+
+## Docker-first (non-negotiable)
+
+- The primary install is ONE container:
+  `docker run --network host --cap-add NET_RAW --cap-add NET_ADMIN -v "$PWD/config.yaml:/etc/packeteer/config.yaml" ghcr.io/grandarcher/packeteer`
+- Every feature must work inside that container with a mounted config file and env vars (`PACKETEER_CONFIG`, etc.). No host-only assumptions (no systemd units, host paths, or host tools required at runtime).
+- The CI `docker` job must stay green: the image builds and runs against a mounted config.
+
+## Modularity
+
+- New capabilities are added as plugins behind a small interface (prober, target source, scorer, announcer, notifier, exporter), selected by `type` in config. Do not hard-wire them into the core.
+- Plugin config is validated at load time; unknown plugin types are errors.
+- Plugins must work with the stock image (built-in or out-of-process `exec` / `webhook`); see docs/PLUGINS.md.
+- Public plugin interfaces live in `pkg/plugin`; built-ins in `internal/plugins/<kind>/<name>`, registered via `init()` and linked in `internal/plugins/all`.
+- Announcers are in-process only; never let an out-of-process plugin inject routes.
+
+## Testing BGP
+
+- All BGP tests use simulated routers (in-process GoBGP, or FRR/GoBGP containers in CI). Never real networks.
+- No graceful-restart: Packeteer routes must disappear when Packeteer does.
+- Use documentation prefixes (192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24, 2001:db8::/32) and documentation/private ASNs (64496-64511, 65536-65551, or 64512-65534) only.
+
+## PR requirements
+
+- Branch from `main`. Never push to `main`.
+- Include tests for the behavior you changed.
+- Update ARCHITECTURE.md only when the pipeline changes.
+- Describe rollback in the PR body for any announce-path change.

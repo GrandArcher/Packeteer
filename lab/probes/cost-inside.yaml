@@ -1,0 +1,8 @@
+# transit-b is 10ms slower: inside the 20ms cost floor and inside the 15ms
+# performance threshold. transit-b is cheaper, so cost is what steers.
+sent: 4
+paths:
+  - provider: transit-a
+    rtt_ms: 40
+  - provider: transit-b
+    rtt_ms: 50

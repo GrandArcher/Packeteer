@@ -1,0 +1,43 @@
+# Lines from an IRR database dump (RPSL, RFC 2622) with documentation
+# values. Comments and blank lines separate objects as in a real dump.
+
+route:          198.51.100.0/24
+descr:          EXAMPLE-NET
+origin:         AS64496
+mnt-by:         MAINT-EXAMPLE
+changed:        noc@example.net 20200101
+source:         RADB
+
+route:          198.51.100.0/24
+descr:          EXAMPLE-NET backup origin
+origin:         AS64497
+mnt-by:         MAINT-EXAMPLE
+source:         RADB
+
+route6:         2001:db8::/32
+descr:          EXAMPLE-NET
+origin:         AS64496
+mnt-by:         MAINT-EXAMPLE
+source:         RADB
+
+route:          203.0.113.0/24
+descr:          RPKI ROA for 203.0.113.0/24 / AS64499
+origin:         AS64499
+source:         RPKI  # Trust Anchor: ripe
+
+as-set:         AS-EXAMPLE
+descr:          Example customers
+members:        AS64496, AS64497,
++               AS-EXAMPLE-DOWNSTREAM
+mnt-by:         MAINT-EXAMPLE
+source:         RADB
+
+as-set:         AS-EXAMPLE-DOWNSTREAM
+members:        AS64498 # downstream
+members:        AS-EXAMPLE
+source:         RADB
+
+aut-num:        AS64496
+as-name:        EXAMPLE-NET-AS
+descr:          Example network
+source:         RADB

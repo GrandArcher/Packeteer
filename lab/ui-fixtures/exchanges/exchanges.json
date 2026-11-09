@@ -1,0 +1,28 @@
+{
+  "exchanges": [
+    {
+      "name": "ix-lab",
+      "lans": ["203.0.113.0/24"],
+      "prefixes": 6,
+      "improvements": 0,
+      "peers": [
+        {"name": "ix-peer-a", "asn": 64501, "next_hop": "203.0.113.11", "prefixes": 1, "up": true, "improvements": 0, "via": "bilateral"},
+        {"name": "ix-peer-b", "asn": 64502, "next_hop": "203.0.113.12", "prefixes": 1, "up": true, "improvements": 0, "via": "bilateral"}
+      ],
+      "discovered": [
+        {"next_hop": "203.0.113.13", "asn": 64503, "prefixes": 3},
+        {"next_hop": "203.0.113.14", "prefixes": 1}
+      ]
+    },
+    {
+      "name": "ix-not-in-the-form",
+      "lans": ["198.51.100.0/24"],
+      "prefixes": 9,
+      "improvements": 0,
+      "peers": [],
+      "discovered": [
+        {"next_hop": "198.51.100.77", "asn": 64511, "prefixes": 9}
+      ]
+    }
+  ]
+}

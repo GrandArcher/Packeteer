@@ -1,0 +1,6 @@
+{
+  "stubs": [
+    {"method": "GET", "path": "/api/prefixes", "contains": "prefix=203.0.113.0%2F25", "file": "prefixes.json"},
+    {"method": "GET", "path": "/api/prefixes/history", "contains": "prefix=203.0.113.0%2F25", "file": "history.json"}
+  ]
+}

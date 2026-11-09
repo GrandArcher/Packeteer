@@ -1,0 +1,11 @@
+{
+  "state": "ok",
+  "prefix": "198.51.100.0/24",
+  "routes": [
+    {"prefix": "198.51.100.0/24", "peer": "peer-one (AS64496)", "as_path": ["64496", "64500"], "origin": "64500", "rpki": "Valid", "last_update": "2026-01-01 00:00:00 UTC"},
+    {"prefix": "198.51.100.0/24", "peer": "peer-two (AS64497)", "as_path": ["64497", "64501", "64500"], "origin": "64500", "rpki": "NotFound", "last_update": "2026-01-02 00:00:00 UTC"}
+  ],
+  "warnings": ["Not showing more specific routes"],
+  "cached": true,
+  "fetched_at": "2026-01-02T12:00:00Z"
+}

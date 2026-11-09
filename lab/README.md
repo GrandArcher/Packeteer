@@ -1,0 +1,201 @@
+# FRR lab
+
+A simulated edge router (FRR) peered over iBGP with Packeteer. Addresses are documentation prefixes (RFC 5737) and the ASN is the private-use value 64512. Nothing here touches a real network.
+
+`lab/e2e.sh` builds the Packeteer image from the repo Dockerfile, starts FRR, and checks `vtysh -c 'show bgp ipv4 unicast json'`:
+
+1. `198.51.100.0/24` appears with next hop `192.0.2.2` (transit-b), local preference 260 (`local_pref_cause.performance`; the global value stays 250), community `64512:666`, the performance extra `64512:100`, the provider extras `64512:200` and large `64512:1:50`, and `no-export`. That local preference and those extras are gone after the SIGTERM withdraw and after the SIGKILL withdraw. Before the flip-back, a SIGHUP that lowers `min_rtt_delta_ms` keeps the route, a SIGHUP that sets `max_improvements` to 0 withdraws it, and restoring the file announces it again (#128).
+2. Rewriting the fixed-prober file so transit-a is faster withdraws that route (flip-back, after `hold_time`).
+3. Restoring the original results announces it again. The route then has to stay up while FRR is still advertising the native path (the network statement's weight keeps it best).
+4. Removing FRR's `network 198.51.100.0/24` withdraws Packeteer's route within seconds, while Packeteer is still running. That is a real leave: FRR had kept sending the prefix.
+5. The network statement is put back and Packeteer's import weight is raised to match, so local preference wins the way a real eBGP path loses. FRR stops advertising the prefix to Packeteer. Packeteer's route has to stay; withdrawing it would flap.
+6. Stopping Packeteer with SIGTERM withdraws it (`WithdrawAll` while the session is still up).
+7. Packeteer is started again and the route comes back. `docker kill -s KILL` stops it with no withdraw. FRR's negotiated hold time is the configured 9 seconds. The injected route must be gone once the session is no longer Established, and no later than that hold time plus a few seconds. A withdraw while the session is still Established fails this step. Graceful restart is off on both sides.
+
+The fixed prober (`type: fixed`) returns configured RTTs and sends no packets. It is for this lab and for tests. A real deployment uses `icmp` and `tcp`.
+
+`lab/e2e-commit.sh` is the commit-cause path on the same FRR edge. Probe RTTs stay inside the latency threshold. A static target declares 80 Mbps and the `fixed` telemetry plugin reports transit-a over its commit, so the injected route is a commit steer (`cause=commit` in the log). Rewriting the usage file so transit-a can take the prefix back withdraws it. The script then restores the over-commit file, stops Packeteer with SIGTERM, and SIGKILLs it. The route is gone once the session drops, and no later than the BGP hold timer. `fixed` telemetry is for this lab. A real edge uses `snmp` and flow volume.
+
+`lab/e2e-cost.sh` is the cost-cause path on the same FRR edge (`lab/packeteer-cost.yaml`). transit-a costs 10 per Mbps and transit-b costs 5. transit-b is 10 ms slower, inside the 20 ms cost floor and the 15 ms performance threshold, so the injected route is a cost steer (`cause=cost` in the log). Rewriting the probe file so transit-b is 40 ms slower moves it outside the floor and withdraws the route. The script then restores the in-floor file, stops Packeteer with SIGTERM, and SIGKILLs it, with the same checks as the commit job.
+
+`lab/e2e-inbound.sh` is inbound optimization (#25) on its own topology (`lab/docker-compose-inbound.yml`): the FRR edge (`lab/frr-inbound`) peers with Packeteer and with two simulated eBGP transits, transit-a (AS 64496, `192.0.2.21`) and transit-b (AS 64497, `192.0.2.22`). The edge originates `203.0.113.0/24`. The `fixed` telemetry file puts transit-a's inbound 95th over commit, so Packeteer re-announces the prefix with its marker and transit-a's catalog communities.
+
+The script checks the transits' own tables with `lab/checkpath`: transit-a must see `64512 64512 64512` and `64496:3`, transit-b the plain `64512`, and no Packeteer community may leave the edge. It releases the steer by rewriting the usage file, steers again inside the flap window (damped: doubled hold and learned inertia) and checks that flipping usage under does not release it, then stops Packeteer with SIGTERM.
+
+After a restart it rewrites the `fixed` prober file: transit-a slowest gives a performance steer, equal probes release it, transit-b slowest withholds the prefix from transit-b (`checkpath -absent`, selective announcement), and finally it SIGKILLs Packeteer with transit-a steered. Each stop must return both transits to the plain path, the SIGKILL case within the 9s hold timer.
+
+`lab/e2e-inbound-med.sh` is the inbound MED action (#303) on its own topology (`lab/docker-compose-inbound-med.yml`): the FRR edge (`lab/frr-inbound-med`) has two sessions to one simulated transit, transit-m (AS 64496, `lab/frr-transit-m`), link 1 on `192.0.2.0/24` and link 2 on `198.51.100.0/24`. With link-1's inbound 95th over commit, the edge sets MED 100 on link 1 only and the transit's best path moves to link 2 (`checkpath -from` reads each session's MED). Release, SIGTERM, and SIGKILL within the 9s hold timer must each put MED 0 back on link 1.
+
+`lab/e2e-bmp.sh` is the BMP monitoring station (#26) on its own topology (`lab/docker-compose-bmp.yml`). The FRR edge (`lab/frr-bmp`, bgpd with `-M bmp`) peers with Packeteer over iBGP and with two simulated eBGP transits (`lab/frr-bmp-transit-a`, `lab/frr-bmp-transit-b`). It streams post-policy Adj-RIB-In and Loc-RIB to Packeteer's station on `192.0.2.10:11019` (`lab/packeteer-bmp.yaml`). Both transits send `198.51.100.0/24`. transit-b prepends, so its path is inactive on the edge and never reaches Packeteer over iBGP. Only BMP shows it. transit-b (`bmp: only`) is the faster probed path.
+
+The script checks: (1) Packeteer steers onto transit-b's inactive path. (2) transit-b withdraws the prefix: the route check retires the improvement within seconds, inside the 5m `hold_time`, even though the edge still has Packeteer's own route as best and reports it back over BMP. Packeteer does not re-inject while transit-b has no path. (3) transit-b re-announces and the steer comes back. (4) The edge removes its BMP target: the improvement retires, and nothing is injected onto the `only` provider without a feed. (5) BMP returns and the steer comes back; SIGTERM withdraws it.
+
+`lab/e2e-addpath.sh` is BGP add-path on the iBGP session (#26) on its own topology (`lab/docker-compose-addpath.yml`), with no BMP. The FRR edge (`lab/frr-addpath`) sends Packeteer every path (`neighbor 192.0.2.10 addpath-tx-all-paths`); Packeteer asks for them with `bgp.neighbors[].add_path` and checks both providers with `providers[].add_path` (`lab/packeteer-addpath.yaml`). The transits are the BMP lab's. transit-b's prepended path is inactive on the edge and reaches Packeteer only as an additional path.
+
+The script checks: (1) add-path is negotiated, Packeteer steers onto transit-b, and its looking glass holds transit-b's path and, while Packeteer's route is the edge's best, transit-a's native path, each with a path ID. (2) transit-b withdraws: the add-path route check retires the improvement within seconds, inside the 5m `hold_time`, and nothing re-injects. (3) transit-b re-announces and the steer comes back. (4) SIGTERM withdraws. (5) After a restart and a new steer, SIGKILL: the route drops with the session within the 9s hold timer.
+
+`lab/e2e-multirouter.sh` is multiple edge routers and a route reflector (#27) on its own topology (`lab/docker-compose-multirouter.yml`): edge-a (`lab/frr-mr-edge-a`, transit-a only), edge-b (`lab/frr-mr-edge-b`, transit-b only), a route reflector (`lab/frr-mr-rr`) with both edges as clients, and two simulated transits. Both transits send `198.51.100.0/24`; transit-b prepends, so transit-a is native on both edges, and transit-b is the faster probed path. Part one (`lab/packeteer-multirouter.yaml`) peers Packeteer with both edges; edge-a lists `providers: [transit-a]` and reaches transit-b through edge-b (`next_hops`).
+
+The script checks with `lab/checkpath -nexthop`: (1) the steer reaches edge-b with next hop `192.0.2.22` and edge-a with next hop `192.0.2.252`. (2) edge-a's session to Packeteer is shut: edge-a returns to transit-a while edge-b stays steered, and edge-a gets the route back when the session returns. (3) edge-b's session is shut: edge-b is transit-b's only egress, so the improvement retires (`egress router down`) and edge-a is withdrawn too; nothing re-injects until the session returns and the steer comes back on both. (4) SIGTERM withdraws on both edges.
+
+(5) After a restart and a new steer, SIGKILL: both edges drop the route within the 9s hold timer. Part two (`lab/packeteer-rr.yaml`) peers Packeteer with the reflector only: (6) the steer is reflected to both edges with next hop `192.0.2.22`, (7) SIGTERM withdraws on both, (8) SIGKILL drops it on both within the hold timer.
+
+`lab/e2e-ix.sh` is Internet exchange peers, AS-path behavior, and online reconfiguration (#27, second half) on its own topology (`lab/docker-compose-ix.yml`): one FRR edge (`lab/frr-ix-edge`, add-path to Packeteer) with transit-a (AS 64496) on the lab LAN and three exchange members on a simulated peering LAN `203.0.113.0/24`: ix-peer-a (AS 64501) and ix-peer-c (AS 64503) send `198.51.100.0/24` prepended, ix-peer-b (AS 64502) sends only `198.51.100.128/25`.
+
+`lab/packeteer-ix.yaml` lists ix-peer-a and ix-peer-b as exchange peers (ix-peer-b is the fastest probed path) and sets `bgp.as_path: provider`; a second iBGP router (`lab/frr-ix-collector`) joins only through a reload. The script checks: (1) the edge's best is Packeteer's route with next hop `203.0.113.11` and AS path `64501 64501 64501`, ix-peer-b is refused by the route check and never announced, and `/api/exchanges` counts each peer's prefixes and the improvement and lists ix-peer-c as discovered.
+
+(2) ix-peer-a withdraws: the route check retires the improvement at once and nothing goes to ix-peer-b or ix-peer-c; it re-announces and the steer returns. (3) SIGHUP with the collector added: the collector gets the steer, while the edge never loses the route and its session is not reset (`connectionsEstablished` unchanged). (4) SIGHUP with `local_pref` changed is refused and nothing moves. (5) SIGHUP with the collector removed closes its session. (6) SIGTERM withdraws. (7) After a restart, SIGKILL drops the route within the 9s hold timer.
+
+`lab/e2e-mitigation.sh` is threat mitigation (#28, first half: RTBH and BGP redirect) on its own topology (`lab/docker-compose-mitigation.yml`): the FRR edge (`lab/frr-mit-edge`) routes the discard address `192.0.2.66` to null, peers with Packeteer, learns `198.51.100.0/24` from transit-a (`lab/frr-mit-transit-a`, AS 64496), and exports to transit-b (`lab/frr-mit-transit-b`, AS 64497). Rules go through Packeteer's ops API from the host (`192.0.2.10:8080`, lab-only basic auth in the compose file; `lab/packeteer-mitigation.yaml`, `max_rules: 2`).
+
+The script checks: (1) a rule outside the mitigation allowlist and a request without credentials are refused. (2) An allowlisted `198.51.100.128/25`, which nobody advertises, is held and never announced, and a third prefix is refused by the cap. (3) RTBH: the edge's best path is Packeteer's with next hop `192.0.2.66`, BLACKHOLE, the marker, and `no-export`; zebra resolves it to the blackhole; transit-b loses the prefix instead of receiving it. (4) Redirect replaces it in place with next hop `192.0.2.77` and `64512:777`. (5) DELETE restores transit-a. (6) An 8s TTL expires on its own. (7) SIGTERM withdraws.
+
+(8) After a restart no rule exists and nothing returns. (9) SIGKILL drops a new RTBH route within the 9s hold timer.
+
+`lab/e2e-more-specific.sh` is more-specific injection (#56) on its own topology (`lab/docker-compose-more-specific.yml`): one FRR edge (`lab/frr-ms-edge`) originates `198.51.100.0/24` with three more-specifics (`/25`, `/26`, `/27`) and nothing else inside it; `lab/packeteer-more-specific.yaml` turns `more_specific` on with `max_routes: 4`.
+
+On every sample the script reads the edge's table with `lab/checkms` and fails on a Packeteer route for any prefix the edge never advertised or on more than 4 routes that persist for 3s (the edge can briefly show a withdrawn route next to the ones announced into the room it freed, before it processes the withdraw). It checks: (1) the /24 and exactly its three learned more-specifics arrive with next hop `192.0.2.2`, local-pref 250, `64512:666`, and `no-export`. (2) The edge adds `203.0.113.0/24` with one more-specific: it needs 2 routes with 4 in use, so neither is announced.
+
+(3) `no network 198.51.100.192/27` (a real RIB leave) withdraws that more-specific. (4) A second leave makes room and the second /24 arrives whole. (5) SIGTERM withdraws every route and a restart brings back the same four. (6) SIGKILL drops them with the session within the 9s hold timer.
+
+`lab/e2e-synthesize.sh` is synthesized more-specific injection (#122) on its own topology (`lab/docker-compose-synthesize.yml`): an FRR edge (`lab/frr-syn-edge`) originates `198.51.100.0/24` and `203.0.113.0/24` and nothing inside them, and exports everything to `ext` (`lab/frr-syn-ext`, AS 64511, the other transit, which streams BMP to the leak watch). `lab/sendflow` sends equal traffic to a low and a high /25; the fixed prober makes transit-b faster toward the low /25 only, so each /24 stays native. `lab/packeteer-synthesize.yaml` turns `synthesize` on with `max_prefix_len.v4: 25` and a route cap of 1. On every sample the script fails on any Packeteer prefix other than the two low /25s, on more than one route, and on a Packeteer route seen on `ext`. It checks: (1) `198.51.100.0/25` arrives toward transit-b with local-pref 250, `64512:666`, the marker `64512:667`, and `no-export`, and `/api/decisions` names its covering prefix; (2) `203.0.113.0/25` waits at the cap; (3) `no network 198.51.100.0/24` withdraws the synthesized /25 with no confirm window and the waiting one is announced; (4) SIGTERM withdraws and a restart announces it again; (5) SIGKILL drops it with the session.
+
+`lab/e2e-vrf.sh` is the internet VRF and partial-table lab (#206) on `lab/docker-compose-vrf.yml`. `lab/frr-vrf-start.sh` moves the edge's lab interface into a kernel VRF `internet` (table 10) before FRR starts, so both transit sessions and Packeteer's session are in the VRF (`lab/frr-vrf/frr.conf`, shown in [docs/vrf.md](../docs/vrf.md)); the default VRF holds a blackhole for `198.51.100.0/24`. transit-a sends `198.51.100.0/24` and a default route, transit-b a default route only. The script loads the host's `vrf` module and checks: (1) the VRF's native path is transit-a's; (2) Packeteer's route (next hop transit-b, community, no-export) is best in the VRF's BGP and kernel tables, the main table keeps its blackhole, and transit-b never receives the route; (3) `0.0.0.0/0` and `203.0.113.0/24` (covered only by the default route) are measured, never announced, and `/api/decisions` says why; (4) SIGTERM withdraws in the VRF; (5) SIGKILL drops the route with the session within the 9s hold timer.
+
+`lab/e2e-reorder.sh` is the packet reordering measurement (#224) on its own topology (`lab/docker-compose-reorder.yml`, `lab/packeteer-reorder.yaml`), with no BGP. Packeteer's two probe sources are policy-routed to two transit containers; transit-a is one link to a `packeteer-reflector` (TWAMP-Light, RFC 5357) at `203.0.113.9`, transit-b reaches it over a 2-way ECMP bundle hashed on the 5-tuple. The script puts `netem delay 30ms reorder 100% gap 5` on transit-b's second member, so every fifth packet overtakes the one before it. It checks on `/api/reorder` that transit-a reads about 0 on every flow, that transit-b's worst flow reads a reordered ratio near 20% with extent 1 and n-reordering 1 while another flow (a different source port, so the other member) reads about 0, that the ICMP responder rows are marked `estimate`, that `/api/providers` and `/api/decisions` carry the controlled reading, that `/metrics` has the per-flow gauges, and that the Providers page shows the Reordering column. Deleting the qdisc brings transit-b back to 0. SIGTERM stops cleanly. Nothing is announced.
+
+`lab/twamp-interop.sh` (#224) runs `nokia/twampy`, an independent TWAMP-Light session sender pinned to one commit, against `packeteer-reflector` on loopback and requires 0.0% loss outbound, inbound, and round trip. It needs python3 (3.11+), git, and Go, not Docker.
+
+`lab/e2e-flap.sh` is the flap quarantine (#228) on the main lab topology with `lab/packeteer-flap.yaml` (`max_flips: 3`, 45s cool-down): three provider changes are allowed, the fourth withdraws Packeteer's route and logs `flap quarantine started`, the edge stays on its native path for 20s while transit-b measures better, the cool-down ends with `flap quarantine released` and the route returns, and SIGTERM withdraws.
+
+`lab/e2e-overload.sh` is overload protection for a provider with no commit (#307), on the main topology (`lab/packeteer-overload.yaml`). transit-b has `interface_capacity_threshold_pct: 85` on a 1000 Mbps interface and the prefix carries 60 Mbps. With transit-b at 800 Mbps the steer is refused (`overload.refused`, the decision says why, no route); at 700 Mbps it is announced (`overload.cleared`); at 900 Mbps it is shed after `hold_time` (`overload.shed`, the route leaves the edge) and refused again; SIGTERM withdraws.
+
+`lab/e2e-verify-inbound.sh` and `lab/e2e-verify-outbound.sh` are steer verification (#305), on the inbound topology (`lab/packeteer-verify-inbound.yaml`) and the main topology (`lab/packeteer-verify-outbound.yaml`). The `fixed` telemetry file is rewritten to move the traffic or not. Inbound: the steer away from transit-a is verified when the usage shows the traffic arriving on transit-b and stays on the transits; after a restart, with the usage unchanged, it is reverted (transit-a gets the plain path again) and not made again during the back-off. Outbound: the improvement to transit-b is verified (log, `/api/verification`, `steer.verified`), a move to transit-c with no change in usage is reported (`steer.unverified`) and left in place, and SIGTERM withdraws.
+
+`lab/e2e-move.sh` is make-before-break (#386) on the main lab topology with `lab/packeteer-move.yaml` (a third provider, transit-c, next hop `192.0.2.4`). The improvement moves from transit-b to transit-c while the edge logs every UPDATE it receives (`debug bgp updates in`). Sampled every 0.2s, the edge holds exactly one Packeteer path for the prefix until it reads `192.0.2.4`, and the update log has the move's UPDATE and no withdraw. A flip-back withdraw must then appear in the same log, and SIGTERM withdraws.
+
+`lab/e2e-leak-watch.sh` is the leak watch (#199) on its own topology (`lab/docker-compose-leak-watch.yml`): one FRR edge (`lab/frr-leak-edge`), a router outside the AS (`lab/frr-leak-ext`, AS 64511) that streams BMP to Packeteer's leak source on `192.0.2.10:11020`, and Packeteer (`lab/packeteer-leak-watch.yaml`). The edge originates `198.51.100.0/24` and `203.0.113.0/24` (both injected) and `192.0.2.64/26`, and exports only the last to ext. The script checks: (1) both /24s are injected and tagged. (2) A clean 40s run: ext holds only `192.0.2.64/26`, `/api/leaks` is empty and `watching`.
+
+(3) The edge import strips communities and its export filter lets `203.0.113.0/24` through: only that route is withdrawn (`reason: as_path`), `198.51.100.0/24` is untouched, and the leaked one stays out for 20s of decision rounds. (4) The edge is fixed and `POST /api/leaks/clear` releases the hold: the route returns tagged and ext never sees it. (5) Stopping ext reads `unknown` with no route moving. (6) SIGTERM withdraws and a restart injects both again. (7) SIGKILL drops them with the session within the 9s hold timer.
+
+`lab/e2e-multipop.sh` is multi-POP federation (#30) on its own topology (`lab/docker-compose-multipop.yml`): two POPs, each an FRR edge and a Packeteer instance. edge-a (`lab/frr-mp-edge-a`) has learned only `198.51.100.0/24`; edge-b (`lab/frr-mp-edge-b`) has also learned `203.0.113.0/24`. `lab/packeteer-multipop-a.yaml` (pop-a: carriers x-a and y-a, plus x-b in pop-b at 10ms inter-DC RTT, reached at `192.0.2.253`) and `lab/packeteer-multipop-b.yaml` (pop-b: x-b, plus x-a in pop-a) federate over mutual TLS with certificates `lab/mkcerts` generates for the run, and share a 100 Mbps `global_commit` for carrier X.
+
+Probe results and usage come from `lab/probes/multipop/` files the script swaps. On every sample, with `lab/checkpop`, it fails if packeteer-a announces `203.0.113.0/24` or packeteer-b announces anything. It checks: (1) `/api/federation` on both shows the other fresh. (2) With POP A's carriers at 80ms and x-b at 10+10ms, `198.51.100.0/24` reaches edge-a with next hop `192.0.2.253`, local-pref 250, `64512:666`, and `no-export`. (3) SIGTERM of packeteer-b withdraws it; starting it re-steers.
+
+(4) With x-a and y-a within the threshold and x-b at 60+10ms (so the steer through POP B flips back to native), x-a at 60 of its own 100 and x-b at 60 in POP B put carrier X at 120: the prefix moves to y-a (`192.0.2.2`, cause commit). (5) POP B's usage drops to 5 and the commit steer is released. (6) A blackhole route between the two Packeteer instances (#308) withdraws the steer within 15s, both `/api/federation` views show the peer stale and the global commit incomplete, nothing steers for 20s, and after the route is removed exactly one re-steer returns. (7) SIGTERM of packeteer-a withdraws, and SIGKILL drops the route with the session within the 9s hold timer.
+
+`lab/e2e-agents.sh` is the probe agent lab (#478) on its own topology (`lab/docker-compose-agents.yml`): the FRR edge of the main lab, the controller in observe mode (`lab/packeteer-agents.yaml`), and two `packeteer-agent` containers (`lab/agent-site-a.yaml`, `lab/agent-site-b.yaml`) at sites `dc-a` (transit-a) and `dc-b` (transit-b) over mutual TLS. The certificates and two CRLs come from `lab/mkcerts -revoke agent-b` per run. Both agents probe `198.51.100.1`; agent-a sits behind a 40ms netem delay. After each step the edge holds only its own path for `198.51.100.0/24`.
+
+The script checks: (1) each provider's probe row names its site and agent and has that agent's RTT, and the controller recommends transit-b. (2) SIGKILL on agent-b makes transit-b fail closed (`no usable probe agent`), its decisions candidate unusable, and the recommendation disappear while agent-a keeps measuring; starting agent-b brings them back. (3) Swapping in the CRL that lists agent-b's certificate makes the running controller refuse it (`certificate revoked`), fail transit-b closed, and refuse a restarted agent-b too, with agent-a unaffected.
+
+`lab/e2e-herd.sh` is herd phase 1 (#260) on its own topology (`lab/docker-compose-herd.yml`): three Packeteer members in observe mode (member-a 192.0.2.10 in US, member-b 192.0.2.11 in DE, member-c 192.0.2.12 in JP) behind one FRR edge (`lab/frr-herd-edge`) that learns `192.0.2.128/26` with path `64501 64510` from an upstream (`lab/frr-herd-upstream`, 192.0.2.21), which also owns `192.0.2.130` so the members' real ICMP probes are answered. Keys come from `lab/mkherdkeys` per run; no seed is configured and nothing talks to a real herd. member-a and member-b share at origin-ASN level and list what they share; member-c excludes `192.0.2.0/24`, so it records and serves nothing but pulls from both.
+
+It checks: (1) every member pulls both peers without failures and the edge holds no route from a member. (2) `GET /api/herd/vantages?origin_asn=64510` shows one vantage per member and country (a: itself and b; c: a and b and none of its own; b: itself and a), never merged. (3) The preview on a and b is signed, origin-level, and holds no prefix, provider name, or AS path; member-c's preview is empty. (4) Each served pull is in the audit log as `herd.serve`. (5) With member-b paused (a peer that never answers), a and c report b failing, member-a keeps probing and stays ready. (6) SIGTERM stops member-a. Limit defaults are exercised here, not tuned.
+
+`lab/e2e-ha.sh` is active/standby HA (#31) on its own topology (`lab/docker-compose-ha.yml`): one FRR edge (`lab/frr-ha`, hold time 9s) with two Packeteer instances as iBGP neighbors, pk-a (`lab/packeteer-ha-a.yaml`, 192.0.2.10) and pk-b (`lab/packeteer-ha-b.yaml`, 192.0.2.20), sharing a `lease` elector file on one Docker volume (`ttl` 4s, `renew` 1s). On every sample, with `lab/checkpop`, it fails if the edge holds Packeteer routes from both instances at once. It checks: (1) pk-a alone takes the lease and announces `198.51.100.0/24` with next hop `192.0.2.2`, local-pref 250, `64512:666`, and `no-export`.
+
+(2) pk-b starts, is eligible, and stays standby for 20s with nothing announced. (3) `packeteer -backup` inside the running pk-a. (4) SIGKILL of pk-a: the edge drops its route with the session, and pk-b takes the expired lease and announces only after that. (5) pk-a restarts and stays standby. (6) A neighbor shutdown on the edge for the active pk-b: pk-b steps down and resigns, and pk-a takes over; pk-b's session returns and it stays standby. (7) SIGTERM of pk-a: it withdraws and releases the lease.
+
+`lab/checklease` watches the lease file from inside the standby, armed before the signal, and fails if pk-a does not release it within 20s (a release that never arrives fails; the 10s takeover bound is unchanged). pk-b announces within 10s. (8) SIGTERM of pk-b leaves nothing on the edge. (9) `packeteer -restore` of the backup with the stock image into a stopped instance's volume, and the restored config passes `-check`.
+
+`lab/e2e-docs.sh` runs a guide's shell blocks, in order, as CI steps (#50). `lab/doccmds` turns the blocks and the hidden `<!-- ci-expect: ... -->`, `ci-absent`, `ci-retry`, `ci-fails`, and `ci-skip` comments after them into a bash script. The docker job runs [docs/quickstart.md](../docs/quickstart.md) and [docs/troubleshooting.md](../docs/troubleshooting.md) against the image it built (tagged as `:edge` and as every release version the guide or `docker-compose.yml` pins, with `raw.githubusercontent.com` downloads of `main` or a `v<version>` tag read from the checkout and `docker pull` refused).
+
+The `e2e` job runs [docs/walkthrough.md](../docs/walkthrough.md) on its own topology (`lab/docker-compose-walkthrough.yml`): the FRR edge in `lab/frr-walkthrough`, which is the configuration [docs/frr.md](../docs/frr.md) shows (a unit test keeps them identical), the BMP lab's two transits, and Packeteer reading `lab/walkthrough/config.yaml`, a copy of `lab/packeteer-walkthrough.yaml` the guide edits. The guide checks: (1) the session and the native path through transit-a. (2) Observe: the prefix is learned with `rib_provider` transit-a and recommended onto transit-b, and nothing is announced.
+
+(3) Suggest: the same recommendation, logged with `mode=suggest`, still nothing on the edge. (4) Inject: `-check` of the edited file, then the edge's best path is Packeteer's with next hop `192.0.2.22`, local-pref 250, `64512:666`, and `no-export`, and neither transit is sent the prefix. (5) SIGTERM (`docker stop -t 30`) withdraws it and the edge is back on transit-a. (6) Back to observe, nothing returns.
+
+GitHub Actions runs all twelve scripts and the walkthrough as the `e2e` job. Docker and Go are required (the scripts build `lab/checkroute`, `lab/checkpath`, `lab/checkms`, `lab/checkpop`, `lab/checklease`, and `lab/mkcerts`); they do not run in the unit-test job. `go test ./lab/checkroute ./lab/checkpath ./lab/checkms ./lab/checkpop ./lab/checklease ./lab/doccmds` covers the checks themselves.
+
+```sh
+bash lab/e2e.sh
+bash lab/e2e-commit.sh
+bash lab/e2e-cost.sh
+bash lab/e2e-inbound.sh
+bash lab/e2e-inbound-med.sh
+bash lab/e2e-overload.sh
+bash lab/e2e-verify-inbound.sh
+bash lab/e2e-verify-outbound.sh
+bash lab/e2e-mitigation.sh
+bash lab/e2e-bmp.sh
+bash lab/e2e-addpath.sh
+bash lab/e2e-multirouter.sh
+bash lab/e2e-ix.sh
+bash lab/e2e-more-specific.sh
+bash lab/e2e-synthesize.sh
+bash lab/e2e-vrf.sh
+bash lab/e2e-leak-watch.sh
+bash lab/e2e-multipop.sh
+bash lab/e2e-herd.sh
+bash lab/e2e-agents.sh
+bash lab/e2e-ha.sh
+PACKETEER_DOCS_DIR=. bash lab/e2e-docs.sh docs/walkthrough.md
+```
+
+`lab/soak.sh` is the load and soak test (#51), with no FRR: `lab/soak` plays the edge with a minimal BGP speaker that sends a full-table-sized synthetic RIB (1,250,000 documentation prefixes on the `pr` and `soak` profiles), exports IPFIX at 20,000 records a second, churns 6,000 prefixes a minute, and reads the stock image's process and ops API while Packeteer runs in observe with a mounted config. It fails when a figure in `lab/soak/budgets.yaml` is over budget, when the session or readiness drops, when observe sends the router a route, or when SIGTERM does not stop Packeteer cleanly.
+
+The `load` CI job runs the 10-minute `pr` profile and the `load-bmp` job the `bmp` profile (#237: the same workload with no iBGP session, the table over BMP); `.github/workflows/soak.yml` runs the 5h30m `soak` profile weekly. `routes3m` is a separate opt-in profile (3,000,000 prefixes, no budgets, not what CI runs): `bash lab/soak.sh IMAGE routes3m`. The 1.25M table measured about 4.5 GiB RSS, so 3M is on the order of 11 GiB before collector headroom; do not run it on a small host. The multi-session profiles (#383) play 2 to 4 routers and run Packeteer in inject mode inside an allowlist of the documentation blocks, with flaps, a slow peer, and the outage and vip sources: the `load-multi` CI job runs `multi-smoke` on every pull request, and `.github/workflows/load-multi.yml` runs `multi2` and `multi4` weekly. `lab/realtable.sh` (#342) is an opt-in replay of one peer's view of a public RIPE RIS or RouteViews dump, downloaded at run time and never committed, in observe mode over loopback with next hops rewritten to documentation addresses; it is not part of CI (`.github/workflows/realtable.yml` is manual only). Budgets and measured values: [docs/performance.md](../docs/performance.md).
+
+## MikroTik CHR lab (#52)
+
+`lab/e2e-chr.sh` (CI job `chr`) runs Packeteer against RouterOS instead of FRR, with no GNS3 and no Docker topology for the router. It downloads the free CHR image (pinned to 7.23.7 long-term, SHA-256 checked) from `download.mikrotik.com` at run time and boots a throwaway qcow2 overlay of it in QEMU (KVM when `/dev/kvm` is usable, otherwise TCG). The router stays on the free license level, which is enough for BGP; the script fails if it is not. Nothing from the image is committed or cached.
+
+The CHR has two NICs: ether1 on QEMU user networking, used only to reach its REST API from a host loopback port, and ether2 on a tap device (`pkchr0`, 192.0.2.0/24) shared with the host. [lab/chr/edge.rsc](chr/edge.rsc) is applied through `/rest/execute`; its middle block is the iBGP configuration in [docs/mikrotik.md](../docs/mikrotik.md) (a `lab/doccmds` test keeps them identical). On the host side of the tap:
+
+- Packeteer (192.0.2.10), the image built from the repo Dockerfile, `--network host`, `lab/chr/packeteer.yaml` mounted, inject mode with the fixed prober.
+- `lab/chrpeer` speakers (GoBGP): transit-a (192.0.2.1, AS 64496) and transit-b (192.0.2.2, AS 64497) both originate `198.51.100.0/24`; a collector (192.0.2.20, AS 64498) records everything the CHR exports over eBGP; an untagged iBGP speaker (192.0.2.30) sends `203.0.113.0/24` without the Packeteer community through the same `packeteer-in` filter.
+
+The script reads `/routing/route` and `/routing/bgp/session` over REST and checks:
+
+1. The free license level, every session up, the untagged route filtered by `packeteer-in`, and the collector holding the native `198.51.100.0/24`.
+2. Packeteer's route: exactly one, from 192.0.2.10, next hop 192.0.2.2, local preference 250, communities `64512:666` and `no-export`, active (it beats the eBGP paths on local preference). It stays for 10s after the router stops advertising the native path to Packeteer.
+3. The collector loses the prefix while Packeteer's route is best and never sees `64512:666`. `203.0.113.0/24` is allowlisted and probed but never in the learned RIB, so it must never arrive from Packeteer. Both are checked on every read for the whole run.
+4. The session uses the router's 9s hold time and Packeteer does not offer graceful restart.
+5. Flip-back withdraws the route and the collector gets the native path back; restoring the probes announces it again.
+6. SIGTERM withdraws it and Packeteer exits 0 after `withdrew all ... prefixes=1`.
+7. SIGSTOP (a frozen process that keeps TCP open): the route stays while the session is established and is gone when the 9s hold timer expires.
+8. SIGKILL: exit 137, the session closes and the route is gone within the hold time.
+
+Locally without Docker: `CHR_ACCEL=tcg PACKETEER_BIN=/path/to/packeteer bash lab/e2e-chr.sh` (needs sudo for the tap, `qemu-system-x86_64`, `qemu-img`, `jq`, `unzip`, and Go). `CHR_CACHE=dir` keeps the downloaded zip between runs.
+
+## Router interop matrix (#53)
+
+`lab/e2e-interop.sh <router> <feature>` runs one cell of the matrix on its own topology (`lab/interop/docker-compose.yml`, one compose profile per router). One simulated edge at 192.0.2.254 (AS 64512) sits between Packeteer (the image built from the repo Dockerfile, inject mode, mounted config) and two simulated FRR eBGP transits: transit-a (`lab/interop/frr-transit-a`, AS 64496) and transit-b (`lab/interop/frr-transit-b`, AS 64497, prepended, so inactive on the edge). Both transits keep what the edge sends them (soft-reconfiguration inbound) for the export check. The edges:
+
+- `frr`: FRR 10.2.4, `lab/interop/frr/frr.conf`.
+- `bird2` and `bird3`: Debian's `bird2` and `bird3` packages (`lab/interop/bird/Dockerfile`), `lab/interop/bird/bird.conf`, plus `bird-bmp.conf` for BMP (BIRD 3 only).
+- `gobgp`: `gobgpd` built at run time from the GoBGP version in `go.mod`, `lab/interop/gobgp/gobgpd.toml`, plus `bmp.toml` for BMP.
+
+Every edge accepts only routes with `64512:666` from Packeteer, exports nothing to eBGP, holds the Packeteer session at 9s, leaves graceful restart off, and offers add-path send. The features are Packeteer configs: `ibgp` (`lab/interop/packeteer.yaml`, best path only), `addpath` (`packeteer-addpath.yaml`), `bmp` (`packeteer-bmp.yaml`), and `bmponly` (`packeteer-bmponly.yaml`, #237: no iBGP session, the RIB view from BMP alone, the decision on the external policy feed). `lab/interopcheck` reads FRR JSON, `birdc show route all` (BIRD 2 and 3), and `gobgp global rib -j` into one path list and applies the same check to each. The steps for each column, and the BIRD 3 BMP refeed gap, are in [docs/routers.md](../docs/routers.md#interop-matrix). On every sample of every wait, the script also fails if the edge holds a Packeteer route for `203.0.113.0/24` or `198.51.100.128/25`. Both are allowlisted and probed, but no router advertises them.
+
+`.github/workflows/interop.yml` runs every cell, plus the CHR (`lab/e2e-chr.sh`), weekly, on demand, and on pull requests that touch the lab, the announcer, or the BMP station. `go test ./lab/interopcheck` covers the parser with real BIRD 2.17, BIRD 3.1, and GoBGP output.
+
+```sh
+for r in frr bird2 bird3 gobgp; do
+	for f in ibgp addpath bmp; do
+		[ "$r$f" = bird2bmp ] || bash lab/e2e-interop.sh "$r" "$f"
+	done
+done
+```
+
+## Failure-mode matrix (#234)
+
+`lab/e2e-failure-matrix.sh SURFACE [FAILURE...]` runs one injection surface through six failures, each from a fresh Packeteer and the surface's baseline routes, and asserts on the simulated routers (never on Packeteer's own view). On every sample no prefix outside the surface's learned set and no more than its route cap may be on the router.
+
+| Failure | What is done | Routes afterwards |
+|---|---|---|
+| `sigkill` | `docker kill -s KILL` | gone within the router's hold timer; HA: the standby's route, never both |
+| `session-loss` | `neighbor shutdown` on the edge | gone while Packeteer runs; HA: the standby's route |
+| `stale-measurements` | outbound, more-specific, HA: the fixed prober's file is removed; inbound: the telemetry file; mitigation: the prober file | withdrawn; mitigation keeps its rules (probe results never keep or drop them, the TTL does) |
+| `source-gone` | outbound, more-specific, HA: the prefix leaves the static target source on a reload, then the probe file is removed; inbound: the probe file under a performance steer; mitigation: rules with a 30s TTL and no client | outbound, more-specific, HA: kept while measurements are fresh (an improvement keeps its prefix probed, #116), then withdrawn; inbound, mitigation: withdrawn |
+| `reload-observe` | SIGHUP with `mode: observe` | withdrawn and not re-announced |
+| `lowered-cap` | SIGHUP with a lower cap | outbound, more-specific, HA: `max_improvements: 0` withdraws; inbound (shared cap) and mitigation (`max_rules`): the reload is refused by name and the routes stay |
+
+Surfaces are the files in `lab/failure-matrix/`. A new surface adds its file, which must answer every failure with a `case_<failure>` function or a reasoned `na_<failure>`, and an entry in the `failure-matrix` job in `.github/workflows/ci.yml`; `go test ./lab/failure-matrix` fails until both exist. `lab/matrixcfg` moves a lab config's inline fixed-prober results into a file so the case can remove them.
+
+`MATRIX_BREAK=reload-observe` skips the config edit of that case, as a controller whose withdraw path is broken would: the SIGHUP changes nothing and the routes stay. The CI job runs that and requires the matrix to fail on the routes left on the router.
+
+`lab/e2e-netbox.sh` is the NetBox inventory (#208, `lab/docker-compose-netbox.yml`): a NetBox container with PostgreSQL and Redis, seeded over its REST API with two tagged providers and one untagged. The script runs `packeteer config plan`, `diff`, and `apply -plan ID -git` against it, and checks that the plan names the tagged providers only, that the git commit holds the same changed lines as `diff`, that `packeteer -check` accepts the written file, and that a second plan is empty. Observe mode; nothing announces.
+
+## Running demo
+
+The running demo is a separate checkout, not a compose file in this repo. It has two transit providers, one customer, and one IX peer. Telling those sessions apart (peer vs customer vs transit) and suggesting the role is still open (#103). A suggestion must not write itself into the running config.

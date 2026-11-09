@@ -1,0 +1,4 @@
+providers:
+  - name: x-b
+    commit_mbps: 100
+    usage_mbps: 60

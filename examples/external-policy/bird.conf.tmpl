@@ -1,0 +1,37 @@
+# Rendered by packeteer-policy from the Packeteer external policy feed
+# (docs/external-policy.md). Do not edit: every poll rewrites this file.
+# Include it at the top level of bird.conf (BIRD 2 or 3), at the start of a
+# line: include "/var/lib/packeteer-policy/routes.conf";
+# Static routes have preference 200, so each one wins over the BGP paths.
+# Graceful restart stays off: when this BIRD or its session goes, the routes
+# must go with it. Build the session that carries them to the edge from
+# this template, after the include:
+#   protocol bgp edge from packeteer_feed_session { ... }
+template bgp packeteer_feed_session {
+	graceful restart off;
+	long lived graceful restart off;
+}
+
+protocol static packeteer_feed4 {
+	ipv4;
+{{- range .Routes}}{{if .Prefix.Addr.Is4}}
+	route {{.Prefix}} via {{.NextHop}} {
+		bgp_local_pref = {{.LocalPref}};
+{{- range .Communities}}{{$c := split . ":"}}
+		{{if eq (len $c) 3}}bgp_large_community.add(({{index $c 0}}, {{index $c 1}}, {{index $c 2}}));{{else}}bgp_community.add(({{index $c 0}}, {{index $c 1}}));{{end}}
+{{- end}}
+	};
+{{- end}}{{end}}
+}
+
+protocol static packeteer_feed6 {
+	ipv6;
+{{- range .Routes}}{{if .Prefix.Addr.Is6}}
+	route {{.Prefix}} via {{.NextHop}} {
+		bgp_local_pref = {{.LocalPref}};
+{{- range .Communities}}{{$c := split . ":"}}
+		{{if eq (len $c) 3}}bgp_large_community.add(({{index $c 0}}, {{index $c 1}}, {{index $c 2}}));{{else}}bgp_community.add(({{index $c 0}}, {{index $c 1}}));{{end}}
+{{- end}}
+	};
+{{- end}}{{end}}
+}

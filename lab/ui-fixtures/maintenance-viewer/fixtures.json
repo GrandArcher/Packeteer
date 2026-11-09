@@ -1,0 +1,7 @@
+{
+  "inject": {"page": "/policies.html", "script": "driver.js"},
+  "stubs": [
+    {"method": "GET", "path": "/api/me", "file": "me.json"},
+    {"method": "GET", "path": "/api/maintenance", "file": "maintenance.json"}
+  ]
+}

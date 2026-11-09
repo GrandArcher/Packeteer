@@ -1,0 +1,29 @@
+{
+  "prefixes": 2,
+  "bytes": 250000000,
+  "mbps": 200,
+  "est_savings": 160,
+  "truncated": false,
+  "rows": [
+    {
+      "prefix": "192.0.2.0/25",
+      "bytes": 150000000,
+      "mbps": 120,
+      "transit": "transit-b",
+      "peers": [
+        {"exchange": "ix-lab", "peer": "ix-peer-a"},
+        {"exchange": "ix-lab", "peer": "ix-peer-b"}
+      ]
+    },
+    {
+      "prefix": "198.51.100.0/24",
+      "bytes": 100000000,
+      "mbps": 80,
+      "transit": "transit-a",
+      "peers": [
+        {"exchange": "ix-lab", "peer": "ix-peer-a"}
+      ],
+      "est_savings": 160
+    }
+  ]
+}

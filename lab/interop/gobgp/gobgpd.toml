@@ -1,0 +1,92 @@
+# Simulated GoBGP edge for the router interop matrix (#53). Lab only:
+# documentation prefixes (RFC 5737) and documentation/private ASNs.
+# Packeteer is 192.0.2.10, this router is 192.0.2.254, transit-a (AS 64496)
+# is 192.0.2.21, transit-b (AS 64497) is 192.0.2.22.
+#
+# Both transits send 198.51.100.0/24; transit-b prepends, so its path is
+# inactive here. The Packeteer session offers add-path send (send-max): it
+# is used only when Packeteer asks for it (bgp.neighbors[].add_path),
+# otherwise the session carries the best path alone. gobgpd-bmp.toml is this
+# file plus a BMP feed. Graceful restart is not configured (off).
+
+[global.config]
+  as = 64512
+  router-id = "192.0.2.254"
+  local-address-list = ["192.0.2.254"]
+
+[global.apply-policy.config]
+  import-policy-list = ["from-packeteer"]
+  default-import-policy = "accept-route"
+  export-policy-list = ["to-transits"]
+  default-export-policy = "accept-route"
+
+[[defined-sets.neighbor-sets]]
+  neighbor-set-name = "packeteer"
+  neighbor-info-list = ["192.0.2.10/32"]
+
+[[defined-sets.neighbor-sets]]
+  neighbor-set-name = "transits"
+  neighbor-info-list = ["192.0.2.21/32", "192.0.2.22/32"]
+
+[[defined-sets.bgp-defined-sets.community-sets]]
+  community-set-name = "packeteer"
+  community-list = ["64512:666"]
+
+# Accept only routes from Packeteer that carry its community.
+[[policy-definitions]]
+  name = "from-packeteer"
+  [[policy-definitions.statements]]
+    name = "untagged"
+    [policy-definitions.statements.conditions.match-neighbor-set]
+      neighbor-set = "packeteer"
+    [policy-definitions.statements.conditions.bgp-conditions.match-community-set]
+      community-set = "packeteer"
+      match-set-options = "invert"
+    [policy-definitions.statements.actions]
+      route-disposition = "reject-route"
+
+# Never export to an eBGP neighbor: Packeteer's routes stay here.
+[[policy-definitions]]
+  name = "to-transits"
+  [[policy-definitions.statements]]
+    name = "deny-all"
+    [policy-definitions.statements.conditions.match-neighbor-set]
+      neighbor-set = "transits"
+    [policy-definitions.statements.actions]
+      route-disposition = "reject-route"
+
+[[neighbors]]
+  [neighbors.config]
+    neighbor-address = "192.0.2.10"
+    peer-as = 64512
+    description = "packeteer"
+  # 9s wins against Packeteer's 90s proposal; lab/e2e-interop.sh bounds the
+  # SIGKILL withdraw on it.
+  [neighbors.timers.config]
+    hold-time = 9
+    keepalive-interval = 3
+  [neighbors.transport.config]
+    passive-mode = true
+  [[neighbors.afi-safis]]
+    [neighbors.afi-safis.config]
+      afi-safi-name = "ipv4-unicast"
+    [neighbors.afi-safis.add-paths.config]
+      send-max = 8
+
+[[neighbors]]
+  [neighbors.config]
+    neighbor-address = "192.0.2.21"
+    peer-as = 64496
+    description = "transit-a"
+  [[neighbors.afi-safis]]
+    [neighbors.afi-safis.config]
+      afi-safi-name = "ipv4-unicast"
+
+[[neighbors]]
+  [neighbors.config]
+    neighbor-address = "192.0.2.22"
+    peer-as = 64497
+    description = "transit-b"
+  [[neighbors.afi-safis]]
+    [neighbors.afi-safis.config]
+      afi-safi-name = "ipv4-unicast"

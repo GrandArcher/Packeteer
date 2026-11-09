@@ -1,0 +1,16 @@
+{
+  "version": "lab",
+  "mode": "observe",
+  "ready": true,
+  "generated_at": "2026-10-18T12:00:00Z",
+  "configured": true,
+  "manager": true,
+  "stale": false,
+  "member_count": 2,
+  "address_count": 2,
+  "ixps": [],
+  "members": [
+    {"asn": 64496, "name": "Example Member A", "connections": []},
+    {"asn": 64497, "name": "Example Member B", "connections": []}
+  ]
+}

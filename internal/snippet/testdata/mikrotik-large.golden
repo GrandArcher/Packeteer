@@ -1,0 +1,25 @@
+# Packeteer on RouterOS 7. Generated for review: nothing is applied. Check the
+# commands against your RouterOS release first.
+# This router: AS 64512, 192.0.2.254. Packeteer: 192.0.2.10.
+# Skip the instance line when the router already has a BGP instance, and
+# use its name below.
+/routing bgp instance add name=edge as=64512 router-id=192.0.2.254
+/routing bgp connection add name=packeteer instance=edge \
+    local.address=192.0.2.254 local.role=ibgp \
+    remote.address=192.0.2.10 remote.as=64512 \
+    output.redistribute=bgp output.default-originate=never \
+    hold-time=30s \
+    input.filter=packeteer-in
+
+# From Packeteer: accept only routes that carry the Packeteer community.
+/routing filter rule add chain=packeteer-in \
+    rule="if (bgp-large-communities includes 64512:1:666) { accept }"
+/routing filter rule add chain=packeteer-in rule="reject"
+
+# Toward every eBGP peer, customers included: never export that community.
+# Add this rule at the top of the output chain each transit, peer, and IX
+# connection already uses (rename ebgp-out to it); place-before=0 keeps your
+# existing rules after it, and no connection is changed.
+/routing filter rule add chain=ebgp-out place-before=0 \
+    rule="if (bgp-large-communities includes 64512:1:666) { reject }"
+# Packeteer never offers graceful restart. Leave it off for this connection.

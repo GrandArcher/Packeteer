@@ -1,0 +1,10 @@
+# Failure-mode matrix (#234), HA surface: a writable copy of each
+# instance's config over the one lab/docker-compose-ha.yml mounts (see
+# override.yml). The probe directory mount is already in that file.
+services:
+  packeteer-a:
+    volumes:
+      - ${PACKETEER_LAB_CONFIG_A}:/etc/packeteer/config.yaml:ro
+  packeteer-b:
+    volumes:
+      - ${PACKETEER_LAB_CONFIG_B}:/etc/packeteer/config.yaml:ro

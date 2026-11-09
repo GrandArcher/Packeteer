@@ -1,0 +1,2078 @@
+package probe
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"maps"
+	"net/netip"
+	"slices"
+	"sort"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/GrandArcher/Packeteer/internal/exchange"
+	"github.com/GrandArcher/Packeteer/internal/sockmark"
+	"github.com/GrandArcher/Packeteer/pkg/plugin"
+)
+
+// silentHostLimit is how many hosts of one job may get no reply before the
+// job stops trying the other in-prefix hosts, once its provider looks down
+// (dispatcher.looksDown, #381).
+const silentHostLimit = 2
+
+// Provider is a transit whose path is measured from Source.
+type Provider struct {
+	Name   string
+	Source netip.Addr
+	// NextHop is the provider's far-side gateway, the hop just past the
+	// edge toward this provider. Zero means it is not known. It is a probe
+	// target only: it is not a new provider and nothing is announced to it.
+	NextHop netip.Addr
+	// Marking tags this provider's probe packets when its Source is shared
+	// with other providers (#157).
+	Marking sockmark.Marking
+	// Site, when set, makes the provider measured only by probe agents at
+	// that site (#230). Source and Marking are then unset: the agent
+	// knows its own source address and tag for the provider.
+	Site string
+	// SiteV6 is the address family of a site provider's probe source,
+	// which this host cannot see: targets of the other family are skipped
+	// as for a local provider.
+	SiteV6 bool
+}
+
+// is4 reports whether the provider probes IPv4 targets.
+func (p Provider) is4() bool {
+	if p.Site != "" {
+		return !p.SiteV6
+	}
+	return p.Source.Is4()
+}
+
+// Request builds a probe request from this provider toward target, with
+// its tag.
+func (p Provider) Request(target netip.Addr, count int, timeout time.Duration) plugin.ProbeRequest {
+	return plugin.ProbeRequest{Provider: p.Name, Source: p.Source, Target: target,
+		Count: count, Timeout: timeout, Mark: p.Marking.Mark, DSCP: p.Marking.DSCP, Site: p.Site}
+}
+
+// NamedProber is one entry of the ordered prober chain.
+type NamedProber struct {
+	Name   string
+	Prober plugin.Prober
+	// Type is the plugin type (icmp, tcp, udp, exec, ...). It is the
+	// Protocol on each sample's Confidence (#202).
+	Type string
+}
+
+// NamedSource is one configured target source.
+type NamedSource struct {
+	Name   string
+	Source plugin.TargetSource
+}
+
+// Limiter bounds the global packet rate. *rate.Limiter satisfies it.
+type Limiter interface {
+	WaitN(ctx context.Context, n int) error
+}
+
+// Options tune the engine.
+type Options struct {
+	Interval             time.Duration // time between rounds
+	Timeout              time.Duration // per-packet timeout
+	Packets              int           // packets per probe run
+	Workers              int           // concurrent probe runs
+	ProviderInflight     int           // concurrent runs per provider; 0 is no cap
+	PerTargetConcurrency int           // concurrent runs toward one target host
+	Limiter              Limiter       // nil: unlimited
+	Logger               *slog.Logger
+	Now                  func() time.Time
+	// Sleep waits between rounds. Nil uses a timer. Tests set it so Run's
+	// scheduler can be stepped without waiting on the wall clock.
+	Sleep    func(context.Context, time.Duration) error
+	OnResult func(Result) // called for every result (optional)
+	OnRound  func()       // called after each completed round (optional)
+	// RoundTimeout bounds one round, including target collection. Zero
+	// derives a bound from the interval and the per-probe deadline. A round
+	// that exceeds it stores the probes that finished and leaves the rest
+	// as they were: a prober or target source that ignores cancellation
+	// must not refresh a result it did not finish, and must not discard
+	// results that did finish.
+	RoundTimeout time.Duration
+	// RetryLossPct, when greater than zero, re-probes a path with
+	// RetryPackets before the result is stored if loss is at least this
+	// percent. Zero disables loss retry. The retry sample replaces the
+	// first. Dispersion over the limit escalates the same way when
+	// RetryPackets is positive.
+	RetryLossPct float64
+	RetryPackets int
+	// MinReplies is how many replies a host needs before it can define
+	// the score. Zero uses 1, so any reply counts. Fewer replies are
+	// left out the way a silent host is.
+	MinReplies int
+	// Dispersion is the maximum RTT spread (max reply minus min reply)
+	// for a host that defines the score. Zero disables the check. A
+	// wider spread is left out the way a silent host is, and the prefix
+	// is probed again with RetryPackets.
+	Dispersion time.Duration
+	// ProberRecheckRounds is how often a host is probed from the first
+	// prober again. Probe 1, N+1, 2N+1, ... start at the chain head. The
+	// others start at the prober that last got a reply from that host
+	// and move only forward. Zero uses DefaultProberRecheckRounds.
+	// One means every probe starts at the chain head.
+	ProberRecheckRounds int
+	// ProberMemory caps how many hosts keep a remembered prober. Zero
+	// uses DefaultProberMemory. Hosts that leave the target set are
+	// dropped. Past the cap, the least recently probed hosts are dropped.
+	ProberMemory int
+	// ExchangeLANs are peering LANs (#145). A prefix inside one, or a
+	// pinned host on one, is not probed. A provider next hop on a LAN
+	// stays the far-side gateway probe. Nil leaves every target alone.
+	ExchangeLANs []netip.Prefix
+	// Indirect, when set, traces a prefix whose in-prefix addresses are
+	// all silent from each provider's source and scores that provider at
+	// its own highest stable hop (#123). Nil disables it.
+	Indirect *Indirect
+	// Exclude is probe.exclude (#203). Nil or empty leaves every target
+	// alone. An excluded prefix, address, or origin ASN gets no packet
+	// from any source, retained improvement, or manual queue entry.
+	Exclude *Exclusion
+	// PerASN is probe.per_asn_pps (#203), waited on before Limiter by the
+	// prober chain and indirect traces. Nil is no per-ASN cap.
+	PerASN *ASNLimits
+	// OnBatch, when set, receives the results a round stored, with Share
+	// filled, after OnResult. It must not block (herd hands off to a
+	// bounded queue). Results stored in the engine never carry Share.
+	OnBatch func([]Result)
+}
+
+// Result is the latest measurement of one provider toward one prefix.
+type Result struct {
+	Provider string       `json:"provider"`
+	Prefix   netip.Prefix `json:"prefix"`
+	Target   netip.Addr   `json:"target"`
+	// Targets is every address probed for this provider and prefix, in
+	// the order they were tried. Target is the one that defined the score.
+	Targets []netip.Addr `json:"targets,omitempty"`
+	Prober  string       `json:"prober,omitempty"` // prober that produced Stats
+	Stats   Stats        `json:"stats"`
+	Err     string       `json:"error,omitempty"` // set when no measurement was possible
+	Time    time.Time    `json:"time"`
+	// Round is when the probe round that stored this result ended. Every
+	// result a round stores carries the same Round, so a prefix whose
+	// providers differ in Round was only partly measured by its newest
+	// round (a timed-out round, #381).
+	Round time.Time `json:"round,omitzero"`
+	// Subranges, when the target carried two or more (#121), are the
+	// per-sub-range measurements. Stats is then their traffic-weighted
+	// aggregate. Measurement only.
+	Subranges []SubrangeResult `json:"subranges,omitempty"`
+	// Indirect is true when every address inside the prefix was silent
+	// and Target is this provider's highest stable traceroute hop toward
+	// it (#123). Measurement only.
+	Indirect bool `json:"indirect,omitempty"`
+	// Hops is the stable traceroute hop addresses, in TTL order, from this
+	// provider's indirect trace (#124). Empty when no trace is cached.
+	// Outage detection maps them to origin ASNs. Measurement only.
+	Hops []netip.Addr `json:"hops,omitempty"`
+	// Confidence rates how far Stats can be trusted (#202): the prober
+	// type, the reply count, a traceroute hop, and the RTT spread. The
+	// decision engine adds passive agreement for the path that carries the
+	// traffic. Measurement only unless thresholds.require_evidence is on.
+	Confidence Confidence `json:"confidence"`
+	// Site and Agent are the site and probe agent (#230) that took the
+	// measurement, comma-separated when the hosts behind Stats came from
+	// several. Empty for a measurement taken on this host.
+	Site  string `json:"site,omitempty"`
+	Agent string `json:"agent,omitempty"`
+	// Share is the raw evidence behind Stats and the target sources that
+	// listed the prefix, kept only for Options.OnBatch (herd, #260). It is
+	// nil in stored results.
+	Share *Share `json:"-"`
+}
+
+// HostRaw is one probed host's raw outcome: packets sent and one RTT per
+// reply, in send order.
+type HostRaw struct {
+	Sent int
+	RTTs []time.Duration
+}
+
+// Share is the evidence herd builds a record from. Hosts holds the hosts
+// that defined the score, so the records recompute to Stats. It is empty
+// for a failed result, a sub-range aggregate, and an indirect trace.
+type Share struct {
+	Hosts   []HostRaw
+	Sources []string
+}
+
+// OK reports whether the result holds a measurement.
+func (r Result) OK() bool { return r.Err == "" }
+
+// ProviderStatus is the probe-source health of one provider.
+type ProviderStatus struct {
+	Name   string     `json:"name"`
+	Source netip.Addr `json:"source"`
+	Site   string     `json:"site,omitempty"` // probe agents' site (#230); Source is then unset
+	Up     bool       `json:"up"`
+	Reason string     `json:"reason,omitempty"`
+	Since  time.Time  `json:"since"`
+}
+
+type key struct {
+	provider string
+	prefix   netip.Prefix
+}
+
+type job struct {
+	provider Provider
+	target   plugin.Target
+	hosts    []netip.Addr
+	subs     []plugin.Subrange
+}
+
+// keepShare reports whether results carry Share.
+func (e *Engine) keepShare() bool { return e.opt.OnBatch != nil }
+
+// Engine runs probe rounds and stores the latest results.
+type Engine struct {
+	providers []Provider
+	probers   []NamedProber
+	sources   []NamedSource
+	opt       Options
+	// sched overrides interval, timeout, packets, and loss-retry timing
+	// after a reload (#128). Nil keeps Options, which tests mutate directly.
+	sched atomic.Pointer[Timing]
+	log   *slog.Logger
+
+	mu      sync.RWMutex
+	results map[key]Result
+	status  map[string]ProviderStatus
+	// srcDown is the source-unavailable reason from the last round a
+	// provider ran; pathDown is the probe-path mismatch mark (#150). Both
+	// are guarded by mu and persist across rounds so a provider a round
+	// did not run, or a source that is still mis-routed, does not flip up.
+	srcDown  map[string]string
+	pathDown map[string]string
+	// cadence is the probe interval per prefix from the last complete
+	// target list. Positive target intervals override Options.Interval.
+	cadence map[netip.Prefix]time.Duration
+	// memory is the last host and interval a configured source submitted
+	// for a prefix. retained is the decision state's active improvements
+	// (#116): those prefixes stay in the probe set after every configured
+	// source drops them. Both are guarded by mu.
+	memory   map[netip.Prefix]plugin.Target
+	retained map[netip.Prefix]struct{}
+	// urgent is the decision state's half-confirmed prefixes (#117).
+	// They are probed after a quarter of their interval instead of
+	// waiting out the whole interval. A source that sets Target.Urgent
+	// still probes on this round. The global rate limit still applies.
+	// An empty set clears the mark. Guarded by mu.
+	urgent map[netip.Prefix]struct{}
+	// manual is the operator's queue (QueueManual, #126), guarded by mu.
+	manual map[netip.Prefix]*manualEntry
+	// probedAt is when Run last probed the prefix. SetUrgent uses it so
+	// a confirm streak does not wake the scheduler before the quarter-
+	// interval gap. Guarded by mu.
+	probedAt map[netip.Prefix]time.Time
+	// srcCache holds the last target list for sources that are not on a
+	// shorter cadence than Options.Interval. A VIP wake does not start
+	// those sources again.
+	srcCache map[string]sourceSnap
+
+	semMu sync.Mutex
+	sems  map[netip.Addr]chan struct{}
+
+	// stateMu guards probeBusy and srcBusy. A timed-out round leaves its
+	// probes (or a target source that ignores cancellation) running, and
+	// further rounds are skipped until that work returns, so a stuck
+	// prober cannot pile up goroutines.
+	stateMu   sync.Mutex
+	probeBusy bool
+	srcBusy   map[string]bool
+	// silentLast marks providers whose last round with a finished job got
+	// no reply on any job; only those may skip in-prefix hosts (#381).
+	// Guarded by stateMu.
+	silentLast map[string]bool
+
+	// wake is a one-slot signal. OnRound calls Wake when a detector has
+	// new prefixes so sleep returns without waiting out the interval.
+	wake chan struct{}
+
+	// prefixCommits counts prefixes whose results were stored, once per
+	// prefix per round that stored at least one of that prefix's results.
+	// The load test turns this into active prefixes measured per hour (#125).
+	prefixCommits atomic.Uint64
+
+	// proberMem remembers which prober got a reply from a host. proberPlan
+	// is the chain start chosen for the current round (one per host, shared
+	// by providers and by a loss retry). proberNote is the latest chain
+	// index that got a reply this round. All three are guarded by mu.
+	proberMem  map[netip.Addr]proberSlot
+	proberPlan map[netip.Addr]int
+	proberNote map[netip.Addr]int
+	memTick    uint64
+
+	// indMu guards the indirect hop cache and trace queue (#123).
+	// indWake starts a background pass.
+	indMu     sync.Mutex
+	indCache  map[key]indirectHop
+	indQueued map[key]indirectReq
+	indOrder  []key
+	indWake   chan struct{}
+}
+
+// errSourceBusy is returned when a target source's previous call has not
+// returned. The round is treated as incomplete and previous results stay.
+var errSourceBusy = errors.New("previous call still running")
+
+// sourceSnap is one source's last target list. fast is true when any
+// target asked for a shorter interval than the engine, and that source
+// is read on every wake.
+type sourceSnap struct {
+	at      time.Time
+	targets []plugin.Target
+	err     error
+	fast    bool
+	// since is when the source last went from failing to working or back.
+	since time.Time
+}
+
+// SourceStatus is the outcome of a target source's latest call. Since is
+// when it last started or stopped failing.
+type SourceStatus struct {
+	Targets int
+	Err     string
+	Since   time.Time
+}
+
+// SourceStatus reports the latest call to the named source. It is false
+// until the source has answered once.
+func (e *Engine) SourceStatus(name string) (SourceStatus, bool) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	c, ok := e.srcCache[name]
+	if !ok {
+		return SourceStatus{}, false
+	}
+	st := SourceStatus{Targets: len(c.targets), Since: c.since}
+	if c.err != nil {
+		st.Err = c.err.Error()
+	}
+	return st, true
+}
+
+// New validates inputs and returns an engine.
+func New(providers []Provider, probers []NamedProber, sources []NamedSource, opt Options) (*Engine, error) {
+	if len(providers) == 0 {
+		return nil, errors.New("probe: no providers")
+	}
+	if len(probers) == 0 {
+		return nil, errors.New("probe: no probers")
+	}
+	if opt.Packets < 1 || opt.Timeout <= 0 || opt.Interval <= 0 {
+		return nil, errors.New("probe: packets, timeout and interval must be positive")
+	}
+	if opt.RetryLossPct < 0 || opt.RetryLossPct > 100 {
+		return nil, errors.New("probe: retry loss percent must be between 0 and 100")
+	}
+	if opt.RetryLossPct > 0 && opt.RetryPackets < 1 {
+		return nil, errors.New("probe: retry packets must be positive when retry is enabled")
+	}
+	if opt.MinReplies == 0 {
+		opt.MinReplies = 1
+	}
+	if opt.MinReplies < 1 || opt.MinReplies > 1000 {
+		return nil, fmt.Errorf("probe: min replies %d must be between 1 and 1000", opt.MinReplies)
+	}
+	if opt.Dispersion < 0 {
+		return nil, errors.New("probe: dispersion must not be negative")
+	}
+	if opt.ProberRecheckRounds == 0 {
+		opt.ProberRecheckRounds = DefaultProberRecheckRounds
+	}
+	if opt.ProberRecheckRounds < 1 || opt.ProberRecheckRounds > MaxProberRecheckRounds {
+		return nil, fmt.Errorf("probe: prober recheck rounds %d must be between 1 and %d", opt.ProberRecheckRounds, MaxProberRecheckRounds)
+	}
+	if opt.ProberMemory == 0 {
+		opt.ProberMemory = DefaultProberMemory
+	}
+	if opt.ProberMemory < 1 || opt.ProberMemory > MaxProberMemory {
+		return nil, fmt.Errorf("probe: prober memory %d must be between 1 and %d", opt.ProberMemory, MaxProberMemory)
+	}
+	if err := validIndirect(opt.Indirect); err != nil {
+		return nil, err
+	}
+	if opt.Exclude != nil && len(opt.Exclude.ASNs) > 0 && opt.Exclude.Origin == nil {
+		return nil, errors.New("probe: excluded ASNs need an origin lookup")
+	}
+	if opt.Workers < 1 {
+		opt.Workers = 1
+	}
+	if opt.PerTargetConcurrency < 1 {
+		opt.PerTargetConcurrency = 1
+	}
+	if opt.Logger == nil {
+		opt.Logger = slog.Default()
+	}
+	if opt.Now == nil {
+		opt.Now = time.Now
+	}
+	if len(opt.ExchangeLANs) > 0 {
+		opt.ExchangeLANs = append([]netip.Prefix(nil), opt.ExchangeLANs...)
+	}
+	e := &Engine{providers: providers, probers: probers, sources: sources, opt: opt, log: opt.Logger,
+		results: map[key]Result{}, status: map[string]ProviderStatus{}, sems: map[netip.Addr]chan struct{}{},
+		srcDown: map[string]string{}, pathDown: map[string]string{},
+		wake: make(chan struct{}, 1), indCache: map[key]indirectHop{}, indQueued: map[key]indirectReq{},
+		indWake: make(chan struct{}, 1)}
+	now := opt.Now()
+	for _, p := range providers {
+		e.status[p.Name] = ProviderStatus{Name: p.Name, Source: p.Source, Site: p.Site, Up: true, Since: now}
+	}
+	return e, nil
+}
+
+// Timing is the probe timing a reload can change while the engine runs.
+// Workers, the rate limit, dispersion, and indirect tracing stay on Options
+// and still need a restart.
+type Timing struct {
+	Interval     time.Duration
+	Timeout      time.Duration
+	Packets      int
+	RetryLossPct float64
+	RetryPackets int
+	RoundTimeout time.Duration
+}
+
+// SetTiming replaces the timing the next round uses and wakes Run.
+func (e *Engine) SetTiming(t Timing) {
+	if e == nil {
+		return
+	}
+	e.sched.Store(&t)
+	e.Wake()
+}
+
+// TimingNow is the timing the engine probes with.
+func (e *Engine) TimingNow() Timing {
+	if e == nil {
+		return Timing{}
+	}
+	return e.live()
+}
+
+func (e *Engine) live() Timing {
+	if p := e.sched.Load(); p != nil {
+		return *p
+	}
+	return Timing{
+		Interval: e.opt.Interval, Timeout: e.opt.Timeout, Packets: e.opt.Packets,
+		RetryLossPct: e.opt.RetryLossPct, RetryPackets: e.opt.RetryPackets,
+		RoundTimeout: e.opt.RoundTimeout,
+	}
+}
+
+func (e *Engine) interval() time.Duration     { return e.live().Interval }
+func (e *Engine) timeout() time.Duration      { return e.live().Timeout }
+func (e *Engine) packets() int                { return e.live().Packets }
+func (e *Engine) retryLoss() float64          { return e.live().RetryLossPct }
+func (e *Engine) retryPackets() int           { return e.live().RetryPackets }
+func (e *Engine) roundTimeout() time.Duration { return e.live().RoundTimeout }
+
+// SetSources replaces the target sources. Removed names drop their target
+// cache. Unchanged sources keep the engine's last list until the cache
+// expires. Caller starts and stops the plugins.
+func (e *Engine) SetSources(sources []NamedSource) {
+	if e == nil {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.sources = append([]NamedSource(nil), sources...)
+	if len(e.srcCache) == 0 {
+		return
+	}
+	keep := map[string]bool{}
+	for _, s := range sources {
+		keep[s.Name] = true
+	}
+	for name := range e.srcCache {
+		if !keep[name] {
+			delete(e.srcCache, name)
+		}
+	}
+}
+
+func (e *Engine) sourceList() []NamedSource {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	out := make([]NamedSource, len(e.sources))
+	copy(out, e.sources)
+	return out
+}
+
+// Run probes immediately and then whenever a prefix is due. A target
+// with a positive Interval (the vip source) is measured on that cadence.
+// Other targets use Options.Interval. Results for prefixes that are not
+// due are left in place. Sources that do not carry a shorter interval are
+// re-read on Options.Interval, not on every wake. A completed round,
+// including one that only probed the shorter cadence, still calls OnRound.
+// The global rate limit applies to every probe, including the shorter
+// cadence and any retry. It returns ctx.Err().
+func (e *Engine) Run(ctx context.Context) error {
+	last := map[netip.Prefix]time.Time{}
+	if e.indirectEnabled() {
+		ictx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		go e.runIndirect(ictx)
+	}
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		probed, done := e.runRound(ctx, func(t plugin.Target) bool {
+			return e.targetDue(t, last)
+		}, true)
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if done {
+			stamp := e.opt.Now()
+			e.mu.RLock()
+			cad := e.cadence
+			e.mu.RUnlock()
+			for p := range probed {
+				last[p] = stamp
+			}
+			e.mu.Lock()
+			for p := range last {
+				if _, ok := cad[p]; !ok {
+					delete(last, p)
+					delete(e.probedAt, p)
+				}
+			}
+			e.mu.Unlock()
+		}
+		wait := e.interval()
+		if done {
+			wait = e.wakeAfter(e.opt.Now(), last)
+		}
+		if wait < 0 {
+			wait = 0
+		}
+		if err := e.sleep(ctx, wait); err != nil {
+			return err
+		}
+	}
+}
+
+// Wake asks Run to start the next round without waiting out the interval.
+// The outage source calls it from OnRound when a new incident re-queues
+// prefixes. One pending wake is enough; extra calls are dropped.
+func (e *Engine) Wake() {
+	if e == nil || e.wake == nil {
+		return
+	}
+	select {
+	case e.wake <- struct{}{}:
+	default:
+	}
+}
+
+func (e *Engine) consumeWake() bool {
+	if e == nil || e.wake == nil {
+		return false
+	}
+	select {
+	case <-e.wake:
+		return true
+	default:
+		return false
+	}
+}
+
+func (e *Engine) sleep(ctx context.Context, d time.Duration) error {
+	if e.consumeWake() {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if e.opt.Sleep != nil {
+		return e.opt.Sleep(ctx, d)
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	case <-e.wake:
+		return nil
+	}
+}
+
+// targetDue reports whether prefix t should be probed now. Urgent from a
+// source is a one-shot and is due immediately; the interval still applies
+// on the following rounds. Urgent from SetUrgent (a confirm streak) waits
+// a quarter of the prefix interval so consecutive rounds are not the same
+// instant.
+func (e *Engine) targetDue(t plugin.Target, last map[netip.Prefix]time.Time) bool {
+	every := e.interval()
+	if t.Interval > 0 {
+		every = t.Interval
+	}
+	if t.Urgent && !e.decisionUrgent(t.Prefix) {
+		return true
+	}
+	if t.Urgent && e.decisionUrgent(t.Prefix) {
+		every = confirmProbeGap(every)
+	}
+	prev, ok := last[t.Prefix]
+	if !ok {
+		return true
+	}
+	return !e.opt.Now().Before(prev.Add(every))
+}
+
+// confirmProbeGap is the minimum time between probes of a prefix a
+// half-confirmed performance move asked to measure early. It is a quarter
+// of that prefix's interval.
+func confirmProbeGap(every time.Duration) time.Duration {
+	if every <= 0 {
+		return 0
+	}
+	g := every / 4
+	if g <= 0 {
+		return every
+	}
+	return g
+}
+
+// wakeAfter is how long to sleep before the next prefix is due. A
+// confirm-urgent prefix is due after a quarter of its interval.
+func (e *Engine) wakeAfter(now time.Time, last map[netip.Prefix]time.Time) time.Duration {
+	e.mu.RLock()
+	cad := e.cadence
+	urgent := e.urgent
+	e.mu.RUnlock()
+	if len(cad) == 0 {
+		return e.interval()
+	}
+	var next time.Time
+	for p, every := range cad {
+		if every <= 0 {
+			every = e.interval()
+		}
+		when := now
+		if prev, ok := last[p]; ok {
+			when = prev.Add(every)
+		}
+		if _, ok := urgent[p]; ok {
+			gapWhen := now
+			if prev, ok := last[p]; ok {
+				gapWhen = prev.Add(confirmProbeGap(every))
+			}
+			if gapWhen.Before(when) {
+				when = gapWhen
+			}
+		}
+		if next.IsZero() || when.Before(next) {
+			next = when
+		}
+	}
+	if next.IsZero() {
+		return e.interval()
+	}
+	wait := next.Sub(now)
+	if wait < 0 {
+		return 0
+	}
+	return wait
+}
+
+// roundBudget is the overall deadline for one round. An explicit
+// RoundTimeout wins; otherwise the bound is long enough for a probe to
+// use its own deadline and for about three intervals of target collection,
+// which matches how old a measurement may be before it is stale.
+func (e *Engine) roundBudget() time.Duration {
+	if e.roundTimeout() > 0 {
+		return e.roundTimeout()
+	}
+	pkts := e.packets() + e.retryExtra()
+	per := time.Duration(pkts)*e.timeout() + time.Second
+	d := 3*e.interval() + per
+	if d < per+time.Second {
+		d = per + time.Second
+	}
+	return d
+}
+
+// retryExtra is how many packets a second probe may add. Loss retry and
+// dispersion escalation both use RetryPackets, and both count toward the
+// same staleness window: 3*interval + (packets + retryPackets)*timeout.
+// The round deadline adds one more second on top of that product.
+func (e *Engine) retryExtra() int {
+	if e.retryPackets() < 1 {
+		return 0
+	}
+	if e.retryLoss() > 0 || e.opt.Dispersion > 0 {
+		return e.retryPackets()
+	}
+	return 0
+}
+
+// Targets collects and de-duplicates targets from every source. A failing
+// source is logged and skipped so the others keep working. The context's
+// deadline is an overall timeout: a source that ignores cancellation does
+// not block the caller past it.
+func (e *Engine) Targets(ctx context.Context) []plugin.Target {
+	ts, _ := e.gatherTargets(ctx)
+	return ts
+}
+
+// gatherTargets reports incomplete when a source missed the deadline or is
+// still stuck from an earlier call. Callers must not replace stored results
+// in that case.
+func (e *Engine) gatherTargets(ctx context.Context) ([]plugin.Target, bool) {
+	seen := map[netip.Prefix]int{}
+	var out []plugin.Target
+	incomplete := false
+	for _, s := range e.sourceList() {
+		if ctx.Err() != nil {
+			incomplete = true
+			break
+		}
+		ts, err, called := e.targetsFrom(ctx, s)
+		if err != nil {
+			if called {
+				e.log.Warn("target source failed", "source", s.Name, "err", err)
+			}
+			if errors.Is(err, errSourceBusy) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+				incomplete = true
+				break
+			}
+			continue
+		}
+		for _, t := range ts {
+			t.Prefix = t.Prefix.Masked()
+			if !t.Prefix.IsValid() {
+				continue
+			}
+			// A named host is a pin, unless the source marked it as a
+			// candidate (a flow destination). An empty host stays the
+			// representative address for scheduling, and the probe round
+			// spreads it. Candidates are probed first and are not the
+			// only addresses.
+			t = normalizeTarget(t)
+			t.Sources = []string{s.Name}
+			// The first explicit host stays. A later pin replaces a
+			// default or a candidate. A later candidate replaces only a
+			// default. A later source can shorten the interval. A stored
+			// interval of zero means the engine interval, so a longer VIP
+			// interval does not slow a prefix that static or flow already
+			// listed.
+			if i, ok := seen[t.Prefix]; ok {
+				if !slices.Contains(out[i].Sources, s.Name) {
+					out[i].Sources = append(out[i].Sources, s.Name)
+				}
+				e.shortenInterval(&out[i], t.Interval)
+				if t.Urgent {
+					out[i].Urgent = true
+				}
+				if t.Pinned && !out[i].Pinned {
+					out[i].Host = t.Host
+					out[i].Hosts = nil
+					out[i].Subranges = nil
+					out[i].Pinned = true
+					out[i].Candidate = false
+				} else if !out[i].Pinned && !out[i].Candidate && t.Candidate {
+					out[i].Host = t.Host
+					out[i].Hosts = append([]netip.Addr(nil), t.Hosts...)
+					out[i].Candidate = true
+				}
+				// Sub-ranges come from the first source that named
+				// them, unless a pin now owns the prefix.
+				if !out[i].Pinned && len(out[i].Subranges) == 0 && len(t.Subranges) > 0 {
+					out[i].Subranges = append([]plugin.Subrange(nil), t.Subranges...)
+				}
+				continue
+			}
+			seen[t.Prefix] = len(out)
+			out = append(out, t)
+		}
+	}
+	// A timed-out source leaves a partial list. Do not treat that as the
+	// prefixes that still exist, and do not drop a remembered host.
+	if !incomplete {
+		e.keepImproved(&out)
+		e.applyUrgent(&out)
+		e.applyManual(&out)
+		e.dropExchangeLANs(&out)
+	}
+	// Exclusion is not a judgment about which prefixes exist, so a partial
+	// list is filtered too.
+	e.dropExcluded(&out)
+	return out, incomplete
+}
+
+// dropExcluded removes probe.exclude targets (#203) after keepImproved,
+// applyUrgent, and applyManual, so neither a retained improvement nor the
+// operator's queue can bring one back.
+func (e *Engine) dropExcluded(out *[]plugin.Target) {
+	x := e.opt.Exclude
+	if out == nil || x.Empty() || len(*out) == 0 {
+		return
+	}
+	next, dropped := exchange.DropNormalized(*out, x.Prefix, x.Addr)
+	if dropped == 0 {
+		return
+	}
+	e.log.Debug("dropped probe targets listed in probe.exclude", "dropped", dropped, "kept", len(next))
+	*out = next
+}
+
+// onLAN reports whether a probe address sits on an exchange peering LAN
+// (#145).
+func (e *Engine) onLAN(a netip.Addr) bool {
+	return exchange.ContainsAddr(e.opt.ExchangeLANs, a)
+}
+
+// avoidAddr reports whether a probe address sits on a peering LAN or in
+// probe.exclude (#203).
+func (e *Engine) avoidAddr(a netip.Addr) bool {
+	return e.onLAN(a) || e.opt.Exclude.Addr(a)
+}
+
+// dropExchangeLANs removes prefixes and pinned hosts that sit on a peering
+// LAN after keepImproved, so a retained improvement cannot bring one back.
+func (e *Engine) dropExchangeLANs(out *[]plugin.Target) {
+	if out == nil || len(e.opt.ExchangeLANs) == 0 || len(*out) == 0 {
+		return
+	}
+	before := *out
+	next := exchange.FilterNormalized(e.opt.ExchangeLANs, before)
+	if sameTargetSlice(before, next) {
+		return
+	}
+	if len(next) < len(before) {
+		e.log.Info("dropped probe targets inside an exchange LAN", "before", len(before), "after", len(next))
+	}
+	*out = next
+}
+
+func sameTargetSlice(a, b []plugin.Target) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	if len(a) == 0 {
+		return true
+	}
+	return &a[0] == &b[0]
+}
+
+// SetUrgent replaces the prefixes a half-confirmed performance move wants
+// measured before the full probe interval elapses (#117). An empty list
+// clears the set. A non-empty list wakes Run only when one of those
+// prefixes is already due: a quarter of its interval since it was last
+// probed. Waking sooner would probe the same sample back to back. Safe
+// for concurrent use with probing. Every probe, urgent or not, still
+// waits on Options.Limiter (probe.rate_limit_pps).
+func (e *Engine) SetUrgent(prefixes []netip.Prefix) {
+	if e == nil {
+		return
+	}
+	next := make(map[netip.Prefix]struct{}, len(prefixes))
+	for _, p := range prefixes {
+		p = p.Masked()
+		if !p.IsValid() {
+			continue
+		}
+		next[p] = struct{}{}
+	}
+	e.mu.Lock()
+	e.urgent = next
+	due := e.urgentDueLocked(next)
+	e.mu.Unlock()
+	if due {
+		e.Wake()
+	}
+}
+
+// urgentDueLocked reports whether any prefix in next may be probed now.
+// The caller holds e.mu.
+func (e *Engine) urgentDueLocked(next map[netip.Prefix]struct{}) bool {
+	if len(next) == 0 {
+		return false
+	}
+	now := e.opt.Now()
+	for p := range next {
+		prev, ok := e.probedAt[p]
+		if !ok || !now.Before(prev.Add(confirmProbeGap(e.prefixIntervalLocked(p)))) {
+			return true
+		}
+	}
+	return false
+}
+
+// prefixIntervalLocked is the prefix's probe interval. The caller holds e.mu.
+func (e *Engine) prefixIntervalLocked(p netip.Prefix) time.Duration {
+	if e.cadence != nil {
+		if every, ok := e.cadence[p]; ok && every > 0 {
+			return every
+		}
+	}
+	return e.interval()
+}
+
+// decisionUrgent reports whether p was marked by SetUrgent.
+func (e *Engine) decisionUrgent(p netip.Prefix) bool {
+	if e == nil {
+		return false
+	}
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	_, ok := e.urgent[p]
+	return ok
+}
+
+// rememberProbes stamps prefixes this round actually probed, before
+// OnRound, so SetUrgent can see that the quarter-interval gap has not
+// elapsed yet.
+func (e *Engine) rememberProbes(probed map[netip.Prefix]struct{}) {
+	if e == nil || len(probed) == 0 {
+		return
+	}
+	now := e.opt.Now()
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.noteManualProbedLocked(probed)
+	if e.probedAt == nil {
+		e.probedAt = map[netip.Prefix]time.Time{}
+	}
+	for p := range probed {
+		e.probedAt[p] = now
+	}
+}
+
+// applyUrgent sets Urgent on targets the decision state is confirming.
+// It does not add a prefix a source did not list: confirmation only
+// re-measures a prefix already being probed.
+func (e *Engine) applyUrgent(out *[]plugin.Target) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if len(e.urgent) == 0 || out == nil {
+		return
+	}
+	for i := range *out {
+		if _, ok := e.urgent[(*out)[i].Prefix]; ok {
+			(*out)[i].Urgent = true
+		}
+	}
+}
+
+// shortenInterval sets dst.Interval when next is a strictly shorter
+// cadence. Zero on either side means Options.Interval.
+func (e *Engine) shortenInterval(dst *plugin.Target, next time.Duration) {
+	want := next
+	if want <= 0 {
+		want = e.interval()
+	}
+	cur := dst.Interval
+	if cur <= 0 {
+		cur = e.interval()
+	}
+	if want >= cur {
+		return
+	}
+	if next > 0 {
+		dst.Interval = next
+		return
+	}
+	dst.Interval = 0
+}
+
+// freshTargetSource is a target source whose list changes because of a
+// probe round or a RIB read and must not be cached for Options.Interval.
+// The outage source is fresh. static, flow, traceroute, and vip are not:
+// vip is re-read when it carries a shorter interval, which the cache
+// already treats as fast.
+type freshTargetSource interface {
+	Fresh() bool
+}
+
+func sourceFresh(s plugin.TargetSource) bool {
+	f, ok := s.(freshTargetSource)
+	return ok && f.Fresh()
+}
+
+// targetsFrom returns a cached target list for sources that are not on a
+// shorter cadence and are not fresh. called is false when the cache was
+// used. A deadline or a stuck source is not cached.
+func (e *Engine) targetsFrom(ctx context.Context, s NamedSource) (ts []plugin.Target, err error, called bool) {
+	if !sourceFresh(s.Source) {
+		if c, ok := e.loadSource(s.Name); ok {
+			return c.targets, c.err, false
+		}
+	}
+	ts, err = e.oneSource(ctx, s)
+	if err != nil && (errors.Is(err, errSourceBusy) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)) {
+		return nil, err, true
+	}
+	e.storeSource(s.Name, ts, err)
+	return ts, err, true
+}
+
+func (e *Engine) loadSource(name string) (sourceSnap, bool) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	c, ok := e.srcCache[name]
+	if !ok || c.fast {
+		return sourceSnap{}, false
+	}
+	if !e.opt.Now().Before(c.at.Add(e.interval())) {
+		return sourceSnap{}, false
+	}
+	c.targets = cloneTargets(c.targets)
+	return c, true
+}
+
+func (e *Engine) storeSource(name string, ts []plugin.Target, err error) {
+	fast := false
+	for _, t := range ts {
+		if t.Interval > 0 && t.Interval < e.interval() {
+			fast = true
+			break
+		}
+	}
+	e.mu.Lock()
+	if e.srcCache == nil {
+		e.srcCache = map[string]sourceSnap{}
+	}
+	now := e.opt.Now()
+	since := now
+	if prev, ok := e.srcCache[name]; ok && (prev.err == nil) == (err == nil) {
+		since = prev.since
+	}
+	e.srcCache[name] = sourceSnap{at: now, targets: cloneTargets(ts), err: err, fast: fast, since: since}
+	e.mu.Unlock()
+}
+
+func cloneTargets(in []plugin.Target) []plugin.Target {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]plugin.Target, len(in))
+	copy(out, in)
+	return out
+}
+
+func (e *Engine) oneSource(ctx context.Context, s NamedSource) ([]plugin.Target, error) {
+	e.stateMu.Lock()
+	if e.srcBusy == nil {
+		e.srcBusy = map[string]bool{}
+	}
+	if e.srcBusy[s.Name] {
+		e.stateMu.Unlock()
+		return nil, errSourceBusy
+	}
+	e.srcBusy[s.Name] = true
+	e.stateMu.Unlock()
+
+	type result struct {
+		ts  []plugin.Target
+		err error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		ts, err := s.Source.Targets(ctx)
+		ch <- result{ts, err}
+	}()
+	select {
+	case r := <-ch:
+		e.clearSource(s.Name)
+		return r.ts, r.err
+	case <-ctx.Done():
+		go func() {
+			<-ch
+			e.clearSource(s.Name)
+		}()
+		return nil, ctx.Err()
+	}
+}
+
+func (e *Engine) clearSource(name string) {
+	e.stateMu.Lock()
+	delete(e.srcBusy, name)
+	e.stateMu.Unlock()
+}
+
+func (e *Engine) setProbeBusy(busy bool) {
+	e.stateMu.Lock()
+	e.probeBusy = busy
+	e.stateMu.Unlock()
+}
+
+func (e *Engine) probesBusy() bool {
+	e.stateMu.Lock()
+	defer e.stateMu.Unlock()
+	return e.probeBusy
+}
+
+// silentProviders returns a copy of silentLast for the next round's
+// dispatcher.
+func (e *Engine) silentProviders() map[string]bool {
+	e.stateMu.Lock()
+	defer e.stateMu.Unlock()
+	return maps.Clone(e.silentLast)
+}
+
+// noteSilentProviders stores a round's silentProviders. A provider that
+// finished no job keeps its previous mark.
+func (e *Engine) noteSilentProviders(silent map[string]bool) {
+	e.stateMu.Lock()
+	defer e.stateMu.Unlock()
+	if e.silentLast == nil {
+		e.silentLast = map[string]bool{}
+	}
+	maps.Copy(e.silentLast, silent)
+}
+
+// RunOnce performs one probe round over all providers and targets.
+// The round has an overall deadline. A complete round stores every result
+// together. If the deadline expires first, the results of the probes that
+// finished are stored together and each unfinished probe keeps its
+// previous result. If a target source does not
+// return, nothing changes. OnRound is not called unless a prefix was stored.
+// RunOnce ignores per-target intervals and measures every target.
+func (e *Engine) RunOnce(ctx context.Context) {
+	_, _ = e.runRound(ctx, nil, false)
+}
+
+// runRound probes targets. allow, when non-nil, selects which gathered
+// targets are probed; the others keep their stored results (merge).
+// probed is the set of prefixes this call stored (all attempted when the
+// round completed). done is false when the round was skipped, shut down,
+// or finished nothing, in which case stored results and the caller's
+// schedule stay as they were.
+func (e *Engine) runRound(ctx context.Context, allow func(plugin.Target) bool, merge bool) (probed map[netip.Prefix]struct{}, done bool) {
+	if e.probesBusy() {
+		e.log.Debug("previous probe round still running; skipping")
+		return nil, false
+	}
+	roundCtx, cancel := context.WithTimeout(ctx, e.roundBudget())
+	defer cancel()
+
+	targets, incomplete := e.gatherTargets(roundCtx)
+	if incomplete || roundCtx.Err() != nil {
+		if ctx.Err() == nil {
+			e.log.Warn("probe round timed out listing targets; keeping previous results")
+		}
+		return nil, false
+	}
+	e.noteCadence(targets)
+	e.beginProberRound(targets)
+	keep := map[netip.Prefix]bool{}
+	var jobs []job
+	for _, t := range targets {
+		keep[t.Prefix] = true
+		if allow != nil && !allow(t) {
+			continue
+		}
+		if probed == nil {
+			probed = map[netip.Prefix]struct{}{}
+		}
+		probed[t.Prefix] = struct{}{}
+		for _, p := range e.providers {
+			if p.is4() != t.Host.Is4() {
+				continue // provider cannot reach this address family
+			}
+			pin, candidates := targetProbeAddrs(t)
+			hosts := omitHosts(ProbeHosts(t.Prefix, pin, candidates, p.NextHop, p.Source), p.NextHop, e.onLAN, e.opt.Exclude.Addr)
+			if len(hosts) == 0 {
+				continue
+			}
+			jobs = append(jobs, job{provider: p, target: t, hosts: hosts, subs: jobSubranges(t, e.avoidAddr)})
+		}
+	}
+	// Targets exist but none are due. Keep stored results and let the
+	// scheduler sleep. A prefix that left every source is still dropped,
+	// which is the completed round CONFIG.md describes.
+	if allow != nil && len(probed) == 0 && len(targets) > 0 {
+		if e.droppedAny(keep) {
+			e.commit(nil, nil, nil, keep, true)
+			if e.opt.OnRound != nil {
+				e.opt.OnRound()
+			}
+		}
+		return probed, true
+	}
+
+	// Urgent and shorter intervals first, so a round that runs out of time
+	// still measures the priority tier, VIP prefixes, and confirm-urgent
+	// prefixes before a longer tail (#118, #125).
+	sortJobs(jobs, e.interval())
+
+	disp := newDispatcher(jobs, e.silentProviders(), e.opt.ProviderInflight)
+	context.AfterFunc(roundCtx, disp.stop)
+	type outcome struct {
+		res        Result
+		sourceDown bool
+	}
+	// The channel holds a few results per worker, not one per job (400,000
+	// Result slots at 100,000 targets and 4 providers). A send gives up at
+	// the deadline, so a worker never blocks once the collector has stopped.
+	outs := make(chan outcome, e.opt.Workers)
+	var wg sync.WaitGroup
+	for i := 0; i < e.opt.Workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for roundCtx.Err() == nil {
+				j, ok := disp.next()
+				if !ok {
+					return
+				}
+				r, srcDown := e.probe(roundCtx, j, disp.looksDown)
+				disp.done(j, r.Stats.Received > 0)
+				if e.keepShare() {
+					if r.Share == nil {
+						r.Share = &Share{}
+					}
+					r.Share.Sources = j.target.Sources
+				}
+				if e.indirectEnabled() {
+					if hops := e.traceHops(key{j.provider.Name, j.target.Prefix}); len(hops) > 0 {
+						r.Hops = hops
+					}
+				}
+				r.Confidence = RateConfidence(r, e.proberType(r.Prober), e.opt.Dispersion)
+				// A probe that the deadline cancelled must not refresh the
+				// stored result. Staleness stays on the previous time.
+				if roundCtx.Err() != nil {
+					return
+				}
+				select {
+				case outs <- outcome{r, srcDown}:
+				case <-roundCtx.Done():
+					return
+				}
+			}
+		}()
+	}
+
+	finished := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(finished)
+		close(outs)
+	}()
+
+	// Results are buffered until the round ends and go in under one lock.
+	// The policy dates a round by the newest result for a prefix, so
+	// storing a prefix in two steps would count one measurement round twice
+	// toward confirm_rounds.
+	fresh := map[key]Result{}
+	got := map[netip.Prefix]struct{}{}
+	downBy := map[key]string{}
+	received := 0
+	collecting := true
+	for collecting {
+		select {
+		case o, ok := <-outs:
+			if !ok {
+				collecting = false
+				break
+			}
+			received++
+			got[o.res.Prefix] = struct{}{}
+			fresh[key{o.res.Provider, o.res.Prefix}] = o.res
+			if o.sourceDown {
+				downBy[key{o.res.Provider, o.res.Prefix}] = o.res.Err
+			}
+		case <-roundCtx.Done():
+			collecting = false
+		}
+	}
+	// Results already in the channel when the deadline fired are kept. A
+	// worker blocked on a full channel at the deadline drops its result,
+	// which only leaves that prefix on its previous result. A round whose
+	// every job reported is complete even if the deadline fired while the
+	// collector was choosing between the two channels.
+	for drain := true; drain; {
+		select {
+		case o, ok := <-outs:
+			if !ok {
+				drain = false
+				break
+			}
+			received++
+			got[o.res.Prefix] = struct{}{}
+			fresh[key{o.res.Provider, o.res.Prefix}] = o.res
+			if o.sourceDown {
+				downBy[key{o.res.Provider, o.res.Prefix}] = o.res.Err
+			}
+		default:
+			drain = false
+		}
+	}
+	e.noteSilentProviders(disp.silentProviders())
+	if ctx.Err() != nil {
+		// Shutdown: nothing was stored, so results stay as they were.
+		e.leaveProbes(finished, nil)
+		return nil, false
+	}
+
+	at := e.opt.Now()
+	for k, r := range fresh {
+		r.Round = at
+		fresh[k] = r
+	}
+
+	if received == len(jobs) {
+		down := map[string]string{}
+		ran := map[string]bool{}
+		for k, r := range fresh {
+			ran[r.Provider] = true
+			if reason, isDown := downBy[k]; isDown {
+				down[r.Provider] = reason
+			}
+		}
+		e.finishProberRound()
+		batch := takeShare(fresh)
+		e.commit(fresh, ran, down, keep, merge)
+		e.emitResults(fresh)
+		e.emitBatch(batch)
+		e.rememberProbes(probed)
+		e.addPrefixCommits(len(got))
+		if e.opt.OnRound != nil {
+			e.opt.OnRound()
+		}
+		return probed, true
+	}
+
+	// The deadline passed with jobs outstanding. Store every result that
+	// finished, so a provider that never answers does not cost the others
+	// theirs (#381). A job that did not finish keeps its previous result,
+	// which ages out on its own; a prefix with no finished job stays due.
+	// A prefix with at least one finished job counts as probed, so its
+	// unfinished provider is tried again at the prefix's next interval.
+	if len(got) == 0 {
+		e.leaveProbes(finished, nil)
+		e.log.Warn("probe round timed out; keeping previous results")
+		return nil, false
+	}
+	e.log.Warn("probe round timed out; kept finished results", "results", len(fresh), "jobs", len(jobs))
+	ran := map[string]bool{}
+	down := map[string]string{}
+	for k, r := range fresh {
+		ran[r.Provider] = true
+		if reason, isDown := downBy[k]; isDown {
+			down[r.Provider] = reason
+		}
+	}
+	e.pruneIndirect(keep)
+	batch := takeShare(fresh)
+	e.storeResults(fresh, keep, ran, down)
+	e.emitResults(fresh)
+	e.emitBatch(batch)
+	e.rememberProbes(got)
+	e.addPrefixCommits(len(got))
+	if e.opt.OnRound != nil {
+		e.opt.OnRound()
+	}
+	// Probes still inside a prober that ignores cancellation must
+	// finish before the next round plans prober memory.
+	e.leaveProbes(finished, e.finishProberRound)
+	return got, true
+}
+
+// emitResults hands stored results to OnResult.
+func (e *Engine) emitResults(rs map[key]Result) {
+	if e.opt.OnResult == nil {
+		return
+	}
+	for _, r := range rs {
+		e.opt.OnResult(r)
+	}
+}
+
+// takeShare removes Share from the results about to be stored and returns
+// the results that had it, so the engine keeps no raw samples.
+func takeShare(rs map[key]Result) []Result {
+	var out []Result
+	for k, r := range rs {
+		if r.Share == nil {
+			continue
+		}
+		out = append(out, r)
+		r.Share = nil
+		rs[k] = r
+	}
+	return out
+}
+
+// emitBatch hands the shared evidence of a stored round to OnBatch.
+func (e *Engine) emitBatch(batch []Result) {
+	if e.opt.OnBatch != nil && len(batch) > 0 {
+		e.opt.OnBatch(batch)
+	}
+}
+
+// sortJobs orders work so a round that cannot finish everything still
+// probes the prefixes that are due soonest and the priority tier first.
+// Urgent (a confirm streak, or a source that marked the target) is first,
+// then a shorter interval than the engine (VIP), then the engine interval
+// (flow top_n and ordinary targets), then a longer interval (flow tail).
+func sortJobs(jobs []job, base time.Duration) {
+	// Stable so prefixes in the same tier keep the order the sources
+	// returned. Prober memory evicts the least recently probed host, and
+	// that order is the target list when every interval is the same.
+	sort.SliceStable(jobs, func(i, j int) bool {
+		ti, ei := jobRank(jobs[i].target, base)
+		tj, ej := jobRank(jobs[j].target, base)
+		if ti != tj {
+			return ti < tj
+		}
+		return ei < ej
+	})
+}
+
+// jobRank is the probe order of one target. Lower is sooner.
+func jobRank(t plugin.Target, base time.Duration) (tier int, every time.Duration) {
+	every = base
+	if t.Interval > 0 {
+		every = t.Interval
+	}
+	switch {
+	case t.Urgent:
+		return 0, every
+	case every < base:
+		return 1, every
+	case every > base:
+		return 3, every
+	default:
+		return 2, every
+	}
+}
+
+// storeResults merges the results of finished probes under one lock and
+// drops prefixes that left every source. A result missing from rs, such as
+// an unfinished probe of a timed-out round, stays as it was.
+func (e *Engine) storeResults(rs map[key]Result, keep map[netip.Prefix]bool, ran map[string]bool, down map[string]string) {
+	now := e.opt.Now()
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.results == nil {
+		e.results = map[key]Result{}
+	}
+	for k, r := range rs {
+		e.results[k] = r
+	}
+	for k := range e.results {
+		if !keep[k.prefix] {
+			delete(e.results, k)
+		}
+	}
+	e.applyStatusLocked(ran, down, now)
+}
+
+func (e *Engine) addPrefixCommits(n int) {
+	if n > 0 {
+		e.prefixCommits.Add(uint64(n))
+	}
+}
+
+// PrefixCommits is how many prefixes have had a result stored since the
+// engine was created, counted once per prefix per round.
+func (e *Engine) PrefixCommits() uint64 {
+	if e == nil {
+		return 0
+	}
+	return e.prefixCommits.Load()
+}
+
+// droppedAny reports whether a stored result belongs to a prefix that is
+// no longer in the target list.
+func (e *Engine) droppedAny(keep map[netip.Prefix]bool) bool {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	for k := range e.results {
+		if !keep[k.prefix] {
+			return true
+		}
+	}
+	return false
+}
+
+func (e *Engine) noteCadence(targets []plugin.Target) {
+	m := make(map[netip.Prefix]time.Duration, len(targets))
+	for _, t := range targets {
+		every := e.interval()
+		if t.Interval > 0 {
+			every = t.Interval
+		}
+		m[t.Prefix] = every
+	}
+	e.mu.Lock()
+	e.cadence = m
+	e.mu.Unlock()
+}
+
+// leaveProbes records that workers from a timed-out round may still be
+// inside a prober that ignores cancellation. The next round waits until
+// they return instead of starting another. after runs once they have
+// returned, before the next round is allowed to start. Nil after is fine.
+func (e *Engine) leaveProbes(finished <-chan struct{}, after func()) {
+	done := func() {
+		if after != nil {
+			after()
+		}
+	}
+	select {
+	case <-finished:
+		done()
+		return
+	default:
+	}
+	e.setProbeBusy(true)
+	go func() {
+		<-finished
+		done()
+		e.setProbeBusy(false)
+	}()
+}
+
+func (e *Engine) commit(fresh map[key]Result, ran map[string]bool, down map[string]string, keep map[netip.Prefix]bool, merge bool) {
+	e.pruneIndirect(keep)
+	now := e.opt.Now()
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if !merge {
+		e.results = fresh
+	} else {
+		if e.results == nil {
+			e.results = map[key]Result{}
+		}
+		for k, r := range fresh {
+			e.results[k] = r
+		}
+		for k := range e.results {
+			if !keep[k.prefix] {
+				delete(e.results, k)
+			}
+		}
+	}
+	e.applyStatusLocked(ran, down, now)
+}
+
+// applyStatusLocked updates probe-source health from a round's results.
+// The caller holds e.mu. A provider that did not finish a probe is left
+// as it was. One source-unavailable result fails that provider closed.
+func (e *Engine) applyStatusLocked(ran map[string]bool, down map[string]string, now time.Time) {
+	for _, p := range e.providers {
+		if !ran[p.Name] {
+			continue
+		}
+		if reason, isDown := down[p.Name]; isDown {
+			e.srcDown[p.Name] = reason
+		} else {
+			delete(e.srcDown, p.Name)
+		}
+	}
+	for _, p := range e.providers {
+		e.refreshStatusLocked(p.Name, now)
+	}
+}
+
+// refreshStatusLocked sets one provider's status from its stored source
+// and path-check marks. The caller holds e.mu. A log line is written only
+// when the provider changes state. A source that cannot be bound wins
+// over a path mismatch: the probe source is the more specific problem.
+func (e *Engine) refreshStatusLocked(name string, now time.Time) {
+	st, ok := e.status[name]
+	if !ok {
+		return
+	}
+	reason, isDown := "", false
+	if r, down := e.srcDown[name]; down {
+		reason, isDown = r, true
+	} else if r, down := e.pathDown[name]; down {
+		reason, isDown = r, true
+	}
+	if st.Up == !isDown {
+		return
+	}
+	st.Up, st.Reason, st.Since = !isDown, reason, now
+	if isDown {
+		e.log.Error("probe source down; provider excluded (fail closed)", "provider", name, "source", st.Source, "reason", reason)
+	} else {
+		e.log.Info("probe source recovered", "provider", name, "source", st.Source)
+	}
+	e.status[name] = st
+}
+
+func (e *Engine) sem(a netip.Addr) chan struct{} {
+	e.semMu.Lock()
+	defer e.semMu.Unlock()
+	s, ok := e.sems[a]
+	if !ok {
+		s = make(chan struct{}, e.opt.PerTargetConcurrency)
+		e.sems[a] = s
+	}
+	return s
+}
+
+// probe measures every host for one provider and prefix and stores one
+// result. A pinned host is probed alone. Flow candidates are probed
+// first, then the automatic in-prefix hosts when fewer than three were
+// named, and a usable far-side gateway, at most four. A host that does
+// not qualify (too few replies, or an RTT spread over the limit) is
+// left out of the score when another in-prefix host does, the same way
+// a silent host is. The far-side gateway counts only when no in-prefix
+// host qualified. Traceroute hop times are not used. A dead probe
+// source fails closed. Every packet waits on the global rate limit
+// inside probeOne, including a dispersion or loss retry.
+//
+// A target with sub-ranges (#121) is measured per sub-range instead, and
+// the prefix result is their traffic-weighted aggregate. When none of
+// them could be measured, the prefix hosts are probed as above.
+//
+// looksDown reports whether a provider looks down; only then may the job
+// skip in-prefix hosts.
+func (e *Engine) probe(ctx context.Context, j job, looksDown func(string) bool) (Result, bool) {
+	if len(j.subs) > 0 {
+		if res, down, ok := e.probeSubranges(ctx, j, looksDown); ok {
+			return res, down
+		}
+	}
+	hosts := j.hosts
+	if len(hosts) == 0 && j.target.Host.IsValid() {
+		hosts = []netip.Addr{j.target.Host}
+	}
+	gw := netip.Addr{}
+	if !j.target.Pinned {
+		gw = j.provider.NextHop
+	}
+	var samples []hostSample
+	var errs []error
+	var tried []netip.Addr
+	silent, answered, skipped := 0, false, false
+	for _, h := range hosts {
+		// A provider that is down costs the full timeout per host and holds
+		// a worker the whole time (#381). Once the provider looks down,
+		// a job skips its remaining in-prefix hosts after
+		// silentHostLimit hosts with no reply and none answered. A healthy
+		// provider still probes every host, so a later host that answers
+		// keeps the prefix measured. A host whose probe errors counts as
+		// silent. The far-side gateway is still probed: it can score the
+		// prefix when no in-prefix host answers.
+		isGW := gw.IsValid() && h == gw
+		if silent >= silentHostLimit && !answered && !isGW && looksDown(j.provider.Name) {
+			skipped = true
+			continue
+		}
+		tried = append(tried, h)
+		one, down := e.probeOne(ctx, j.provider, j.target.Prefix, h, e.packets())
+		if down || ctx.Err() != nil {
+			one.Targets = tried
+			return one, down
+		}
+		if one.Err != "" {
+			errs = append(errs, errors.New(one.Err))
+			silent++
+			continue
+		}
+		if one.Stats.Received > 0 {
+			answered = true
+		} else {
+			silent++
+		}
+		samples = append(samples, hostSample{addr: h, res: one, gateway: isGW})
+	}
+	// A trace from a provider that looks down would find nothing and fill
+	// the trace queue and cache for it.
+	if !skipped {
+		if res, down, ok := e.probeIndirect(ctx, j, tried, samples); ok {
+			return res, down
+		}
+	}
+	if len(samples) == 0 {
+		res := Result{Provider: j.provider.Name, Prefix: j.target.Prefix, Targets: tried, Time: e.opt.Now()}
+		if len(hosts) > 0 {
+			res.Target = hosts[0]
+		}
+		if len(errs) == 0 {
+			res.Err = "no probe target"
+		} else {
+			res.Err = errors.Join(errs...).Error()
+		}
+		return res, false
+	}
+	res := combineHosts(j.provider.Name, j.target.Prefix, tried, samples, e.hostQualifies)
+	lossRetry := e.retryLoss() > 0 && res.Stats.LossPct >= e.retryLoss()
+	dispRetry := e.spreadOver(samples)
+	if e.retryPackets() < 1 || (!lossRetry && !dispRetry) {
+		return res, false
+	}
+	// Re-probe the hosts that define the score, and any host whose
+	// spread is over the limit, so a small sample escalates to the
+	// full one. The retry sample replaces the first.
+	used := map[netip.Addr]bool{}
+	for _, s := range scoreSamples(samples, e.hostQualifies) {
+		used[s.addr] = true
+	}
+	if dispRetry {
+		for _, s := range samples {
+			if e.inconsistent(s.res.Stats) {
+				used[s.addr] = true
+			}
+		}
+	}
+	var again []hostSample
+	for _, s := range samples {
+		if !used[s.addr] {
+			continue
+		}
+		one, down := e.probeOne(ctx, j.provider, j.target.Prefix, s.addr, e.retryPackets())
+		if down || ctx.Err() != nil {
+			one.Targets = tried
+			return one, down
+		}
+		if one.Err != "" {
+			e.log.Debug("retry failed; keeping first sample", "provider", res.Provider, "prefix", res.Prefix, "err", one.Err)
+			return res, false
+		}
+		again = append(again, hostSample{addr: s.addr, res: one, gateway: s.gateway})
+	}
+	reason := "loss"
+	switch {
+	case lossRetry && dispRetry:
+		reason = "loss+dispersion"
+	case dispRetry:
+		reason = "dispersion"
+	}
+	e.log.Debug("retry probe", "provider", res.Provider, "prefix", res.Prefix, "loss_pct", res.Stats.LossPct, "packets", e.retryPackets(), "reason", reason)
+	return combineHosts(j.provider.Name, j.target.Prefix, tried, again, e.hostQualifies), false
+}
+
+// proberType is the plugin type of the named prober, empty when unknown.
+func (e *Engine) proberType(name string) string {
+	for _, p := range e.probers {
+		if p.Name == name {
+			return p.Type
+		}
+	}
+	return ""
+}
+
+// hostQualifies reports whether one address may define the prefix score.
+// The default (one reply, dispersion off) is the historical "any reply
+// counts" rule. A single reply has a spread of zero.
+func (e *Engine) hostQualifies(st Stats) bool {
+	min := e.opt.MinReplies
+	if min < 1 {
+		min = 1
+	}
+	if st.Received < min {
+		return false
+	}
+	if e.opt.Dispersion <= 0 || st.Received < 2 {
+		return true
+	}
+	return st.RTTMax-st.RTTMin <= e.opt.Dispersion
+}
+
+// inconsistent reports whether the sample has enough replies to judge
+// an RTT spread and that spread is over the limit. Too few replies are
+// unqualified but do not escalate; dispersion does.
+func (e *Engine) inconsistent(st Stats) bool {
+	if e.opt.Dispersion <= 0 || st.Received < 2 {
+		return false
+	}
+	return st.RTTMax-st.RTTMin > e.opt.Dispersion
+}
+
+// spreadOver reports whether any measured host should escalate the
+// prefix to the full probe.
+func (e *Engine) spreadOver(samples []hostSample) bool {
+	if e.opt.Dispersion <= 0 {
+		return false
+	}
+	for _, s := range samples {
+		if e.inconsistent(s.res.Stats) {
+			return true
+		}
+	}
+	return false
+}
+
+// hostSample is one address's measurement inside a prefix.
+type hostSample struct {
+	addr    netip.Addr
+	res     Result
+	gateway bool
+}
+
+// probeOne runs the prober chain for one address. Chain semantics: try
+// probers in order; move on when a prober errors or gets no replies; stop
+// immediately (fail closed) if the source address is unusable. After a
+// host has answered, later rounds start at that prober and move only
+// forward. Every prober_recheck_rounds measurement starts at the first
+// prober again. Each prober that runs waits on the global rate limit.
+func (e *Engine) probeOne(ctx context.Context, p Provider, prefix netip.Prefix, host netip.Addr, count int) (Result, bool) {
+	res := Result{Provider: p.Name, Prefix: prefix, Target: host}
+	if count < 1 {
+		res.Err, res.Time = "no packets", e.opt.Now()
+		return res, false
+	}
+	// The target list already left these out; this catches an indirect
+	// hop and an origin the RIB changed since the round began (#203).
+	if e.opt.Exclude.Addr(host) {
+		res.Err, res.Time = "excluded by probe.exclude", e.opt.Now()
+		return res, false
+	}
+	sem := e.sem(host)
+	select {
+	case sem <- struct{}{}:
+	case <-ctx.Done():
+		res.Err, res.Time = ctx.Err().Error(), e.opt.Now()
+		return res, false
+	}
+	defer func() { <-sem }()
+	if p.Site != "" {
+		// The prober memory is per host and shared with local providers,
+		// which skip agent probers; a site provider must neither read
+		// nor feed it.
+		return e.runChain(ctx, res, p, count, 0, nil)
+	}
+	return e.runChain(ctx, res, p, count, e.proberStart(host), func(i int) { e.noteProber(host, i) })
+}
+
+// runChain tries the probers from index start. note, when set, is told
+// the index of a prober that got a reply. res carries the provider,
+// prefix, and target.
+func (e *Engine) runChain(ctx context.Context, res Result, p Provider, count, start int, note func(int)) (Result, bool) {
+	host := res.Target
+	req := p.Request(host, count, e.timeout())
+	var errs []error
+	var fallback *Result
+	for i := start; i < len(e.probers); i++ {
+		pr := e.probers[i]
+		// A provider with a site is measured only by probe agents (#230),
+		// and an agent prober serves only such providers.
+		if _, remote := pr.Prober.(plugin.RemoteProber); remote != (p.Site != "") {
+			continue
+		}
+		if err := e.opt.PerASN.Wait(ctx, host, count); err != nil {
+			errs = append(errs, fmt.Errorf("rate limit: %w", err))
+			break
+		}
+		if e.opt.Limiter != nil {
+			if err := e.opt.Limiter.WaitN(ctx, count); err != nil {
+				errs = append(errs, fmt.Errorf("rate limit: %w", err))
+				break
+			}
+		}
+		pctx, cancel := context.WithTimeout(ctx, time.Duration(count)*e.timeout()+time.Second)
+		raw, err := pr.Prober.Probe(pctx, req)
+		cancel()
+		if err != nil {
+			if errors.Is(err, plugin.ErrSourceUnavailable) {
+				res.Err, res.Time = fmt.Sprintf("%s: %v", pr.Name, err), e.opt.Now()
+				return res, true
+			}
+			errs = append(errs, fmt.Errorf("%s: %w", pr.Name, err))
+			continue
+		}
+		r := res
+		r.Prober, r.Stats, r.Time = pr.Name, Compute(raw), e.opt.Now()
+		r.Site, r.Agent = raw.Site, raw.Agent
+		if e.keepShare() {
+			r.Share = &Share{Hosts: []HostRaw{{Sent: raw.Sent, RTTs: slices.Clone(raw.RTTs)}}}
+		}
+		if r.Stats.Received > 0 {
+			if note != nil {
+				note(i)
+			}
+			return r, false
+		}
+		if fallback == nil {
+			cp := r
+			fallback = &cp // full loss: remember, but try the next prober
+		}
+	}
+	if fallback != nil {
+		return *fallback, false
+	}
+	if len(errs) == 0 {
+		errs = append(errs, errors.New("no prober can serve this provider"))
+	}
+	res.Err, res.Time = errors.Join(errs...).Error(), e.opt.Now()
+	return res, false
+}
+
+// scoreSamples picks the hosts that define the prefix. Qualified
+// addresses inside the prefix win, so one silent or unqualified host
+// does not. qualify nil means any reply counts. The far-side gateway
+// is the sample only when none of those qualified. When nothing
+// qualified, every measured host counts so the loss is still reported.
+func scoreSamples(samples []hostSample, qualify func(Stats) bool) []hostSample {
+	if qualify == nil {
+		qualify = func(st Stats) bool { return st.Received > 0 }
+	}
+	var inPrefix, answered, measured []hostSample
+	for _, s := range samples {
+		if !s.res.OK() {
+			continue
+		}
+		measured = append(measured, s)
+		if !qualify(s.res.Stats) {
+			continue
+		}
+		answered = append(answered, s)
+		if !s.gateway {
+			inPrefix = append(inPrefix, s)
+		}
+	}
+	if len(inPrefix) > 0 {
+		return inPrefix
+	}
+	if len(answered) > 0 {
+		return answered
+	}
+	return measured
+}
+
+// combineHosts builds one result from the hosts that define the score.
+// Loss and RTT come from those hosts only. Target is the first of them
+// that answered, otherwise the first probed address.
+func combineHosts(provider string, prefix netip.Prefix, hosts []netip.Addr, samples []hostSample, qualify func(Stats) bool) Result {
+	used := scoreSamples(samples, qualify)
+	res := Result{Provider: provider, Prefix: prefix, Targets: hosts, Time: samples[0].res.Time}
+	if len(hosts) > 0 {
+		res.Target = hosts[0]
+	}
+	if len(used) == 0 {
+		res.Err = "no probe target"
+		return res
+	}
+	res.Prober = used[0].res.Prober
+	res.Time = used[len(used)-1].res.Time
+	parts := make([]Stats, len(used))
+	answered := false
+	sites, agents := map[string]bool{}, map[string]bool{}
+	for i, s := range used {
+		parts[i] = s.res.Stats
+		if s.res.Site != "" {
+			sites[s.res.Site] = true
+		}
+		if s.res.Agent != "" {
+			agents[s.res.Agent] = true
+		}
+		if s.res.Share != nil {
+			if res.Share == nil {
+				res.Share = &Share{}
+			}
+			res.Share.Hosts = append(res.Share.Hosts, s.res.Share.Hosts...)
+		}
+		if !answered && s.res.Stats.Received > 0 {
+			res.Target = s.addr
+			answered = true
+		}
+	}
+	res.Stats = combineStats(parts)
+	res.Site, res.Agent = joinNames(sites), joinNames(agents)
+	return res
+}
+
+// joinNames is the sorted, comma-separated keys of set.
+func joinNames(set map[string]bool) string {
+	return strings.Join(slices.Sorted(maps.Keys(set)), ",")
+}
+
+// combineStats pools per-host statistics. RTT is the reply-weighted mean.
+// Jitter is the reply-gap-weighted mean of the per-host jitters.
+func combineStats(parts []Stats) Stats {
+	var s Stats
+	var rttSum time.Duration
+	var jitSum time.Duration
+	var connSum, hsSum, ttfbSum time.Duration
+	jitWeight := 0
+	seenRTT := false
+	for _, p := range parts {
+		s.Sent += p.Sent
+		s.Received += p.Received
+		if p.Received == 0 {
+			continue
+		}
+		rttSum += p.RTTAvg * time.Duration(p.Received)
+		connSum += p.Connect * time.Duration(p.Received)
+		hsSum += p.Handshake * time.Duration(p.Received)
+		ttfbSum += p.TTFB * time.Duration(p.Received)
+		if !seenRTT || p.RTTMin < s.RTTMin {
+			s.RTTMin = p.RTTMin
+		}
+		if p.RTTMax > s.RTTMax {
+			s.RTTMax = p.RTTMax
+		}
+		seenRTT = true
+		if p.Received > 1 {
+			jitSum += p.Jitter * time.Duration(p.Received-1)
+			jitWeight += p.Received - 1
+		}
+	}
+	if s.Sent > 0 {
+		lost := s.Sent - s.Received
+		if lost < 0 {
+			lost = 0
+		}
+		s.LossPct = 100 * float64(lost) / float64(s.Sent)
+	}
+	if s.Received > 0 {
+		n := time.Duration(s.Received)
+		s.RTTAvg = rttSum / n
+		s.Connect, s.Handshake, s.TTFB = connSum/n, hsSum/n, ttfbSum/n
+	}
+	if jitWeight > 0 {
+		s.Jitter = jitSum / time.Duration(jitWeight)
+	}
+	return s
+}
+
+// Results returns the latest results sorted by prefix, then provider.
+func (e *Engine) Results() []Result {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	out := make([]Result, 0, len(e.results))
+	for _, r := range e.results {
+		out = append(out, r)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if c := out[i].Prefix.Addr().Compare(out[j].Prefix.Addr()); c != 0 {
+			return c < 0
+		}
+		if out[i].Prefix.Bits() != out[j].Prefix.Bits() {
+			return out[i].Prefix.Bits() < out[j].Prefix.Bits()
+		}
+		return out[i].Provider < out[j].Provider
+	})
+	return out
+}
+
+// Providers returns probe-source status per provider, in config order.
+func (e *Engine) Providers() []ProviderStatus {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	out := make([]ProviderStatus, 0, len(e.providers))
+	for _, p := range e.providers {
+		out = append(out, e.status[p.Name])
+	}
+	return out
+}

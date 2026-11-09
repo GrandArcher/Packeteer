@@ -1,0 +1,6 @@
+# Carrier X in POP B nearly idle: 60 + 5 is under the shared 100, and
+# putting the 30 Mbps prefix back on x-a (90) still fits in 100 - 5.
+providers:
+  - name: x-b
+    commit_mbps: 100
+    usage_mbps: 5

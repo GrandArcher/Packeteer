@@ -1,0 +1,24 @@
+BIRD 2.17.5 ready.
+Table master4:
+198.51.100.0/24      unicast [packeteer 22:50:07.930 from 192.0.2.10] * (100) [i]
+	via 192.0.2.22 on eth0
+	Type: BGP univ
+	BGP.origin: IGP
+	BGP.as_path: 
+	BGP.next_hop: 192.0.2.22
+	BGP.local_pref: 250
+	BGP.community: (64512,666) (65535,65281)
+                     unicast [transit_a 22:50:05.661] (100) [AS64496?]
+	via 192.0.2.21 on eth0
+	Type: BGP univ
+	BGP.origin: Incomplete
+	BGP.as_path: 64496
+	BGP.next_hop: 192.0.2.21
+	BGP.local_pref: 100
+                     unicast [transit_b 22:50:06.099] (100) [AS64497?]
+	via 192.0.2.22 on eth0
+	Type: BGP univ
+	BGP.origin: Incomplete
+	BGP.as_path: 64497 64497 64497
+	BGP.next_hop: 192.0.2.22
+	BGP.local_pref: 100

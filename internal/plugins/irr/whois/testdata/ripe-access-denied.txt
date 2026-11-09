@@ -1,0 +1,5 @@
+%ERROR:201: access denied for 192.0.2.10
+%
+% Sorry, access from your host has been permanently
+% denied because of a repeated excessive querying.
+

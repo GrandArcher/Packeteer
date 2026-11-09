@@ -1,0 +1,7 @@
+# Both transits equally fast: no performance steer.
+sent: 4
+paths:
+  - provider: transit-a
+    rtt_ms: 10
+  - provider: transit-b
+    rtt_ms: 10

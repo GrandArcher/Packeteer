@@ -1,0 +1,16 @@
+{
+ "version": "fixture",
+ "mode": "observe",
+ "ready": true,
+ "generated_at": "2026-10-22T12:00:00Z",
+ "enabled": true,
+ "prefix": "203.0.113.0/25",
+ "from": "2026-10-15T12:00:00Z",
+ "to": "2026-10-22T12:00:00Z",
+ "days": [],
+ "improvements": [],
+ "rpki": [
+  {"provider": "lab-b", "origin_asn": 64511, "state": "unknown", "first": "2026-10-22T10:00:00Z", "last": "2026-10-22T10:05:00Z"},
+  {"provider": "lab-b", "origin_asn": 64511, "state": "invalid", "source": "routinator", "first": "2026-10-21T08:00:00Z", "last": "2026-10-22T09:59:00Z"}
+ ]
+}

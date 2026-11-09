@@ -1,0 +1,5 @@
+{
+  "stubs": [
+    {"method": "GET", "path": "/api/commit", "file": "commit.json"}
+  ]
+}

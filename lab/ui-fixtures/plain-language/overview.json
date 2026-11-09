@@ -1,0 +1,76 @@
+{
+ "version": "fixture",
+ "mode": "observe",
+ "ready": false,
+ "generated_at": "2026-10-20T12:00:00Z",
+ "started": true,
+ "sources": [
+  "static"
+ ],
+ "providers": [
+  {
+   "name": "lab-a",
+   "up": true,
+   "state": "unknown",
+   "loss_pct": 0,
+   "ok": 0,
+   "failed": 0
+  }
+ ],
+ "problems": [],
+ "counts": {
+  "providers_up": 1,
+  "providers_healthy": 0,
+  "providers": 1,
+  "warnings": 1,
+  "prefixes": 0,
+  "measured": 0,
+  "in_rib": 0,
+  "recommended": 0,
+  "improvements": 0,
+  "max_improvements": 50
+ },
+ "bgp": {
+  "configured": true,
+  "ready": false,
+  "established": 0,
+  "peers": 1
+ },
+ "features": [
+  {
+   "name": "history",
+   "on": true
+  },
+  {
+   "name": "config_editor",
+   "on": true
+  }
+ ],
+ "setup": [
+  {
+   "id": "bgp-down",
+   "level": "warn",
+   "title": "No iBGP session is established",
+   "detail": "bgp.neighbors is set but no session is up, so the RIB view is empty and the instance is not ready. Check the router's neighbor config, the AS number, and that TCP port 179 is reachable.",
+   "doc": "docs/routers.md",
+   "doc_url": "https://github.com/GrandArcher/Packeteer/blob/main/docs/routers.md",
+   "fix": "/settings.html#form-bgp"
+  },
+  {
+   "id": "first-round",
+   "level": "info",
+   "title": "Waiting for the first probe round",
+   "detail": "Sources are configured but nothing has been measured yet. The first round starts at once; a flow source lists prefixes only after it has seen traffic.",
+   "doc": "docs/CONFIG.md#probe",
+   "doc_url": "https://github.com/GrandArcher/Packeteer/blob/main/docs/CONFIG.md#probe"
+  }
+ ],
+ "system": {
+  "total": 0,
+  "ok": 0,
+  "degraded": 0,
+  "down": 0,
+  "idle": 0
+ },
+ "auth": ""
+}

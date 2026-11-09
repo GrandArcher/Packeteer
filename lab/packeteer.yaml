@@ -1,0 +1,59 @@
+# Lab only. Documentation prefix, private ASN. The fixed prober does not
+# send packets; lab/e2e.sh rewrites the probe file to force a flip-back.
+mode: inject
+asn: 64512
+router_id: 192.0.2.10
+packeteer_community: "64512:666"
+# Extras on the performance steer to transit-b. The export policy matches
+# only 64512:666. 64512:1:50 is a large community (RFC 8092).
+communities_cause:
+  performance: ["64512:100"]
+local_pref: 250
+# Distinct from the global 250 so lab/e2e.sh can require this LocPrf on
+# the edge. Empty cause is performance; the lab's steer is a performance
+# move onto transit-b.
+local_pref_cause:
+  performance: 260
+max_improvements: 50
+hold_time: 5s
+improvement_ttl: 1h
+thresholds:
+  min_loss_delta_pct: 1
+  min_rtt_delta_ms: 15
+providers:
+  - name: transit-a
+    source_ip: 192.0.2.11
+    next_hop: 192.0.2.1
+  - name: transit-b
+    source_ip: 192.0.2.12
+    next_hop: 192.0.2.2
+    communities: ["64512:200", "64512:1:50"]
+allowlist:
+  prefixes:
+    - 198.51.100.0/24
+probe:
+  interval: 2s
+  timeout: 500ms
+  packets: 4
+  workers: 2
+  rate_limit_pps: 50
+bgp:
+  neighbors:
+    - address: 192.0.2.254
+      description: edge
+sources:
+  - type: static
+    config:
+      targets:
+        - prefix: 198.51.100.0/24
+          host: 198.51.100.1
+probers:
+  - type: fixed
+    config:
+      file: /etc/packeteer/probes/state.yaml
+announcer:
+  type: gobgp
+
+# Lab only: no sign-in, so the e2e scripts can read the API (#328).
+auth:
+  enabled: false

@@ -1,0 +1,72 @@
+# Example only. Copy config.example.yaml to ./config.yaml and edit it.
+# Keep mode: observe until you have read docs/THREAT_MODEL.md.
+services:
+  packeteer:
+    # Pinned to the last release. :edge tracks main.
+    image: ghcr.io/grandarcher/packeteer:1.0.0
+    container_name: packeteer
+    # Host networking: probes must leave via each transit's source IP, the
+    # iBGP session must reach the edge router, and a flow source binds its
+    # UDP ports directly on the host. Do not publish those ports.
+    network_mode: host
+    cap_add:
+      - NET_RAW    # ICMP probes
+      - NET_ADMIN  # binding probe sockets to per-provider sources
+    volumes:
+      - ./config.yaml:/etc/packeteer/config.yaml:ro
+      - ./plugins:/etc/packeteer/plugins:ro
+      # Report history (storage: sqlite). Survives restarts and upgrades.
+      - packeteer-data:/var/lib/packeteer
+    # Dashboard, JSON API, and Prometheus metrics. Host networking means
+    # http.listen (default 127.0.0.1:8080) is an address on the host, so
+    # there is no ports: mapping. The image EXPOSEs 8080. Disable the
+    # server with PACKETEER_HTTP_LISTEN=off. Sign-in is on by default. With
+    # no PACKETEER_ADMIN_PASSWORD the first start generates an admin password
+    # and writes it to a 0600 file (the log names the file, never the
+    # password): docker compose exec packeteer cat
+    # /var/lib/packeteer/first-run-admin-password. It asks for a new one at
+    # first sign-in. auth.enabled: false in the config opts out. The single
+    # basic-auth account, set both: PACKETEER_HTTP_USER / PACKETEER_HTTP_PASSWORD
+    expose:
+      - "8080"
+    environment:
+      PACKETEER_CONFIG: /etc/packeteer/config.yaml
+      PACKETEER_ADMIN_PASSWORD: ${PACKETEER_ADMIN_PASSWORD:-}
+    restart: unless-stopped
+
+  # Optional RIPE Atlas software probe (#213, docs/atlas.md). Off unless you
+  # start it: docker compose --profile atlas up -d atlas-probe
+  # RIPE NCC publishes the probe as packages, not as an image, so this is the
+  # community image jamesits/ripe-atlas (the unmodified RIPE probe), pinned to
+  # the probe release it was built from. It runs in its own container on the
+  # default network (IPv4 only), with no access to config.yaml, the
+  # packeteer-data volume, or the BGP sessions.
+  atlas-probe:
+    profiles: ["atlas"]
+    image: jamesits/ripe-atlas:5130-probe
+    container_name: packeteer-atlas-probe
+    volumes:
+      # The probe key pair (probe_key.pub is what you register with RIPE).
+      - atlas-probe-key:/etc/ripe-atlas
+      - atlas-probe-spool:/var/spool/ripe-atlas
+    tmpfs:
+      - /run/ripe-atlas
+    # The capabilities and mem_limit are those of the upstream compose
+    # example; cpus and pids_limit are Packeteer's, so the probe's
+    # measurements for other Atlas users stay small beside Packeteer's own
+    # probing.
+    cap_drop: [ALL]
+    cap_add: [NET_RAW, KILL, SETUID, SETGID, CHOWN, FOWNER, DAC_OVERRIDE]
+    mem_limit: 64m
+    cpus: 0.5
+    pids_limit: 64
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+
+volumes:
+  packeteer-data:
+  atlas-probe-key:
+  atlas-probe-spool:

@@ -1,0 +1,14 @@
+{
+  "frames": true,
+  "inject": {
+    "page": "/providers.html",
+    "script": "driver.js"
+  },
+  "stubs": [
+    {"method": "GET", "path": "/api/overview", "file": "overview.json"},
+    {"method": "GET", "path": "/api/providers", "file": "providers.json"},
+    {"method": "GET", "path": "/api/improvements", "file": "improvements.json"},
+    {"method": "GET", "path": "/api/events", "file": "events.json"},
+    {"method": "GET", "path": "/api/prefixes", "file": "prefixes.json"}
+  ]
+}

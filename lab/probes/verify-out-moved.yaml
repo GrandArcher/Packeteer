@@ -1,0 +1,15 @@
+# After the steer to transit-b: 38 of the 40 Mbps left transit-a and arrived
+# on transit-b.
+providers:
+  - name: transit-a
+    commit_mbps: 1000
+    usage_mbps: 62
+    out_mbps: 62
+  - name: transit-b
+    commit_mbps: 1000
+    usage_mbps: 48
+    out_mbps: 48
+  - name: transit-c
+    commit_mbps: 1000
+    usage_mbps: 10
+    out_mbps: 10

@@ -1,0 +1,26 @@
+{
+  "version": "ci",
+  "mode": "inject",
+  "ready": true,
+  "generated_at": "2026-10-26T12:20:00Z",
+  "enabled": true,
+  "results": [
+    {"kind": "outbound", "prefix": "198.51.100.0/24", "provider": "transit-b", "from": "transit-a", "status": "pending",
+     "started": "2026-10-26T12:18:00Z", "due": "2026-10-26T12:23:00Z", "expected_mbps": 40, "moved_mbps": 0, "moved_pct": 0,
+     "detail": "waiting for the window to pass"},
+    {"kind": "outbound", "prefix": "203.0.113.0/24", "provider": "transit-b", "from": "transit-a", "status": "verified",
+     "started": "2026-10-26T12:00:00Z", "due": "2026-10-26T12:05:00Z", "checked": "2026-10-26T12:05:00Z",
+     "expected_mbps": 40, "moved_mbps": 38, "moved_pct": 95, "detail": "38.0 of 40.0 Mbps moved (95%)"},
+    {"kind": "outbound", "prefix": "192.0.2.0/24", "provider": "transit-c", "from": "transit-a", "status": "partial",
+     "started": "2026-10-26T12:00:00Z", "due": "2026-10-26T12:05:00Z", "checked": "2026-10-26T12:05:00Z",
+     "expected_mbps": 40, "moved_mbps": 12, "moved_pct": 30, "detail": "12.0 of 40.0 Mbps moved (30%)"},
+    {"kind": "inbound", "provider": "transit-a", "status": "not_moved",
+     "started": "2026-10-26T12:00:00Z", "due": "2026-10-26T12:10:00Z", "checked": "2026-10-26T12:10:00Z",
+     "expected_mbps": 150, "moved_mbps": 0, "moved_pct": 0, "backed_out": true,
+     "detail": "0.0 of 150.0 Mbps moved (0%); backed out, held off 30m0s"},
+    {"kind": "inbound", "provider": "transit-b", "status": "unknown",
+     "started": "2026-10-26T12:00:00Z", "due": "2026-10-26T12:10:00Z", "checked": "2026-10-26T12:20:00Z",
+     "expected_mbps": 0, "moved_mbps": 0, "moved_pct": 0,
+     "detail": "no interface counters newer than half the window"}
+  ]
+}

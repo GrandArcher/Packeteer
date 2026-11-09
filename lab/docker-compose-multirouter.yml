@@ -1,0 +1,98 @@
+# Multi-router lab (#27). Two simulated edges, a route reflector, and two
+# simulated eBGP transits, one per edge. Documentation addresses (RFC 5737)
+# and documentation/private ASNs only. Brought up by lab/e2e-multirouter.sh,
+# which sets PACKETEER_LAB_DIR (holding state.yaml, re-read by the fixed
+# prober) and PACKETEER_LAB_CONFIG (the multi-edge or route-reflector
+# config).
+name: packeteer-e2e-multirouter
+x-frr: &frr
+  image: quay.io/frrouting/frr:10.2.4
+  privileged: true
+  entrypoint: ["/bin/sh", "/lab/frr-start.sh"]
+services:
+  rr:
+    <<: *frr
+    hostname: rr
+    environment:
+      FRR_EXPECT: "route-reflector-client;route-map from-packeteer in"
+    volumes:
+      - ./frr-mr-rr:/etc/frr
+      - ./frr-start.sh:/lab/frr-start.sh:ro
+    networks:
+      lab:
+        ipv4_address: 192.0.2.250
+  edge-a:
+    <<: *frr
+    hostname: edge-a
+    environment:
+      FRR_EXPECT: "router bgp 64512;route-map from-packeteer in;neighbor 192.0.2.21 remote-as 64496"
+    volumes:
+      - ./frr-mr-edge-a:/etc/frr
+      - ./frr-start.sh:/lab/frr-start.sh:ro
+    networks:
+      lab:
+        ipv4_address: 192.0.2.251
+  edge-b:
+    <<: *frr
+    hostname: edge-b
+    environment:
+      FRR_EXPECT: "router bgp 64512;route-map from-packeteer in;neighbor 192.0.2.22 remote-as 64497"
+    volumes:
+      - ./frr-mr-edge-b:/etc/frr
+      - ./frr-start.sh:/lab/frr-start.sh:ro
+    networks:
+      lab:
+        ipv4_address: 192.0.2.252
+  transit-a:
+    <<: *frr
+    hostname: transit-a
+    environment:
+      FRR_EXPECT: "router bgp 64496;network 198.51.100.0/24"
+    volumes:
+      - ./frr-mr-transit-a:/etc/frr
+      - ./frr-start.sh:/lab/frr-start.sh:ro
+    networks:
+      lab:
+        ipv4_address: 192.0.2.21
+  transit-b:
+    <<: *frr
+    hostname: transit-b
+    environment:
+      FRR_EXPECT: "router bgp 64497;network 198.51.100.0/24;route-map to-edge out"
+    volumes:
+      - ./frr-mr-transit-b:/etc/frr
+      - ./frr-start.sh:/lab/frr-start.sh:ro
+    networks:
+      lab:
+        ipv4_address: 192.0.2.22
+  packeteer:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      args:
+        VERSION: e2e
+    image: packeteer:e2e
+    depends_on:
+      - rr
+      - edge-a
+      - edge-b
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
+      - NET_BIND_SERVICE
+    environment:
+      PACKETEER_CONFIG: /etc/packeteer/config.yaml
+      PACKETEER_LOG_LEVEL: debug
+    volumes:
+      - ${PACKETEER_LAB_CONFIG}:/etc/packeteer/config.yaml:ro
+      - ${PACKETEER_LAB_DIR}:/etc/packeteer/probes:ro
+    networks:
+      lab:
+        ipv4_address: 192.0.2.10
+networks:
+  lab:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 192.0.2.0/24
+          gateway: 192.0.2.3

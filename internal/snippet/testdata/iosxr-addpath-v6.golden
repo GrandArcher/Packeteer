@@ -1,0 +1,46 @@
+! Packeteer on Cisco IOS-XR. Generated for review: nothing is applied. Load it
+! with "load" in configuration mode, then "commit confirmed".
+! This router: AS 64512, 192.0.2.254. Packeteer: 192.0.2.10.
+community-set packeteer
+  64512:666
+end-set
+!
+! From Packeteer: only routes that carry the Packeteer community.
+route-policy packeteer-in
+  if community matches-any packeteer then
+    pass
+  else
+    drop
+  endif
+end-policy
+!
+! Toward every eBGP neighbor, customers and peers included: never a route
+! with the Packeteer community. Put the first "if" at the top of the
+! outbound route-policy each eBGP neighbor already uses (rename ebgp-out to
+! it); your existing terms replace the final pass.
+route-policy ebgp-out
+  if community matches-any packeteer then
+    drop
+  endif
+  pass
+end-policy
+!
+router bgp 64512
+ neighbor 192.0.2.10
+  remote-as 64512
+  description packeteer
+  ! Keepalive 10s, hold time 30s: a crashed Packeteer's routes go within 30s.
+  timers 10 30
+  ! Packeteer never offers graceful restart. Leave "graceful-restart" off
+  ! for this neighbor.
+  address-family ipv4 unicast
+   route-policy packeteer-in in
+  !
+  address-family ipv6 unicast
+   route-policy packeteer-in in
+  !
+ !
+!
+! add_path is set for this neighbor in Packeteer's config: also enable
+! add-path send toward 192.0.2.10 ("additional-paths send" in each
+! address family, with an "additional-paths selection" policy).

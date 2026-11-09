@@ -1,0 +1,33 @@
+{
+  "version": "lab",
+  "mode": "observe",
+  "ready": true,
+  "generated_at": "2026-10-18T12:00:00Z",
+  "asn": 64496,
+  "name": "Example Member A",
+  "ixp_manager_url": "https://ixp.example.invalid/admin/search?search=AS64496",
+  "connections": [
+    {
+      "ixp_id": 1,
+      "state": "active",
+      "interfaces": [{"switch_id": 7, "switch": "sw1", "colo": "cab-a", "speed_mbps": 10000}],
+      "addresses": [{"family": "ipv4", "address": "192.0.2.20", "vlan_id": 10, "route_server": true}]
+    }
+  ],
+  "fabric": {
+    "configured": true,
+    "stale": false,
+    "round": "2026-10-18T11:59:30Z",
+    "samples": [
+      {"vantage": "lan1-a", "asn": 64496, "address": "192.0.2.20", "family": "ipv4", "vlan_id": 10, "ixp_id": 1, "busy_host": false, "sent": 5, "received": 5, "loss_pct": 0, "rtt_ms": 0.42, "jitter_ms": 0.05, "past_tolerance": false, "at": "2026-10-18T11:59:30Z"},
+      {"vantage": "lan1-b", "asn": 64496, "address": "192.0.2.20", "family": "ipv4", "vlan_id": 10, "ixp_id": 1, "busy_host": false, "sent": 5, "received": 3, "loss_pct": 40, "rtt_ms": 310.5, "jitter_ms": 12.25, "past_tolerance": true, "at": "2026-10-18T11:59:30Z"}
+    ]
+  },
+  "route_server_sessions": [
+    {
+      "server": "rs1", "session": "pb_a", "asn": 64496, "name": "Example Member A", "neighbor": "192.0.2.20",
+      "state": "Established", "established": true, "counted": true, "received": 10, "accepted": 7, "filtered": 3,
+      "reasons": [{"reason": 9, "count": 3}], "max_prefix": 100, "scanned": false, "blackhole": 0, "at": "2026-10-18T11:59:00Z"
+    }
+  ]
+}

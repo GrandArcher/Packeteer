@@ -1,0 +1,28 @@
+route:          198.51.100.0/24
+descr:          EXAMPLE-NET
+origin:         AS64496
+mnt-by:         MAINT-EXAMPLE
+created:        2020-01-01T00:00:00Z
+last-modified:  2024-05-06T07:08:09Z
+source:         RIPE
+remarks:        ****************************
+remarks:        * THIS OBJECT IS MODIFIED
+remarks:        * Please note that all data that is generally regarded as personal
+remarks:        * data has been removed from this object.
+remarks:        ****************************
+rpki-ov-state:  valid
+
+route:          198.51.100.0/24
+descr:          EXAMPLE-NET second origin
+origin:         AS64497
+mnt-by:         MAINT-EXAMPLE
+source:         RADB
+
+route:          198.51.100.0/24
+descr:          RPKI ROA for 198.51.100.0/24 / AS64498
+remarks:        This AS64498 route object represents routing data retrieved
+                from the RPKI. This route object is the result of an automated
+                RPKI-to-IRR conversion process performed by IRRd.
+max-length:     24
+origin:         AS64498
+source:         RPKI  # Trust Anchor: ripe

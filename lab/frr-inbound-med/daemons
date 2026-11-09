@@ -1,0 +1,9 @@
+# Lab only. zebra and staticd are required so the blackhole routes exist;
+# bgpd is the simulated edge.
+zebra=yes
+bgpd=yes
+staticd=yes
+vtysh_enable=yes
+zebra_options="  -A 127.0.0.1 -s 90000000"
+bgpd_options="   -A 127.0.0.1"
+staticd_options="  -A 127.0.0.1"

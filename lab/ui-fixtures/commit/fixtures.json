@@ -1,0 +1,7 @@
+{
+  "inject": {
+    "page": "/settings.html",
+    "script": "driver.js"
+  },
+  "stubs": []
+}

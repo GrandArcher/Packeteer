@@ -1,0 +1,25 @@
+{
+  "report": "exchanges",
+  "from": "2026-10-07T00:00:00Z",
+  "to": "2026-10-14T00:00:00Z",
+  "rows": [
+    {
+      "exchange": "ix-lab",
+      "peer": "ix-peer-a",
+      "improvements": 5,
+      "active": 2,
+      "prefixes": 4,
+      "volume_mbps": 61.5,
+      "steered_hours": 120.5
+    },
+    {
+      "exchange": "ix-lab",
+      "peer": "ix-peer-b",
+      "improvements": 0,
+      "active": 0,
+      "prefixes": 0,
+      "volume_mbps": 0,
+      "steered_hours": 0
+    }
+  ]
+}

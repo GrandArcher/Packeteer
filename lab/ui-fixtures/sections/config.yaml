@@ -1,0 +1,129 @@
+# Config for the settings sections smoke test (#330). Every section the page
+# draws from the schema has something in it. Documentation prefixes and
+# addresses, documentation or private ASNs, and observe mode only. The
+# controller in the test runs without a router; nothing is announced.
+mode: observe
+asn: 64512
+router_id: 192.0.2.10
+packeteer_community: "64512:666"
+local_pref: 200
+hold_time: 15m
+max_improvements: 50
+thresholds: {min_loss_delta_pct: 1, min_rtt_delta_ms: 15}
+http:
+  listen: "127.0.0.1:18330"
+  config_editor: true
+  allow_from: [127.0.0.0/8]
+providers:
+  - name: lab-a
+    source_ip: 127.0.0.1
+    next_hop: 192.0.2.1
+    cost: 5
+    bmp: prefer
+  - name: lab-b
+    source_ip: 127.0.0.2
+    next_hop: 192.0.2.2
+    cost: 9
+exchanges:
+  - name: ix-lab
+    lans: [203.0.113.0/24]
+    peers:
+      - name: ix-peer-a
+        asn: 64501
+        next_hop: 203.0.113.11
+        source_ip: 127.0.0.3
+      - name: ix-peer-b
+        asn: 64502
+        next_hop: 203.0.113.12
+        source_ip: 127.0.0.4
+        precedence: 50
+        exclude: true
+allowlist:
+  prefixes: [198.51.100.0/24]
+probe: {interval: 30s, timeout: 200ms, packets: 1}
+bgp:
+  neighbors:
+    - address: 192.0.2.254
+      description: edge
+      add_path: true
+rib_sources:
+  - type: bmp
+    config:
+      listen: "127.0.0.1:11319"
+      routers: [192.0.2.254]
+scorer:
+  type: commit
+  config:
+    loss_weight: 100
+    balance: equal
+sources:
+  - type: static
+    config:
+      targets: [{prefix: 198.51.100.0/24}]
+  - type: flow
+    config:
+      listen: "127.0.0.1:12355"
+      window: 10m
+      problems:
+        local: [192.0.2.0/24]
+        failure_pct: 25
+policies:
+  - type: maintenance
+    config:
+      windows:
+        - name: nightly
+          providers: [lab-b]
+          schedule: "0 2 * * 0"
+          duration: 2h
+inbound:
+  mode: observe
+  prefixes: [198.51.100.0/24]
+  performance: {}
+  announcer:
+    type: gobgp
+    config:
+      marker: "64512:777"
+      providers:
+        - provider: lab-a
+          communities: ["64512:1001"]
+          prepend: 2
+mitigation:
+  mode: observe
+  allowlist: [198.51.100.0/24]
+  max_rules: 10
+anomaly:
+  detector:
+    type: baseline
+  rules:
+    - name: udp-flood
+      prefixes: [198.51.100.0/24]
+      action: blackhole
+telemetry:
+  - type: snmp
+    config:
+      hosts:
+        - name: edge
+          address: 192.0.2.254
+          version: 2c
+          community_env: PACKETEER_SNMP_COMMUNITY
+        - name: edge3
+          address: 192.0.2.253
+          version: "3"
+          username_env: PACKETEER_SNMP_USER
+          security_level: authPriv
+          auth_protocol: SHA256
+          auth_env: PACKETEER_SNMP_AUTH
+          priv_protocol: AES
+          priv_env: PACKETEER_SNMP_PRIV
+      providers:
+        - {name: lab-a, host: edge, interface: ether1, commit_mbps: 100, billing_day: 1, percentile: greater}
+notifiers:
+  - type: webhook
+    name: chat
+    config:
+      url: http://127.0.0.1:9/lab
+      timeout: 5s
+probers:
+  - type: fixed
+    config:
+      paths: [{provider: lab-a, rtt_ms: 12}, {provider: lab-b, rtt_ms: 20}, {provider: ix-peer-a, rtt_ms: 15}, {provider: ix-peer-b, rtt_ms: 25}]

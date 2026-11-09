@@ -1,0 +1,45 @@
+name: discord
+
+on:
+  release:
+    types: [published]
+  pull_request_target:
+    types: [closed]
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  release:
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post release to #releases
+        env:
+          WEBHOOK: ${{ secrets.DISCORD_RELEASES_WEBHOOK }}
+          NAME: ${{ github.event.release.name || github.event.release.tag_name }}
+          URL: ${{ github.event.release.html_url }}
+          BODY: ${{ github.event.release.body }}
+        run: |
+          [ -n "$WEBHOOK" ] || exit 0
+          notes=$(printf '%s' "$BODY" | head -c 1500)
+          jq -n --arg t "Packeteer $NAME is out" --arg u "$URL" --arg d "$notes" \
+            '{username:"Packeteer Releases", allowed_mentions:{parse:[]}, embeds:[{title:$t, url:$u, description:$d, color:15105570}]}' \
+            | curl -fsS -H 'Content-Type: application/json' -d @- "$WEBHOOK"
+
+  merged:
+    if: github.event_name == 'pull_request_target' && github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post merged PR to #dev
+        env:
+          WEBHOOK: ${{ secrets.DISCORD_DEV_WEBHOOK }}
+          TITLE: ${{ github.event.pull_request.title }}
+          NUM: ${{ github.event.pull_request.number }}
+          URL: ${{ github.event.pull_request.html_url }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          [ -n "$WEBHOOK" ] || exit 0
+          jq -n --arg c "Merged #$NUM: $TITLE (by $AUTHOR) <$URL>" \
+            '{username:"Packeteer Dev", allowed_mentions:{parse:[]}, content:$c}' \
+            | curl -fsS -H 'Content-Type: application/json' -d @- "$WEBHOOK"

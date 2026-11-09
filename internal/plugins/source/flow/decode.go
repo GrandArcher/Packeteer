@@ -1,0 +1,945 @@
+package flow
+
+import (
+	"encoding/binary"
+	"errors"
+	"fmt"
+	"net/netip"
+	"sync"
+	"time"
+)
+
+// Decoding lives here rather than in github.com/netsampler/goflow2. That
+// module's go.mod requires a newer protobuf than the BGP speaker, plus
+// collector dependencies the decoders themselves do not use. This reader
+// keeps only the destination and octet fields target discovery needs, plus
+// the source, protocol, and TCP flags that passive problem detection and
+// transit classification read. sFlow gives the source and, from a sampled
+// header or record, the TCP flags of that one packet.
+
+const (
+	maxTemplates = 4096
+	// templateTTL is how long a domain's templates are kept without a
+	// refresh once the table is full. Exporters over UDP resend their
+	// templates on a timer, usually minutes apart, so only a domain that
+	// went quiet, or a spoofed one, is that old.
+	templateTTL    = time.Hour
+	maxFlowSamples = 1024
+	maxFlowRecords = 64
+
+	ieInBytes            = 1
+	ieProtocol           = 4
+	ieTCPFlags           = 6
+	ieSrcV4              = 8
+	ieDstV4              = 12
+	ieOutBytes           = 23
+	ieSrcV6              = 27
+	ieDstV6              = 28
+	ieSamplingInterval   = 34
+	ieSamplerRandom      = 50
+	iePermanentBytes     = 85
+	ieSamplingPacketRate = 305 // IPFIX samplingPacketInterval
+
+	sflowEnterpriseShift = 12
+	sflowFormatFlow      = 1
+	sflowFormatExpanded  = 3
+	sflowRawHeader       = 1
+	sflowSampledIPv4     = 3
+	sflowSampledIPv6     = 4
+	sflowHeaderEthernet  = 1
+	sflowHeaderIPv4      = 11
+	sflowHeaderIPv6      = 12
+)
+
+var (
+	errNeedMore  = errors.New("short record")
+	errTableFull = errors.New("template table full")
+)
+
+type observation struct {
+	dst   netip.Addr
+	bytes uint64
+
+	// src is set when the record carries it (sFlow too). The rest are set
+	// only by NetFlow v5, v9, and IPFIX records that carry them.
+	src       netip.Addr
+	proto     uint8
+	tcpFlags  uint8
+	haveFlags bool
+	// sampled is true when the exporter samples packets (rate above 1) or
+	// is sFlow, whose records are single packets at any rate. A sampled
+	// record may hold only a SYN, so problem detection counts only its
+	// RSTs. rate is the sampling interval, 0 when unknown.
+	sampled bool
+	rate    uint64
+}
+
+type fieldSpec struct {
+	ie     uint16
+	length uint16
+	skip   bool // enterprise IE; consumed, not interpreted
+}
+
+type tmpl struct {
+	fields []fieldSpec
+}
+
+type domainKey struct {
+	exp     netip.Addr
+	version uint16
+	domain  uint32
+}
+
+// domainState holds one exporter domain's templates and the sampling rate
+// learned from its data. It is deleted with its last template, so a rate
+// never outlives the templates that set it and maxTemplates also caps the
+// number of domains.
+type domainState struct {
+	tmpl map[uint16]tmpl
+	rate uint64
+	// seen is when a template of this domain was last stored.
+	seen time.Time
+}
+
+// decoder holds NetFlow v9 / IPFIX templates and sampling rates per
+// exporter, version, and observation domain. They are not flow records.
+type decoder struct {
+	mu    sync.Mutex
+	doms  map[domainKey]*domainState
+	ntmpl int // templates across all domains
+	// at is the arrival time of the datagram being decoded, set under mu.
+	at time.Time
+	// sweepAt is the earliest time a domain held at the last sweep can
+	// expire. A full table is swept again only from then on, so a datagram
+	// of many template sets costs one scan, not one per set.
+	sweepAt time.Time
+}
+
+// obsPool reuses the observation slice for one datagram. Observations
+// hold no pointers into the packet, so the slice can travel through the
+// queue to a worker while the reader reuses its read buffer. A slice bigger than a jumbo packet is dropped
+// so a pathological exporter cannot pin it.
+var obsPool = sync.Pool{New: func() any {
+	s := make([]observation, 0, 64)
+	return &s
+}}
+
+func getObs() []observation {
+	return (*obsPool.Get().(*[]observation))[:0]
+}
+
+func putObs(s []observation) {
+	if cap(s) == 0 || cap(s) > 4096 {
+		return
+	}
+	s = s[:0]
+	obsPool.Put(&s)
+}
+
+// decode reads one datagram from exporter that arrived at at.
+func (d *decoder) decode(exporter netip.Addr, at time.Time, payload []byte) ([]observation, error) {
+	if len(payload) < 2 {
+		return nil, errors.New("short packet")
+	}
+	// sFlow's version is a uint32. NetFlow's is a uint16, so a v5 packet
+	// never starts with 00 00 00 05.
+	if len(payload) >= 4 && binary.BigEndian.Uint32(payload[:4]) == 5 {
+		return decodeSFlow(payload)
+	}
+	switch binary.BigEndian.Uint16(payload[:2]) {
+	case 5:
+		return decodeV5(payload)
+	case 9:
+		return d.decodeV9(exporter, at, payload)
+	case 10:
+		return d.decodeIPFIX(exporter, at, payload)
+	default:
+		return nil, fmt.Errorf("unknown flow version %d", binary.BigEndian.Uint16(payload[:2]))
+	}
+}
+
+func (d *decoder) init() {
+	if d.doms == nil {
+		d.doms = map[domainKey]*domainState{}
+	}
+}
+
+func decodeV5(p []byte) ([]observation, error) {
+	if len(p) < 24 {
+		return nil, errors.New("netflow v5: short header")
+	}
+	count := int(binary.BigEndian.Uint16(p[2:4]))
+	// Cisco packs a 2-bit sampling mode and a 14-bit interval into this
+	// field. Zero means the octet counts are already absolute.
+	rate := uint64(binary.BigEndian.Uint16(p[22:24]) & 0x3fff)
+	rest := p[24:]
+	out := getObs()
+	for i := 0; i < count; i++ {
+		if len(rest) < 48 {
+			return out, errors.New("netflow v5: short record")
+		}
+		rec := rest[:48]
+		rest = rest[48:]
+		octets := binary.BigEndian.Uint32(rec[20:24])
+		if octets == 0 {
+			continue
+		}
+		var src4, dst4 [4]byte
+		copy(src4[:], rec[0:4])
+		copy(dst4[:], rec[4:8])
+		out = append(out, observation{
+			dst:       netip.AddrFrom4(dst4),
+			bytes:     scale(uint64(octets), rate),
+			src:       netip.AddrFrom4(src4),
+			proto:     rec[38],
+			tcpFlags:  rec[37],
+			haveFlags: true,
+			sampled:   rate > 1,
+			rate:      rate,
+		})
+	}
+	return out, nil
+}
+
+func (d *decoder) decodeV9(exporter netip.Addr, at time.Time, p []byte) ([]observation, error) {
+	if len(p) < 20 {
+		return nil, errors.New("netflow v9: short header")
+	}
+	domain := binary.BigEndian.Uint32(p[16:20])
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.init()
+	d.at = at
+	return d.walkSets(exporter, 9, domain, p[20:])
+}
+
+func (d *decoder) decodeIPFIX(exporter netip.Addr, at time.Time, p []byte) ([]observation, error) {
+	if len(p) < 16 {
+		return nil, errors.New("ipfix: short header")
+	}
+	total := int(binary.BigEndian.Uint16(p[2:4]))
+	if total < 16 || total > len(p) {
+		return nil, errors.New("ipfix: bad length")
+	}
+	domain := binary.BigEndian.Uint32(p[12:16])
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.init()
+	d.at = at
+	return d.walkSets(exporter, 10, domain, p[16:total])
+}
+
+func (d *decoder) walkSets(exp netip.Addr, version uint16, domain uint32, body []byte) ([]observation, error) {
+	obs := getObs()
+	var errs []error
+	for len(body) >= 4 {
+		id := binary.BigEndian.Uint16(body[0:2])
+		l := int(binary.BigEndian.Uint16(body[2:4]))
+		if l < 4 || l > len(body) {
+			errs = append(errs, errors.New("flowset length out of range"))
+			break
+		}
+		set := body[4:l]
+		body = body[l:]
+		var err error
+		switch {
+		case version == 9 && id == 0:
+			err = d.takeTemplates(exp, version, domain, set, false)
+		case version == 9 && id == 1:
+			err = d.takeV9Options(exp, domain, set)
+		case version == 10 && id == 2:
+			err = d.takeTemplates(exp, version, domain, set, true)
+		case version == 10 && id == 3:
+			err = d.takeIPFIXOptions(exp, domain, set)
+		case id >= 256:
+			obs, err = d.takeData(exp, version, domain, id, set, obs)
+			if err != nil {
+				errs = append(errs, err)
+			}
+			continue
+		}
+		// A malformed template set ends the datagram: the sets after it come
+		// from the same unauthenticated sender, and one packet may hold
+		// thousands of them. A full table is not malformed, and data for the
+		// templates already held still counts.
+		if err != nil {
+			errs = append(errs, err)
+			if !errors.Is(err, errTableFull) {
+				break
+			}
+		}
+	}
+	return obs, errors.Join(errs...)
+}
+
+func (d *decoder) takeTemplates(exp netip.Addr, version uint16, domain uint32, body []byte, ipfix bool) error {
+	for len(body) >= 4 {
+		id := binary.BigEndian.Uint16(body[0:2])
+		n := int(binary.BigEndian.Uint16(body[2:4]))
+		body = body[4:]
+		if n == 0 {
+			d.withdraw(exp, version, domain, id)
+			continue
+		}
+		var fields []fieldSpec
+		var err error
+		if ipfix {
+			fields, body, err = readIPFIXFields(body, n)
+		} else {
+			fields, body, err = readV9Fields(body, n)
+		}
+		if err != nil {
+			return err
+		}
+		if err := d.store(domainKey{exp, version, domain}, id, tmpl{fields: fields}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (d *decoder) takeV9Options(exp netip.Addr, domain uint32, body []byte) error {
+	for len(body) >= 6 {
+		id := binary.BigEndian.Uint16(body[0:2])
+		scopeLen := int(binary.BigEndian.Uint16(body[2:4]))
+		optLen := int(binary.BigEndian.Uint16(body[4:6]))
+		body = body[6:]
+		if scopeLen%4 != 0 || optLen%4 != 0 {
+			return errors.New("netflow v9: options template length")
+		}
+		n := scopeLen/4 + optLen/4
+		if n == 0 {
+			d.withdraw(exp, 9, domain, id)
+			continue
+		}
+		fields, rest, err := readV9Fields(body, n)
+		if err != nil {
+			return err
+		}
+		body = rest
+		if err := d.store(domainKey{exp, 9, domain}, id, tmpl{fields: fields}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (d *decoder) takeIPFIXOptions(exp netip.Addr, domain uint32, body []byte) error {
+	for len(body) >= 6 {
+		id := binary.BigEndian.Uint16(body[0:2])
+		n := int(binary.BigEndian.Uint16(body[2:4]))
+		scope := int(binary.BigEndian.Uint16(body[4:6]))
+		body = body[6:]
+		if n == 0 {
+			d.withdraw(exp, 10, domain, id)
+			continue
+		}
+		if scope > n {
+			return errors.New("ipfix: scope count exceeds field count")
+		}
+		fields, rest, err := readIPFIXFields(body, n)
+		if err != nil {
+			return err
+		}
+		body = rest
+		if err := d.store(domainKey{exp, 10, domain}, id, tmpl{fields: fields}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func readV9Fields(body []byte, n int) ([]fieldSpec, []byte, error) {
+	need := n * 4
+	if len(body) < need {
+		return nil, body, errors.New("netflow v9: short template")
+	}
+	fields := make([]fieldSpec, n)
+	for i := 0; i < n; i++ {
+		off := i * 4
+		fields[i] = fieldSpec{
+			ie:     binary.BigEndian.Uint16(body[off:]),
+			length: binary.BigEndian.Uint16(body[off+2:]),
+		}
+	}
+	return fields, body[need:], nil
+}
+
+func readIPFIXFields(body []byte, n int) ([]fieldSpec, []byte, error) {
+	// Each field spec takes at least 4 bytes. Checking before make keeps a
+	// wire count of 65535 in a short set from allocating.
+	if len(body) < n*4 {
+		return nil, body, errors.New("ipfix: short template")
+	}
+	fields := make([]fieldSpec, 0, n)
+	for i := 0; i < n; i++ {
+		if len(body) < 4 {
+			return nil, body, errors.New("ipfix: short template")
+		}
+		ie := binary.BigEndian.Uint16(body[0:2])
+		l := binary.BigEndian.Uint16(body[2:4])
+		body = body[4:]
+		f := fieldSpec{ie: ie, length: l}
+		if ie&0x8000 != 0 {
+			if len(body) < 4 {
+				return nil, body, errors.New("ipfix: short enterprise field")
+			}
+			body = body[4:]
+			f.ie = ie &^ 0x8000
+			f.skip = true
+		}
+		fields = append(fields, f)
+	}
+	return fields, body, nil
+}
+
+func (d *decoder) store(k domainKey, id uint16, t tmpl) error {
+	if !usable(t.fields) {
+		return nil
+	}
+	ds := d.doms[k]
+	if ds != nil {
+		if _, ok := ds.tmpl[id]; ok {
+			ds.tmpl[id] = t
+			ds.seen = d.at
+			return nil
+		}
+	}
+	if d.ntmpl >= maxTemplates && !d.at.Before(d.sweepAt) {
+		d.expire()
+		ds = d.doms[k]
+	}
+	if d.ntmpl >= maxTemplates {
+		return errTableFull
+	}
+	if ds == nil {
+		ds = &domainState{tmpl: map[uint16]tmpl{}}
+		d.doms[k] = ds
+	}
+	ds.tmpl[id] = t
+	ds.seen = d.at
+	d.ntmpl++
+	return nil
+}
+
+// expire drops every domain whose templates were not refreshed within
+// templateTTL, with its sampling rate, and sets sweepAt. It runs only on a
+// full table, so a sender that filled the table holds it for at most
+// templateTTL after it stops (#493).
+func (d *decoder) expire() {
+	var oldest time.Time
+	for k, ds := range d.doms {
+		if d.at.Sub(ds.seen) >= templateTTL {
+			d.ntmpl -= len(ds.tmpl)
+			delete(d.doms, k)
+			continue
+		}
+		if oldest.IsZero() || ds.seen.Before(oldest) {
+			oldest = ds.seen
+		}
+	}
+	d.sweepAt = oldest.Add(templateTTL)
+}
+
+func usable(fields []fieldSpec) bool {
+	n := 0
+	for _, f := range fields {
+		if f.length == 0xffff {
+			n++
+		} else {
+			n += int(f.length)
+		}
+	}
+	return n > 0
+}
+
+// withdraw removes one template. An id below 256 withdraws every template for
+// that exporter and domain (IPFIX uses template id 2 or 3 for this; v9 uses 0).
+func (d *decoder) withdraw(exp netip.Addr, version uint16, domain uint32, id uint16) {
+	k := domainKey{exp, version, domain}
+	ds := d.doms[k]
+	if ds == nil {
+		return
+	}
+	if id < 256 {
+		d.ntmpl -= len(ds.tmpl)
+		delete(d.doms, k)
+		return
+	}
+	if _, ok := ds.tmpl[id]; !ok {
+		return
+	}
+	delete(ds.tmpl, id)
+	d.ntmpl--
+	if len(ds.tmpl) == 0 {
+		delete(d.doms, k)
+	}
+}
+
+type gotRec struct {
+	dst       netip.Addr
+	src       netip.Addr
+	proto     uint8
+	tcpFlags  uint8
+	haveProto bool
+	haveFlags bool
+	inB       uint64
+	outB      uint64
+	haveIn    bool
+	haveOut   bool
+	rate      uint64
+}
+
+func (d *decoder) takeData(exp netip.Addr, version uint16, domain uint32, id uint16, body []byte, obs []observation) ([]observation, error) {
+	ds := d.doms[domainKey{exp, version, domain}]
+	var t tmpl
+	var ok bool
+	if ds != nil {
+		t, ok = ds.tmpl[id]
+	}
+	if !ok {
+		return obs, fmt.Errorf("template %d not found", id)
+	}
+	for len(body) > 0 {
+		rec, rest, err := nextRecord(body, t.fields)
+		if errors.Is(err, errNeedMore) {
+			break
+		}
+		if err != nil {
+			return obs, err
+		}
+		if len(rest) >= len(body) {
+			break
+		}
+		body = rest
+		if rec.rate > 0 {
+			ds.rate = rec.rate
+		}
+		octets, keep := octetsOf(rec)
+		if !keep {
+			continue
+		}
+		rate := rec.rate
+		if rate == 0 {
+			rate = ds.rate
+		}
+		obs = append(obs, observation{
+			dst:       rec.dst,
+			bytes:     scale(octets, rate),
+			src:       rec.src,
+			proto:     rec.proto,
+			tcpFlags:  rec.tcpFlags,
+			haveFlags: rec.haveProto && rec.haveFlags && rec.src.IsValid(),
+			sampled:   rate > 1,
+			rate:      rate,
+		})
+	}
+	return obs, nil
+}
+
+func octetsOf(rec gotRec) (uint64, bool) {
+	if rec.haveIn && rec.inB > 0 {
+		return rec.inB, rec.dst.IsValid()
+	}
+	if rec.haveOut && rec.outB > 0 {
+		return rec.outB, rec.dst.IsValid()
+	}
+	return 0, false
+}
+
+func nextRecord(body []byte, fields []fieldSpec) (gotRec, []byte, error) {
+	min := 0
+	for _, f := range fields {
+		if f.length == 0xffff {
+			min++
+		} else {
+			min += int(f.length)
+		}
+	}
+	if min == 0 || len(body) < min {
+		return gotRec{}, body, errNeedMore
+	}
+	var rec gotRec
+	for _, f := range fields {
+		val, rest, ok := takeField(body, f.length)
+		if !ok {
+			return gotRec{}, body, errors.New("truncated flow record")
+		}
+		body = rest
+		if f.skip {
+			continue
+		}
+		switch f.ie {
+		case ieDstV4:
+			if len(val) == 4 {
+				var a [4]byte
+				copy(a[:], val)
+				rec.dst = netip.AddrFrom4(a)
+			}
+		case ieDstV6:
+			if len(val) == 16 {
+				var a [16]byte
+				copy(a[:], val)
+				rec.dst = netip.AddrFrom16(a)
+			}
+		case ieSrcV4:
+			if len(val) == 4 {
+				var a [4]byte
+				copy(a[:], val)
+				rec.src = netip.AddrFrom4(a)
+			}
+		case ieSrcV6:
+			if len(val) == 16 {
+				var a [16]byte
+				copy(a[:], val)
+				rec.src = netip.AddrFrom16(a)
+			}
+		case ieProtocol:
+			if n, ok := u64be(val); ok {
+				rec.proto, rec.haveProto = uint8(n), true
+			}
+		case ieTCPFlags:
+			// v9 sends one byte; IPFIX sends two (the low byte holds the
+			// classic flags).
+			if n, ok := u64be(val); ok {
+				rec.tcpFlags, rec.haveFlags = uint8(n), true
+			}
+		case ieInBytes, iePermanentBytes:
+			if n, ok := u64be(val); ok {
+				rec.inB = n
+				rec.haveIn = true
+			}
+		case ieOutBytes:
+			if n, ok := u64be(val); ok {
+				rec.outB = n
+				rec.haveOut = true
+			}
+		case ieSamplingInterval, ieSamplerRandom, ieSamplingPacketRate:
+			if n, ok := u64be(val); ok && n > 0 {
+				rec.rate = n
+			}
+		}
+	}
+	return rec, body, nil
+}
+
+func takeField(body []byte, length uint16) ([]byte, []byte, bool) {
+	if length == 0xffff {
+		if len(body) < 1 {
+			return nil, body, false
+		}
+		n := int(body[0])
+		body = body[1:]
+		if n == 255 {
+			if len(body) < 2 {
+				return nil, body, false
+			}
+			n = int(binary.BigEndian.Uint16(body[:2]))
+			body = body[2:]
+		}
+		length = uint16(n)
+	}
+	if int(length) > len(body) {
+		return nil, body, false
+	}
+	return body[:length], body[length:], true
+}
+
+func u64be(b []byte) (uint64, bool) {
+	if len(b) == 0 || len(b) > 8 {
+		return 0, false
+	}
+	var n uint64
+	for _, c := range b {
+		n = n<<8 | uint64(c)
+	}
+	return n, true
+}
+
+func scale(octets, rate uint64) uint64 {
+	if rate <= 1 || octets == 0 {
+		return octets
+	}
+	if octets > ^uint64(0)/rate {
+		return ^uint64(0)
+	}
+	return octets * rate
+}
+
+func decodeSFlow(p []byte) ([]observation, error) {
+	if len(p) < 28 {
+		return nil, errors.New("sflow: short header")
+	}
+	if binary.BigEndian.Uint32(p[:4]) != 5 {
+		return nil, errors.New("sflow: bad version")
+	}
+	af := binary.BigEndian.Uint32(p[4:8])
+	off := 8
+	switch af {
+	case 1:
+		off += 4
+	case 2:
+		off += 16
+	default:
+		return nil, fmt.Errorf("sflow: address type %d", af)
+	}
+	// sub-agent, sequence, uptime, sample count
+	if len(p) < off+16 {
+		return nil, errors.New("sflow: short header")
+	}
+	n := binary.BigEndian.Uint32(p[off+12 : off+16])
+	off += 16
+	if n > maxFlowSamples {
+		return nil, errors.New("sflow: too many samples")
+	}
+	out := getObs()
+	for i := uint32(0); i < n; i++ {
+		if len(p)-off < 8 {
+			return out, errors.New("sflow: short sample")
+		}
+		format := binary.BigEndian.Uint32(p[off:])
+		l := int(binary.BigEndian.Uint32(p[off+4:]))
+		off += 8
+		if l < 0 || l > len(p)-off {
+			return out, errors.New("sflow: sample overruns packet")
+		}
+		body := p[off : off+l]
+		off += l
+		if format>>sflowEnterpriseShift != 0 {
+			continue
+		}
+		var o observation
+		var ok bool
+		switch format & 0xfff {
+		case sflowFormatFlow:
+			o, ok = flowSample(body, false)
+		case sflowFormatExpanded:
+			o, ok = flowSample(body, true)
+		}
+		if ok {
+			out = append(out, o)
+		}
+	}
+	return out, nil
+}
+
+func flowSample(body []byte, expanded bool) (observation, bool) {
+	need := 8 + 8 + 8 + 4 // seq+source, rate+pool, drops+input/output header, nrecords
+	if expanded {
+		need = 12 + 8 + 16 + 4 // seq+source type/index, rate+pool, ifs, nrecords
+	}
+	if len(body) < need {
+		return observation{}, false
+	}
+	off := 0
+	if expanded {
+		off = 12
+	} else {
+		off = 8
+	}
+	rate := binary.BigEndian.Uint32(body[off:])
+	off += 8 // rate + pool
+	off += 4 // drops
+	if expanded {
+		off += 16
+	} else {
+		off += 8
+	}
+	if len(body) < off+4 {
+		return observation{}, false
+	}
+	n := binary.BigEndian.Uint32(body[off:])
+	off += 4
+	if n > maxFlowRecords {
+		return observation{}, false
+	}
+	var header, explicit observation
+	var headerOK, explicitOK bool
+	for i := uint32(0); i < n && len(body)-off >= 8; i++ {
+		format := binary.BigEndian.Uint32(body[off:])
+		l := int(binary.BigEndian.Uint32(body[off+4:]))
+		off += 8
+		if l > len(body)-off {
+			return observation{}, false
+		}
+		rec := body[off : off+l]
+		off += l
+		if format>>sflowEnterpriseShift != 0 {
+			continue
+		}
+		switch format & 0xfff {
+		case sflowRawHeader:
+			if !headerOK {
+				if o, ok := sampledHeader(rec); ok {
+					header, headerOK = o, true
+				}
+			}
+		case sflowSampledIPv4:
+			if o, ok := sampledIPv4(rec); ok {
+				explicit, explicitOK = o, true
+			}
+		case sflowSampledIPv6:
+			if o, ok := sampledIPv6(rec); ok {
+				explicit, explicitOK = o, true
+			}
+		}
+	}
+	o := header
+	ok := headerOK
+	if explicitOK {
+		o, ok = explicit, true
+	}
+	if !ok || o.bytes == 0 || !o.dst.IsValid() {
+		return observation{}, false
+	}
+	r := uint64(rate)
+	if r == 0 {
+		r = 1
+	}
+	o.bytes = scale(o.bytes, r)
+	o.sampled, o.rate = true, r
+	return o, true
+}
+
+func sampledIPv4(rec []byte) (observation, bool) {
+	// length, protocol, src, dst, srcPort, dstPort, flags, tos: 32 bytes
+	if len(rec) < 32 {
+		return observation{}, false
+	}
+	n := binary.BigEndian.Uint32(rec[0:4])
+	var src, dst [4]byte
+	copy(src[:], rec[8:12])
+	copy(dst[:], rec[12:16])
+	if n == 0 {
+		return observation{}, false
+	}
+	o := observation{src: netip.AddrFrom4(src), dst: netip.AddrFrom4(dst), bytes: uint64(n), proto: protoByte(rec[4:8])}
+	o.tcpFlags, o.haveFlags = rec[27], o.proto == 6
+	return o, true
+}
+
+// protoByte is an sFlow 32-bit protocol field, or 0 when it is out of
+// range.
+func protoByte(b []byte) uint8 {
+	v := binary.BigEndian.Uint32(b)
+	if v > 255 {
+		return 0
+	}
+	return uint8(v)
+}
+
+func sampledIPv6(rec []byte) (observation, bool) {
+	// length, protocol, src16, dst16, ports, flags, priority: 56 bytes
+	if len(rec) < 56 {
+		return observation{}, false
+	}
+	n := binary.BigEndian.Uint32(rec[0:4])
+	var src, dst [16]byte
+	copy(src[:], rec[8:24])
+	copy(dst[:], rec[24:40])
+	if n == 0 {
+		return observation{}, false
+	}
+	o := observation{src: netip.AddrFrom16(src), dst: netip.AddrFrom16(dst), bytes: uint64(n), proto: protoByte(rec[4:8])}
+	o.tcpFlags, o.haveFlags = rec[51], o.proto == 6
+	return o, true
+}
+
+func sampledHeader(rec []byte) (observation, bool) {
+	if len(rec) < 16 {
+		return observation{}, false
+	}
+	proto := binary.BigEndian.Uint32(rec[0:4])
+	frameLen := binary.BigEndian.Uint32(rec[4:8])
+	hdrLen := int(binary.BigEndian.Uint32(rec[12:16]))
+	if hdrLen < 0 || hdrLen > len(rec)-16 {
+		return observation{}, false
+	}
+	hdr := rec[16 : 16+hdrLen]
+	var o observation
+	var ok bool
+	switch proto {
+	case sflowHeaderEthernet:
+		o, ok = parseEthernet(hdr, frameLen)
+	case sflowHeaderIPv4:
+		o, ok = parseIPv4(hdr, frameLen)
+	case sflowHeaderIPv6:
+		o, ok = parseIPv6(hdr, frameLen)
+	default:
+		return observation{}, false
+	}
+	if !ok || o.bytes == 0 {
+		return observation{}, false
+	}
+	return o, true
+}
+
+func parseEthernet(hdr []byte, frameLen uint32) (observation, bool) {
+	if len(hdr) < 14 {
+		return observation{}, false
+	}
+	off := 12
+	et := binary.BigEndian.Uint16(hdr[off : off+2])
+	off += 2
+	for et == 0x8100 || et == 0x88a8 || et == 0x9100 {
+		if len(hdr) < off+4 {
+			return observation{}, false
+		}
+		et = binary.BigEndian.Uint16(hdr[off+2 : off+4])
+		off += 4
+	}
+	switch et {
+	case 0x0800:
+		return parseIPv4(hdr[off:], frameLen)
+	case 0x86dd:
+		return parseIPv6(hdr[off:], frameLen)
+	default:
+		return observation{}, false
+	}
+}
+
+func parseIPv4(b []byte, frameLen uint32) (observation, bool) {
+	if len(b) < 20 || b[0]>>4 != 4 {
+		return observation{}, false
+	}
+	var src, dst [4]byte
+	copy(src[:], b[12:16])
+	copy(dst[:], b[16:20])
+	n := uint32(binary.BigEndian.Uint16(b[2:4]))
+	if n < 20 {
+		n = frameLen
+	}
+	if n == 0 {
+		return observation{}, false
+	}
+	o := observation{src: netip.AddrFrom4(src), dst: netip.AddrFrom4(dst), bytes: uint64(n), proto: b[9]}
+	// The first fragment holds the TCP header; later ones do not.
+	ihl := int(b[0]&0x0f) * 4
+	if o.proto == 6 && ihl >= 20 && binary.BigEndian.Uint16(b[6:8])&0x1fff == 0 && len(b) > ihl+13 {
+		o.tcpFlags, o.haveFlags = b[ihl+13], true
+	}
+	return o, true
+}
+
+func parseIPv6(b []byte, frameLen uint32) (observation, bool) {
+	if len(b) < 40 || b[0]>>4 != 6 {
+		return observation{}, false
+	}
+	var src, dst [16]byte
+	copy(src[:], b[8:24])
+	copy(dst[:], b[24:40])
+	payload := uint32(binary.BigEndian.Uint16(b[4:6]))
+	n := payload + 40
+	if payload == 0 {
+		n = frameLen
+	}
+	if n == 0 {
+		return observation{}, false
+	}
+	// The next header; extension headers are not followed.
+	o := observation{src: netip.AddrFrom16(src), dst: netip.AddrFrom16(dst), bytes: uint64(n), proto: b[6]}
+	if o.proto == 6 && len(b) > 40+13 {
+		o.tcpFlags, o.haveFlags = b[40+13], true
+	}
+	return o, true
+}

@@ -1,0 +1,44 @@
+{
+ "version": "fixture",
+ "mode": "observe",
+ "ready": true,
+ "generated_at": "2026-10-17T12:00:00Z",
+ "improvements": [
+  {
+   "prefix": "198.51.100.0/24",
+   "provider": "lab-b",
+   "native": "lab-a",
+   "since": "2026-10-17T11:55:00Z",
+   "reason": "lab-b: loss 0.0%->0.0%, rtt 60ms->20ms",
+   "cause": "performance",
+   "volume_mbps": 12.5,
+   "asn": 64496,
+   "as_name": "Example Origin One",
+   "native_loss_pct": 0,
+   "loss_pct": 0,
+   "native_rtt_ms": 60,
+   "rtt_ms": 20,
+   "gain_ms": 40,
+   "gain_pct": 66.7,
+   "explain": "lab-b is 40 ms faster (60 -> 20 ms, 67%), loss equal. Threshold 15 ms.",
+   "hold_left_s": 130
+  },
+  {
+   "prefix": "2001:db8:1234::/48",
+   "provider": "lab-c-transit-long-name",
+   "native": "lab-a",
+   "since": "2026-10-17T11:50:00Z",
+   "reason": "lab-c-transit-long-name: loss 4.0%->0.5%, rtt 30ms->32ms",
+   "cause": "performance",
+   "asn": 64500,
+   "native_loss_pct": 4,
+   "loss_pct": 0.5,
+   "native_rtt_ms": 30,
+   "rtt_ms": 32,
+   "gain_ms": -2,
+   "gain_pct": -6.7,
+   "loss_gain_pct": 3.5,
+   "explain": "lab-c-transit-long-name has 3.5 pt less loss (4% -> 0.5%), rtt 30 -> 32 ms. Threshold 1 pt of loss."
+  }
+ ]
+}

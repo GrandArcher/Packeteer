@@ -1,0 +1,9 @@
+# Traffic is still on transit-a. 150 of a 100 Mbps commit, and transit-b
+# has room for the 80 Mbps prefix.
+providers:
+  - name: transit-a
+    commit_mbps: 100
+    usage_mbps: 150
+  - name: transit-b
+    commit_mbps: 100
+    usage_mbps: 20

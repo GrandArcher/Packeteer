@@ -1,0 +1,7 @@
+# Native exit (transit-a) is clearly faster, so the improvement flips back.
+sent: 4
+paths:
+  - provider: transit-a
+    rtt_ms: 10
+  - provider: transit-b
+    rtt_ms: 80

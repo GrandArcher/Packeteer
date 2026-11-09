@@ -1,0 +1,14 @@
+{
+  "mode": "observe",
+  "configured": true,
+  "on_demand": true,
+  "windows": [
+    {"id": "api-3", "name": "on-demand", "providers": ["lab-a"], "start": "2026-10-13T09:00:00Z", "end": "2026-10-13T17:00:00Z", "source": "api", "reason": "fiber work"}
+  ],
+  "upcoming": [
+    {"id": "schedule-patch", "name": "patch", "providers": ["lab-b"], "start": "2026-10-14T01:00:00Z", "end": "2026-10-14T02:00:00Z", "source": "schedule"}
+  ],
+  "finished": [
+    {"id": "api-1", "name": "on-demand", "providers": ["lab-a", "lab-b"], "start": "2026-10-12T09:00:00Z", "end": "2026-10-12T10:00:00Z", "source": "api"}
+  ]
+}

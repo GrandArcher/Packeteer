@@ -1,0 +1,1048 @@
+// Package auth is HTTP authentication and role-based access for the ops
+// API (#32): local users with passwords, API tokens, optional single
+// sign-on through an sso plugin, and the audit log. Users and tokens live
+// in the storage plugin (plugin.UserStore). Nothing here announces routes
+// or changes decisions; it only decides who may call the API.
+package auth
+
+import (
+	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/base64"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net"
+	"net/http"
+	"net/netip"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/GrandArcher/Packeteer/pkg/plugin"
+)
+
+// Sign-in methods recorded on a Principal and in the audit log.
+const (
+	MethodPassword = "password"
+	MethodToken    = "token"
+	MethodSSO      = "sso"
+	// MethodBasic is the single PACKETEER_HTTP_USER account used when auth
+	// is not configured.
+	MethodBasic  = "basic"
+	MethodSystem = "system"
+	// MethodFederation is a settings push from a federation peer, which
+	// authenticated with its client certificate (#137).
+	MethodFederation = "federation"
+)
+
+// Defaults and bounds.
+const (
+	DefaultSessionTTL = 12 * time.Hour
+	MinSessionTTL     = 5 * time.Minute
+	MaxSessionTTL     = 7 * 24 * time.Hour
+	DefaultTokenTTL   = 90 * 24 * time.Hour
+	MaxTokenTTL       = 365 * 24 * time.Hour
+	// MaxSSOTokenTTL caps tokens minted from an SSO session. The role and
+	// the IdP's view of the user refresh only at the next SSO sign-in, so a
+	// user removed at the IdP keeps a token until a local disable or this
+	// expiry.
+	MaxSSOTokenTTL = 7 * 24 * time.Hour
+	// MaxTokensPerUser caps live tokens per user.
+	MaxTokensPerUser = 20
+
+	// SessionCookie holds a server-side session id, from SSO or from the
+	// local sign-in page.
+	SessionCookie = "packeteer_session"
+	// StateCookie ties an SSO callback to the browser that started it.
+	StateCookie = "packeteer_sso"
+
+	loginTTL    = 10 * time.Minute
+	maxPending  = 1000
+	maxSessions = 10000
+	// maxUserSessions bounds one user's sessions; the oldest is replaced so
+	// a scripted sign-in loop cannot fill the shared pool.
+	maxUserSessions = 10
+	cacheTTL        = 5 * time.Minute
+	failWindow      = 5 * time.Minute
+	failLimit       = 10
+	maxFailKeys     = 10000
+	// maxHashing password checks run at once; one more waits up to
+	// hashWait and is then refused with ErrBusy.
+	maxHashing  = 2
+	hashWait    = 5 * time.Second
+	tokenPrefix = "pkt_"
+)
+
+// Errors.
+var (
+	ErrNoCredentials  = errors.New("no credentials")
+	ErrBadCredentials = errors.New("invalid credentials")
+	ErrThrottled      = errors.New("too many failed sign-ins; try again later")
+	ErrBusy           = errors.New("too many sign-ins in progress; try again later")
+	ErrUnavailable    = errors.New("user store unavailable")
+	ErrNotFound       = errors.New("not found")
+	ErrExists         = errors.New("already exists")
+	ErrForbidden      = errors.New("forbidden")
+	ErrLastAdmin      = errors.New("refused: this would leave no enabled admin")
+	ErrNoSSO          = errors.New("single sign-on is not configured")
+	// ErrInvalid wraps request validation errors.
+	ErrInvalid = errors.New("invalid")
+)
+
+func invalid(format string, a ...any) error {
+	return fmt.Errorf("%w: %s", ErrInvalid, fmt.Sprintf(format, a...))
+}
+
+// Principal is who made a request.
+type Principal struct {
+	User    string      `json:"user"`
+	Role    plugin.Role `json:"role"`
+	Method  string      `json:"method"`
+	TokenID string      `json:"token_id,omitempty"`
+	// Session is true when the request carried a session cookie, which
+	// the caller can end with Logout.
+	Session bool `json:"session,omitempty"`
+	// MustChange is true for the generated first-run admin until the
+	// password is changed: only the password change is allowed (#328).
+	MustChange bool `json:"must_change,omitempty"`
+}
+
+// Options configure a Service.
+type Options struct {
+	Users plugin.UserStore
+	// SSO is nil when single sign-on is off.
+	SSO        plugin.SSO
+	SessionTTL time.Duration
+	TokenTTL   time.Duration
+	Logger     *slog.Logger
+	Now        func() time.Time
+	// OnGeneratedGone is called with the name of a user whose generated
+	// password stopped signing in: the forced change is done, an admin
+	// set a password, or the user was deleted (#328).
+	OnGeneratedGone func(user string)
+}
+
+type session struct {
+	user string
+	// method is how the user proved who they are: MethodSSO or
+	// MethodPassword.
+	method  string
+	expires time.Time
+}
+
+type pendingLogin struct {
+	nonce    string
+	verifier string
+	expires  time.Time
+}
+
+type cached struct {
+	key     [32]byte
+	expires time.Time
+}
+
+// Service authenticates requests and manages users and tokens.
+type Service struct {
+	users      plugin.UserStore
+	sso        plugin.SSO
+	sessionTTL time.Duration
+	tokenTTL   time.Duration
+	log        *slog.Logger
+	now        func() time.Time
+	pepper     []byte
+	onGone     func(string)
+
+	// mu serializes user and token changes (the last-admin check).
+	mu sync.Mutex
+
+	smu      sync.Mutex
+	sessions map[string]session
+	pending  map[string]pendingLogin
+	pwCache  map[string]cached
+	fails    *Throttle
+
+	// hashSem holds one slot per password hash in progress. A check is
+	// 600,000 PBKDF2-HMAC-SHA256 iterations on one core, and failures are
+	// counted per user name, so without a cap a client naming many users
+	// could keep every core busy (#493).
+	hashSem  chan struct{}
+	hashWait time.Duration
+
+	dummyOnce sync.Once
+	dummy     string
+}
+
+// New validates options. It does not touch the store.
+func New(o Options) (*Service, error) {
+	if o.Users == nil {
+		return nil, errors.New("auth: a user store is required")
+	}
+	if o.SessionTTL == 0 {
+		o.SessionTTL = DefaultSessionTTL
+	}
+	if o.TokenTTL == 0 {
+		o.TokenTTL = DefaultTokenTTL
+	}
+	if o.SessionTTL < MinSessionTTL || o.SessionTTL > MaxSessionTTL {
+		return nil, fmt.Errorf("auth: session_ttl %s must be between %s and %s", o.SessionTTL, MinSessionTTL, MaxSessionTTL)
+	}
+	if o.TokenTTL < time.Hour || o.TokenTTL > MaxTokenTTL {
+		return nil, fmt.Errorf("auth: token_ttl %s must be between 1h and %s", o.TokenTTL, MaxTokenTTL)
+	}
+	if o.Logger == nil {
+		o.Logger = slog.Default()
+	}
+	if o.Now == nil {
+		o.Now = time.Now
+	}
+	pepper := make([]byte, 32)
+	if _, err := rand.Read(pepper); err != nil {
+		return nil, err
+	}
+	return &Service{
+		users: o.Users, sso: o.SSO, sessionTTL: o.SessionTTL, tokenTTL: o.TokenTTL, log: o.Logger, now: o.Now, pepper: pepper, onGone: o.OnGeneratedGone,
+		sessions: map[string]session{}, pending: map[string]pendingLogin{}, pwCache: map[string]cached{}, fails: NewThrottle(o.Logger),
+		hashSem: make(chan struct{}, maxHashing), hashWait: hashWait,
+	}, nil
+}
+
+// SSOEnabled reports whether single sign-on is configured.
+func (s *Service) SSOEnabled() bool { return s != nil && s.sso != nil }
+
+// RemoteIP is the request's peer address. X-Forwarded-For is ignored:
+// behind a reverse proxy the proxy's address is what is seen.
+func RemoteIP(r *http.Request) netip.Addr {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	a, err := netip.ParseAddr(host)
+	if err != nil {
+		return netip.Addr{}
+	}
+	return a.Unmap().WithZone("")
+}
+
+// Authenticate identifies the caller from an Authorization header (Bearer
+// token or Basic password) or a session cookie. A valid token or session
+// is accepted whatever the failure count; only a guessable password is
+// refused before it is checked. Failures are counted per user name and
+// client network (an IPv6 /64); past the limit an attempt under that
+// count fails with ErrThrottled until the window ends. A password check
+// that finds no free hashing slot fails with ErrBusy.
+func (s *Service) Authenticate(r *http.Request) (Principal, error) {
+	ip := RemoteIP(r)
+	now := s.now()
+	ctx := r.Context()
+	if h := r.Header.Get("Authorization"); h != "" {
+		scheme, cred, _ := strings.Cut(h, " ")
+		switch strings.ToLower(scheme) {
+		case "bearer":
+			p, err := s.token(ctx, strings.TrimSpace(cred), now)
+			if errors.Is(err, ErrBadCredentials) {
+				return Principal{}, s.failed("", ip, now)
+			}
+			return p, err
+		case "basic":
+			user, pass, ok := r.BasicAuth()
+			if s.fails.Throttled(user, ip, now) {
+				return Principal{}, ErrThrottled
+			}
+			if !ok {
+				s.fails.Fail(user, ip, now)
+				return Principal{}, ErrBadCredentials
+			}
+			p, err := s.password(ctx, user, pass, now)
+			if errors.Is(err, ErrBadCredentials) {
+				s.fails.Fail(user, ip, now)
+			}
+			return p, err
+		default:
+			return Principal{}, s.failed("", ip, now)
+		}
+	}
+	if c, err := r.Cookie(SessionCookie); err == nil && c.Value != "" {
+		p, err := s.session(ctx, c.Value, now)
+		if errors.Is(err, ErrBadCredentials) {
+			// An expired or unknown session is the same as none: the
+			// browser is sent to sign in again.
+			return Principal{}, ErrNoCredentials
+		}
+		return p, err
+	}
+	return Principal{}, ErrNoCredentials
+}
+
+// failed answers a credential that was checked and refused: ErrThrottled
+// once user from ip is over the limit, else it counts the failure.
+func (s *Service) failed(user string, ip netip.Addr, now time.Time) error {
+	if s.fails.Throttled(user, ip, now) {
+		return ErrThrottled
+	}
+	s.fails.Fail(user, ip, now)
+	return ErrBadCredentials
+}
+
+// hashSlot waits for a free password hashing slot, up to hashWait. The
+// caller runs the returned release when its hashing is done.
+func (s *Service) hashSlot(ctx context.Context) (release func(), err error) {
+	t := time.NewTimer(s.hashWait)
+	defer t.Stop()
+	select {
+	case s.hashSem <- struct{}{}:
+		return func() { <-s.hashSem }, nil
+	case <-ctx.Done():
+		return nil, ErrBusy
+	case <-t.C:
+		return nil, ErrBusy
+	}
+}
+
+func (s *Service) dummyHash() string {
+	s.dummyOnce.Do(func() {
+		s.dummy, _ = HashPassword(randomHex(16))
+	})
+	return s.dummy
+}
+
+func (s *Service) password(ctx context.Context, name, pw string, now time.Time) (Principal, error) {
+	u, ok, err := s.users.User(ctx, name)
+	if err != nil {
+		return Principal{}, fmt.Errorf("%w: %v", ErrUnavailable, err)
+	}
+	if !ok || u.Source != plugin.UserLocal || u.PasswordHash == "" || u.Disabled || !u.Role.Valid() {
+		release, err := s.hashSlot(ctx)
+		if err != nil {
+			return Principal{}, err
+		}
+		// Same cost as a real check, so a missing user is not faster.
+		VerifyPassword(s.dummyHash(), pw)
+		release()
+		return Principal{}, ErrBadCredentials
+	}
+	key := s.cacheKey(u.PasswordHash, pw)
+	s.smu.Lock()
+	c, hit := s.pwCache[name]
+	s.smu.Unlock()
+	if !hit || now.After(c.expires) || subtle.ConstantTimeCompare(c.key[:], key[:]) != 1 {
+		release, err := s.hashSlot(ctx)
+		if err != nil {
+			return Principal{}, err
+		}
+		ok := VerifyPassword(u.PasswordHash, pw)
+		release()
+		if !ok {
+			return Principal{}, ErrBadCredentials
+		}
+		s.smu.Lock()
+		s.pwCache[name] = cached{key: key, expires: now.Add(cacheTTL)}
+		s.smu.Unlock()
+	}
+	return Principal{User: u.Name, Role: u.Role, Method: MethodPassword, MustChange: u.MustChange}, nil
+}
+
+// cacheKey binds a verified password to the stored hash, so a password
+// change invalidates the cache. The pepper is per process.
+func (s *Service) cacheKey(hash, pw string) [32]byte {
+	h := sha256.New()
+	h.Write(s.pepper)
+	h.Write([]byte(hash))
+	h.Write([]byte{0})
+	h.Write([]byte(pw))
+	var out [32]byte
+	copy(out[:], h.Sum(nil))
+	return out
+}
+
+func tokenHash(secret string) string {
+	sum := sha256.Sum256([]byte(secret))
+	return hex.EncodeToString(sum[:])
+}
+
+func parseToken(raw string) (id, secret string, ok bool) {
+	rest, found := strings.CutPrefix(raw, tokenPrefix)
+	if !found {
+		return "", "", false
+	}
+	id, secret, found = strings.Cut(rest, "_")
+	if !found || len(id) != 16 || len(secret) < 32 || len(secret) > 64 {
+		return "", "", false
+	}
+	if _, err := hex.DecodeString(id); err != nil {
+		return "", "", false
+	}
+	return id, secret, true
+}
+
+func (s *Service) token(ctx context.Context, raw string, now time.Time) (Principal, error) {
+	id, secret, ok := parseToken(raw)
+	if !ok {
+		return Principal{}, ErrBadCredentials
+	}
+	t, found, err := s.users.Token(ctx, id)
+	if err != nil {
+		return Principal{}, fmt.Errorf("%w: %v", ErrUnavailable, err)
+	}
+	if !found || subtle.ConstantTimeCompare([]byte(tokenHash(secret)), []byte(t.Hash)) != 1 {
+		return Principal{}, ErrBadCredentials
+	}
+	if !t.Expires.IsZero() && !now.Before(t.Expires) {
+		return Principal{}, ErrBadCredentials
+	}
+	u, found, err := s.users.User(ctx, t.User)
+	if err != nil {
+		return Principal{}, fmt.Errorf("%w: %v", ErrUnavailable, err)
+	}
+	if !found || u.Disabled {
+		return Principal{}, ErrBadCredentials
+	}
+	role := plugin.MinRole(t.Role, u.Role)
+	if !role.Valid() {
+		return Principal{}, ErrBadCredentials
+	}
+	return Principal{User: u.Name, Role: role, Method: MethodToken, TokenID: t.ID, MustChange: u.MustChange}, nil
+}
+
+func (s *Service) session(ctx context.Context, id string, now time.Time) (Principal, error) {
+	s.smu.Lock()
+	ss, ok := s.sessions[id]
+	if ok && !now.Before(ss.expires) {
+		delete(s.sessions, id)
+		ok = false
+	}
+	s.smu.Unlock()
+	if !ok {
+		return Principal{}, ErrBadCredentials
+	}
+	u, found, err := s.users.User(ctx, ss.user)
+	if err != nil {
+		return Principal{}, fmt.Errorf("%w: %v", ErrUnavailable, err)
+	}
+	if !found || u.Disabled || !u.Role.Valid() {
+		s.smu.Lock()
+		delete(s.sessions, id)
+		s.smu.Unlock()
+		return Principal{}, ErrBadCredentials
+	}
+	return Principal{User: u.Name, Role: u.Role, Method: ss.method, Session: true, MustChange: u.MustChange}, nil
+}
+
+// SignIn checks a local user's password for the sign-in page and starts a
+// session. It shares the per-user-and-network failure count with
+// Authenticate, so the form and basic auth lock out together. A session
+// the browser already holds is ended first.
+func (s *Service) SignIn(w http.ResponseWriter, r *http.Request, name, pw string) (Principal, error) {
+	ip, now := RemoteIP(r), s.now()
+	if s.fails.Throttled(name, ip, now) {
+		return Principal{}, ErrThrottled
+	}
+	p, err := s.password(r.Context(), name, pw, now)
+	if errors.Is(err, ErrBadCredentials) {
+		s.fails.Fail(name, ip, now)
+	}
+	if err != nil {
+		return Principal{}, err
+	}
+	if c, err := r.Cookie(SessionCookie); err == nil && c.Value != "" {
+		s.smu.Lock()
+		delete(s.sessions, c.Value)
+		s.smu.Unlock()
+	}
+	if err := s.startSession(w, p.User, MethodPassword, now); err != nil {
+		return Principal{}, err
+	}
+	p.Session = true
+	return p, nil
+}
+
+// startSession records a session for user and sets its cookie.
+func (s *Service) startSession(w http.ResponseWriter, user, method string, now time.Time) error {
+	sid := randomToken()
+	s.smu.Lock()
+	s.evictOldest(user)
+	if len(s.sessions) >= maxSessions {
+		for k, ss := range s.sessions {
+			if !now.Before(ss.expires) {
+				delete(s.sessions, k)
+			}
+		}
+	}
+	if len(s.sessions) >= maxSessions {
+		s.smu.Unlock()
+		return errors.New("too many sessions; try again later")
+	}
+	s.sessions[sid] = session{user: user, method: method, expires: now.Add(s.sessionTTL)}
+	s.smu.Unlock()
+	http.SetCookie(w, s.sessionCookie(sid, int(s.sessionTTL/time.Second)))
+	return nil
+}
+
+// evictOldest drops user's earliest-expiring session when the user is at
+// maxUserSessions. smu must be held.
+func (s *Service) evictOldest(user string) {
+	count, oldest := 0, ""
+	for k, ss := range s.sessions {
+		if ss.user != user {
+			continue
+		}
+		count++
+		if oldest == "" || ss.expires.Before(s.sessions[oldest].expires) {
+			oldest = k
+		}
+	}
+	if count >= maxUserSessions {
+		delete(s.sessions, oldest)
+	}
+}
+
+func (s *Service) sessionCookie(value string, maxAge int) *http.Cookie {
+	return &http.Cookie{Name: SessionCookie, Value: value, Path: "/", MaxAge: maxAge,
+		HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode}
+}
+
+// ---- Single sign-on ----
+
+// BeginLogin redirects the browser to the identity provider.
+func (s *Service) BeginLogin(w http.ResponseWriter, r *http.Request) error {
+	if s.sso == nil {
+		return ErrNoSSO
+	}
+	now := s.now()
+	state, nonce, verifier := randomToken(), randomToken(), randomToken()+randomToken()
+	s.smu.Lock()
+	for k, p := range s.pending {
+		if !now.Before(p.expires) {
+			delete(s.pending, k)
+		}
+	}
+	if len(s.pending) >= maxPending {
+		s.smu.Unlock()
+		return errors.New("too many sign-ins in progress; try again later")
+	}
+	s.pending[state] = pendingLogin{nonce: nonce, verifier: verifier, expires: now.Add(loginTTL)}
+	s.smu.Unlock()
+	u, err := s.sso.AuthURL(r.Context(), state, nonce, verifier)
+	if err != nil {
+		s.smu.Lock()
+		delete(s.pending, state)
+		s.smu.Unlock()
+		return err
+	}
+	http.SetCookie(w, &http.Cookie{Name: StateCookie, Value: state, Path: "/auth", MaxAge: int(loginTTL / time.Second),
+		HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode})
+	http.Redirect(w, r, u, http.StatusFound)
+	return nil
+}
+
+// FinishLogin completes the SSO callback, records the user in the store
+// with the role the provider granted, and starts a session. A local user
+// with the same name, or a disabled SSO user, is refused. The returned
+// name is the user that tried to sign in, when known.
+func (s *Service) FinishLogin(w http.ResponseWriter, r *http.Request) (Principal, string, error) {
+	if s.sso == nil {
+		return Principal{}, "", ErrNoSSO
+	}
+	// The state cookie is single use.
+	http.SetCookie(w, &http.Cookie{Name: StateCookie, Value: "", Path: "/auth", MaxAge: -1, HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode})
+	q := r.URL.Query()
+	if e := q.Get("error"); e != "" {
+		return Principal{}, "", fmt.Errorf("identity provider: %.200s", e)
+	}
+	state, code := q.Get("state"), q.Get("code")
+	c, err := r.Cookie(StateCookie)
+	if err != nil || state == "" || code == "" || subtle.ConstantTimeCompare([]byte(c.Value), []byte(state)) != 1 {
+		return Principal{}, "", errors.New("sign-in state does not match; start again")
+	}
+	now := s.now()
+	s.smu.Lock()
+	p, ok := s.pending[state]
+	delete(s.pending, state)
+	s.smu.Unlock()
+	if !ok || !now.Before(p.expires) {
+		return Principal{}, "", errors.New("sign-in expired; start again")
+	}
+	id, err := s.sso.Exchange(r.Context(), code, p.nonce, p.verifier)
+	if err != nil {
+		return Principal{}, "", err
+	}
+	if !ValidUserName(id.User) {
+		return Principal{}, "", fmt.Errorf("identity provider user %q is not a valid account name", id.User)
+	}
+	if !id.Role.Valid() {
+		return Principal{}, id.User, errors.New("identity provider granted no role")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	u, found, err := s.users.User(r.Context(), id.User)
+	if err != nil {
+		return Principal{}, id.User, fmt.Errorf("%w: %v", ErrUnavailable, err)
+	}
+	switch {
+	case found && u.Source != plugin.UserSSO:
+		return Principal{}, id.User, fmt.Errorf("a local user named %q exists; single sign-on cannot use it", id.User)
+	case found && u.Disabled:
+		return Principal{}, id.User, fmt.Errorf("user %q is disabled", id.User)
+	}
+	if !found {
+		u = plugin.User{Name: id.User, Source: plugin.UserSSO, Created: now.UTC()}
+	}
+	u.Role, u.Updated = id.Role, now.UTC()
+	if err := s.users.PutUser(r.Context(), u); err != nil {
+		return Principal{}, id.User, fmt.Errorf("%w: %v", ErrUnavailable, err)
+	}
+	if err := s.startSession(w, u.Name, MethodSSO, now); err != nil {
+		return Principal{}, id.User, err
+	}
+	return Principal{User: u.Name, Role: u.Role, Method: MethodSSO, Session: true}, u.Name, nil
+}
+
+// Logout ends the request's session, if any, and clears the cookie. The
+// returned principal names the user and how they signed in.
+func (s *Service) Logout(w http.ResponseWriter, r *http.Request) (Principal, bool) {
+	http.SetCookie(w, s.sessionCookie("", -1))
+	c, err := r.Cookie(SessionCookie)
+	if err != nil || c.Value == "" {
+		return Principal{}, false
+	}
+	s.smu.Lock()
+	defer s.smu.Unlock()
+	ss, ok := s.sessions[c.Value]
+	delete(s.sessions, c.Value)
+	return Principal{User: ss.user, Method: ss.method, Session: true}, ok
+}
+
+func (s *Service) dropSessions(user string) {
+	s.smu.Lock()
+	defer s.smu.Unlock()
+	for k, ss := range s.sessions {
+		if ss.user == user {
+			delete(s.sessions, k)
+		}
+	}
+	delete(s.pwCache, user)
+}
+
+// ---- Users ----
+
+// UserView is a user without the password hash.
+type UserView struct {
+	Name     string      `json:"name"`
+	Role     plugin.Role `json:"role"`
+	Source   string      `json:"source"`
+	Disabled bool        `json:"disabled"`
+	Created  time.Time   `json:"created"`
+	Updated  time.Time   `json:"updated"`
+}
+
+func view(u plugin.User) UserView {
+	return UserView{Name: u.Name, Role: u.Role, Source: u.Source, Disabled: u.Disabled, Created: u.Created, Updated: u.Updated}
+}
+
+// ValidUserName is 1-64 characters of letters, digits, '.', '_', '-', '+',
+// and '@', starting with a letter or digit.
+func ValidUserName(s string) bool {
+	if s == "" || len(s) > 64 {
+		return false
+	}
+	for i, c := range s {
+		alnum := c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9'
+		if i == 0 && !alnum {
+			return false
+		}
+		if !alnum && c != '.' && c != '_' && c != '-' && c != '@' && c != '+' {
+			return false
+		}
+	}
+	return true
+}
+
+// Users lists every user, sorted by name.
+func (s *Service) Users(ctx context.Context) ([]UserView, error) {
+	us, err := s.users.Users(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrUnavailable, err)
+	}
+	out := make([]UserView, 0, len(us))
+	for _, u := range us {
+		out = append(out, view(u))
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+// HasUsers reports whether any user exists.
+func (s *Service) HasUsers(ctx context.Context) (bool, error) {
+	us, err := s.users.Users(ctx)
+	return len(us) > 0, err
+}
+
+// ChangePending reports whether a user still signs in with a generated
+// password that must be changed.
+func (s *Service) ChangePending(ctx context.Context) (bool, error) {
+	us, err := s.users.Users(ctx)
+	if err != nil {
+		return false, err
+	}
+	for _, u := range us {
+		if u.MustChange {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// CreateUser adds a local user.
+func (s *Service) CreateUser(ctx context.Context, name string, role plugin.Role, password string) (UserView, error) {
+	return s.createUser(ctx, name, role, password, false)
+}
+
+func (s *Service) createUser(ctx context.Context, name string, role plugin.Role, password string, mustChange bool) (UserView, error) {
+	if !ValidUserName(name) {
+		return UserView{}, invalid("name must be 1-64 characters of letters, digits, '.', '_', '-', '+', '@', starting with a letter or digit")
+	}
+	if !role.Valid() {
+		return UserView{}, invalid("role must be viewer, operator, or admin")
+	}
+	if err := CheckPassword(password); err != nil {
+		return UserView{}, invalid("%v", err)
+	}
+	hash, err := HashPassword(password)
+	if err != nil {
+		return UserView{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, found, err := s.users.User(ctx, name)
+	if err != nil {
+		return UserView{}, fmt.Errorf("%w: %v", ErrUnavailable, err)
+	}
+	if found {
+		return UserView{}, ErrExists
+	}
+	now := s.now().UTC()
+	u := plugin.User{Name: name, Role: role, Source: plugin.UserLocal, PasswordHash: hash, MustChange: mustChange, Created: now, Updated: now}
+	if err := s.users.PutUser(ctx, u); err != nil {
+		return UserView{}, fmt.Errorf("%w: %v", ErrUnavailable, err)
+	}
+	return view(u), nil
+}
+
+// UserUpdate changes a user. Nil fields stay.
+type UserUpdate struct {
+	Role     *plugin.Role `json:"role"`
+	Password *string      `json:"password"`
+	Disabled *bool        `json:"disabled"`
+}
+
+// UpdateUser changes a user's role, password, or disabled flag. An SSO
+// user's role and password come from the identity provider; only
+// disabled may be set. A change that leaves no enabled admin is refused.
+func (s *Service) UpdateUser(ctx context.Context, name string, up UserUpdate) (UserView, error) {
+	if up.Role == nil && up.Password == nil && up.Disabled == nil {
+		return UserView{}, invalid("nothing to change (role, password, disabled)")
+	}
+	if up.Role != nil && !up.Role.Valid() {
+		return UserView{}, invalid("role must be viewer, operator, or admin")
+	}
+	var hash string
+	if up.Password != nil {
+		if err := CheckPassword(*up.Password); err != nil {
+			return UserView{}, invalid("%v", err)
+		}
+		h, err := HashPassword(*up.Password)
+		if err != nil {
+			return UserView{}, err
+		}
+		hash = h
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	u, found, err := s.users.User(ctx, name)
+	if err != nil {
+		return UserView{}, fmt.Errorf("%w: %v", ErrUnavailable, err)
+	}
+	if !found {
+		return UserView{}, ErrNotFound
+	}
+	if u.Source == plugin.UserSSO && (up.Role != nil || up.Password != nil) {
+		return UserView{}, invalid("an sso user's role and password come from the identity provider; only disabled can be set")
+	}
+	next := u
+	if up.Role != nil {
+		next.Role = *up.Role
+	}
+	if up.Password != nil {
+		next.PasswordHash, next.MustChange = hash, false
+	}
+	if up.Disabled != nil {
+		next.Disabled = *up.Disabled
+	}
+	if err := s.keepAdmin(ctx, u, &next); err != nil {
+		return UserView{}, err
+	}
+	next.Updated = s.now().UTC()
+	if err := s.users.PutUser(ctx, next); err != nil {
+		return UserView{}, fmt.Errorf("%w: %v", ErrUnavailable, err)
+	}
+	if next.Disabled || up.Password != nil || next.Role != u.Role {
+		s.dropSessions(name)
+	}
+	s.generatedGone(u, &next)
+	return view(next), nil
+}
+
+// generatedGone tells the owner of the generated password that it no
+// longer signs in: was is replaced by now, or deleted (now nil).
+func (s *Service) generatedGone(was plugin.User, now *plugin.User) {
+	if was.MustChange && (now == nil || !now.MustChange) && s.onGone != nil {
+		s.onGone(was.Name)
+	}
+}
+
+// ChangePassword sets p's own password after checking the current one. A
+// wrong current password counts toward p's sign-in lockout. It ends
+// the user's sessions and, for a session request, starts a new one, so a
+// browser stays signed in. It clears MustChange.
+func (s *Service) ChangePassword(w http.ResponseWriter, r *http.Request, p Principal, current, next string) error {
+	ip, now := RemoteIP(r), s.now()
+	if s.fails.Throttled(p.User, ip, now) {
+		return ErrThrottled
+	}
+	if err := CheckPassword(next); err != nil {
+		return invalid("%v", err)
+	}
+	if next == current {
+		return invalid("the new password must differ from the current one")
+	}
+	release, err := s.hashSlot(r.Context())
+	if err != nil {
+		return err
+	}
+	defer release()
+	hash, err := HashPassword(next)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	u, found, err := s.users.User(r.Context(), p.User)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrUnavailable, err)
+	}
+	if !found {
+		return ErrNotFound
+	}
+	if u.Source != plugin.UserLocal || u.PasswordHash == "" {
+		return invalid("this account signs in through the identity provider and has no local password")
+	}
+	if !VerifyPassword(u.PasswordHash, current) {
+		s.fails.Fail(p.User, ip, now)
+		return fmt.Errorf("%w: the current password is wrong", ErrForbidden)
+	}
+	updated := u
+	updated.PasswordHash, updated.MustChange, updated.Updated = hash, false, now.UTC()
+	if err := s.users.PutUser(r.Context(), updated); err != nil {
+		return fmt.Errorf("%w: %v", ErrUnavailable, err)
+	}
+	s.dropSessions(u.Name)
+	if p.Session && p.Method == MethodPassword {
+		if err := s.startSession(w, u.Name, MethodPassword, now); err != nil {
+			return err
+		}
+	}
+	s.generatedGone(u, &updated)
+	return nil
+}
+
+// DeleteUser removes a user and the user's tokens.
+func (s *Service) DeleteUser(ctx context.Context, name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	u, found, err := s.users.User(ctx, name)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrUnavailable, err)
+	}
+	if !found {
+		return ErrNotFound
+	}
+	if err := s.keepAdmin(ctx, u, nil); err != nil {
+		return err
+	}
+	if _, err := s.users.DeleteUser(ctx, name); err != nil {
+		return fmt.Errorf("%w: %v", ErrUnavailable, err)
+	}
+	s.dropSessions(name)
+	s.generatedGone(u, nil)
+	return nil
+}
+
+// keepAdmin refuses a change to cur (next nil: delete) that leaves no
+// enabled admin. Callers hold s.mu.
+func (s *Service) keepAdmin(ctx context.Context, cur plugin.User, next *plugin.User) error {
+	wasAdmin := cur.Role == plugin.RoleAdmin && !cur.Disabled
+	stillAdmin := next != nil && next.Role == plugin.RoleAdmin && !next.Disabled
+	if !wasAdmin || stillAdmin {
+		return nil
+	}
+	us, err := s.users.Users(ctx)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrUnavailable, err)
+	}
+	for _, u := range us {
+		if u.Name != cur.Name && u.Role == plugin.RoleAdmin && !u.Disabled {
+			return nil
+		}
+	}
+	return ErrLastAdmin
+}
+
+// Bootstrap creates the first admin. It does nothing when a user with
+// that name exists, so a password changed through the API is not reset on
+// restart. mustChange limits the account to a password change until it
+// has one (a generated password, #328).
+func (s *Service) Bootstrap(ctx context.Context, name, password string, mustChange bool) (bool, error) {
+	if name == "" {
+		name = "admin"
+	}
+	_, err := s.createUser(ctx, name, plugin.RoleAdmin, password, mustChange)
+	switch {
+	case errors.Is(err, ErrExists):
+		return false, nil
+	case err != nil:
+		return false, err
+	}
+	return true, nil
+}
+
+// ---- API tokens ----
+
+// TokenView is a token without its hash.
+type TokenView struct {
+	ID      string      `json:"id"`
+	User    string      `json:"user"`
+	Name    string      `json:"name"`
+	Role    plugin.Role `json:"role"`
+	Created time.Time   `json:"created"`
+	Expires time.Time   `json:"expires"`
+	Expired bool        `json:"expired,omitempty"`
+}
+
+func (s *Service) tokenView(t plugin.APIToken) TokenView {
+	return TokenView{ID: t.ID, User: t.User, Name: t.Name, Role: t.Role, Created: t.Created, Expires: t.Expires, Expired: !s.now().Before(t.Expires)}
+}
+
+// CreateToken issues a token for p's own user. The role defaults to p's
+// role and may not exceed it. A token cannot create tokens, so a leaked
+// token cannot outlive its own expiry. The secret is returned once.
+func (s *Service) CreateToken(ctx context.Context, p Principal, name string, role plugin.Role, ttl time.Duration) (TokenView, string, error) {
+	if p.Method == MethodToken {
+		return TokenView{}, "", fmt.Errorf("%w: an API token cannot create tokens; sign in with a password or SSO", ErrForbidden)
+	}
+	if p.Method != MethodPassword && p.Method != MethodSSO {
+		return TokenView{}, "", fmt.Errorf("%w: tokens need a user account", ErrForbidden)
+	}
+	name = strings.TrimSpace(name)
+	if name == "" || len(name) > 64 || strings.ContainsFunc(name, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+		return TokenView{}, "", invalid("name must be 1-64 printable characters")
+	}
+	if role == "" {
+		role = p.Role
+	}
+	if !role.Valid() {
+		return TokenView{}, "", invalid("role must be viewer, operator, or admin")
+	}
+	if !p.Role.Allows(role) {
+		return TokenView{}, "", fmt.Errorf("%w: a token cannot have a higher role than its user (%s)", ErrForbidden, p.Role)
+	}
+	maxTTL := MaxTokenTTL
+	if p.Method == MethodSSO {
+		maxTTL = MaxSSOTokenTTL
+	}
+	if ttl == 0 {
+		ttl = min(s.tokenTTL, maxTTL)
+	}
+	if ttl < time.Minute || ttl > maxTTL {
+		return TokenView{}, "", invalid("ttl must be between 1m and %s", maxTTL)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
+	all, err := s.users.Tokens(ctx)
+	if err != nil {
+		return TokenView{}, "", fmt.Errorf("%w: %v", ErrUnavailable, err)
+	}
+	live := 0
+	for _, t := range all {
+		if !now.Before(t.Expires) {
+			_, _ = s.users.DeleteToken(ctx, t.ID)
+			continue
+		}
+		if t.User == p.User {
+			live++
+		}
+	}
+	if live >= MaxTokensPerUser {
+		return TokenView{}, "", invalid("user %s already has %d tokens; revoke one first", p.User, MaxTokensPerUser)
+	}
+	secret := randomToken()
+	t := plugin.APIToken{ID: randomHex(8), User: p.User, Name: name, Role: role, Hash: tokenHash(secret), Created: now.UTC(), Expires: now.Add(ttl).UTC()}
+	if err := s.users.PutToken(ctx, t); err != nil {
+		return TokenView{}, "", fmt.Errorf("%w: %v", ErrUnavailable, err)
+	}
+	return s.tokenView(t), tokenPrefix + t.ID + "_" + secret, nil
+}
+
+// Tokens lists p's tokens; an admin sees every user's.
+func (s *Service) Tokens(ctx context.Context, p Principal) ([]TokenView, error) {
+	all, err := s.users.Tokens(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrUnavailable, err)
+	}
+	out := []TokenView{}
+	for _, t := range all {
+		if t.User == p.User || p.Role == plugin.RoleAdmin {
+			out = append(out, s.tokenView(t))
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].User != out[j].User {
+			return out[i].User < out[j].User
+		}
+		return out[i].Created.Before(out[j].Created)
+	})
+	return out, nil
+}
+
+// RevokeToken deletes one of p's tokens; an admin may revoke any.
+func (s *Service) RevokeToken(ctx context.Context, p Principal, id string) (TokenView, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, found, err := s.users.Token(ctx, id)
+	if err != nil {
+		return TokenView{}, fmt.Errorf("%w: %v", ErrUnavailable, err)
+	}
+	if !found {
+		return TokenView{}, ErrNotFound
+	}
+	if t.User != p.User && p.Role != plugin.RoleAdmin {
+		// Not found, so other users' token ids are not confirmed.
+		return TokenView{}, ErrNotFound
+	}
+	if _, err := s.users.DeleteToken(ctx, id); err != nil {
+		return TokenView{}, fmt.Errorf("%w: %v", ErrUnavailable, err)
+	}
+	return s.tokenView(t), nil
+}
+
+func randomToken() string {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		panic(err)
+	}
+	return base64.RawURLEncoding.EncodeToString(b)
+}

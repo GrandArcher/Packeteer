@@ -1,0 +1,21 @@
+{
+ "events": [
+  {
+   "time": "2026-10-17T12:00:00Z",
+   "kind": "improvement.added",
+   "severity": "info",
+   "message": "Recommends moving 198.51.100.0/24 from lab-a to lab-b (not announced, observe mode)",
+   "fields": {
+    "mode": "observe",
+    "native": "lab-a",
+    "prefix": "198.51.100.0/24",
+    "provider": "lab-b",
+    "reason": "lab-b beats lab-a on loss"
+   },
+   "source": "improvement"
+  }
+ ],
+ "stored": false,
+ "since": "2026-10-17T11:00:00Z",
+ "now": "2026-10-17T12:00:05Z"
+}

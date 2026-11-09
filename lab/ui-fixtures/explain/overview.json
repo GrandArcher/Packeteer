@@ -1,0 +1,111 @@
+{
+ "version": "fixture",
+ "mode": "observe",
+ "ready": true,
+ "generated_at": "2026-10-17T12:00:00Z",
+ "started": true,
+ "sources": [
+  "static"
+ ],
+ "providers": [
+  {
+   "name": "lab-a",
+   "up": true,
+   "state": "up",
+   "loss_pct": 2,
+   "ok": 3,
+   "failed": 0
+  },
+  {
+   "name": "lab-b",
+   "up": true,
+   "state": "up",
+   "loss_pct": 0,
+   "ok": 3,
+   "failed": 0
+  },
+  {
+   "name": "lab-c-transit-long-name",
+   "up": true,
+   "state": "up",
+   "loss_pct": 0.25,
+   "ok": 3,
+   "failed": 0
+  }
+ ],
+ "problems": [],
+ "counts": {
+  "providers_up": 3,
+  "providers_healthy": 3,
+  "providers": 3,
+  "warnings": 0,
+  "prefixes": 2,
+  "measured": 2,
+  "in_rib": 2,
+  "recommended": 2,
+  "improvements": 2,
+  "max_improvements": 50
+ },
+ "bgp": {
+  "configured": true,
+  "ready": true,
+  "established": 1,
+  "peers": 1
+ },
+ "features": [
+  {
+   "name": "history",
+   "on": false
+  },
+  {
+   "name": "troubleshoot",
+   "on": false
+  },
+  {
+   "name": "config_editor",
+   "on": false
+  },
+  {
+   "name": "dashboards",
+   "on": false
+  },
+  {
+   "name": "inbound",
+   "on": false
+  },
+  {
+   "name": "mitigation",
+   "on": false
+  },
+  {
+   "name": "anomaly",
+   "on": false
+  },
+  {
+   "name": "federation",
+   "on": false
+  },
+  {
+   "name": "ha",
+   "on": false
+  }
+ ],
+ "setup": [
+  {
+   "id": "history",
+   "level": "info",
+   "title": "Report history is off",
+   "detail": "Add storage: {type: sqlite} and mount a volume on /var/lib/packeteer to keep reports across restarts.",
+   "doc": "docs/CONFIG.md#storage-sqlite",
+   "doc_url": "https://github.com/GrandArcher/Packeteer/blob/main/docs/CONFIG.md#storage-sqlite"
+  }
+ ],
+ "system": {
+  "total": 10,
+  "ok": 6,
+  "degraded": 0,
+  "down": 0,
+  "idle": 4
+ },
+ "auth": "rbac"
+}

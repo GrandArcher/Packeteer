@@ -1,0 +1,20 @@
+{
+  "prefix":"198.51.100.0/24",
+  "paths":[
+    {
+      "aspath":{"string":"64496","segments":[{"type":"as-sequence","list":[64496]}],"length":1},
+      "origin":"IGP",
+      "valid":true,
+      "bestpath":{"overall":true,"selectionReason":"First path received"},
+      "nexthops":[{"ip":"192.0.2.21","afi":"ipv4","used":true}],
+      "peer":{"peerId":"192.0.2.21","routerId":"192.0.2.21","type":"external"}
+    },
+    {
+      "aspath":{"string":"64497 64497 64497","segments":[{"type":"as-sequence","list":[64497,64497,64497]}],"length":3},
+      "origin":"IGP",
+      "valid":true,
+      "nexthops":[{"ip":"192.0.2.22","afi":"ipv4","used":true}],
+      "peer":{"peerId":"192.0.2.22","routerId":"192.0.2.22","type":"external"}
+    }
+  ]
+}

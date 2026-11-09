@@ -1,0 +1,11 @@
+# transit-a's inbound rate (150) is over its 120 Mbps commit; transit-b has
+# room. lab/e2e-verify-inbound.sh starts here.
+providers:
+  - name: transit-a
+    commit_mbps: 120
+    usage_mbps: 20
+    in_mbps: 150
+  - name: transit-b
+    commit_mbps: 120
+    usage_mbps: 20
+    in_mbps: 30

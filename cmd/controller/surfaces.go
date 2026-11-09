@@ -1,0 +1,147 @@
+package main
+
+import (
+	"context"
+	"net/netip"
+	"sync"
+	"time"
+
+	"github.com/GrandArcher/Packeteer/internal/config"
+	"github.com/GrandArcher/Packeteer/internal/exchange"
+	"github.com/GrandArcher/Packeteer/internal/httpapi"
+	"github.com/GrandArcher/Packeteer/internal/pluginhost"
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/all"
+	"github.com/GrandArcher/Packeteer/internal/policy"
+	"github.com/GrandArcher/Packeteer/internal/rib"
+	"github.com/GrandArcher/Packeteer/internal/rpki"
+)
+
+// exchangesFromConfig is the configured exchanges as the ops API and the
+// alerts see them.
+func exchangesFromConfig(cfg *config.Config) []exchange.Exchange {
+	var exs []exchange.Exchange
+	for _, ex := range cfg.Exchanges {
+		e := exchange.Exchange{Name: ex.Name, LANs: ex.ExchangeLANs()}
+		if pt := ex.Port; pt != nil {
+			e.Port = &exchange.PortConfig{CapacityMbps: pt.CapacityMbps, CommitMbps: pt.CommitMbps, PortCost: pt.PortCost}
+		}
+		for _, p := range ex.Peers {
+			nh, err := netip.ParseAddr(p.NextHop)
+			if err != nil {
+				continue
+			}
+			e.Peers = append(e.Peers, exchange.Peer{Name: p.Name, ASN: p.ASN, NextHop: nh})
+		}
+		exs = append(exs, e)
+	}
+	return exs
+}
+
+// wireExchanges gives the ops API the exchange statistics (#27). The next
+// hop counts walk every learned path, so they are rebuilt when the RIB
+// generation or the RPKI data changes. It also starts the member
+// availability history (#156), which stops with ctx, and the offload
+// report (#152).
+func wireExchanges(ctx context.Context, cfg *config.Config, col *httpapi.Collector, srv *httpapi.Server, view *rib.View, plugins *pluginhost.Set, decider *policy.Engine, origins *rpki.Set) {
+	if len(cfg.Exchanges) == 0 || view == nil {
+		return
+	}
+	exs := exchangesFromConfig(cfg)
+	lans := exchange.LANs(exs)
+	var mu sync.Mutex
+	var gen, rpkiVer uint64
+	var cached []rib.NextHopCount
+	built := false
+	hops := func() []rib.NextHopCount {
+		g := view.Generation()
+		rv := origins.Version()
+		mu.Lock()
+		defer mu.Unlock()
+		// A VRP update does not change the RIB generation, so the RPKI
+		// data version is part of the key.
+		if !built || g != gen || rv != rpkiVer {
+			if origins.Enabled() {
+				cached = view.NextHopsRPKI(lans, origins.Validate)
+			} else {
+				cached = view.NextHops(lans)
+			}
+			gen, rpkiVer, built = g, rv, true
+		}
+		return cached
+	}
+	col.SetExchanges(exs, hops)
+	if plugins != nil && plugins.Scorer != nil {
+		if s, ok := plugins.Scorer.Plugin.(interface{ TelemetryMaxAge() time.Duration }); ok {
+			col.SetPortMaxAge(s.TelemetryMaxAge())
+		}
+	}
+
+	// Member counts over time (#156): in memory, read-only.
+	hist := exchange.NewHistory()
+	stats := func() []exchange.Stats { return exchange.Build(exs, hops(), nil, nil, nil) }
+	srv.SetExchangeMembers(httpapi.ExchangeMembers{
+		History: hist, Prefixes: view.MemberPrefixes, Offload: offloadReport(cfg, plugins, view, decider),
+		PotentialPeers: potentialPeersReport(cfg.ASN, plugins, view, lans, stats),
+	})
+	go hist.Run(ctx, exchange.SampleEvery, stats)
+}
+
+// wireSuggestions gives the settings form next hops seen on iBGP or BMP
+// that are not configured providers (#102). Counts walk every learned
+// path, so they are rebuilt only when the RIB generation changes. The
+// callback only reads. Accepting a suggestion is a draft row in the
+// form; nothing here writes a provider, probes, or announces. Exchange
+// LAN hops stay on /api/exchanges until the operator adds them as peers.
+func wireSuggestions(cfg *config.Config, srv *httpapi.Server, view *rib.View) {
+	if srv == nil {
+		return
+	}
+	if view == nil {
+		srv.SetSuggestions(func() []httpapi.Suggestion { return nil })
+		return
+	}
+	var mu sync.Mutex
+	var gen uint64
+	var cached []httpapi.Suggestion
+	built := false
+	srv.SetSuggestions(func() []httpapi.Suggestion {
+		g := view.Generation()
+		mu.Lock()
+		defer mu.Unlock()
+		if !built || g != gen {
+			cached = providerSuggestions(cfg, view)
+			gen = g
+			built = true
+		}
+		out := make([]httpapi.Suggestion, len(cached))
+		copy(out, cached)
+		return out
+	})
+}
+
+const maxProviderSuggestions = 64
+
+func providerSuggestions(cfg *config.Config, view *rib.View) []httpapi.Suggestion {
+	if cfg == nil || view == nil {
+		return nil
+	}
+	var configured []netip.Addr
+	for _, p := range cfg.Providers {
+		if a, err := netip.ParseAddr(p.NextHop); err == nil {
+			configured = append(configured, a.Unmap())
+		}
+	}
+	var lans []netip.Prefix
+	for _, ex := range cfg.Exchanges {
+		lans = append(lans, ex.ExchangeLANs()...)
+	}
+	hops := view.SuggestNextHops(configured, lans)
+	if len(hops) > maxProviderSuggestions {
+		hops = hops[:maxProviderSuggestions]
+	}
+	out := make([]httpapi.Suggestion, 0, len(hops))
+	for _, h := range hops {
+		out = append(out, httpapi.Suggestion{NextHop: h.NextHop.String(), ASN: h.ASN, Prefixes: h.Prefixes})
+	}
+	return out
+}

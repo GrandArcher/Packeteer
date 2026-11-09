@@ -1,0 +1,7 @@
+{
+  "stubs": [
+    {"method": "GET", "path": "/api/ring_lg", "contains": "prefix=198.51.100.0%2F24", "file": "ok.json"},
+    {"method": "GET", "path": "/api/ring_lg", "contains": "prefix=203.0.113.0%2F24", "file": "unavailable.json"},
+    {"method": "GET", "path": "/api/ring_lg", "contains": "prefix=192.0.2.0%2F24", "file": "empty.json"}
+  ]
+}

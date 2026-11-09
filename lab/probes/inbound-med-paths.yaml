@@ -1,0 +1,7 @@
+# Both links equally fast. The MED lab has no performance trigger.
+sent: 4
+paths:
+  - provider: link-1
+    rtt_ms: 10
+  - provider: link-2
+    rtt_ms: 10

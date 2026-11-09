@@ -1,0 +1,82 @@
+# Walkthrough lab (docs/walkthrough.md, #50): the FRR edge from docs/frr.md,
+# two simulated eBGP transits, and Packeteer, which reads
+# lab/walkthrough/config.yaml. Documentation addresses (RFC 5737) and
+# documentation/private ASNs only. CI runs the guide's commands against it
+# (lab/e2e-docs.sh in the e2e job).
+name: packeteer-walkthrough
+x-frr: &frr
+  image: quay.io/frrouting/frr:10.2.4
+  privileged: true
+  entrypoint: ["/bin/sh", "/lab/frr-start.sh"]
+services:
+  edge:
+    <<: *frr
+    container_name: pkw-edge
+    hostname: edge
+    environment:
+      FRR_EXPECT: "network 203.0.113.0/24;route-map packeteer-in in;route-map ebgp-out out;graceful-restart-disable"
+    volumes:
+      - ./frr-walkthrough:/etc/frr
+      - ./frr-start.sh:/lab/frr-start.sh:ro
+    networks:
+      lab:
+        ipv4_address: 192.0.2.254
+  # The BMP lab's transits: both send 198.51.100.0/24, transit-b prepended,
+  # so the edge's native exit is transit-a.
+  transit-a:
+    <<: *frr
+    container_name: pkw-transit-a
+    hostname: transit-a
+    environment:
+      FRR_EXPECT: "router bgp 64496;network 198.51.100.0/24"
+    volumes:
+      - ./frr-bmp-transit-a:/etc/frr
+      - ./frr-start.sh:/lab/frr-start.sh:ro
+    networks:
+      lab:
+        ipv4_address: 192.0.2.21
+  transit-b:
+    <<: *frr
+    container_name: pkw-transit-b
+    hostname: transit-b
+    environment:
+      FRR_EXPECT: "router bgp 64497;network 198.51.100.0/24;route-map to-edge out"
+    volumes:
+      - ./frr-bmp-transit-b:/etc/frr
+      - ./frr-start.sh:/lab/frr-start.sh:ro
+    networks:
+      lab:
+        ipv4_address: 192.0.2.22
+  packeteer:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      args:
+        VERSION: walkthrough
+    image: packeteer:walkthrough
+    container_name: pkw-packeteer
+    depends_on:
+      - edge
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
+    environment:
+      PACKETEER_CONFIG: /etc/packeteer/walkthrough/config.yaml
+    volumes:
+      # A directory, not the file: the guide replaces config.yaml between
+      # restarts, and a single-file bind mount would keep the old one.
+      - ./walkthrough:/etc/packeteer/walkthrough:ro
+    # The lab runs on a bridge, so the dashboard is published on loopback.
+    # A real install uses --network host instead (docs/quickstart.md).
+    ports:
+      - "127.0.0.1:18090:8080"
+    networks:
+      lab:
+        ipv4_address: 192.0.2.10
+networks:
+  lab:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 192.0.2.0/24
+          gateway: 192.0.2.3

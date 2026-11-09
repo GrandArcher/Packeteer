@@ -1,0 +1,8 @@
+# transit-b is 40ms slower: outside the 20ms cost floor. The cost steer
+# must withdraw, and native transit-a is best, so nothing replaces it.
+sent: 4
+paths:
+  - provider: transit-a
+    rtt_ms: 40
+  - provider: transit-b
+    rtt_ms: 80

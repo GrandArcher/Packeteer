@@ -1,0 +1,5 @@
+{
+  "stubs": [
+    {"method": "GET", "path": "/api/atlas", "contains": "prefix=198.51.100.0%2F24", "file": "ok.json"}
+  ]
+}

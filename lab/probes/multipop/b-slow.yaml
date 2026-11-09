@@ -1,0 +1,7 @@
+# x-b at 60ms in POP B plus 10ms inter-DC is 30ms behind x-a: the
+# performance steer through POP B flips back to native, and commit control
+# is what steers next.
+sent: 4
+paths:
+  - provider: x-b
+    rtt_ms: 60

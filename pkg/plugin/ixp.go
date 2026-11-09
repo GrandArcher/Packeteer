@@ -1,0 +1,506 @@
+package plugin
+
+import (
+	"cmp"
+	"net/netip"
+	"slices"
+	"time"
+)
+
+// KindMemberSource is the read-only IX-F member import (#161).
+// It is not a RIB source and it never announces.
+const KindMemberSource Kind = "ixp_member"
+
+// KindFabric is the IX fabric prober (#162). It measures member LAN
+// addresses from configured vantages. It is not a provider, it is not an
+// input to Decide, and it never announces.
+const KindFabric Kind = "ixp_fabric"
+
+// KindRouteServer is the Birdseye route-server watch (#164). It reads
+// route-server state with GET only and keeps it in its own store. It is
+// not a RIB source, not an input to Decide, and it never announces.
+const KindRouteServer Kind = "ixp_routeserver"
+
+// KindCorrelator is the fabric incident correlator (#163). It groups the
+// fabric probe samples by switch, colo, and core bundle and tells a fabric
+// problem from a member problem. It is not a provider, not an input to
+// Decide, and it never announces.
+const KindCorrelator Kind = "ixp_correlate"
+
+// KindCore is the inter-site core prober (#167). It measures the path
+// from this site to each other site's address across the exchange core.
+// It is not a provider, not an input to Decide, and it never announces.
+const KindCore Kind = "ixp_core"
+
+// MemberSources is the registry for ixp.members.
+var MemberSources = NewRegistry[MemberSource](KindMemberSource)
+
+// FabricProbes is the registry for ixp.fabric.
+var FabricProbes = NewRegistry[FabricProbe](KindFabric)
+
+// RouteServerWatches is the registry for ixp.routeservers.
+var RouteServerWatches = NewRegistry[RouteServerWatch](KindRouteServer)
+
+// FabricCorrelators is the registry for ixp.correlate.
+var FabricCorrelators = NewRegistry[FabricCorrelator](KindCorrelator)
+
+// CoreProbes is the registry for ixp.core.
+var CoreProbes = NewRegistry[CoreProbe](KindCore)
+
+// MemberSource imports an IX-F member list. View never blocks and never
+// fetches. The slices it returns must not be modified. SetEventSink is
+// called before Start; the sink is how a key-expiry warning is delivered.
+// An implementation must not announce and must not write the RIB.
+type MemberSource interface {
+	Lifecycle
+	View() MemberView
+	SetEventSink(fn func(Event))
+}
+
+// MemberView is one imported member list. Counts are zero and the lists
+// are empty when the import is not configured, has not succeeded, or has
+// gone stale. KeyID is the key's identifier, never the secret.
+type MemberView struct {
+	Configured   bool        `json:"configured"`
+	URL          string      `json:"url,omitempty"`
+	Manager      bool        `json:"manager"`
+	ManagerURL   string      `json:"manager_url,omitempty"`
+	KeyID        string      `json:"key_id,omitempty"`
+	KeyExpires   *time.Time  `json:"key_expires,omitempty"`
+	Fetched      *time.Time  `json:"fetched,omitempty"`
+	Stale        bool        `json:"stale"`
+	Error        string      `json:"error,omitempty"`
+	MemberCount  int         `json:"member_count"`
+	AddressCount int         `json:"address_count"`
+	IXPs         []IXPSite   `json:"ixps"`
+	Members      []IXPMember `json:"members"`
+}
+
+// IXPSite is one exchange in the IX-F ixp_list.
+type IXPSite struct {
+	ID        int         `json:"ixp_id"`
+	Shortname string      `json:"shortname,omitempty"`
+	Name      string      `json:"name,omitempty"`
+	VLANs     []IXPVLAN   `json:"vlans"`
+	Switches  []IXPSwitch `json:"switches"`
+}
+
+// IXPVLAN is one peering LAN. IPv4 and IPv6 are CIDR prefixes.
+type IXPVLAN struct {
+	ID   int    `json:"id"`
+	Name string `json:"name,omitempty"`
+	IPv4 string `json:"ipv4,omitempty"`
+	IPv6 string `json:"ipv6,omitempty"`
+}
+
+// IXPSwitch is one switch in the export. Colo is the cabinet name.
+type IXPSwitch struct {
+	ID           int    `json:"id"`
+	Name         string `json:"name,omitempty"`
+	Colo         string `json:"colo,omitempty"`
+	City         string `json:"city,omitempty"`
+	Country      string `json:"country,omitempty"`
+	Manufacturer string `json:"manufacturer,omitempty"`
+	Model        string `json:"model,omitempty"`
+	Software     string `json:"software,omitempty"`
+}
+
+// IXPMember is one member ASN and its connections at the exchange.
+type IXPMember struct {
+	ASN         uint32          `json:"asn"`
+	Name        string          `json:"name,omitempty"`
+	Connections []IXPConnection `json:"connections"`
+}
+
+// IXPConnection is one member connection. State is the IX-F state string.
+type IXPConnection struct {
+	IXPID      int            `json:"ixp_id"`
+	State      string         `json:"state,omitempty"`
+	Interfaces []IXPInterface `json:"interfaces"`
+	Addresses  []IXPAddress   `json:"addresses"`
+}
+
+// IXFStateUp reports whether an IX-F connection state is one that carries
+// traffic: active, connected, or operational. An empty or other state
+// (inactive, pending) does not.
+func IXFStateUp(state string) bool {
+	switch state {
+	case "active", "connected", "operational":
+		return true
+	default:
+		return false
+	}
+}
+
+// IXPInterface is one physical interface. Switch and Colo are copied from
+// the switch list of this connection's IXP when switch_id matches. A
+// missing switch, or the same id on another IXP, leaves them empty.
+// PhysSpeedMbps is set only when the export included if_phys_speed.
+type IXPInterface struct {
+	SwitchID      int    `json:"switch_id"`
+	Switch        string `json:"switch,omitempty"`
+	Colo          string `json:"colo,omitempty"`
+	SpeedMbps     int    `json:"speed_mbps"`
+	PhysSpeedMbps *int   `json:"if_phys_speed,omitempty"`
+}
+
+// IXPAddress is one LAN address on a connection.
+// CanPing is IXP Manager's per-protocol opt-out when the export carries
+// it. Nil means the document did not say. False means do not probe.
+// BusyHost selects the looser ping tolerance (a slow control plane).
+// Stock IX-F omits both; the fabric prober also reads them from IXP
+// Manager's Nagios customer list when the import is the manager export.
+type IXPAddress struct {
+	Family      string `json:"family"`
+	Address     string `json:"address"`
+	VLANID      int    `json:"vlan_id,omitempty"`
+	RouteServer bool   `json:"route_server"`
+	MaxPrefix   int    `json:"max_prefix,omitempty"`
+	ASMacro     string `json:"as_macro,omitempty"`
+	CanPing     *bool  `json:"can_ping,omitempty"`
+	BusyHost    bool   `json:"busy_host,omitempty"`
+}
+
+// FabricProbe measures member LAN addresses from IX vantages (#162).
+// View never blocks and never fetches. SetMembers and SetVantages are
+// called before Start. An implementation must not announce and must not
+// write the RIB or call Decide.
+type FabricProbe interface {
+	Lifecycle
+	View() FabricView
+	SetMembers(fn func() MemberView)
+	SetVantages(v []FabricVantage)
+}
+
+// FabricVantage is one IX-owned monitoring address on a peering LAN.
+// IXPID 0 means the vlan id is unique in the member list.
+type FabricVantage struct {
+	Name    string
+	IXPID   int
+	VLANID  int
+	Address netip.Addr
+}
+
+// FabricView is the latest fabric round. Samples is empty when probing
+// is off, the member list is stale, or a vantage source cannot be used.
+// The API key is never included.
+type FabricView struct {
+	Configured bool                  `json:"configured"`
+	Stale      bool                  `json:"stale"`
+	Error      string                `json:"error,omitempty"`
+	Round      time.Time             `json:"round,omitempty"`
+	Targets    int                   `json:"targets"`
+	OptOut     int                   `json:"opt_out"`
+	Vantages   []FabricVantageStatus `json:"vantages"`
+	Samples    []FabricSample        `json:"samples"`
+}
+
+// FabricVantageStatus is one vantage after a round. Up is false when its
+// address is not on the peering LAN or every probe from it failed.
+type FabricVantageStatus struct {
+	Name    string `json:"name"`
+	Address string `json:"address"`
+	VLANID  int    `json:"vlan_id"`
+	IXPID   int    `json:"ixp_id,omitempty"`
+	Up      bool   `json:"up"`
+	Targets int    `json:"targets"`
+	Error   string `json:"error,omitempty"`
+}
+
+// FabricSwitch is one switch behind a member connection.
+type FabricSwitch struct {
+	ID   int    `json:"id"`
+	Name string `json:"name,omitempty"`
+	Colo string `json:"colo,omitempty"`
+}
+
+// FabricSample is one member address measured from one vantage.
+// PastTolerance uses IXP Manager's ping warning (busy-host when set).
+// An Error means the probe did not produce a measurement.
+type FabricSample struct {
+	Vantage       string         `json:"vantage"`
+	ASN           uint32         `json:"asn"`
+	Name          string         `json:"name,omitempty"`
+	Address       string         `json:"address"`
+	Family        string         `json:"family"`
+	VLANID        int            `json:"vlan_id"`
+	IXPID         int            `json:"ixp_id"`
+	Switches      []FabricSwitch `json:"switches,omitempty"`
+	BusyHost      bool           `json:"busy_host"`
+	Sent          int            `json:"sent"`
+	Received      int            `json:"received"`
+	LossPct       float64        `json:"loss_pct"`
+	RTTMs         float64        `json:"rtt_ms"`
+	JitterMs      float64        `json:"jitter_ms"`
+	PastTolerance bool           `json:"past_tolerance"`
+	Error         string         `json:"error,omitempty"`
+	At            time.Time      `json:"at"`
+}
+
+// RouteServerWatch polls Birdseye on each route server and keeps a short
+// per-session history (#164). View and History never block and never
+// fetch. SetMembers and SetEventSink are called before Start. An
+// implementation must not announce, must not write the RIB, and must not
+// call Decide.
+type RouteServerWatch interface {
+	Lifecycle
+	View() RouteServerView
+	// History returns one session's samples, oldest first. The bool is
+	// false when the server and session are not known.
+	History(server, session string) ([]RouteServerSample, bool)
+	SetMembers(fn func() MemberView)
+	SetEventSink(fn func(Event))
+}
+
+// RouteServerView is the latest poll of every configured route server.
+// A server whose polls keep failing is marked Stale and its sessions are
+// dropped from the view; its history stays.
+type RouteServerView struct {
+	Configured bool                 `json:"configured"`
+	Servers    []RouteServerStatus  `json:"servers"`
+	Sessions   []RouteServerSession `json:"sessions"`
+}
+
+// RouteServerStatus is one route server's last poll. Up is true when the
+// latest poll succeeded.
+type RouteServerStatus struct {
+	Name       string    `json:"name"`
+	URL        string    `json:"url"`
+	ASN        uint32    `json:"asn"`
+	Up         bool      `json:"up"`
+	Stale      bool      `json:"stale"`
+	Error      string    `json:"error,omitempty"`
+	Polled     time.Time `json:"polled,omitempty"`
+	Version    string    `json:"version,omitempty"`
+	RouterID   string    `json:"router_id,omitempty"`
+	LastReconf string    `json:"last_reconfig,omitempty"`
+	Message    string    `json:"message,omitempty"`
+	Sessions   int       `json:"sessions"`
+}
+
+// RouteServerReason is the number of routes tagged rs-asn:1101:Reason.
+type RouteServerReason struct {
+	Reason int `json:"reason"`
+	Count  int `json:"count"`
+}
+
+// RouteServerSession is one BGP session on a route server. Received is
+// the route count of the session's protocol, which includes routes the
+// server tagged rs-asn:1101:x. Filtered is the number of routes with at
+// least one such tag, and Accepted is Received minus Filtered. Reasons
+// counts each tag. MaxPrefix is the member's IX-F max_prefix for the
+// neighbor address, else Birdseye's import limit; zero means none.
+// UsedPct is Accepted as a share of MaxPrefix. Counted is false when the
+// counts could not be read; they are then zero. Scanned is true when
+// the session's routes were listed this poll (ixp.routeservers
+// route_signals); Blackhole is then the number of routes that carry the
+// RFC 7999 community 65535:666, and ScanError says why a listing failed.
+type RouteServerSession struct {
+	Server      string              `json:"server"`
+	Session     string              `json:"session"`
+	ASN         uint32              `json:"asn"`
+	Name        string              `json:"name,omitempty"`
+	Neighbor    string              `json:"neighbor,omitempty"`
+	Description string              `json:"description,omitempty"`
+	State       string              `json:"state"`
+	Established bool                `json:"established"`
+	Counted     bool                `json:"counted"`
+	Received    int                 `json:"received"`
+	Accepted    int                 `json:"accepted"`
+	Filtered    int                 `json:"filtered"`
+	Reasons     []RouteServerReason `json:"reasons"`
+	MaxPrefix   int                 `json:"max_prefix,omitempty"`
+	UsedPct     float64             `json:"used_pct,omitempty"`
+	Scanned     bool                `json:"scanned"`
+	Blackhole   int                 `json:"blackhole"`
+	ScanError   string              `json:"scan_error,omitempty"`
+	Error       string              `json:"error,omitempty"`
+	At          time.Time           `json:"at"`
+}
+
+// RouteServerSample is one point of a session's history.
+type RouteServerSample struct {
+	At          time.Time           `json:"at"`
+	Established bool                `json:"established"`
+	Counted     bool                `json:"counted"`
+	Received    int                 `json:"received"`
+	Accepted    int                 `json:"accepted"`
+	Filtered    int                 `json:"filtered"`
+	Reasons     []RouteServerReason `json:"reasons"`
+	MaxPrefix   int                 `json:"max_prefix,omitempty"`
+	Scanned     bool                `json:"scanned"`
+	Blackhole   int                 `json:"blackhole"`
+}
+
+// Correlation group scopes.
+const (
+	ScopeSwitch = "switch"
+	ScopeColo   = "colo"
+	ScopeBundle = "bundle"
+)
+
+// FabricCorrelator reads the fabric probe view and raises
+// ixp.fabric_degraded when many members behind one switch, colo, or core
+// bundle degrade together, and ixp.member_degraded when one member does
+// alone (#163). View never blocks. SetFabric and SetEventSink are called
+// before Start. An implementation must not announce, must not write the
+// RIB, and must not call Decide.
+type FabricCorrelator interface {
+	Lifecycle
+	View() CorrelationView
+	SetFabric(fn func() FabricView)
+	SetEventSink(fn func(Event))
+}
+
+// CorrelationView is the latest evaluated fabric round. Groups is every
+// switch, colo, and bundle that had a measured member. Members is each
+// member that is degraded on its own, outside every degraded group.
+type CorrelationView struct {
+	Configured bool                `json:"configured"`
+	Stale      bool                `json:"stale"`
+	Round      time.Time           `json:"round,omitempty"`
+	Groups     []CorrelationGroup  `json:"groups"`
+	Members    []CorrelationMember `json:"members"`
+}
+
+// CorrelationGroup is one switch, colo, or bundle in one round. Members
+// is the count of member ASNs measured behind it. A member is degraded
+// there when every one of its measured addresses behind the group is past
+// tolerance from every vantage that measured it. Active is true once the
+// group has met the thresholds for the configured number of rounds.
+type CorrelationGroup struct {
+	Scope       string   `json:"scope"`
+	IXPID       int      `json:"ixp_id"`
+	Name        string   `json:"name"`
+	Members     int      `json:"members"`
+	Degraded    int      `json:"degraded"`
+	DegradedPct float64  `json:"degraded_pct"`
+	Active      bool     `json:"active"`
+	ASNs        []uint32 `json:"asns"`
+}
+
+// CorrelationMember is one member degraded on its own. Active is true once
+// it has held for the configured number of rounds.
+type CorrelationMember struct {
+	ASN       uint32 `json:"asn"`
+	Name      string `json:"name,omitempty"`
+	Addresses int    `json:"addresses"`
+	Active    bool   `json:"active"`
+}
+
+// CoreProbe measures the core between sites (#167). View never blocks and
+// never probes. SetLinks is called before Start. An implementation must
+// not announce, must not write the RIB, and must not call Decide.
+type CoreProbe interface {
+	Lifecycle
+	View() CoreView
+	SetLinks(l []CoreLink)
+}
+
+// CoreLink is one measured path from this site to another. Peer is the
+// other site's federation instance name. Source may be the zero address,
+// which lets the kernel choose. MaxRTT zero means no RTT limit.
+type CoreLink struct {
+	Name       string
+	Peer       string
+	Source     netip.Addr
+	Address    netip.Addr
+	MaxLossPct float64
+	MaxRTT     time.Duration
+}
+
+// CoreView is the latest round over every link. Links is empty before the
+// first round.
+type CoreView struct {
+	Configured bool             `json:"configured"`
+	Round      time.Time        `json:"round,omitzero"`
+	Links      []CoreLinkStatus `json:"links"`
+}
+
+// CoreLinkStatus is one link after a round. Up is false when no reply came
+// back or the probe failed. Degraded is true when the link is down, loss
+// is above the link's limit, or RTT is above its limit. Loss and RTT are
+// zero when the probe failed (Error is set).
+type CoreLinkStatus struct {
+	Name     string    `json:"name"`
+	Peer     string    `json:"peer"`
+	Address  string    `json:"address"`
+	Sent     int       `json:"sent"`
+	LossPct  float64   `json:"loss_pct"`
+	RTTMs    float64   `json:"rtt_ms"`
+	JitterMs float64   `json:"jitter_ms"`
+	Up       bool      `json:"up"`
+	Degraded bool      `json:"degraded"`
+	Error    string    `json:"error,omitempty"`
+	At       time.Time `json:"at"`
+}
+
+// FabricPath is a member's worst measurement in one VLAN, vantage, and
+// address family: the highest loss, RTT, and jitter of its addresses
+// there, and whether any is past tolerance. A probe error is not a
+// measurement and makes no path.
+type FabricPath struct {
+	ASN           uint32  `json:"asn"`
+	VLANID        int     `json:"vlan_id"`
+	Vantage       string  `json:"vantage"`
+	Family        string  `json:"family"`
+	LossPct       float64 `json:"loss_pct"`
+	RTTMs         float64 `json:"rtt_ms"`
+	JitterMs      float64 `json:"jitter_ms"`
+	PastTolerance bool    `json:"past_tolerance"`
+}
+
+// WorstFabricPaths reduces a fabric round to one path per ASN, VLAN id,
+// vantage, and family, sorted by those keys. It is the one place that
+// decides what "worst address" means for the member series and for what a
+// site publishes to its peers.
+func WorstFabricPaths(samples []FabricSample) []FabricPath {
+	type key struct {
+		asn     uint32
+		vlan    int
+		vantage string
+		family  string
+	}
+	worst := map[key]FabricPath{}
+	for _, sm := range samples {
+		if sm.Error != "" {
+			continue
+		}
+		k := key{sm.ASN, sm.VLANID, sm.Vantage, sm.Family}
+		w, seen := worst[k]
+		if !seen {
+			w = FabricPath{ASN: sm.ASN, VLANID: sm.VLANID, Vantage: sm.Vantage, Family: sm.Family}
+		}
+		w.LossPct = max(w.LossPct, sm.LossPct)
+		w.RTTMs = max(w.RTTMs, sm.RTTMs)
+		w.JitterMs = max(w.JitterMs, sm.JitterMs)
+		w.PastTolerance = w.PastTolerance || sm.PastTolerance
+		worst[k] = w
+	}
+	out := make([]FabricPath, 0, len(worst))
+	for _, w := range worst {
+		out = append(out, w)
+	}
+	slices.SortFunc(out, func(a, b FabricPath) int {
+		return cmp.Or(cmp.Compare(a.ASN, b.ASN), cmp.Compare(a.VLANID, b.VLANID), cmp.Compare(a.Vantage, b.Vantage), cmp.Compare(a.Family, b.Family))
+	})
+	return out
+}
+
+// ValidLabel reports whether s is a short URL-safe label: a letter or
+// digit, then letters, digits, '.', '_' or '-', at most 64 characters.
+// Vantage, route server, exchange, and bundle names use it.
+func ValidLabel(s string) bool {
+	if s == "" || len(s) > 64 {
+		return false
+	}
+	for i, c := range s {
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		case i > 0 && (c == '.' || c == '_' || c == '-'):
+		default:
+			return false
+		}
+	}
+	return true
+}

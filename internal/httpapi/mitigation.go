@@ -1,0 +1,181 @@
+package httpapi
+
+import (
+	"encoding/json"
+	"errors"
+	"io"
+	"mime"
+	"net/http"
+	"net/netip"
+	"strings"
+	"time"
+
+	"github.com/GrandArcher/Packeteer/internal/mitigation"
+	"github.com/GrandArcher/Packeteer/pkg/plugin"
+)
+
+// MitigationControl lists, adds, and removes threat mitigation rules
+// (#28). The controller checks the mitigation allowlist, max_rules, the
+// TTL bounds, and the catalog; only inject announces, and only a prefix in
+// the learned RIB.
+type MitigationControl interface {
+	Status() mitigation.Status
+	Add(mitigation.Request) (mitigation.Rule, error)
+	Remove(id string) bool
+}
+
+// MitigationCandidates is the prefix picker's read-only view (#131): the
+// prefixes in the learned RIB view that sit inside the mitigation
+// allowlist and contain q. Ready is false until the RIB view is ready (or
+// when there is none). The function only reads.
+type MitigationCandidates func(q string, limit int) (prefixes []string, truncated, ready bool)
+
+// MaxCandidates is how many picker prefixes one request returns.
+const MaxCandidates = 100
+
+type mitigationRequest struct {
+	Prefix string `json:"prefix"`
+	Action string `json:"action"`
+	Target string `json:"target"`
+	TTL    string `json:"ttl"`
+	Reason string `json:"reason"`
+	// FlowSpec only.
+	Match     *plugin.FlowSpecMatch `json:"match"`
+	Countries []string              `json:"source_countries"`
+	RateMbps  float64               `json:"rate_mbps"`
+}
+
+func (s *Server) handleMitigations(w http.ResponseWriter, _ *http.Request) {
+	snap := s.snapshot()
+	body := struct {
+		meta
+		Enabled bool `json:"enabled"`
+		// Writable is true when rules can be added (basic auth is on).
+		Writable bool `json:"writable"`
+		mitigation.Status
+	}{meta: snap.meta(), Status: (*mitigation.Controller)(nil).Status()}
+	if s.mitigation != nil {
+		body.Enabled = true
+		body.Writable = s.writesEnabled()
+		body.Status = s.mitigation.Status()
+	}
+	writeJSON(w, http.StatusOK, body)
+}
+
+// mitigationWritable rejects a change unless basic auth is on, mitigation
+// is configured, and (for POST) the body is JSON. A cross-site form cannot
+// send application/json without a CORS preflight, which this server never
+// grants.
+func (s *Server) mitigationWritable(w http.ResponseWriter, r *http.Request, needJSON bool) bool {
+	if !s.writesEnabled() {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "mitigation rules require auth (auth.enabled) or PACKETEER_HTTP_USER and PACKETEER_HTTP_PASSWORD"})
+		return false
+	}
+	if s.mitigation == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "mitigation is not configured"})
+		return false
+	}
+	if needJSON {
+		mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+		if err != nil || mt != "application/json" {
+			writeJSON(w, http.StatusUnsupportedMediaType, map[string]string{"error": "content type must be application/json"})
+			return false
+		}
+	}
+	return true
+}
+
+func (s *Server) handleMitigationAdd(w http.ResponseWriter, r *http.Request) {
+	if !s.mitigationWritable(w, r, true) {
+		return
+	}
+	var req mitigationRequest
+	dec := json.NewDecoder(io.LimitReader(r.Body, 8192))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body: " + err.Error()})
+		return
+	}
+	p, err := netip.ParsePrefix(req.Prefix)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "prefix: " + err.Error()})
+		return
+	}
+	var ttl time.Duration
+	if req.TTL != "" {
+		if ttl, err = time.ParseDuration(req.TTL); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "ttl: " + err.Error()})
+			return
+		}
+	}
+	mreq := mitigation.Request{Prefix: p, Action: req.Action, Target: req.Target, TTL: ttl, Reason: req.Reason,
+		Countries: req.Countries, RateMbps: req.RateMbps}
+	if req.Match != nil {
+		mreq.Match = *req.Match
+	}
+	noteAudit(r, p.String(), "action="+req.Action+" target="+req.Target+" ttl="+req.TTL)
+	rule, err := s.mitigation.Add(mreq)
+	switch {
+	case errors.Is(err, mitigation.ErrFull), errors.Is(err, mitigation.ErrConflict):
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	case err != nil:
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	s.log.Info("mitigation rule added through the API", "id", rule.ID, "prefix", rule.Prefix, "action", rule.Action, "target", rule.Target,
+		"match", rule.MatchText(), "remote", r.RemoteAddr)
+	noteAudit(r, rule.ID, "prefix="+rule.Prefix.String()+" action="+rule.Action+" target="+rule.Target+" ttl="+req.TTL)
+	writeJSON(w, http.StatusCreated, rule)
+}
+
+func (s *Server) handleMitigationRemove(w http.ResponseWriter, r *http.Request) {
+	if !s.mitigationWritable(w, r, false) {
+		return
+	}
+	if !s.mitigation.Remove(r.PathValue("id")) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no mitigation rule with that id"})
+		return
+	}
+	s.log.Info("mitigation rule removed through the API", "id", r.PathValue("id"), "remote", r.RemoteAddr)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// SetMitigationCandidates installs the prefix picker's source (#131). It
+// may be called after New, once the RIB view exists.
+func (s *Server) SetMitigationCandidates(fn MitigationCandidates) {
+	if s == nil {
+		return
+	}
+	s.candidates.Store(fn)
+}
+
+// handleMitigationCandidates lists learned prefixes a rule may name. It
+// is the picker behind the Protection form. It writes nothing; the add
+// call still checks the allowlist and the learned RIB, and only inject
+// announces.
+func (s *Server) handleMitigationCandidates(w http.ResponseWriter, r *http.Request) {
+	body := struct {
+		Enabled   bool     `json:"enabled"`
+		Ready     bool     `json:"ready"`
+		Allowlist []string `json:"allowlist"`
+		Prefixes  []string `json:"prefixes"`
+		Truncated bool     `json:"truncated"`
+	}{Allowlist: []string{}, Prefixes: []string{}}
+	if s.mitigation != nil {
+		body.Enabled = true
+		body.Allowlist = s.mitigation.Status().Allowlist
+		if fn, ok := s.candidates.Load().(MitigationCandidates); ok && fn != nil {
+			q := strings.TrimSpace(r.URL.Query().Get("q"))
+			if len(q) > 64 {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "q is too long"})
+				return
+			}
+			body.Prefixes, body.Truncated, body.Ready = fn(q, MaxCandidates)
+			if body.Prefixes == nil {
+				body.Prefixes = []string{}
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, body)
+}

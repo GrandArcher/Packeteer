@@ -1,0 +1,60 @@
+{
+	"metadata": {
+		"buildmachine": "lab",
+		"buildtime": "2026-10-22T20:19:09Z",
+		"elapsedtime": 0,
+		"usertime": 0,
+		"systemtime": 0,
+		"ccr_mfts_hash": "wqT0qAaz/JOExm4bkSFbhIY1z5GeXsvWddebRbjN6wU=",
+		"ccr_vrps_hash": "Z2jzYVeI08c61CSo7MIqpCXZldXhJRAvXt5cB8bQ/Sg=",
+		"ccr_vaps_hash": "5PYNCqbX89O2pklLHIYbmfZJxvnsUauvIBsg8pcyfJU=",
+		"ccr_brks_hash": "5PYNCqbX89O2pklLHIYbmfZJxvnsUauvIBsg8pcyfJU=",
+		"ccr_tas_hash": "493cHucZf0Igz+J4KSC5nTGxfJo8KIplpFkGqaMr4DM=",
+		"roas": 3,
+		"failedroas": 0,
+		"invalidroas": 0,
+		"aspas": 0,
+		"failedaspas": 0,
+		"invalidaspas": 0,
+		"bgpsec_pubkeys": 0,
+		"certificates": 2,
+		"invalidcertificates": 0,
+		"nonfunctionalcas": 0,
+		"deferredcas": 0,
+		"taks": 0,
+		"tals": 1,
+		"invalidtals": 0,
+		"talfiles": [
+			"ktals/ta.tal"
+		],
+		"manifests": 2,
+		"failedmanifests": 0,
+		"crls": 2,
+		"repositories": 2,
+		"vrps": 3,
+		"uniquevrps": 3,
+		"vsps": 0,
+		"uniquevsps": 0,
+		"vaps": 0,
+		"uniquevaps": 0,
+		"cachedir_new_files": 8,
+		"cachedir_del_files": 0,
+		"cachedir_del_dirs": 5,
+		"cachedir_superfluous_files": 0,
+		"cachedir_del_superfluous_files": 0
+	},
+	"roas": [
+		{ "asn": 64496, "prefix": "192.0.2.0/24", "maxLength": 24, "ta": "ta", "expires": 1792795916 },
+		{ "asn": 64497, "prefix": "203.0.113.0/24", "maxLength": 25, "ta": "ta", "expires": 1792795916 },
+		{ "asn": 64498, "prefix": "2001:db8::/32", "maxLength": 48, "ta": "ta", "expires": 1792795916 }
+	],
+	"bgpsec_keys": [
+
+	],
+	"nonfunc_cas": [
+
+	],
+	"aspas": [
+
+	]
+}

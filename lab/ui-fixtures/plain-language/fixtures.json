@@ -1,0 +1,8 @@
+{
+  "stubs": [
+    {"method": "GET", "path": "/api/overview", "file": "overview.json"},
+    {"method": "GET", "path": "/api/providers", "file": "providers.json"},
+    {"method": "GET", "path": "/api/prefixes", "file": "prefixes.json"},
+    {"method": "GET", "path": "/api/improvements", "file": "improvements.json"}
+  ]
+}

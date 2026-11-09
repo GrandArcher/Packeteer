@@ -1,0 +1,10 @@
+# lab/e2e-move.sh: transit-c is now clearly faster than transit-b, so the
+# improvement switches providers.
+sent: 4
+paths:
+  - provider: transit-a
+    rtt_ms: 80
+  - provider: transit-b
+    rtt_ms: 40
+  - provider: transit-c
+    rtt_ms: 10

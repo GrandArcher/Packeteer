@@ -1,0 +1,130 @@
+# Multi-POP: routing domains, global commit, central view (#30)
+
+Lab-proven only, not on a public edge. Default mode stays `observe`.
+
+Run one Packeteer instance per POP (routing domain). A `federation` plugin connects them. Each instance keeps its own iBGP session, learned RIB, allowlist, and announcer. Nothing is announced across POPs: federation only adds decision inputs, and every route an instance announces goes through its own safety rules.
+
+## What it does
+
+- **Inter-DC RTT in the path cost .** A provider can belong to another POP (`providers[].domain`). This instance does not probe it: the peer in that POP measures it. Its path to a prefix is the peer's measurement plus `inter_dc_rtt` for that domain. When that total beats the local exits by the usual thresholds, this POP steers the prefix to its own edge with that provider's `next_hop`, the address this POP's routers use to reach the other POP's exit across the backbone.
+- **Global commit .** `global_commit` shares one commit across providers in several POPs, usually one carrier in each POP. With the `commit` scorer, each local member's commit becomes the global commit minus every other member's fresh usage, and never more than its own commit. Commit control then moves traffic off that member as usual.
+- **Central view .** `/api/federation` and the dashboard's POPs section list this instance and every peer. Each row shows mode, freshness, last error, providers up, improvements against the cap, inter-DC RTT, and the global commit totals with each member's usage. An instance with `listen` empty only polls, so it can serve the central view without anyone reading its data.
+
+## Safety
+
+A provider in another domain is usable for a prefix only while all of these hold:
+
+1. the peer is fresh (a good snapshot within the plugin's `max_age`);
+2. the peer's RIB is ready and it reports that provider up;
+3. the peer's own traffic for that exact prefix leaves through that provider. Traffic this POP sends there then exits there and cannot come back. If two POPs steer the same prefix at each other in one interval, the POP whose domain sorts first keeps its steer and the other retires its own.
+
+The steer is still an ordinary improvement:
+
+- the prefix must be in this POP's learned RIB. A prefix only the other POP learned is never announced;
+- the prefix must be in the allowlist;
+- the route carries `packeteer_community` and NO_EXPORT;
+- it counts toward `max_improvements`;
+- it obeys `hold_time` and the thresholds.
+
+If any condition fails, the provider becomes unusable and the improvement is retired and withdrawn. This happens when the peer goes stale, crashes, loses its RIB, or loses the provider. On shutdown an instance publishes its providers down before it withdraws its own routes, so peers retire their steers at the next poll. A crash is caught by `max_age`.
+
+The global commit applies only when every member's usage is known and every peer involved is fresh. Otherwise each provider's own commit applies, as if the instance ran standalone.
+
+Snapshot times are converted by age, so clock skew between POPs cannot make stale data look fresh. The federation plugin is in-process only and never announces. An out-of-process plugin cannot feed decisions.
+
+## Config
+
+The full reference is in [CONFIG.md](CONFIG.md#multi-pop-federation).
+
+```yaml
+instance: pop-a            # defaults to domain
+domain: pop-a
+inter_dc_rtt:
+  pop-b: 12ms
+providers:
+  - name: x-a
+    source_ip: 192.0.2.11
+    next_hop: 192.0.2.1
+  - name: x-b              # carrier X in POP B
+    domain: pop-b
+    next_hop: 192.0.2.253  # POP B's exit, reached across the backbone
+    cc_disable: true       # moving carrier X to carrier X does not relieve the shared commit
+global_commit:
+  - name: carrier-x
+    commit_mbps: 1000
+    providers: [x-a, x-b]
+federation:
+  type: mtls
+  config:
+    listen: 0.0.0.0:9443
+    cert_file: /etc/packeteer/certs/pop-a.crt
+    key_file: /etc/packeteer/certs/pop-a.key
+    ca_file: /etc/packeteer/certs/ca.crt
+    peers:
+      - name: pop-b
+        url: https://192.0.2.20:9443
+        domain: pop-b      # the domain this peer may claim
+```
+
+Each POP lists the other POPs' providers it may use, and gives each one a `next_hop` that its own edge routers can reach. Provider names must be the same in every POP.
+
+## Docker
+
+This uses the stock image. Mount the certificates next to the config:
+
+```sh
+docker run --network host --cap-add NET_RAW --cap-add NET_ADMIN \
+  -v "$PWD/config.yaml:/etc/packeteer/config.yaml" \
+  -v "$PWD/certs:/etc/packeteer/certs:ro" \
+  ghcr.io/grandarcher/packeteer
+```
+
+Issue every instance's certificate from one CA, with the instance name as CN or DNS SAN. Keep keys out of git. Open `listen` only to the other POPs.
+
+## Lab
+
+`lab/e2e-multipop.sh` runs two POPs, each with an FRR edge and a Packeteer instance. The certificates are generated for that run only, and the prefixes are documentation ranges. The lab proves:
+
+- the central view;
+- a steer through the other POP's carrier because of the inter-DC RTT, with next hop, local-pref, community, and NO_EXPORT;
+- withdraw on peer loss, then the re-steer;
+- a commit move driven by the other POP's usage, and its release;
+- a prefix only the other POP learned is never announced;
+- the other instance never steers back;
+- a cut federation link: the steer is withdrawn within the staleness limit, neither POP steers or flaps while cut off, and one re-steer returns after the heal;
+- SIGTERM and SIGKILL.
+
+## When sites lose contact
+
+If the federation link is cut (network partition, a dead peer, expired certificates), each instance keeps running alone:
+
+- The peer's last snapshot is used until it is older than `max_age` (default 3x `poll_interval`), then the peer is stale. `/api/federation` shows `fresh: false`, with the last error.
+- At the next decision round after that, every provider in the peer's domain is unusable. Steers onto it are retired and withdrawn, and the prefix goes back to the local exits. The withdraw is bounded by `max_age` plus one decision round, not by `improvement_ttl`.
+- The global commit is not complete, so each local provider's own commit applies, as if the instance ran standalone.
+- Each instance's own providers, probes, and local steers are not touched. A prefix is steered to the other POP only while that POP's fresh data says its own traffic for it exits there, so cutting the link cannot leave both POPs pointing at each other.
+- Nothing is announced on the strength of a stale peer, so a cut adds no new route toward the other POP.
+
+When contact returns, the peer is fresh again at its next good poll. The usual hold time and thresholds then apply, so a steer through the other POP comes back once, not as a flap. Choose `max_age` longer than a few polls so one lost poll does not retire a steer, and shorter than the time you accept traffic going to a POP that is no longer reachable. If a peer is down for good, remove it from `federation.config.peers` and its providers from `providers`.
+
+`lab/e2e-multipop.sh` proves this with both POPs running (step 6 in the list above): it blackholes the route between the two instances, then checks the withdraw time, the stale and incomplete views, 20s with no steer and nothing from the second POP, and exactly one re-steer after the heal. `TestFederationLinkCut` in `cmd/controller` runs the same cut and heal in process.
+
+## Pushing settings
+
+An admin can send this instance's `thresholds` or `policies` to every peer ([design](design/federation-push.md)). It is off until a peer lists the sender:
+
+```yaml
+federation:
+  type: mtls
+  config:
+    accept_settings_from: [pop-a]   # certificate names allowed to push here
+http:
+  config_editor: true               # the push is written to the mounted file
+```
+
+On the sending instance, save the change in the settings page or the YAML editor first, then press Push on the dashboard's POPs section or call `POST /api/federation/push` with `{"sections": ["thresholds"]}` (optionally `"peers": ["pop-b"]`). The sender needs `http.config_editor` and an admin sign-in. Each peer validates the sections like a local `PUT /api/config` and applies them online with no restart; the reply has one row per peer: `applied`, `unchanged`, `refused` with the reasons, `failed`, or `unreachable`.
+
+Only `thresholds` and `policies` are accepted. `mode`, the allowlist, the announcer, and every other key are refused, a push never turns inject on, and a peer whose file has other unapplied edits refuses it. Both sides write an audit record. The endpoint is in [API.md](API.md).
+
+## Rollback
+
+Remove `federation`, `global_commit`, and the providers with another `domain`, then restart. Each instance runs standalone. SIGHUP refuses these keys, so they need a restart. To stop only the settings push, remove `accept_settings_from` on the receivers and restart; a push already applied stays in the file like any local edit, so revert it with the editor or by editing the file.

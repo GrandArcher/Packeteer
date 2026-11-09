@@ -1,0 +1,11 @@
+# After the steer, 110 Mbps left transit-a and 88 Mbps arrived on transit-b
+# (59% of the 150 Mbps that was expected to move).
+providers:
+  - name: transit-a
+    commit_mbps: 120
+    usage_mbps: 20
+    in_mbps: 40
+  - name: transit-b
+    commit_mbps: 120
+    usage_mbps: 20
+    in_mbps: 118

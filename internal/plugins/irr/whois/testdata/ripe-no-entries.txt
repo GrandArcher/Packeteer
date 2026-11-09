@@ -1,0 +1,13 @@
+% This is the RIPE Database query service.
+% The objects are in RPSL format.
+%
+% The RIPE Database is subject to Terms and Conditions.
+% See https://docs.db.ripe.net/terms-conditions.html
+
+%ERROR:101: no entries found
+%
+% No entries found in source RIPE.
+
+% This query was served by the RIPE Database Query Service version 1.0 (EXAMPLE)
+
+

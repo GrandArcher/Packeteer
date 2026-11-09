@@ -1,0 +1,143 @@
+package icmp
+
+import (
+	"context"
+	"errors"
+	"net/netip"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/GrandArcher/Packeteer/internal/sockmark"
+	"github.com/GrandArcher/Packeteer/pkg/plugin"
+)
+
+func newProber(t *testing.T, y string) plugin.Prober {
+	t.Helper()
+	c, err := plugin.ConfigFromYAML(y)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := plugin.Probers.New(TypeName, c, plugin.Env{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// skipIfNoSocket skips when neither raw nor datagram ICMP is permitted in
+// this environment (e.g. an unprivileged CI runner).
+func skipIfNoSocket(t *testing.T, err error) {
+	t.Helper()
+	if err != nil && strings.Contains(err.Error(), "icmp socket unavailable") {
+		t.Skipf("no ICMP socket permission here: %v", err)
+	}
+}
+
+func TestLoopbackEcho(t *testing.T) {
+	lo := netip.MustParseAddr("127.0.0.1")
+	p := newProber(t, "packet_interval: 1ms")
+	res, err := p.Probe(context.Background(), plugin.ProbeRequest{Source: lo, Target: lo, Count: 3, Timeout: time.Second})
+	skipIfNoSocket(t, err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Sent != 3 || len(res.RTTs) != 3 {
+		t.Fatalf("res = %+v", res)
+	}
+	// The loopback delivers the train in order, and the prober says so (#224).
+	if !slices.Equal(res.Order, []int{0, 1, 2}) {
+		t.Fatalf("order = %v", res.Order)
+	}
+}
+
+// A request spacing overrides packet_interval: three echoes 40ms apart
+// take at least 80ms, and the run still ends soon after the last reply.
+func TestRequestSpacing(t *testing.T) {
+	lo := netip.MustParseAddr("127.0.0.1")
+	p := newProber(t, "packet_interval: 1ms")
+	start := time.Now()
+	res, err := p.Probe(context.Background(), plugin.ProbeRequest{Source: lo, Target: lo, Count: 3, Spacing: 40 * time.Millisecond, Timeout: time.Second})
+	skipIfNoSocket(t, err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if took := time.Since(start); took < 80*time.Millisecond || took > 900*time.Millisecond || len(res.RTTs) != 3 {
+		t.Fatalf("took %s, res %+v", took, res)
+	}
+}
+
+// A run cut short by its context keeps the replies already matched: the
+// probe engine scores it as the loss of the packets not answered.
+func TestCancelKeepsReplies(t *testing.T) {
+	lo := netip.MustParseAddr("127.0.0.1")
+	p := newProber(t, "packet_interval: 1ms")
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+	res, err := p.Probe(ctx, plugin.ProbeRequest{Source: lo, Target: lo, Count: 5, Spacing: 100 * time.Millisecond, Timeout: time.Second})
+	skipIfNoSocket(t, err)
+	if !errors.Is(err, context.DeadlineExceeded) || res.Sent < 2 || res.Sent > 4 || len(res.RTTs) < res.Sent-1 || len(res.Order) != len(res.RTTs) {
+		t.Fatalf("res = %+v, err = %v", res, err)
+	}
+}
+
+func TestSourceUnavailable(t *testing.T) {
+	p := newProber(t, "")
+	_, err := p.Probe(context.Background(), plugin.ProbeRequest{Source: netip.MustParseAddr("192.0.2.99"),
+		Target: netip.MustParseAddr("192.0.2.1"), Count: 1, Timeout: 100 * time.Millisecond})
+	skipIfNoSocket(t, err)
+	if !errors.Is(err, plugin.ErrSourceUnavailable) {
+		t.Fatalf("err = %v, want ErrSourceUnavailable", err)
+	}
+}
+
+func TestFamilyMismatch(t *testing.T) {
+	p := newProber(t, "")
+	_, err := p.Probe(context.Background(), plugin.ProbeRequest{Source: netip.MustParseAddr("127.0.0.1"),
+		Target: netip.MustParseAddr("::1"), Count: 1, Timeout: time.Second})
+	if err == nil || !strings.Contains(err.Error(), "address family") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestConfig(t *testing.T) {
+	for y, want := range map[string]string{
+		"socket: magic":        `socket "magic" is invalid`,
+		"packet_interval: -1s": "must not be negative",
+		"ttl: 3":               "field ttl not found",
+	} {
+		c, _ := plugin.ConfigFromYAML(y)
+		if _, err := plugin.Probers.New(TypeName, c, plugin.Env{}); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%q: err = %v, want %q", y, err, want)
+		}
+	}
+	for _, y := range []string{"", "socket: raw", "socket: udp", "socket: auto\npacket_interval: 50ms"} {
+		c, _ := plugin.ConfigFromYAML(y)
+		if _, err := plugin.Probers.New(TypeName, c, plugin.Env{}); err != nil {
+			t.Errorf("%q: %v", y, err)
+		}
+	}
+}
+
+// A DSCP-tagged echo still gets its reply on the loopback (#157), and the
+// tag is on the socket.
+func TestTaggedEcho(t *testing.T) {
+	lo := netip.MustParseAddr("127.0.0.1")
+	pr := newProber(t, "packet_interval: 1ms").(*Prober)
+	c, err := pr.listen(lo, sockmark.Marking{DSCP: 46})
+	skipIfNoSocket(t, err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.c.Close()
+	tos, err := c.c.IPv4PacketConn().TOS()
+	if err != nil || tos != 46<<2 {
+		t.Fatalf("TOS = %d, err %v, want %d", tos, err, 46<<2)
+	}
+	res, err := pr.Probe(context.Background(), plugin.ProbeRequest{Source: lo, Target: lo, Count: 2, Timeout: time.Second, DSCP: 46})
+	skipIfNoSocket(t, err)
+	if err != nil || res.Sent != 2 || len(res.RTTs) != 2 {
+		t.Fatalf("res = %+v, err %v", res, err)
+	}
+}

@@ -1,0 +1,28 @@
+{
+ "version": "fixture",
+ "mode": "observe",
+ "ready": true,
+ "generated_at": "2026-10-22T12:00:00Z",
+ "enabled": true,
+ "prefix": "198.51.100.0/24",
+ "from": "2026-10-15T12:00:00Z",
+ "to": "2026-10-22T12:00:00Z",
+ "days": [],
+ "rpki": [],
+ "improvements": [
+  {
+   "prefix": "198.51.100.0/24", "provider": "lab-b", "native": "lab-a", "cause": "performance",
+   "reason": "lab-b: loss 0.0%->0.0%, rtt 90ms->30ms", "mode": "observe",
+   "start": "2026-10-21T09:00:00Z", "end": "2026-10-21T10:00:00Z", "end_reason": "ttl expired", "hours": 1,
+   "explain": {
+    "outcome": "moved", "reason": "lab-b: loss 0.0%->0.0%, rtt 90ms->30ms",
+    "gates": [
+     {"gate": "rib", "status": "pass", "value": "native lab-a"},
+     {"gate": "thresholds", "status": "pass", "value": "lab-b vs lab-a: loss gain 0 pt, rtt gain 60 ms (66.7%)"},
+     {"gate": "rpki", "status": "skip", "detail": "RPKI is off"}
+    ],
+    "samples": []
+   }
+  }
+ ]
+}

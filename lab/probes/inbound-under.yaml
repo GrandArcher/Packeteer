@@ -1,0 +1,10 @@
+# transit-a's inbound 95th (50) is under 90% of its commit: release.
+providers:
+  - name: transit-a
+    commit_mbps: 100
+    usage_mbps: 20
+    in_mbps: 50
+  - name: transit-b
+    commit_mbps: 100
+    usage_mbps: 20
+    in_mbps: 30

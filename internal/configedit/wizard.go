@@ -1,0 +1,303 @@
+package configedit
+
+import (
+	"bytes"
+	"errors"
+	"fmt"
+	"net"
+	"net/netip"
+	"strconv"
+	"strings"
+
+	"gopkg.in/yaml.v3"
+
+	"github.com/GrandArcher/Packeteer/internal/config"
+)
+
+// Wizard limits.
+const (
+	MaxWizardProviders = 32
+)
+
+// WizardInput is the setup wizard (#106). The generated config is always
+// mode observe: it learns from one edge session and never announces.
+// Inject is not a field the wizard applies. Secrets are not fields either;
+// plugins keep them in environment variables.
+type WizardInput struct {
+	ASN      uint32 `json:"asn"`
+	RouterID string `json:"router_id"`
+	// Edge is the learn-only iBGP neighbor address. The session has no
+	// announcer.
+	Edge      string           `json:"edge"`
+	Providers []WizardProvider `json:"providers"`
+	// Prefix is an optional prefix to probe. Empty means the static
+	// source is left out; flow or another source can be added later in
+	// the file.
+	Prefix string `json:"prefix,omitempty"`
+	// Host is an optional pin inside Prefix. Empty lets the probe engine
+	// pick a few addresses, including the provider next hop when it can.
+	// A host without a prefix is refused.
+	Host string `json:"host,omitempty"`
+	// Flow is the optional flow collector step (#130). Nil leaves the flow
+	// source out. It only listens for exporter records; it never announces.
+	Flow *WizardFlow `json:"flow,omitempty"`
+	// Storage turns on report history (sqlite in /var/lib/packeteer).
+	Storage bool `json:"storage"`
+	// HTTPListen is the ops server address (default 127.0.0.1:8080).
+	HTTPListen string `json:"http_listen,omitempty"`
+	// Mode must be empty or observe. Any other value is refused. The
+	// wizard never writes suggest or inject.
+	Mode string `json:"mode,omitempty"`
+	// DisableAuth turns sign-in off in a config that has it on. Only
+	// WizardOver reads it; without it auth is always kept.
+	DisableAuth bool `json:"disable_auth,omitempty"`
+}
+
+// WizardFlow is the optional flow collector. Listen is host:port for the
+// UDP socket the router's NetFlow, IPFIX, or sFlow exporter sends to. The
+// host is an IP address or empty (every address); the port is 1 to 65535.
+// Everything else is the source's default and can be tuned in the settings
+// form.
+type WizardFlow struct {
+	Listen string `json:"listen"`
+}
+
+// WizardProvider is one upstream the operator added. There is no field
+// for a secret. A provider has one address family, so an IPv6 probe source
+// and next hop together become a second provider named "<name>-v6" with the
+// same ASN and type. Commit and cost stay in the settings form.
+type WizardProvider struct {
+	Name      string `json:"name"`
+	SourceIP  string `json:"source_ip"`
+	NextHop   string `json:"next_hop"`
+	ASN       uint32 `json:"asn,omitempty"`
+	Type      string `json:"type,omitempty"`
+	SourceIP6 string `json:"source_ip6,omitempty"`
+	NextHop6  string `json:"next_hop6,omitempty"`
+}
+
+type wizProvider struct {
+	Name     string `yaml:"name"`
+	SourceIP string `yaml:"source_ip"`
+	NextHop  string `yaml:"next_hop"`
+	ASN      uint32 `yaml:"asn,omitempty"`
+	Type     string `yaml:"type,omitempty"`
+}
+
+const v6Suffix = "-v6"
+
+func wizardProviders(in []WizardProvider) []wizProvider {
+	var out []wizProvider
+	for _, p := range in {
+		out = append(out, wizProvider{Name: p.Name, SourceIP: p.SourceIP, NextHop: p.NextHop, ASN: p.ASN, Type: p.Type})
+		if p.SourceIP6 != "" {
+			out = append(out, wizProvider{Name: p.Name + v6Suffix, SourceIP: p.SourceIP6, NextHop: p.NextHop6, ASN: p.ASN, Type: p.Type})
+		}
+	}
+	return out
+}
+
+// Output shapes; field order is file order.
+type wizNeighbor struct {
+	Address string `yaml:"address"`
+}
+
+type wizBGP struct {
+	Neighbors []wizNeighbor `yaml:"neighbors"`
+}
+
+type wizPlugin struct {
+	Type   string `yaml:"type"`
+	Config any    `yaml:"config,omitempty"`
+}
+
+type wizHTTP struct {
+	Listen string `yaml:"listen"`
+}
+
+type wizThresholds struct {
+	MinLossDeltaPct float64 `yaml:"min_loss_delta_pct"`
+	MinRTTDeltaMs   float64 `yaml:"min_rtt_delta_ms"`
+}
+
+type wizAllowlist struct {
+	Prefixes []string `yaml:"prefixes"`
+}
+
+type wizTarget struct {
+	Prefix string `yaml:"prefix"`
+	Host   string `yaml:"host,omitempty"`
+}
+
+type wizConfig struct {
+	Mode               string        `yaml:"mode"`
+	ASN                uint32        `yaml:"asn"`
+	RouterID           string        `yaml:"router_id"`
+	PacketeerCommunity string        `yaml:"packeteer_community,omitempty"`
+	MaxImprovements    int           `yaml:"max_improvements"`
+	HoldTime           string        `yaml:"hold_time"`
+	Thresholds         wizThresholds `yaml:"thresholds"`
+	Providers          []wizProvider `yaml:"providers"`
+	Allowlist          wizAllowlist  `yaml:"allowlist"`
+	BGP                *wizBGP       `yaml:"bgp,omitempty"`
+	Sources            []wizPlugin   `yaml:"sources,omitempty"`
+	Scorer             wizPlugin     `yaml:"scorer"`
+	Storage            *wizPlugin    `yaml:"storage,omitempty"`
+	HTTP               wizHTTP       `yaml:"http"`
+}
+
+const wizardHeader = `# Generated by the Packeteer setup wizard (#106).
+# mode: observe measures and recommends; it never announces a route.
+# The edge session is learn-only. Inject is not a wizard step: turning it
+# on is a separate edit (mode inject, an allowlist, local_pref, an
+# announcer). See docs/CONFIG.md "Inject checklist".
+# Secrets stay in environment variables. This file has none.
+`
+
+// wizardFlowListen checks the collector address and returns it in the
+// form the flow source normalizes to.
+func wizardFlowListen(s string) (string, error) {
+	s = strings.TrimSpace(s)
+	if strings.ContainsAny(s, "\r\n") {
+		return "", errors.New("flow listen must be one line")
+	}
+	host, port, err := net.SplitHostPort(s)
+	if err != nil {
+		return "", fmt.Errorf("flow listen %q must be host:port, for example 192.0.2.10:2055", s)
+	}
+	n, err := strconv.Atoi(port)
+	if err != nil || n < 1 || n > 65535 {
+		return "", fmt.Errorf("flow listen %q: port must be 1 to 65535", s)
+	}
+	if host != "" {
+		a, err := netip.ParseAddr(host)
+		if err != nil {
+			return "", fmt.Errorf("flow listen %q: host must be an IP address or empty", s)
+		}
+		host = a.String()
+	}
+	return net.JoinHostPort(host, strconv.Itoa(n)), nil
+}
+
+func wizardFlowNote(listen string) string {
+	return "# Flow collector on " + listen + " (UDP). Point the router's NetFlow v5/v9, IPFIX, or sFlow\n" +
+		"# exporter at this host and port. With --network host this is a host port: do not publish it.\n" +
+		"# It only measures which prefixes carry traffic; it never announces.\n"
+}
+
+// Wizard renders an observe-mode config from the three steps and checks
+// it with config.Parse, the loader the controller uses. The allowlist is
+// empty and there is no announcer: nothing may be injected until an
+// operator edits the file.
+func Wizard(in WizardInput) ([]byte, error) {
+	var errs []error
+	add := func(format string, a ...any) { errs = append(errs, fmt.Errorf(format, a...)) }
+	if m := strings.TrimSpace(in.Mode); m != "" && m != config.ModeObserve {
+		add("mode %q is refused: the wizard always starts in observe and inject is not a step", m)
+	}
+	edge := strings.TrimSpace(in.Edge)
+	if edge == "" {
+		add("edge is required (the learn-only iBGP neighbor address)")
+	} else if _, err := netip.ParseAddr(edge); err != nil {
+		add("edge %q is not an IP address", in.Edge)
+	}
+	if len(in.Providers) < 1 || len(in.Providers) > MaxWizardProviders {
+		add("providers: 1 to %d are required", MaxWizardProviders)
+	}
+	for i, p := range in.Providers {
+		if strings.ContainsAny(p.Name+p.SourceIP+p.NextHop+p.Type+p.SourceIP6+p.NextHop6, "\r\n") {
+			add("providers[%d]: every field must be one line", i)
+		}
+		if (p.SourceIP6 == "") != (p.NextHop6 == "") {
+			add("providers[%d]: the IPv6 probe source and the IPv6 next hop go together; fill both or neither", i)
+		}
+		for _, a := range []string{p.SourceIP6, p.NextHop6} {
+			if ip, err := netip.ParseAddr(a); a != "" && (err != nil || !ip.Is6() || ip.Is4In6()) {
+				add("providers[%d]: %q is not an IPv6 address", i, a)
+			}
+		}
+	}
+	prefix := strings.TrimSpace(in.Prefix)
+	host := strings.TrimSpace(in.Host)
+	var targets []wizTarget
+	switch {
+	case prefix == "" && host != "":
+		add("host %q requires a prefix", in.Host)
+	case prefix != "":
+		p, err := netip.ParsePrefix(prefix)
+		if err != nil {
+			add("prefix %q is not a prefix", in.Prefix)
+		} else {
+			t := wizTarget{Prefix: p.Masked().String()}
+			if host != "" {
+				h, herr := netip.ParseAddr(host)
+				if herr != nil || !p.Contains(h) {
+					add("host %q must be an address inside %s", in.Host, p.Masked())
+				} else {
+					t.Host = h.String()
+				}
+			}
+			targets = append(targets, t)
+		}
+	}
+	flowListen := ""
+	if in.Flow != nil {
+		l, err := wizardFlowListen(in.Flow.Listen)
+		if err != nil {
+			add("%v", err)
+		}
+		flowListen = l
+	}
+	if len(errs) > 0 {
+		return nil, errors.Join(errs...)
+	}
+	out := wizConfig{
+		Mode: config.ModeObserve, ASN: in.ASN, RouterID: strings.TrimSpace(in.RouterID),
+		MaxImprovements: config.DefaultMaxImprovements, HoldTime: "15m",
+		Thresholds: wizThresholds{MinLossDeltaPct: 1, MinRTTDeltaMs: 15},
+		Providers:  wizardProviders(in.Providers),
+		Allowlist:  wizAllowlist{Prefixes: []string{}},
+		BGP:        &wizBGP{Neighbors: []wizNeighbor{{Address: edge}}},
+		Scorer:     wizPlugin{Type: "weighted"},
+		HTTP:       wizHTTP{Listen: config.DefaultHTTPListen},
+	}
+	if len(targets) > 0 {
+		out.Sources = []wizPlugin{{Type: "static", Config: map[string]any{"targets": targets}}}
+	}
+	if flowListen != "" {
+		out.Sources = append(out.Sources, wizPlugin{Type: "flow", Config: map[string]any{"listen": flowListen}})
+	}
+	if in.ASN > 0 && in.ASN <= 0xffff {
+		out.PacketeerCommunity = strconv.FormatUint(uint64(in.ASN), 10) + ":666"
+	}
+	if in.Storage {
+		out.Storage = &wizPlugin{Type: "sqlite", Config: map[string]string{"path": "/var/lib/packeteer/packeteer.db"}}
+	}
+	if l := strings.TrimSpace(in.HTTPListen); l != "" {
+		out.HTTP.Listen = l
+	}
+	var b bytes.Buffer
+	b.WriteString(wizardHeader)
+	if flowListen != "" {
+		b.WriteString(wizardFlowNote(flowListen))
+	}
+	enc := yaml.NewEncoder(&b)
+	enc.SetIndent(2)
+	if err := enc.Encode(out); err != nil {
+		return nil, err
+	}
+	if err := enc.Close(); err != nil {
+		return nil, err
+	}
+	cfg, err := config.Parse(b.Bytes())
+	if err != nil {
+		return nil, err
+	}
+	if cfg.Mode != config.ModeObserve || cfg.Announcer != nil || len(cfg.Allowlist.Prefixes) != 0 {
+		return nil, errors.New("wizard: generated config is not observe")
+	}
+	if len(cfg.BGP.Neighbors) != 1 {
+		return nil, errors.New("wizard: generated config has no learn-only edge session")
+	}
+	return b.Bytes(), nil
+}

@@ -1,0 +1,1 @@
+GO-2026-4736 GoBGP NEXT_HOP DoS (GoBGP issue 3305): the DB marks all v3 affected; v3.37.0's validator panics too, but its receive path treats the UPDATE as withdraw first (internal/rib/nexthop_test.go). Fixed in v4.4.0; drop on GoBGP >= v4.4.0, recheck every release. See docs/THREAT_MODEL.md.
