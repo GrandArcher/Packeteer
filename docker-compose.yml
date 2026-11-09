@@ -3,7 +3,7 @@
 services:
   packeteer:
     # Pinned to the last release. :edge tracks main.
-    image: ghcr.io/grandarcher/packeteer:1.0.0
+    image: ghcr.io/grandarcher/packeteer:1.0.1
     container_name: packeteer
     # Host networking: probes must leave via each transit's source IP, the
     # iBGP session must reach the edge router, and a flow source binds its
