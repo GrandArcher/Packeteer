@@ -7,7 +7,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 ### Security
 
 - The basic-auth account counts failed sign-ins per client network, not per supplied user name, so failures under other names no longer evict its lockout (#527).
-- Password checks take at most one of the two hashing slots per client address (IPv6 /64), so one client cannot hold both and refuse every other sign-in (#534).
+- Password checks take at most one of the two hashing slots per client address (IPv6 /64), so one client cannot hold both; behind a reverse proxy that means one check at a time (#534).
 
 ## [1.0.0] - 2026-11-04
 

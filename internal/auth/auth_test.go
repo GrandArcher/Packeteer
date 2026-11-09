@@ -719,8 +719,9 @@ func TestHashSlotPerNetwork(t *testing.T) {
 		if len(s.hashSem) != 1 {
 			t.Fatalf("one network holds %d global slots", len(s.hashSem))
 		}
-		if p, err := s.Authenticate(req("198.51.100.7:40000", basic("noc", "operator-password"))); err != nil || p.User != "noc" {
-			t.Fatalf("other network refused while %s hashes: %+v %v", held.holder, p, err)
+		// A wrong password is never cached, so this check needs a slot.
+		if _, err := s.Authenticate(req("198.51.100.7:40000", basic("noc", "wrong-password-2"))); !errors.Is(err, ErrBadCredentials) {
+			t.Fatalf("other network refused a slot while %s hashes: %v", held.holder, err)
 		}
 		release()
 	}
@@ -749,6 +750,9 @@ func TestHashSlotPerNetwork(t *testing.T) {
 		if time.Now().After(deadline) {
 			t.Fatalf("second check never waited: %d refs", refs)
 		}
+	}
+	if len(s.hashSem) != 1 {
+		t.Fatalf("a waiting check holds a global slot: %d held", len(s.hashSem))
 	}
 	release()
 	if err := <-res; !errors.Is(err, ErrBadCredentials) {
