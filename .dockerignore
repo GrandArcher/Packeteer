@@ -1,7 +1,0 @@
-.git
-.github
-*.md
-!README.md
-deploy
-docs
-examples

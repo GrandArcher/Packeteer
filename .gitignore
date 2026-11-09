@@ -1,6 +1,0 @@
-# Scratch config written by docs/walkthrough.md
-/lab/walkthrough/
-# Real-table replay artifacts (lab/realtable): never commit a dump or its result
-realtable-result.json
-*.mrt
-*bview*

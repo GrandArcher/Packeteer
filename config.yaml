@@ -11,5 +11,5 @@ providers:
 inventory:
   type: netbox
   config:
-    base_url: http://127.0.0.1:39375
+    base_url: http://127.0.0.1:43533
     tag: packeteer

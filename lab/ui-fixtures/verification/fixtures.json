@@ -1,5 +1,0 @@
-{
-  "stubs": [
-    {"method": "GET", "path": "/api/verification", "file": "ok.json"}
-  ]
-}
