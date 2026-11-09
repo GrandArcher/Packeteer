@@ -70,10 +70,13 @@ type User struct {
 // secret; the secret itself is shown once and never stored. A token's
 // effective role is the lower of Role and its user's current role.
 type APIToken struct {
-	ID      string
-	User    string
-	Name    string
-	Role    Role
+	ID   string
+	User string
+	Name string
+	Role Role
+	// Scope narrows the token to one endpoint family: empty is the whole
+	// API at Role; "mcp" and "mcp:write" work only on POST /mcp (#302).
+	Scope   string
 	Hash    string
 	Created time.Time
 	Expires time.Time

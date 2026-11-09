@@ -101,13 +101,13 @@ func (s *Store) DeleteUser(ctx context.Context, name string) (bool, error) {
 	return n > 0, tx.Commit()
 }
 
-const tokenCols = `id, user_name, name, role, hash, created_ms, expires_ms`
+const tokenCols = `id, user_name, name, role, scope, hash, created_ms, expires_ms`
 
 func scanToken(sc interface{ Scan(...any) error }) (plugin.APIToken, error) {
 	var t plugin.APIToken
 	var role string
 	var created, expires int64
-	if err := sc.Scan(&t.ID, &t.User, &t.Name, &role, &t.Hash, &created, &expires); err != nil {
+	if err := sc.Scan(&t.ID, &t.User, &t.Name, &role, &t.Scope, &t.Hash, &created, &expires); err != nil {
 		return t, err
 	}
 	t.Role, t.Created, t.Expires = plugin.Role(role), fromMS(created), fromMS(expires)
@@ -155,8 +155,8 @@ func (s *Store) PutToken(ctx context.Context, t plugin.APIToken) error {
 	if err != nil {
 		return err
 	}
-	_, err = db.ExecContext(ctx, `INSERT OR REPLACE INTO api_tokens (`+tokenCols+`) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		t.ID, t.User, t.Name, string(t.Role), t.Hash, ms(t.Created), ms(t.Expires))
+	_, err = db.ExecContext(ctx, `INSERT OR REPLACE INTO api_tokens (`+tokenCols+`) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		t.ID, t.User, t.Name, string(t.Role), t.Scope, t.Hash, ms(t.Created), ms(t.Expires))
 	return err
 }
 

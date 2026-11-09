@@ -4,6 +4,10 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ## [Unreleased]
 
+### Added
+
+- MCP server for AI assistants: opt-in `mcp` block, `POST /mcp` with 17 read tools, `packeteer-mcp` stdio bridge, `mcp` and `mcp:write` token scopes, maintenance write tools off by default (#302).
+
 ## [1.0.1] - 2026-11-09
 
 The v1.0.1 patch is the post-v1.0 hardening pass (#527-#536), with no new capability rows; the shipped config stays `mode: observe` and injection stays off by default.

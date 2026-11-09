@@ -62,6 +62,7 @@ func (c *Config) Validate() error {
 	c.validateLeakWatch(add)
 	c.validateSubscriptions(add)
 	c.validateUpgrade(add)
+	c.validateMCP(add)
 	c.Linkouts.Validate(add)
 	c.RingLG.Validate(add)
 	c.Atlas.Validate(add)
