@@ -14,7 +14,7 @@
 set -eu
 
 dir=${PACKETEER_DIR:-packeteer}
-version=${PACKETEER_VERSION:-1.0.0}
+version=${PACKETEER_VERSION:-1.0.1}
 image=${PACKETEER_IMAGE:-ghcr.io/grandarcher/packeteer:$version}
 if [ "$version" = edge ]; then
 	ref=main

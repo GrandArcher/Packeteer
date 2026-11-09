@@ -65,17 +65,17 @@ The image is `ghcr.io/grandarcher/packeteer`, linux/amd64 and linux/arm64. It ru
 
 | Tag | What it is |
 |---|---|
-| `1.0.0` | The last release. Pin this one. |
+| `1.0.1` | The last release. Pin this one. |
 | `latest` | The same release, updated when a release tag is published. |
 | `edge` | The build from `main`. |
 
 **Step by step: [docs/quickstart.md](docs/quickstart.md).** It goes from an empty directory to a running instance in observe, with a first run on loopback, `docker run` and Compose, and the stop. CI runs every command on that page against the image built from the same commit.
 
-The short version, pinned to 1.0.0, the last release. Take the example config from the same tag as the image: the file on `main` can carry keys a release does not know yet, and unknown keys refuse startup. For `:edge`, use `main` in both places.
+The short version, pinned to 1.0.1, the last release. Take the example config from the same tag as the image: the file on `main` can carry keys a release does not know yet, and unknown keys refuse startup. For `:edge`, use `main` in both places.
 
 ```sh
-IMAGE=ghcr.io/grandarcher/packeteer:1.0.0
-curl -fsSLo config.yaml https://raw.githubusercontent.com/GrandArcher/Packeteer/v1.0.0/config.example.yaml
+IMAGE=ghcr.io/grandarcher/packeteer:1.0.1
+curl -fsSLo config.yaml https://raw.githubusercontent.com/GrandArcher/Packeteer/v1.0.1/config.example.yaml
 # Edit providers and source IPs. Leave mode: observe.
 mkdir -p plugins
 
@@ -96,7 +96,7 @@ docker run -d --name packeteer --network host \
 
 ```sh
 docker run --rm -e PACKETEER_CONFIG=/etc/packeteer/config.example.yaml \
-  ghcr.io/grandarcher/packeteer:1.0.0 -check
+  ghcr.io/grandarcher/packeteer:1.0.1 -check
 ```
 
 The default config path inside the container is `/etc/packeteer/config.yaml` (`PACKETEER_CONFIG`, or `-config`).
@@ -107,7 +107,7 @@ Without `NET_RAW`, or where ICMP is filtered, the probe falls back to TCP port 4
 
 The `packeteer-data` volume keeps report history (`storage: {type: sqlite}`, file `/var/lib/packeteer/packeteer.db`) across container restarts and upgrades, and the open billing period of SNMP 95th-percentile samples when telemetry is configured. Without the volume, reports and that window start empty after the container is recreated. Leave out `storage` to turn history off; the probe and decision loop does not depend on it, and the 95th window then lives in memory only. Sign-in on by default (no `auth.enabled`, no `PACKETEER_HTTP_USER`) adds `sqlite` when `storage` is left out.
 
-[docker-compose.yml](docker-compose.yml) runs the same container with Compose: host networking, the two capabilities, the mounts, and `restart: unless-stopped` ([quickstart, step 5](docs/quickstart.md#5-or-run-it-with-compose)). Its `image` line pins `ghcr.io/grandarcher/packeteer:1.0.0`; use `:edge` for the build from `main`. There is no `ports:` map: with host networking, `http.listen` is already an address on the host. Stop with `docker compose stop -t 30` (see [Rollback](#rollback)).
+[docker-compose.yml](docker-compose.yml) runs the same container with Compose: host networking, the two capabilities, the mounts, and `restart: unless-stopped` ([quickstart, step 5](docs/quickstart.md#5-or-run-it-with-compose)). Its `image` line pins `ghcr.io/grandarcher/packeteer:1.0.1`; use `:edge` for the build from `main`. There is no `ports:` map: with host networking, `http.listen` is already an address on the host. Stop with `docker compose stop -t 30` (see [Rollback](#rollback)).
 
 ## Minimum config
 
@@ -322,7 +322,7 @@ Symptoms, log lines, and fixes: [docs/troubleshooting.md](docs/troubleshooting.m
 
 ## Features
 
-Status on main for the 1.0.0 release, capability rows per milestone and how many are done, from the summary in [docs/FEATURES.md](docs/FEATURES.md#summary):
+Status on main for the 1.0.1 release, capability rows per milestone and how many are done, from the summary in [docs/FEATURES.md](docs/FEATURES.md#summary):
 
 | Milestone | Rows | Done |
 |---|---|---|
@@ -343,7 +343,9 @@ v0.8 is about Internet exchanges and shared measurements: IXP observe-only mode 
 
 v0.9 is about evidence, explanations, and plugins: the Why? panel and confidence on every decision, steer verification, RPKI and IRR per provider path, registry hygiene, NetBox and Peering Manager inventory, exporters, an SNMP agent, gRPC plugins, probe agents, an external policy feed, BMP alone, MED and overload protection, and a refreshed UI (plain language, phone layout, keyboard and screen reader access, provider latency and loss). The opt-in `synthesize` block is lab only. Three v0.9 rows are partial (the eBPF data path, registry hygiene, and onboarding, which does not read the router over a management API) and herd keeps its v0.8 gaps. Nothing is field-proven (#54). The shipped config and every example stay `mode: observe`.
 
-v1.0 (this release) adds no capability rows. It is the pre-release audit and review pass over v0.9: fixes to the allowlist and announce path, mitigation, the BMP, flow, and policy-feed inputs, sign-in and SSO, the probe agents, HA step-down, the signed upgrade, and probe and RIB cost at 100k targets, with fuzz targets for the decoders in CI ([CHANGELOG](CHANGELOG.md#100---2026-11-04), audit #486-#494 and #501-#510, review #215). The feature counts above are unchanged. Nothing is field-proven (#54). The shipped config stays `mode: observe`, sign-in stays on by default, and injection stays off by default.
+v1.0 adds no capability rows. It is the pre-release audit and review pass over v0.9: fixes to the allowlist and announce path, mitigation, the BMP, flow, and policy-feed inputs, sign-in and SSO, the probe agents, HA step-down, the signed upgrade, and probe and RIB cost at 100k targets, with fuzz targets for the decoders in CI ([CHANGELOG](CHANGELOG.md#100---2026-11-04), audit #486-#494 and #501-#510, review #215). The feature counts above are unchanged. Nothing is field-proven (#54). The shipped config stays `mode: observe`, sign-in stays on by default, and injection stays off by default.
+
+v1.0.1 (this release) is a patch with no new capability rows and no new config keys: hardening of the sign-in lockout and password hashing, the external policy feed, the herd hub endpoint checks, webhook and `otlp` tokens over https, HA step-down and reload, PBR rollback, flow exporter CIDRs, and the Dockerfile builder pin ([CHANGELOG](CHANGELOG.md#101---2026-11-09), #527-#536). The feature counts above are unchanged. The shipped config stays `mode: observe`.
 
 ## Upgrades
 
@@ -354,6 +356,7 @@ The Settings page can also upgrade in place (#196). It is off by default. It nee
 ### From 1.0.0 to 1.0.1
 
 - An `otlp` exporter with `headers`, and a webhook with `headers`, `routing_key_env`, userinfo, or a variable in `url`, now need an `https` URL; `http` is only for a loopback host. Run `-check` before the upgrade (#535).
+- A herd hub endpoint in 0.0.0.0/8, 100.64.0.0/10, 198.18.0.0/15 or a NAT64 prefix is now refused (#532).
 
 ### From 0.9 to 1.0
 
