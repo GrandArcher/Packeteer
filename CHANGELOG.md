@@ -7,6 +7,9 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 ### Fixed
 
 - Flow exporter allowlists normalize IPv4-mapped CIDRs before matching senders (#533).
+### Security
+
+- The basic-auth account counts failed sign-ins per client network, not per supplied user name, so failures under other names no longer evict its lockout (#527).
 
 ## [1.0.0] - 2026-11-04
 
