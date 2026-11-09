@@ -6,17 +6,10 @@ packeteer_community: "64512:666"
 providers:
   - name: transit-a
     source_ip: 192.0.2.11
-    next_hop: 192.0.2.9
-    communities: ["64496:100", "64496:200"]
-    asn: 64496
-    type: transit
-  - name: peer-b
-    asn: 64497
-    type: peer
-    source_ip: 192.0.2.13
-    next_hop: 192.0.2.3
+    next_hop: 192.0.2.1
+    communities: ["64496:100"]
 inventory:
   type: netbox
   config:
-    base_url: http://127.0.0.1:40505
+    base_url: http://127.0.0.1:39375
     tag: packeteer
