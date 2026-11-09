@@ -491,10 +491,16 @@ func (v *View) AddNeighbors(ctx context.Context, nbrs []Neighbor) error {
 		if dropped {
 			errs = append(errs, errDropped)
 		} else {
+			var enabled []string
 			for _, n := range added {
 				if err := v.srv.EnablePeer(ctx, &api.EnablePeerRequest{Address: n.Address.String()}); err != nil {
 					errs = append(errs, fmt.Errorf("rib: enable neighbor %s: %w", n.Address, err))
+					continue
 				}
+				enabled = append(enabled, n.Address.String())
+			}
+			if err := v.waitAdminUp(ctx, enabled); err != nil {
+				errs = append(errs, err)
 			}
 		}
 		v.dropMu.Unlock()
@@ -519,6 +525,44 @@ func (v *View) SetEgress(egress map[string][]netip.Addr) error {
 	v.mu.Unlock()
 	v.notify()
 	return nil
+}
+
+// waitAdminUp waits until the speaker reports every peer in addrs
+// admin-up. GoBGP queues one admin-state request per peer and drops a
+// second one sent before the peer takes the first, still returning nil, so
+// a DropSessions disable sent while an enable is queued would be lost and
+// the peer would open a session after the drop.
+func (v *View) waitAdminUp(ctx context.Context, addrs []string) error {
+	deadline := adminWaitDeadline(ctx)
+	for {
+		var waiting []string
+		for _, a := range addrs {
+			up := false
+			_ = v.srv.ListPeer(ctx, &api.ListPeerRequest{Address: a}, func(p *api.Peer) {
+				up = p.State.AdminState == api.PeerState_UP
+			})
+			if !up {
+				waiting = append(waiting, a)
+			}
+		}
+		if len(waiting) == 0 {
+			return nil
+		}
+		if !time.Now().Before(deadline) {
+			return fmt.Errorf("rib: neighbors not enabled: %s", strings.Join(waiting, ", "))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// adminWaitDeadline is quiesceTimeout from now or ctx's deadline, whichever
+// is first.
+func adminWaitDeadline(ctx context.Context) time.Time {
+	deadline := time.Now().Add(quiesceTimeout)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+	return deadline
 }
 
 func (v *View) stopServer() {
@@ -574,10 +618,7 @@ func (v *View) quiesceSessions(ctx context.Context, why string) error {
 			errs = append(errs, fmt.Errorf("rib: shut down session to %s: %w", a, err))
 		}
 	}
-	deadline := time.Now().Add(quiesceTimeout)
-	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
-		deadline = d
-	}
+	deadline := adminWaitDeadline(ctx)
 	for {
 		var up []string
 		_ = v.srv.ListPeer(ctx, &api.ListPeerRequest{}, func(p *api.Peer) {
@@ -1599,7 +1640,8 @@ func viaBit(via string) uint8 {
 // returns. The busiest hops are kept.
 const maxSuggestNextHops = 64
 
-// quiesceTimeout bounds the wait for sessions to drop at shutdown.
+// quiesceTimeout bounds the wait for sessions to drop at shutdown and for
+// added neighbors to report admin-up.
 const quiesceTimeout = 3 * time.Second
 
 // NextHops counts, for every next hop inside lans, the distinct prefixes

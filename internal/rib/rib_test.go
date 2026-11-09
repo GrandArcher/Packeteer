@@ -2,10 +2,13 @@ package rib
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net"
 	"net/netip"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -372,21 +375,14 @@ func TestDropSessionsKeepsEverySessionDown(t *testing.T) {
 	if err := v.DropSessions(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	routerUp := func() bool {
-		up := false
-		_ = r.srv.ListPeer(context.Background(), &api.ListPeerRequest{}, func(p *api.Peer) {
-			up = up || p.State.SessionState == api.PeerState_ESTABLISHED
-		})
-		return up
-	}
-	if routerUp() {
+	if r.established() {
 		t.Fatal("the router still has the session established after DropSessions returned")
 	}
 	eventually(t, "view not ready", func() bool { return !v.Ready() && v.Len() == 0 })
 	// The router would accept the session again; it must stay down.
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		if v.Ready() || routerUp() {
+		if v.Ready() || r.established() {
 			t.Fatal("a dropped session came back")
 		}
 		time.Sleep(100 * time.Millisecond)
@@ -394,6 +390,38 @@ func TestDropSessionsKeepsEverySessionDown(t *testing.T) {
 	err := v.AddNeighbors(context.Background(), []Neighbor{{Address: netip.MustParseAddr("127.0.0.3"), Port: uint16(r.port)}})
 	if err == nil || !strings.Contains(err.Error(), "sessions were dropped") {
 		t.Fatalf("AddNeighbors after DropSessions: %v", err)
+	}
+}
+
+// adminState reports whether the view's speaker has a peer for addr and
+// that peer's admin state.
+func adminState(v *View, addr netip.Addr) (found bool, admin api.PeerState_AdminState) {
+	_ = v.Server().ListPeer(context.Background(), &api.ListPeerRequest{Address: addr.String()}, func(p *api.Peer) {
+		found, admin = true, p.State.AdminState
+	})
+	return found, admin
+}
+
+// established reports whether the fake router has any session established.
+func (r *fakeRouter) established() bool {
+	up := false
+	_ = r.srv.ListPeer(context.Background(), &api.ListPeerRequest{}, func(p *api.Peer) {
+		up = up || p.State.SessionState == api.PeerState_ESTABLISHED
+	})
+	return up
+}
+
+// staysDown fails the test if, for d, the peer at addr leaves admin-down or
+// the router has a session established.
+func staysDown(t *testing.T, v *View, r *fakeRouter, addr netip.Addr, d time.Duration) {
+	t.Helper()
+	for deadline := time.Now().Add(d); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
+		if _, admin := adminState(v, addr); admin != api.PeerState_DOWN {
+			t.Fatalf("peer admin state %v after the drop, want DOWN", admin)
+		}
+		if r.established() {
+			t.Fatal("a neighbor added around the drop has a session")
+		}
 	}
 }
 
@@ -406,48 +434,53 @@ func TestAddNeighborDuringDropStaysAdminDown(t *testing.T) {
 	b := newRouterPeer(t, "127.0.0.3", "192.0.2.253", "127.0.0.4")
 	v := newView(t, a)
 	eventually(t, "session", v.Ready)
-
 	nb := Neighbor{Address: netip.MustParseAddr("127.0.0.3"), Port: uint16(b.port), LocalAddress: netip.MustParseAddr("127.0.0.4")}
-	peer := func() (found bool, admin api.PeerState_AdminState) {
-		_ = v.Server().ListPeer(context.Background(), &api.ListPeerRequest{Address: nb.Address.String()}, func(p *api.Peer) {
-			found, admin = true, p.State.AdminState
-		})
-		return found, admin
-	}
-	routerUp := func() bool {
-		up := false
-		_ = b.srv.ListPeer(context.Background(), &api.ListPeerRequest{}, func(p *api.Peer) {
-			up = up || p.State.SessionState == api.PeerState_ESTABLISHED
-		})
-		return up
-	}
 
 	v.dropMu.Lock()
+	var unlock sync.Once
+	t.Cleanup(func() { unlock.Do(v.dropMu.Unlock) })
 	done := make(chan error, 1)
 	go func() { done <- v.AddNeighbors(context.Background(), []Neighbor{nb}) }()
-	eventually(t, "peer on the speaker", func() bool { found, _ := peer(); return found })
-	if _, admin := peer(); admin != api.PeerState_DOWN {
-		v.dropMu.Unlock()
+	eventually(t, "peer on the speaker", func() bool { found, _ := adminState(v, nb.Address); return found })
+	if _, admin := adminState(v, nb.Address); admin != api.PeerState_DOWN {
 		t.Fatalf("peer added with admin state %v before the drop re-check, want DOWN", admin)
 	}
 	v.mu.Lock()
 	v.dropped = true
 	v.mu.Unlock()
-	v.dropMu.Unlock()
+	unlock.Do(v.dropMu.Unlock)
 
-	if err := <-done; err == nil || !strings.Contains(err.Error(), "sessions were dropped") {
+	if err := <-done; !errors.Is(err, errDropped) {
 		t.Fatalf("AddNeighbors racing DropSessions: %v", err)
 	}
-	// The router accepts the session; the peer must still never open it.
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		if _, admin := peer(); admin != api.PeerState_DOWN {
-			t.Fatalf("peer admin state %v after the drop, want DOWN", admin)
-		}
-		if routerUp() {
-			t.Fatal("a neighbor added during the drop opened a session")
-		}
-		time.Sleep(100 * time.Millisecond)
+	staysDown(t, v, b, nb.Address, 3*time.Second)
+}
+
+// A DropSessions right after AddNeighbors enabled a neighbor (#529) must
+// still shut it down: GoBGP drops an admin-state request sent while the
+// peer's previous one is still queued, so AddNeighbors returns only once
+// the enable has been taken.
+func TestDropRightAfterAddNeighborShutsItDown(t *testing.T) {
+	for i := range 3 {
+		t.Run(fmt.Sprint(i), func(t *testing.T) {
+			a := newRouter(t)
+			b := newRouterPeer(t, "127.0.0.3", "192.0.2.253", "127.0.0.4")
+			v := newView(t, a)
+			eventually(t, "session", v.Ready)
+			nb := Neighbor{Address: netip.MustParseAddr("127.0.0.3"), Port: uint16(b.port), LocalAddress: netip.MustParseAddr("127.0.0.4")}
+			if err := v.AddNeighbors(context.Background(), []Neighbor{nb}); err != nil {
+				t.Fatal(err)
+			}
+			if _, admin := adminState(v, nb.Address); admin != api.PeerState_UP {
+				t.Fatalf("AddNeighbors returned with admin state %v, want UP", admin)
+			}
+			if err := v.DropSessions(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			eventually(t, "peer admin-down", func() bool { _, admin := adminState(v, nb.Address); return admin == api.PeerState_DOWN })
+			eventually(t, "router session closed", func() bool { return !b.established() })
+			staysDown(t, v, b, nb.Address, time.Second)
+		})
 	}
 }
 
