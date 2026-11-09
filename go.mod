@@ -10,7 +10,7 @@ require (
 	github.com/hashicorp/go-hclog v1.6.3
 	github.com/hashicorp/go-plugin v1.8.0
 	github.com/nats-io/nats.go v1.55.0
-	github.com/oschwald/maxminddb-golang/v2 v2.8.0
+	github.com/oschwald/maxminddb-golang/v2 v2.9.0
 	github.com/osrg/gobgp/v3 v3.37.0
 	github.com/twmb/franz-go v1.22.2
 	golang.org/x/crypto v0.58.0
