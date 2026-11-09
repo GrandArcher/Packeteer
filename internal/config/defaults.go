@@ -5,6 +5,7 @@ import "strings"
 func (c *Config) applyDefaults() {
 	c.defaultSubscriptions()
 	c.defaultUpgrade()
+	c.defaultMCP()
 	c.defaultHerd()
 	c.defaultNonBGP()
 	// A file without mode observes (#49): the safe default. Inject is

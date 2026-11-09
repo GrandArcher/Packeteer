@@ -122,3 +122,45 @@ func TestUserMustChangeAndMigration(t *testing.T) {
 		t.Fatalf("must_change lost across a restart: %+v", got)
 	}
 }
+
+// TestTokenScopeAndMigration keeps a token's scope across a restart and
+// adds the column to an api_tokens table created before #302: an old token
+// reads back with no scope, so it stays a full-API token.
+func TestTokenScopeAndMigration(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "p.db")
+	old, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := old.Exec(`CREATE TABLE api_tokens (id TEXT PRIMARY KEY, user_name TEXT NOT NULL, name TEXT NOT NULL, role TEXT NOT NULL,
+		hash TEXT NOT NULL, created_ms INTEGER NOT NULL, expires_ms INTEGER NOT NULL);
+		INSERT INTO api_tokens VALUES ('aaaaaaaaaaaaaaaa', 'noc', 'legacy', 'viewer', 'h', 1, 2)`); err != nil {
+		t.Fatal(err)
+	}
+	_ = old.Close()
+
+	s := newStore(t, "path: "+path)
+	if err := s.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	got, ok, err := s.Token(ctx, "aaaaaaaaaaaaaaaa")
+	if err != nil || !ok || got.Scope != "" || got.Name != "legacy" {
+		t.Fatalf("legacy token: %+v %v %v", got, ok, err)
+	}
+	now := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	tok := plugin.APIToken{ID: "bbbbbbbbbbbbbbbb", User: "noc", Name: "assistant", Role: plugin.RoleOperator, Scope: "mcp:write", Hash: "x", Created: now, Expires: now.Add(time.Hour)}
+	if err := s.PutToken(ctx, tok); err != nil {
+		t.Fatal(err)
+	}
+	_ = s.Stop(ctx)
+
+	s = newStore(t, "path: "+path)
+	if err := s.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Stop(ctx)
+	if got, _, _ := s.Token(ctx, tok.ID); got != tok {
+		t.Fatalf("scope lost across a restart: %+v", got)
+	}
+}

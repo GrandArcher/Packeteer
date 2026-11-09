@@ -65,6 +65,8 @@ type Options struct {
 	AllowFrom []netip.Prefix
 	Snapshot  func() Snapshot
 	Logger    *slog.Logger
+	// MCP turns on POST /mcp (#302). Nil leaves it out.
+	MCP *MCPOptions
 	// Maintenance is nil when no maintenance policy is configured.
 	Maintenance MaintenanceControl
 	// Reports is nil when no storage plugin is configured.
@@ -183,7 +185,12 @@ type Server struct {
 	// searchRIB is the learned RIB the global search reads (#172). Nil
 	// until SetSearchRIB.
 	searchRIB atomic.Pointer[SearchRIB]
-	searches  searchLimiters
+	searches  callerLimiters
+	// mcpOpt is nil when the MCP endpoint is off (#302).
+	mcpOpt    *MCPOptions
+	mcpLimits callerLimiters
+	// mux is the route table, which the MCP endpoint dispatches into.
+	mux *http.ServeMux
 	// provStats is the per-provider measurement read (GET
 	// /api/providers/stats). Nil until SetProviderStats. It never announces.
 	provStats atomic.Pointer[ProviderStats]
@@ -300,6 +307,11 @@ func New(opt Options) (*Server, error) {
 	if s.user != "" {
 		s.basicFails = auth.NewThrottle(s.log)
 	}
+	if opt.MCP != nil {
+		s.mcpOpt = opt.MCP
+		s.mcpLimits = callerLimiters{every: time.Minute / time.Duration(opt.MCP.RatePerMinute), burst: opt.MCP.RatePerMinute}
+	}
+	s.searches = callerLimiters{every: searchEvery, burst: searchBurst}
 	s.handler = s.routes()
 	return s, nil
 }
@@ -396,6 +408,7 @@ func (s *Server) routes() http.Handler {
 	for _, rt := range s.routeTable() {
 		mux.Handle(rt.pattern, s.guard(rt))
 	}
+	s.mux = mux
 	var h http.Handler = mux
 	if s.user != "" {
 		h = s.withAuth(h)

@@ -57,7 +57,7 @@ func upgradeEnv(t *testing.T, up UpgradeControl) *rbacEnv {
 		if _, err := svc.CreateUser(context.Background(), name, r, name+"-password"); err != nil {
 			t.Fatal(err)
 		}
-		_, tok, err := svc.CreateToken(context.Background(), auth.Principal{User: name, Role: r, Method: auth.MethodPassword}, "test", r, 0)
+		_, tok, err := svc.CreateToken(context.Background(), auth.Principal{User: name, Role: r, Method: auth.MethodPassword}, "test", r, "", 0)
 		if err != nil {
 			t.Fatal(err)
 		}

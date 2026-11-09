@@ -850,6 +850,16 @@ plugin_dir: /etc/packeteer/plugins
 #   public_key: "<base64 Ed25519 public key>"
 #   # check_interval: 24h      # background check, notify only (default off)
 
+# MCP server for AI assistants (#302, docs/mcp.md): POST /mcp with read tools
+# over the REST API, as the signed-in caller. Off unless enabled. A token for
+# it is created with scope "mcp" (POST /api/tokens). Write tools (maintenance
+# windows only) stay off unless write_tools is true and the token has scope
+# "mcp:write". Never announces. Rollback: enabled: false.
+# mcp:
+#   enabled: true
+#   # write_tools: false
+#   # rate_per_minute: 120
+
 # Threat mitigation (#28, lab-proven only; see docs/mitigation.md): RTBH,
 # BGP redirect, and FlowSpec drop / rate-limit / redirect (optionally by
 # source country) for exact learned prefixes, added through POST

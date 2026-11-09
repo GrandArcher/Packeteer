@@ -22,7 +22,10 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     -o /out/packeteer-agent ./cmd/agent \
  && CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" \
-    -o /out/packeteer-policy ./cmd/policy
+    -o /out/packeteer-policy ./cmd/policy \
+ && CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
+    go build -trimpath -ldflags "-s -w" \
+    -o /out/packeteer-mcp ./cmd/mcp
 
 # ---- runtime stage ----
 # Alpine (not distroless) so exec plugins written as shell scripts work in the
@@ -40,6 +43,8 @@ COPY --from=build /out/packeteer-agent /usr/local/bin/packeteer-agent
 # Reference consumer of the external policy feed (#232). Run it next to your
 # own BGP daemon: docker run ... --entrypoint packeteer-policy IMAGE
 COPY --from=build /out/packeteer-policy /usr/local/bin/packeteer-policy
+# stdio transport of the MCP server (#302): docker exec -i CONTAINER packeteer-mcp
+COPY --from=build /out/packeteer-mcp /usr/local/bin/packeteer-mcp
 COPY config.example.yaml /etc/packeteer/config.example.yaml
 
 # Runs as root inside the container: raw ICMP sockets and BGP port 179 need

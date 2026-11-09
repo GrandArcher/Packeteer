@@ -105,6 +105,8 @@ type Principal struct {
 	Role    plugin.Role `json:"role"`
 	Method  string      `json:"method"`
 	TokenID string      `json:"token_id,omitempty"`
+	// Scope is the token's scope ("" for the whole API; see ScopeMCP).
+	Scope string `json:"scope,omitempty"`
 	// Session is true when the request carried a session cookie, which
 	// the caller can end with Logout.
 	Session bool `json:"session,omitempty"`
@@ -450,7 +452,7 @@ func (s *Service) token(ctx context.Context, raw string, now time.Time) (Princip
 	if !role.Valid() {
 		return Principal{}, ErrBadCredentials
 	}
-	return Principal{User: u.Name, Role: role, Method: MethodToken, TokenID: t.ID, MustChange: u.MustChange}, nil
+	return Principal{User: u.Name, Role: role, Method: MethodToken, TokenID: t.ID, Scope: t.Scope, MustChange: u.MustChange}, nil
 }
 
 func (s *Service) session(ctx context.Context, id string, now time.Time) (Principal, error) {
@@ -972,19 +974,29 @@ type TokenView struct {
 	User    string      `json:"user"`
 	Name    string      `json:"name"`
 	Role    plugin.Role `json:"role"`
+	Scope   string      `json:"scope,omitempty"`
 	Created time.Time   `json:"created"`
 	Expires time.Time   `json:"expires"`
 	Expired bool        `json:"expired,omitempty"`
 }
 
 func (s *Service) tokenView(t plugin.APIToken) TokenView {
-	return TokenView{ID: t.ID, User: t.User, Name: t.Name, Role: t.Role, Created: t.Created, Expires: t.Expires, Expired: !s.now().Before(t.Expires)}
+	return TokenView{ID: t.ID, User: t.User, Name: t.Name, Role: t.Role, Scope: t.Scope, Created: t.Created, Expires: t.Expires, Expired: !s.now().Before(t.Expires)}
 }
 
+// Token scopes (#302). A scoped token is refused on every route except
+// POST /mcp. ScopeMCP reaches the read tools only; ScopeMCPWrite also the
+// write tools, still limited by the token's role.
+const (
+	ScopeMCP      = "mcp"
+	ScopeMCPWrite = "mcp:write"
+)
+
 // CreateToken issues a token for p's own user. The role defaults to p's
-// role and may not exceed it. A token cannot create tokens, so a leaked
-// token cannot outlive its own expiry. The secret is returned once.
-func (s *Service) CreateToken(ctx context.Context, p Principal, name string, role plugin.Role, ttl time.Duration) (TokenView, string, error) {
+// role and may not exceed it. scope is "", ScopeMCP, or ScopeMCPWrite. A
+// token cannot create tokens, so a leaked token cannot outlive its own
+// expiry. The secret is returned once.
+func (s *Service) CreateToken(ctx context.Context, p Principal, name string, role plugin.Role, scope string, ttl time.Duration) (TokenView, string, error) {
 	if p.Method == MethodToken {
 		return TokenView{}, "", fmt.Errorf("%w: an API token cannot create tokens; sign in with a password or SSO", ErrForbidden)
 	}
@@ -1003,6 +1015,11 @@ func (s *Service) CreateToken(ctx context.Context, p Principal, name string, rol
 	}
 	if !p.Role.Allows(role) {
 		return TokenView{}, "", fmt.Errorf("%w: a token cannot have a higher role than its user (%s)", ErrForbidden, p.Role)
+	}
+	switch scope {
+	case "", ScopeMCP, ScopeMCPWrite:
+	default:
+		return TokenView{}, "", invalid("scope must be empty, %s, or %s", ScopeMCP, ScopeMCPWrite)
 	}
 	maxTTL := MaxTokenTTL
 	if p.Method == MethodSSO {
@@ -1035,7 +1052,7 @@ func (s *Service) CreateToken(ctx context.Context, p Principal, name string, rol
 		return TokenView{}, "", invalid("user %s already has %d tokens; revoke one first", p.User, MaxTokensPerUser)
 	}
 	secret := randomToken()
-	t := plugin.APIToken{ID: randomHex(8), User: p.User, Name: name, Role: role, Hash: tokenHash(secret), Created: now.UTC(), Expires: now.Add(ttl).UTC()}
+	t := plugin.APIToken{ID: randomHex(8), User: p.User, Name: name, Role: role, Scope: scope, Hash: tokenHash(secret), Created: now.UTC(), Expires: now.Add(ttl).UTC()}
 	if err := s.users.PutToken(ctx, t); err != nil {
 		return TokenView{}, "", fmt.Errorf("%w: %v", ErrUnavailable, err)
 	}

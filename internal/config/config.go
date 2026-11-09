@@ -225,6 +225,9 @@ type Config struct {
 	// the Settings page (#196). Nil or disabled: the page only shows the
 	// running version.
 	Upgrade *Upgrade `yaml:"upgrade"`
+	// MCP is the Model Context Protocol endpoint for AI assistants
+	// (#302). Nil or disabled: POST /mcp does not exist.
+	MCP *MCP `yaml:"mcp"`
 	// Linkouts picks the "open in" links on the prefix, ASN, and provider
 	// pages (#211). Display only; Packeteer requests none of those sites.
 	Linkouts linkout.Config `yaml:"linkouts"`

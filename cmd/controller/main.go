@@ -385,6 +385,9 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 	if u := cfg.Upgrade; u != nil && u.Enabled {
 		fmt.Fprintf(stdout, "upgrade: on (repo %s, dir %s; only an admin's confirmation upgrades, verified against upgrade.public_key)\n", u.Repo, u.Dir)
 	}
+	if m := cfg.MCP; cfg.MCPEnabled() {
+		fmt.Fprintf(stdout, "mcp: on POST /mcp write_tools=%t rate=%d/min (read tools by default; a write tool needs an API token with scope mcp:write)\n", m.WriteTools, m.RatePerMinute)
+	}
 	fmt.Fprintf(stdout, "log: %s %s\n", cfg.Log.Level, cfg.Log.Format)
 	if cfg.HTTPListen() == "" {
 		fmt.Fprintln(stdout, "http: disabled")
@@ -687,7 +690,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		var err error
 		httpSrv, err = httpapi.New(httpapi.Options{
 			Addr: addr, User: httpUser, Password: httpPass, Snapshot: col.Snapshot, Logger: log,
-			Auth: authSvc, Audit: audit, Events: evlog, AllowFrom: cfg.HTTPAllowFrom(),
+			Auth: authSvc, Audit: audit, Events: evlog, AllowFrom: cfg.HTTPAllowFrom(), MCP: mcpOptions(cfg),
 			Maintenance: maint, Reports: reports, Tools: tools, Inbound: inboundStatus, Verification: verificationStatus, Synthetic: syntheticAPI, Mitigation: mitAPI, Anomaly: anomAPI, ThreatFeeds: feedsAPI, Leaks: leakAPI,
 			Federation: fed.status, FederationPush: fedPush, HA: haStatus, Export: exportStats(exp), SourceErrors: plugins.SourceReadErrors,
 			ConfigEditor: editorAPI, FirstRun: firstRunAPI, Dashboards: dashboardStore(plugins), Subscriptions: subsAPI,
@@ -1279,4 +1282,12 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		return 1
 	}
 	return 0
+}
+
+// mcpOptions is the MCP endpoint's setting (#302), nil when mcp is off.
+func mcpOptions(cfg *config.Config) *httpapi.MCPOptions {
+	if !cfg.MCPEnabled() {
+		return nil
+	}
+	return &httpapi.MCPOptions{WriteTools: cfg.MCP.WriteTools, RatePerMinute: cfg.MCP.RatePerMinute}
 }

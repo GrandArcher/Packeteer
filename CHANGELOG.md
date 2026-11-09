@@ -7,6 +7,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 ### Added
 
 - Non-BGP mode: flow-driven static routes for a dual-ISP site whose router has no BGP, with `mikrotik` and `linux` steerers, synthetic prefixes, `/api/synthetic` (#300).
+- MCP server for AI assistants: opt-in `mcp` block, `POST /mcp` with 17 read tools, `packeteer-mcp` stdio bridge, `mcp` and `mcp:write` token scopes, maintenance write tools off by default (#302).
 
 ## [1.0.1] - 2026-11-09
 

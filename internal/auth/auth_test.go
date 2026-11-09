@@ -166,18 +166,18 @@ func TestSSOTokenLifetimeCap(t *testing.T) {
 	sso := Principal{User: "sso-user", Role: plugin.RoleOperator, Method: MethodSSO}
 	pw := Principal{User: "sso-user", Role: plugin.RoleOperator, Method: MethodPassword}
 
-	if _, _, err := s.CreateToken(ctx, sso, "long", "", MaxSSOTokenTTL+time.Hour); !errors.Is(err, ErrInvalid) {
+	if _, _, err := s.CreateToken(ctx, sso, "long", "", "", MaxSSOTokenTTL+time.Hour); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("SSO token over the cap: %v", err)
 	}
-	tv, _, err := s.CreateToken(ctx, sso, "default", "", 0)
+	tv, _, err := s.CreateToken(ctx, sso, "default", "", "", 0)
 	if err != nil || tv.Expires.Sub(tv.Created) != MaxSSOTokenTTL {
 		t.Fatalf("SSO default must fall to the cap: %+v %v", tv, err)
 	}
-	tv, _, err = s.CreateToken(ctx, sso, "short", "", time.Hour)
+	tv, _, err = s.CreateToken(ctx, sso, "short", "", "", time.Hour)
 	if err != nil || tv.Expires.Sub(tv.Created) != time.Hour {
 		t.Fatalf("SSO short token: %+v %v", tv, err)
 	}
-	tv, _, err = s.CreateToken(ctx, pw, "local", "", 30*24*time.Hour)
+	tv, _, err = s.CreateToken(ctx, pw, "local", "", "", 30*24*time.Hour)
 	if err != nil || tv.Expires.Sub(tv.Created) != 30*24*time.Hour {
 		t.Fatalf("a password session keeps the full range: %+v %v", tv, err)
 	}
@@ -191,7 +191,7 @@ func TestTokens(t *testing.T) {
 	ops := Principal{User: "ops", Role: plugin.RoleOperator, Method: MethodPassword}
 	admin := Principal{User: "root", Role: plugin.RoleAdmin, Method: MethodPassword}
 
-	if _, _, err := s.CreateToken(ctx, ops, "x", plugin.RoleAdmin, 0); !errors.Is(err, ErrForbidden) {
+	if _, _, err := s.CreateToken(ctx, ops, "x", plugin.RoleAdmin, "", 0); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("escalation: %v", err)
 	}
 	for _, bad := range []struct {
@@ -199,11 +199,11 @@ func TestTokens(t *testing.T) {
 		role plugin.Role
 		ttl  time.Duration
 	}{{"", "", 0}, {"x", "root", 0}, {"x", "", time.Second}, {"x", "", 2 * MaxTokenTTL}, {"bad\nname", "", 0}} {
-		if _, _, err := s.CreateToken(ctx, ops, bad.name, bad.role, bad.ttl); !errors.Is(err, ErrInvalid) {
+		if _, _, err := s.CreateToken(ctx, ops, bad.name, bad.role, "", bad.ttl); !errors.Is(err, ErrInvalid) {
 			t.Errorf("%+v: %v", bad, err)
 		}
 	}
-	tv, secret, err := s.CreateToken(ctx, ops, "grafana", plugin.RoleViewer, time.Hour)
+	tv, secret, err := s.CreateToken(ctx, ops, "grafana", plugin.RoleViewer, "", time.Hour)
 	if err != nil || !strings.HasPrefix(secret, "pkt_"+tv.ID+"_") || tv.Role != plugin.RoleViewer {
 		t.Fatalf("create: %+v %q %v", tv, secret, err)
 	}
@@ -212,7 +212,7 @@ func TestTokens(t *testing.T) {
 		t.Fatalf("bearer: %+v %v", p, err)
 	}
 	// A token cannot mint tokens.
-	if _, _, err := s.CreateToken(ctx, p, "again", "", 0); !errors.Is(err, ErrForbidden) {
+	if _, _, err := s.CreateToken(ctx, p, "again", "", "", 0); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("token minted a token: %v", err)
 	}
 	// Tampered secret: change the last character, whatever it is.
@@ -224,7 +224,7 @@ func TestTokens(t *testing.T) {
 		t.Fatalf("tampered: %v", err)
 	}
 	// The token's role follows a demoted user.
-	tv2, sec2, _ := s.CreateToken(ctx, ops, "ops-script", "", time.Hour)
+	tv2, sec2, _ := s.CreateToken(ctx, ops, "ops-script", "", "", time.Hour)
 	if tv2.Role != plugin.RoleOperator {
 		t.Fatalf("default role: %+v", tv2)
 	}
@@ -239,7 +239,7 @@ func TestTokens(t *testing.T) {
 	if ts, _ := s.Tokens(ctx, ops); len(ts) != 2 {
 		t.Fatalf("own tokens: %+v", ts)
 	}
-	adminTok, _, _ := s.CreateToken(ctx, admin, "admin-script", "", 0)
+	adminTok, _, _ := s.CreateToken(ctx, admin, "admin-script", "", "", 0)
 	if ts, _ := s.Tokens(ctx, ops); len(ts) != 2 {
 		t.Fatalf("ops sees admin tokens: %+v", ts)
 	}
@@ -265,7 +265,7 @@ func TestTokens(t *testing.T) {
 		t.Fatalf("expired token works: %v", err)
 	}
 	// Deleting the user kills the rest.
-	_, sec3, _ := s.CreateToken(ctx, ops, "late", "", time.Hour)
+	_, sec3, _ := s.CreateToken(ctx, ops, "late", "", "", time.Hour)
 	if err := s.DeleteUser(ctx, "ops"); err != nil {
 		t.Fatal(err)
 	}
@@ -274,11 +274,11 @@ func TestTokens(t *testing.T) {
 	}
 	// Per-user cap.
 	for i := 0; i < MaxTokensPerUser-1; i++ {
-		if _, _, err := s.CreateToken(ctx, admin, "t", "", 0); err != nil {
+		if _, _, err := s.CreateToken(ctx, admin, "t", "", "", 0); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, _, err := s.CreateToken(ctx, admin, "t", "", 0); !errors.Is(err, ErrInvalid) {
+	if _, _, err := s.CreateToken(ctx, admin, "t", "", "", 0); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("cap: %v", err)
 	}
 }
@@ -421,7 +421,7 @@ func TestLocalSession(t *testing.T) {
 		t.Fatalf("session: %+v %v", got, err)
 	}
 	// A local session may mint a token like a basic-auth password does.
-	if _, _, err := s.CreateToken(ctx, got, "t", "", 0); err != nil {
+	if _, _, err := s.CreateToken(ctx, got, "t", "", "", 0); err != nil {
 		t.Fatalf("token from session: %v", err)
 	}
 	// A new password, a new role, or disabling ends the session.
@@ -553,7 +553,7 @@ func TestThrottleSparesValidSessionAndToken(t *testing.T) {
 	if err != nil || cookie == nil {
 		t.Fatalf("sign in: %v", err)
 	}
-	_, raw, err := s.CreateToken(ctx, sp, "script", "", time.Hour)
+	_, raw, err := s.CreateToken(ctx, sp, "script", "", "", time.Hour)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1004,5 +1004,32 @@ func TestChangePassword(t *testing.T) {
 	_ = st.PutUser(ctx, plugin.User{Name: "idp", Role: plugin.RoleViewer, Source: plugin.UserSSO})
 	if err := s.ChangePassword(w, post("192.0.2.9:1"), Principal{User: "idp"}, "x", "a-new-long-password"); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("sso account: %v", err)
+	}
+}
+
+// TestTokenScope: a scope is stored with the token and reaches the
+// Principal, and only the known scopes are accepted (#302).
+func TestTokenScope(t *testing.T) {
+	s, _, _ := newSvc(t, nil)
+	ctx := context.Background()
+	if _, err := s.CreateUser(ctx, "noc", plugin.RoleOperator, "operator-password"); err != nil {
+		t.Fatal(err)
+	}
+	op := Principal{User: "noc", Role: plugin.RoleOperator, Method: MethodPassword}
+	if _, _, err := s.CreateToken(ctx, op, "bad", "", "admin", time.Hour); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("unknown scope: %v", err)
+	}
+	for _, scope := range []string{"", ScopeMCP, ScopeMCPWrite} {
+		tv, raw, err := s.CreateToken(ctx, op, "t-"+scope, "", scope, time.Hour)
+		if err != nil || tv.Scope != scope {
+			t.Fatalf("scope %q: %+v %v", scope, tv, err)
+		}
+		r := httptest.NewRequest(http.MethodGet, "/api/overview", nil)
+		r.RemoteAddr = "192.0.2.9:1"
+		r.Header.Set("Authorization", "Bearer "+raw)
+		p, err := s.Authenticate(r)
+		if err != nil || p.Scope != scope || p.Method != MethodToken {
+			t.Fatalf("scope %q: principal %+v %v", scope, p, err)
+		}
 	}
 }

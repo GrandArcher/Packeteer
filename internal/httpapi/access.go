@@ -44,7 +44,11 @@ func (s *Server) routeTable() []route {
 		admin    = plugin.RoleAdmin
 	)
 	files := http.FileServer(http.FS(webRoot))
-	return []route{
+	mcpRoutes := []route{}
+	if s.mcpOpt != nil {
+		mcpRoutes = append(mcpRoutes, route{patternMCP, viewer, s.handleMCP})
+	}
+	return append(mcpRoutes, []route{
 		{"GET /healthz", public, s.handleHealth},
 		{"GET /readyz", public, s.handleReady},
 		{"GET /metrics", viewer, s.handleMetrics},
@@ -167,8 +171,11 @@ func (s *Server) routeTable() []route {
 		{"GET /ixp/member/", viewer, serveFile("ixp-member.html")},
 		{"GET /ixp/sites", viewer, serveFile("ixp-sites.html")},
 		{"GET /", viewer, files.ServeHTTP},
-	}
+	}...)
 }
+
+// patternMCP is the one route a scoped token may reach (#302).
+const patternMCP = "POST /mcp"
 
 // codePasswordChange is the error code of a request refused because the
 // account must change its password first (#328). The UI sends the user to
@@ -231,7 +238,9 @@ func (s *Server) guard(rt route) http.Handler {
 			return
 		}
 		ctx := context.WithValue(r.Context(), principalKey{}, p)
-		if !unsafeMethod(r.Method) || rt.role == "" {
+		// POST /mcp carries reads too; each write it dispatches is audited
+		// as its own REST call.
+		if !unsafeMethod(r.Method) || rt.role == "" || rt.pattern == patternMCP {
 			rt.h(w, r.WithContext(ctx))
 			return
 		}
@@ -269,6 +278,9 @@ func (s *Server) record(r *http.Request, p auth.Principal, action, target, detai
 	if actor == "" {
 		actor = "anonymous"
 	}
+	if _, ok := delegated(r.Context()); ok {
+		detail = strings.TrimSpace("via mcp " + detail)
+	}
 	s.audit.Record(r.Context(), plugin.AuditRecord{
 		Actor: actor, Role: p.Role, Method: p.Method, Remote: remoteString(r), Action: action,
 		Target: target, Result: result, Status: status, Detail: detail,
@@ -296,7 +308,16 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request, rt route) (au
 	if rt.role == "" {
 		return auth.Principal{}, true
 	}
-	p, err := s.auth.Authenticate(r)
+	var p auth.Principal
+	var err error
+	d, viaMCP := delegated(r.Context())
+	if viaMCP {
+		// handleMCP authenticated the caller and gated the write tools on
+		// its scope; the route's role check below still applies.
+		p = d
+	} else {
+		p, err = s.auth.Authenticate(r)
+	}
 	switch {
 	case err == nil:
 	case errors.Is(err, auth.ErrThrottled), errors.Is(err, auth.ErrBusy):
@@ -314,6 +335,13 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request, rt route) (au
 		}
 		w.Header().Set("WWW-Authenticate", `Basic realm="packeteer"`)
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return p, false
+	}
+	if p.Scope != "" && !viaMCP && rt.pattern != patternMCP {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden: a token with scope " + p.Scope + " works only on POST /mcp"})
+		if unsafeMethod(r.Method) {
+			s.record(r, p, rt.pattern, "", "token scope "+p.Scope, http.StatusForbidden)
+		}
 		return p, false
 	}
 	if p.MustChange && rt.pattern != "GET /api/me" && rt.pattern != "POST /api/account/password" {
@@ -560,7 +588,9 @@ func (s *Server) handleUserDelete(w http.ResponseWriter, r *http.Request) {
 type tokenRequest struct {
 	Name string      `json:"name"`
 	Role plugin.Role `json:"role"`
-	TTL  string      `json:"ttl"`
+	// Scope is "", "mcp", or "mcp:write" (#302).
+	Scope string `json:"scope"`
+	TTL   string `json:"ttl"`
 }
 
 func (s *Server) handleTokens(w http.ResponseWriter, r *http.Request) {
@@ -592,13 +622,13 @@ func (s *Server) handleTokenCreate(w http.ResponseWriter, r *http.Request) {
 		}
 		ttl = d
 	}
-	t, secret, err := s.auth.CreateToken(r.Context(), principalFrom(r.Context()), req.Name, req.Role, ttl)
+	t, secret, err := s.auth.CreateToken(r.Context(), principalFrom(r.Context()), req.Name, req.Role, req.Scope, ttl)
 	if err != nil {
 		s.writeAuthError(w, err)
 		return
 	}
 	// The secret is never written to the audit log.
-	noteAudit(r, t.ID, "name="+t.Name+" role="+string(t.Role)+" expires="+t.Expires.Format(time.RFC3339))
+	noteAudit(r, t.ID, "name="+t.Name+" role="+string(t.Role)+" scope="+t.Scope+" expires="+t.Expires.Format(time.RFC3339))
 	writeJSON(w, http.StatusCreated, struct {
 		auth.TokenView
 		Token string `json:"token"`

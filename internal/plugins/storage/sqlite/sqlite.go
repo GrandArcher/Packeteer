@@ -217,6 +217,7 @@ CREATE TABLE IF NOT EXISTS api_tokens (
 	user_name TEXT NOT NULL,
 	name TEXT NOT NULL,
 	role TEXT NOT NULL,
+	scope TEXT NOT NULL DEFAULT '',
 	hash TEXT NOT NULL,
 	created_ms INTEGER NOT NULL,
 	expires_ms INTEGER NOT NULL
@@ -282,25 +283,30 @@ CREATE TABLE IF NOT EXISTS provider_samples (
 );
 `
 
-// addMustChange adds users.must_change to a database created before #328.
-func addMustChange(ctx context.Context, db *sql.DB) error {
+// addColumn adds a column to a table created before the column existed.
+func addColumn(ctx context.Context, db *sql.DB, table, column, ddl string) error {
 	var n int
-	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('users') WHERE name = 'must_change'`).Scan(&n); err != nil || n > 0 {
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?`, table, column).Scan(&n); err != nil || n > 0 {
 		return err
 	}
-	_, err := db.ExecContext(ctx, `ALTER TABLE users ADD COLUMN must_change INTEGER NOT NULL DEFAULT 0`)
+	_, err := db.ExecContext(ctx, `ALTER TABLE `+table+` ADD COLUMN `+column+` `+ddl)
 	return err
 }
 
-// addImprovementExplain adds improvements.explain to a database created
-// before #201.
-func addImprovementExplain(ctx context.Context, db *sql.DB) error {
-	var n int
-	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('improvements') WHERE name = 'explain'`).Scan(&n); err != nil || n > 0 {
-		return err
+// addColumns brings a database created by an earlier version up to date:
+// users.must_change (#328), improvements.explain (#201), and
+// api_tokens.scope (#302).
+func addColumns(ctx context.Context, db *sql.DB) error {
+	for _, c := range [][3]string{
+		{"users", "must_change", "INTEGER NOT NULL DEFAULT 0"},
+		{"improvements", "explain", "TEXT NOT NULL DEFAULT ''"},
+		{"api_tokens", "scope", "TEXT NOT NULL DEFAULT ''"},
+	} {
+		if err := addColumn(ctx, db, c[0], c[1], c[2]); err != nil {
+			return err
+		}
 	}
-	_, err := db.ExecContext(ctx, `ALTER TABLE improvements ADD COLUMN explain TEXT NOT NULL DEFAULT ''`)
-	return err
+	return nil
 }
 
 // addImprovementSource adds improvements.source to a database created
@@ -340,11 +346,7 @@ func (s *Store) Start(ctx context.Context) error {
 		_ = db.Close()
 		return fmt.Errorf("open %s: %w", s.path, err)
 	}
-	if err := addMustChange(ctx, db); err != nil {
-		_ = db.Close()
-		return fmt.Errorf("open %s: %w", s.path, err)
-	}
-	if err := addImprovementExplain(ctx, db); err != nil {
+	if err := addColumns(ctx, db); err != nil {
 		_ = db.Close()
 		return fmt.Errorf("open %s: %w", s.path, err)
 	}

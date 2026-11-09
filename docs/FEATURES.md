@@ -20,6 +20,7 @@ Milestones:
 - **v0.9**: evidence and explanations (decision checks, probe confidence, steer verification, reordering, the `https` prober, probe agents, `probe.exclude`), registries (RPKI and IRR per provider path, registry hygiene, NetBox and Peering Manager), outputs (exporters, an SNMP agent, syslog, an external policy feed, BMP alone), plugin work (gRPC plugins, the author guide), opt-in outside sources (herd page, Atlas, NLNOG RING, threat feeds, GeoIP), MED and overload protection, `synthesize`, and the UI refresh. Lab only; partial rows say what is missing.
 - **v1.0**: no new rows. The pre-release audit and review pass over v0.9 (#486-#494, #501-#510, review #215): fixes to the allowlist and announce path, the BMP, flow, and policy-feed inputs, sign-in, probe agents, HA, and the signed upgrade, and probe and RIB cost at 100k targets. The counts below are unchanged. Lab only; nothing is field-proven (#54).
 - **v1.0.1**: no new rows. A patch with the post-v1.0 hardening fixes (#527-#536). The counts below are unchanged. Lab only; nothing is field-proven (#54).
+- **v1.1**: assistant access. An MCP server over the REST API for AI assistants (#302). The counts below include its row.
 
 ## Summary
 
@@ -33,13 +34,14 @@ Milestones:
 | v0.7 | 3 | 3 |
 | v0.8 | 20 | 16 |
 | v0.9 | 32 | 28 |
+| v1.1 | 1 | 0 |
 | won't do | 2 | - |
-| **total** | 143 | 130 |
+| **total** | 144 | 130 |
 
 | Status | Count |
 |---|---|
 | done | 130 |
-| partial | 11 |
+| partial | 12 |
 | in progress | 0 |
 | planned | 0 |
 | won't do | 2 |
@@ -384,6 +386,7 @@ Threat-intelligence feed ingest (#134, [threat-feeds.md](threat-feeds.md)): `thr
 | Configuration editor and setup wizards | partial: the YAML editor covers every key. The settings form covers providers, static targets, the allowlist, the decision knobs, and, since #130 and #226, every `flow`, `vip`, and `outage` source and every `rules` policy (add, remove, reorder; `flow` aggregate lengths and a policy `geoip_db` path), and, since #181, every `exchanges` entry with its peers and an Accept for each discovered LAN member (#155); the wizard has an optional flow collector step (#130). Since #131 it also covers the `inbound` block and `anomaly.rules` (observe and suggest only; inject stays a YAML edit with `confirm_inject`), and the Protection page has an add and remove form for mitigation rules over the existing API, with a learned-RIB prefix picker. Since #174 a Commit setup walks the scorer, SNMP hosts, per-provider commit and telemetry binding, groups, and precedence (observe unchanged; a new host names the environment variable of its community, never the community). Federation stays YAML-only. Provider fields have a visible label (#171). Since #329 the same fields are guided inputs (a number and a unit, one prefix per row, dropdowns that stay free text when no list is known) and an unchanged Apply stays byte-identical. A more-specific anomaly prefix is listed and removable, a prefix outside the allowlist is marked until removed, and a peer AS typed with an AS prefix is stored as a number. Since #344 Save applies pending form edits first, names each changed key (old -> new), and a sticky bar flags unsaved changes. Since #330 the YAML-only parts are forms too (scorer, SNMP v2c and v3 hosts, bgp, BMP, maintenance, flow problems/transit/subranges, the inbound announcer, the anomaly detector, mitigation, plugins, http), Preview shows the diff and the restart list before Save, and the raw YAML is under Advanced; inbound and mitigation inject and exec plugins stay YAML edits. Since #350 no field shows an example or a default as its content (examples are help text, defaults read "Default: X"), the wizard starts from the running config, and its provider rows take a provider AS, a type, and an IPv6 pair. Since #416, with `http.config_editor` unset and only the example providers (192.0.2.0/24) in the config, the editor and wizard are on for an admin while the persisted first-run setup is pending (until a save or Skip setup, and the next restart), and the dashboard opens the wizard after the first password change; settings push still needs an explicit `true`. Since #345 the wizard collapses on a configured box and, over an existing config, shows a diff and what is lost before the editor changes, keeping `auth`, `http`, `storage`, and other blocks | v0.4 | core (`internal/configedit`, `/api/config`, `/api/config/wizard`, `/settings.html`; admin role) ([ui.md](ui.md)) | #34, #131, #155, #171, #174, #181, #226, #329, #330, #344, #345, #350, #416 | no |
 | Improvement weights | done (lab-proven) | v0.4 | scorer (`weighted`, `commit`, `cost`: `improvement_weights`, `plugin.ImprovementWeigher`) ([ui.md](ui.md)) | #34 | no (lab-proven) |
 | Structured logging | done | v0.1 | core | #9 | no |
+| MCP server for AI assistants ([mcp.md](mcp.md)) | partial (#302): `POST /mcp` (opt-in `mcp.enabled`) and the `packeteer-mcp` stdio bridge serve 17 read tools over the REST API (health, links, prefixes, decisions and why, search, events, anomalies, leaks, herd and outside-intel views) with the caller's own role, a rate limit, and no secret or per-vantage herd endpoint. Write tools are off by default (`mcp.write_tools`) and need an `mcp:write` token scope; only maintenance windows exist (`maintenance_open`, `maintenance_close`). Pin/unpin, pause/resume, and alert acknowledgement are not built: the REST API has no such endpoint. Never announces | v1.1 | - (HTTP API) | #302 | no |
 
 Remaining UI features (#34, [ui.md](ui.md)). **Improvement weights**: the `weighted`, `commit`, and `cost` scorers take an optional `improvement_weights` block (`performance`, default 1; `volume`, default 0). When it is set, new static, VIP, and performance moves competing for the last `max_improvements` slots are admitted by `performance x score gain + volume x Mbps` instead of by gain alone, inside their lane (static pins still first; commit and cost moves keep relief and savings order).
 
