@@ -121,13 +121,22 @@ echo "transit-b is faster: one Packeteer path via 192.0.2.2"
 wait_via 192.0.2.2
 
 echo "logging every UPDATE the edge receives"
-out=$(vtysh -c 'configure terminal' -c "log file $updates_log debugging" -c 'end' -c 'debug bgp updates in' 2>&1) || {
+# This step once failed with no message under set -e; retry and report the
+# vtysh error instead. AppArmor unload above (#547) is what makes the open
+# succeed on ubuntu-26.04; the dump below is for any leftover setup failure.
+dbg=
+for _ in $(seq 1 10); do
+	if out=$(vtysh -c 'configure terminal' -c "log file $updates_log debugging" -c 'end' -c 'debug bgp updates in' 2>&1); then
+		dbg=$(vtysh -c 'show debugging' 2>&1 || true)
+		[[ "$dbg" == *"updates"* ]] && break
+	fi
+	sleep 1
+done
+if [[ "$dbg" != *"updates"* ]]; then
 	echo "---- edge log setup ----" >&2
 	"${compose[@]}" exec -T edge sh -c 'id; ls -ld /tmp; ps -o user,args; for p in /proc/[0-9]*; do c=$(tr "\0" " " < "$p/cmdline" 2>/dev/null || true); case "$c" in *bgpd*|*staticd*|*zebra*|*mgmtd*) printf "%s\n" "$c"; printf "aa: "; cat "$p/attr/current" 2>/dev/null || printf "(none)"; printf "\n"; esac; done' >&2 || true
-	fail "FRR update log setup failed: $out"
-}
-dbg=$(vtysh -c 'show debugging' 2>&1 || true)
-[[ "$dbg" == *"updates"* ]] || fail "FRR update debugging did not turn on: $dbg"
+	fail "FRR update debugging did not turn on: ${out:-} $dbg"
+fi
 
 echo "transit-c becomes faster: the improvement moves"
 flip lab/probes/move-c.yaml
