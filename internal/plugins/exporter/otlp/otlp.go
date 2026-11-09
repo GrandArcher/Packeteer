@@ -108,6 +108,11 @@ func New(c plugin.Config, e plugin.Env) (plugin.Exporter, error) {
 		}
 		hdr.Set(k, val)
 	}
+	if len(cfg.Headers) > 0 {
+		if err := sinkcfg.TokenURL(u); err != nil {
+			return nil, fmt.Errorf("endpoint %w", err)
+		}
+	}
 	return &Exporter{base: *u, streams: streams, headers: hdr, service: cfg.ServiceName, started: time.Now(),
 		client: &http.Client{Transport: &http.Transport{TLSClientConfig: tlsConf}, CheckRedirect: outbound.SameHost}}, nil
 }

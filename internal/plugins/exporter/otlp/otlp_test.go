@@ -55,6 +55,20 @@ func TestConfigValidation(t *testing.T) {
 	}
 }
 
+// A header can carry a token, so it needs https or a loopback collector (#535).
+func TestHeadersNeedHTTPS(t *testing.T) {
+	hdr := "headers: {Authorization: \"Bearer ${PACKETEER_OTLP_TOKEN}\"}\n"
+	_, err := build(t, "endpoint: http://collector.example.net:4318\n"+hdr)
+	if err == nil || !strings.Contains(err.Error(), "endpoint must be https when a token is sent") {
+		t.Fatalf("http with a header: err = %v", err)
+	}
+	for _, ok := range []string{"https://collector.example.net:4318", "http://127.0.0.1:4318", "http://[::1]:4318", "http://localhost:4318"} {
+		if _, err := build(t, "endpoint: "+ok+"\n"+hdr); err != nil {
+			t.Errorf("%s with a header: %v", ok, err)
+		}
+	}
+}
+
 type sentSpan struct {
 	TraceID      string `json:"traceId"`
 	SpanID       string `json:"spanId"`

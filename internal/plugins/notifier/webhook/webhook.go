@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/outbound"
+	"github.com/GrandArcher/Packeteer/internal/plugins/exporter/sinkcfg"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -165,6 +166,13 @@ func New(c plugin.Config, e plugin.Env) (plugin.Notifier, error) {
 			return nil, fmt.Errorf("header %s: %w", k, err)
 		}
 		h.Set(k, val)
+	}
+	// A header, a PagerDuty routing key, userinfo (sent as basic auth), or
+	// a URL built from a variable is a secret on the wire (#535).
+	if len(cfg.Headers) > 0 || n.routingKey != "" || u.User != nil || raw != cfg.URL {
+		if err := sinkcfg.TokenURL(u); err != nil {
+			return nil, fmt.Errorf("url %w", err)
+		}
 	}
 	h.Set("Content-Type", ctype)
 	n.headers = h

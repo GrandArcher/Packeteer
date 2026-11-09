@@ -97,6 +97,35 @@ func TestConfigValidation(t *testing.T) {
 	}
 }
 
+// A header, a PagerDuty routing key, userinfo, or a URL from a variable is a secret,
+// so plain http is refused unless the receiver is on loopback (#535).
+func TestSecretsNeedHTTPS(t *testing.T) {
+	env := map[string]string{"PACKETEER_WEBHOOK_TOKEN": "abc", "PD_KEY": "lab",
+		"PACKETEER_WEBHOOK_URL": "http://hooks.example.net/services/T000/secret"}
+	const want = "url must be https when a token is sent"
+	for name, y := range map[string]string{
+		"header":       "url: http://hooks.example.net/x\nheaders: {Authorization: \"Bearer ${PACKETEER_WEBHOOK_TOKEN}\"}",
+		"routing key":  "preset: pagerduty\nrouting_key_env: PD_KEY\nurl: http://events.example.net/v2/enqueue",
+		"url variable": "preset: slack\nurl: ${PACKETEER_WEBHOOK_URL}",
+		"userinfo":     "url: http://u:p@hooks.example.net/x",
+	} {
+		if _, err := newWithEnv(t, y, env); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: err = %v, want %q", name, err, want)
+		}
+	}
+	for name, y := range map[string]string{
+		"no secret":         "url: http://hooks.example.net/x",
+		"https header":      "url: https://hooks.example.net/x\nheaders: {Authorization: \"Bearer ${PACKETEER_WEBHOOK_TOKEN}\"}",
+		"loopback header":   "url: http://127.0.0.1:8080/x\nheaders: {Authorization: \"Bearer ${PACKETEER_WEBHOOK_TOKEN}\"}",
+		"loopback key":      "preset: pagerduty\nrouting_key_env: PD_KEY\nurl: http://[::1]:8080/v2/enqueue",
+		"default PagerDuty": "preset: pagerduty\nrouting_key_env: PD_KEY",
+	} {
+		if _, err := newWithEnv(t, y, env); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}
+
 // A receiver that redirects to another host gets no delivery from there:
 // the token header stays on the configured host (#489).
 func TestRedirectToAnotherHostRefused(t *testing.T) {

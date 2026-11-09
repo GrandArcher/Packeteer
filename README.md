@@ -351,6 +351,10 @@ Pulling a newer image and recreating the container is the plain upgrade. Your co
 
 The Settings page can also upgrade in place (#196). It is off by default. It needs `upgrade.enabled: true`, the release public key in `upgrade.public_key` ([CONFIG.md](docs/CONFIG.md#upgrade)), an admin login (auth or basic auth), and the `packeteer-data` volume to keep the new version across restarts. The public key is printed in the [v0.6.0 release notes](https://github.com/GrandArcher/Packeteer/releases/tag/v0.6.0). Every route is withdrawn before the switch, and a release whose signature or checksum does not match is refused. Details: [docs/ui.md](docs/ui.md#upgrade-from-the-ui).
 
+### From 1.0.0 to 1.0.1
+
+- An `otlp` exporter with `headers`, and a webhook with `headers`, `routing_key_env`, userinfo, or a variable in `url`, now need an `https` URL; `http` is only for a loopback host. Run `-check` before the upgrade (#535).
+
 ### From 0.9 to 1.0
 
 - No config key was renamed. Some configs that 0.9 loaded are now refused or behave differently, so run `docker run --rm -v "$PWD/config.yaml:/etc/packeteer/config.yaml:ro" ghcr.io/grandarcher/packeteer:<new tag> -check` first. The default stays `mode: observe` and sign-in stays on by default.

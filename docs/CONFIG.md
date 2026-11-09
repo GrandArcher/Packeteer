@@ -1610,7 +1610,7 @@ curl -u "$USER:$PASS" -X DELETE http://127.0.0.1:8080/api/maintenance/api-1
 | | `username_env`, `password_env` | none | Both or neither; need `tls: true`. |
 | `otlp` | `endpoint` | required | OTLP/HTTP base URL, for example `http://collector.example.net:4318`; `/v1/traces`, `/v1/logs`, and `/v1/metrics` are added. A redirect to another host is refused. |
 | | `streams` | `decisions` | Any of `decisions` (spans), `events` (log records), `metrics`. |
-| | `headers` | none | Request headers; values may use `${PACKETEER_OTLP_*}` variables, and any other or unset variable is an error. |
+| | `headers` | none | Request headers; values may use `${PACKETEER_OTLP_*}` variables, and any other or unset variable is an error. With any header set, `endpoint` must be `https` (`http` only to a loopback host, #535). |
 | | `ca_file` | system roots | PEM for an `https` endpoint. |
 | | `service_name` | `packeteer` | The `service.name` resource attribute. |
 | `influxdb` | `url` | required | Server base URL, for example `https://influxdb.example.net:8086`; points go to `/api/v2/write`. `http` only to a loopback host, as the token is sent (#504). |
@@ -1646,7 +1646,7 @@ Every notifier, including `exec` and `grpc`, accepts these keys next to its own.
 |---|---|---|
 | `url` | none | Required absolute `http` or `https` URL, except for `preset: pagerduty`. `${PACKETEER_WEBHOOK_*}` variables expand from the environment, so a Slack or Teams URL that is itself a secret stays out of the file; any other or unset variable is an error. A redirect to another host is refused. |
 | `timeout` | `5s` | Not negative. |
-| `headers` | none | Extra request headers. Values expand `${PACKETEER_WEBHOOK_*}` variables, as for `url`. |
+| `headers` | none | Extra request headers. Values expand `${PACKETEER_WEBHOOK_*}` variables, as for `url`. With any header, a `routing_key_env`, userinfo, or a variable in `url`, the URL must be `https` (`http` only to a loopback host, #535). |
 | `preset` | `generic` | `generic` (the event as JSON), `slack` (`{"text": ...}` for an incoming webhook), `teams` (a MessageCard for an incoming webhook), or `pagerduty` (Events API v2). |
 | `routing_key_env` | none | `pagerduty` only, and required there: the name of the environment variable holding the integration key. `url` defaults to `https://events.pagerduty.com/v2/enqueue`. Problems `trigger`; resolving kinds `resolve` the same `dedup_key`. |
 | `template` | none | A Go `text/template` for the body instead of a preset, for SMS and other gateways. The data is the event (`.Kind`, `.Severity`, `.Message`, `.Time`, `.Fields`); functions `json` (quote a string) and `upper`. At most 16 KiB. Only with `preset: generic`. |
