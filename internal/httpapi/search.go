@@ -196,14 +196,17 @@ type SearchResponse struct {
 	Rollups         searchGroup[history.SearchRollup]      `json:"rollups"`
 }
 
-// searchLimiters is a token bucket per caller, so one client cannot use
-// the history store up for the rest.
-type searchLimiters struct {
-	mu sync.Mutex
-	by map[string]*rate.Limiter
+// callerLimiters is a token bucket per caller (a caller gets burst calls
+// at once, then one per every), so one client cannot use a shared store
+// up for the rest. searchCallers bounds the callers tracked.
+type callerLimiters struct {
+	every time.Duration
+	burst int
+	mu    sync.Mutex
+	by    map[string]*rate.Limiter
 }
 
-func (l *searchLimiters) allow(key string) bool {
+func (l *callerLimiters) allow(key string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	lim := l.by[key]
@@ -211,7 +214,7 @@ func (l *searchLimiters) allow(key string) bool {
 		if len(l.by) >= searchCallers {
 			// Forget callers that have their whole burst back: they are idle.
 			for k, v := range l.by {
-				if v.Tokens() >= searchBurst {
+				if v.Tokens() >= float64(l.burst) {
 					delete(l.by, k)
 				}
 			}
@@ -222,7 +225,7 @@ func (l *searchLimiters) allow(key string) bool {
 		if l.by == nil {
 			l.by = map[string]*rate.Limiter{}
 		}
-		lim = rate.NewLimiter(rate.Every(searchEvery), searchBurst)
+		lim = rate.NewLimiter(rate.Every(l.every), l.burst)
 		l.by[key] = lim
 	}
 	return lim.Allow()

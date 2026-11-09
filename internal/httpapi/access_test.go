@@ -57,7 +57,7 @@ func newRBAC(t *testing.T, sso plugin.SSO, allow ...string) *rbacEnv {
 		if _, err := svc.CreateUser(ctx, name, r, name+"-password"); err != nil {
 			t.Fatal(err)
 		}
-		_, tok, err := svc.CreateToken(ctx, auth.Principal{User: name, Role: r, Method: auth.MethodPassword}, "test", r, 0)
+		_, tok, err := svc.CreateToken(ctx, auth.Principal{User: name, Role: r, Method: auth.MethodPassword}, "test", r, "", 0)
 		if err != nil {
 			t.Fatal(err)
 		}

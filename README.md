@@ -190,6 +190,7 @@ Leave graceful restart off on the session. Guides:
 - [docs/multi-pop.md](docs/multi-pop.md) - several POPs (routing domains) federated over mutual TLS: inter-DC RTT in the path cost, global commit across POPs, and the central view. Lab-proven only
 - [docs/external-policy.md](docs/external-policy.md) - publish the routes inject would announce for your own BGP daemon (BIRD, OpenBGPD, ExaBGP) instead of peering Packeteer as an announcer; TLS, token, TTL. Lab-proven with BIRD
 - [docs/agents.md](docs/agents.md) - probe agents you run inside your own network (other POPs, sites), controlled by one controller over mutual TLS with per-agent identity and revocation. Probing only. Tested in process and in a Docker lab with two agents
+- [docs/mcp.md](docs/mcp.md) - an MCP server so AI assistants can read Packeteer through its REST API: read tools by default, write tools off, a token scope for each, stdio and HTTP
 - [docs/leak-watch.md](docs/leak-watch.md) - how Packeteer keeps its routes inside your AS: the rails, and `leak_watch`, which withdraws and holds out a route seen outside the AS. Lab-proven only
 - [docs/precedence.md](docs/precedence.md) - which surface owns a prefix when mitigation, inbound, outbound, a leak hold, flap quarantine, and HA all want it, how the shared cap is spent, and which test proves each pair
 - [docs/policy-routing.md](docs/policy-routing.md) - probe sources behind the router
@@ -322,7 +323,7 @@ Symptoms, log lines, and fixes: [docs/troubleshooting.md](docs/troubleshooting.m
 
 ## Features
 
-Status on main for the 1.0.1 release, capability rows per milestone and how many are done, from the summary in [docs/FEATURES.md](docs/FEATURES.md#summary):
+Status on main after the 1.0.1 release, capability rows per milestone and how many are done, from the summary in [docs/FEATURES.md](docs/FEATURES.md#summary):
 
 | Milestone | Rows | Done |
 |---|---|---|
@@ -334,8 +335,9 @@ Status on main for the 1.0.1 release, capability rows per milestone and how many
 | v0.7 | 3 | 3 |
 | v0.8 | 20 | 16 |
 | v0.9 | 31 | 28 |
+| v1.1 | 1 | 0 |
 | won't do | 2 | - |
-| **Total** | 142 | 130 |
+| **Total** | 143 | 130 |
 
 v0.1 is the outbound loop: probes, static and flow targets, an iBGP RIB, scoring with hysteresis, optional injection, the read-only UI and API, the container, and the FRR lab. v0.2 adds cost and commit control, SNMP, policies, alerts, and reports. v0.3 adds inbound optimization, BMP and add-path, multiple routers and IX, RTBH/FlowSpec mitigation, transit classification, and capped more-specific injection, all lab-proven. v0.4 adds multi-POP federation, active/standby HA and backup, RBAC/SSO/audit, flow-baseline anomaly detection that mitigates only on explicit rules, and the remaining UI rows. v0.5 is hardening on that matrix: dashboard clarity and a first-run checklist, CI-tested install and walkthrough docs, load and soak budgets, a MikroTik CHR lab in CI, and a scheduled router interop matrix. Field feedback from real observe-mode deployments (#54) is still open. v0.6 closes the gaps from the 2026-10-07 review of prefix selection, measurement, and the UI, adds flap quarantine, live apply, scale budgets up to multi-million path tables, upgrade from the UI, and a failure-mode e2e matrix. v0.7 adds exchange (IX) visibility for an edge network: an exchange view, IX LAN health probes, route-server vs bilateral prefix views, offload and potential-peers reports, dashboard widgets, Commit & Cost, Reports, search, System, and maintenance pages, and link-outs.
 

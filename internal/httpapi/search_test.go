@@ -397,7 +397,7 @@ func TestSearchIsRateLimitedPerCaller(t *testing.T) {
 }
 
 func TestSearchLimiterForgetsIdleCallersAndStaysBounded(t *testing.T) {
-	var l searchLimiters
+	l := callerLimiters{every: searchEvery, burst: searchBurst}
 	for i := range searchCallers {
 		if !l.allow(strconv.Itoa(i)) {
 			t.Fatalf("caller %d refused", i)

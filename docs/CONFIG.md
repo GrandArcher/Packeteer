@@ -71,6 +71,7 @@ The image entrypoint is the same binary. Flags go after the image name.
 | `anomaly` | none | no | Automatic traffic anomaly (DDoS) detection: a detector plugin baselines flow volumes per destination prefix and IP protocol from a `flow` source and reports anomalies; an explicit rule can turn one into a mitigation rule, rate-limited and capped. Needs `mitigation` for rules. Off unless set. See [`anomaly`](#anomaly). Lab-proven only. |
 | `threat_feeds` | none | no | Threat-intelligence feed ingest (#134): feed plugins fetch lists of networks; an explicit rule turns a listed network into a mitigation rule, rate-limited and capped. Needs `mitigation`. Off unless set. See [`threat_feeds`](#threat_feeds). Lab-proven only. |
 | `upgrade` | off | no | Version check, one-click upgrade, and rollback in Settings (#196). Needs `public_key`. See [`upgrade`](#upgrade). Never upgrades without an admin's confirmation; does not announce. |
+| `mcp` | off | no | MCP server for AI assistants: `POST /mcp`, read tools by default (#302). See [`mcp`](#mcp) and [mcp.md](mcp.md). Never announces. |
 | `leak_watch` | none | no | Watches for Packeteer's routes outside the AS and withdraws a leaked route (one prefix, never in bulk), holding it out until an operator clears it. Off unless `enabled: true`. See [`leak_watch`](#leak_watch) and [leak-watch.md](leak-watch.md). Lab-proven only. |
 | `linkouts` | defaults | no | Which "open in" links the prefix, ASN, and provider pages show, custom URL templates, and `hide_internal` (#211). Display only; Packeteer requests none of those sites. See [`linkouts`](#linkouts). |
 | `report_subscriptions` | none | no | Stored reports emailed as CSV on a daily, weekly, or monthly UTC schedule through an `smtp` notifier (#34). Needs `storage`. See [`report_subscriptions`](#report_subscriptions). Does not announce. |
@@ -1009,6 +1010,21 @@ xbP7Os7YIqfBhu36+E+WK0xvTizFyPROA1QCAseqEkA=
 Each release carries `SHA256SUMS` (a `# packeteer <version>` line, then the SHA-256 of every binary) and `SHA256SUMS.sig`, a base64 Ed25519 signature over `SHA256SUMS`. The upgrade checks the signature against `upgrade.public_key`, that the version line names the release being installed (#493), then the binary against its `SHA256SUMS` entry. The same key is listed in each release's notes; compare it with this page before you pin it.
 
 Key rotation: a new key is announced in the release notes and this page at least one release before it is used. During the change, update `upgrade.public_key`; a release signed with a key you have not pinned is refused and nothing changes. If a key is ever compromised, the notes say so, the old key must be removed, and releases signed with it are not trusted.
+
+### `mcp`
+
+Model Context Protocol endpoint for AI assistants (#302, [mcp.md](mcp.md)). Off unless `enabled: true`. It is a layer over the REST API with the caller's own role, so it adds no way to change what Packeteer announces. Every key is checked at load, and unknown keys are errors. Changes need a restart.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `enabled` | `false` | Serves `POST /mcp` on `http.listen` with the 17 read tools. |
+| `write_tools` | `false` | Also lists the write tools (`maintenance_open`, `maintenance_close`) to a token with the `mcp:write` scope and a role that may call the matching REST route. Needs `enabled`, and `auth` for the scoped token. |
+| `rate_per_minute` | `120` | Requests per user per minute, 1 to 6000. Past it `POST /mcp` answers `429`. |
+
+```yaml
+mcp:
+  enabled: true
+```
 
 ### Multi-POP (federation)
 

@@ -48,7 +48,7 @@ func TestFederationPushIsAdminOnly(t *testing.T) {
 		if _, err := svc.CreateUser(context.Background(), name, r, name+"-password"); err != nil {
 			t.Fatal(err)
 		}
-		_, tok, err := svc.CreateToken(context.Background(), auth.Principal{User: name, Role: r, Method: auth.MethodPassword}, "t", r, 0)
+		_, tok, err := svc.CreateToken(context.Background(), auth.Principal{User: name, Role: r, Method: auth.MethodPassword}, "t", r, "", 0)
 		if err != nil {
 			t.Fatal(err)
 		}
