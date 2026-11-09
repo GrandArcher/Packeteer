@@ -29,22 +29,17 @@ export PACKETEER_LAB_DIR="$lab_dir"
 export PACKETEER_LAB_CONFIG="$lab_dir/config.yaml"
 
 # A daemon keeps the profile it was started under, so unload first.
+# The runner user can stat the profile list and still be denied the read,
+# so this always goes through sudo.
 if [ -e /sys/kernel/security/apparmor/profiles ]; then
-	read_aa() {
-		if [ -r /sys/kernel/security/apparmor/profiles ]; then
-			cat /sys/kernel/security/apparmor/profiles
-		else
-			sudo -n cat /sys/kernel/security/apparmor/profiles
-		fi
-	}
-	loaded=$(read_aa)
+	loaded=$(sudo -n cat /sys/kernel/security/apparmor/profiles)
 	for name in bgpd staticd; do
 		if printf '%s\n' "$loaded" | grep -q "^${name} "; then
 			echo "unloading host AppArmor profile ${name}"
 			sudo -n apparmor_parser -R "/etc/apparmor.d/${name}"
 		fi
 	done
-	loaded=$(read_aa)
+	loaded=$(sudo -n cat /sys/kernel/security/apparmor/profiles)
 	if printf '%s\n' "$loaded" | grep -qE '^(bgpd|staticd) '; then
 		echo "host AppArmor profiles bgpd and staticd are still loaded" >&2
 		exit 1
