@@ -71,8 +71,9 @@ const (
 	failWindow      = 5 * time.Minute
 	failLimit       = 10
 	maxFailKeys     = 10000
-	// maxHashing password checks run at once; one more waits up to
-	// hashWait and is then refused with ErrBusy.
+	// maxHashing password checks run at once, at most one per client
+	// network; one more waits up to hashWait and is then refused with
+	// ErrBusy.
 	maxHashing  = 2
 	hashWait    = 5 * time.Second
 	tokenPrefix = "pkt_"
@@ -141,6 +142,13 @@ type pendingLogin struct {
 	expires  time.Time
 }
 
+// netSlot is one client network's hashing slot. refs counts the checks
+// holding or waiting for it.
+type netSlot struct {
+	ch   chan struct{}
+	refs int
+}
+
 type cached struct {
 	key     [32]byte
 	expires time.Time
@@ -172,6 +180,12 @@ type Service struct {
 	// could keep every core busy (#493).
 	hashSem  chan struct{}
 	hashWait time.Duration
+	// hashNets holds one slot per client network with a check in progress
+	// or waiting, so one client takes at most one of hashSem's slots
+	// (#534). An entry is deleted when its last check ends, so the map is
+	// bounded by the requests in flight.
+	hmu      sync.Mutex
+	hashNets map[netip.Addr]*netSlot
 
 	dummyOnce sync.Once
 	dummy     string
@@ -207,7 +221,7 @@ func New(o Options) (*Service, error) {
 	return &Service{
 		users: o.Users, sso: o.SSO, sessionTTL: o.SessionTTL, tokenTTL: o.TokenTTL, log: o.Logger, now: o.Now, pepper: pepper, onGone: o.OnGeneratedGone,
 		sessions: map[string]session{}, pending: map[string]pendingLogin{}, pwCache: map[string]cached{}, fails: NewThrottle(o.Logger),
-		hashSem: make(chan struct{}, maxHashing), hashWait: hashWait,
+		hashSem: make(chan struct{}, maxHashing), hashWait: hashWait, hashNets: map[netip.Addr]*netSlot{},
 	}, nil
 }
 
@@ -234,7 +248,8 @@ func RemoteIP(r *http.Request) netip.Addr {
 // refused before it is checked. Failures are counted per user name and
 // client network (an IPv6 /64); past the limit an attempt under that
 // count fails with ErrThrottled until the window ends. A password check
-// that finds no free hashing slot fails with ErrBusy.
+// that finds no free hashing slot, for its client network or overall,
+// fails with ErrBusy.
 func (s *Service) Authenticate(r *http.Request) (Principal, error) {
 	ip := RemoteIP(r)
 	now := s.now()
@@ -257,7 +272,7 @@ func (s *Service) Authenticate(r *http.Request) (Principal, error) {
 				s.fails.Fail(user, ip, now)
 				return Principal{}, ErrBadCredentials
 			}
-			p, err := s.password(ctx, user, pass, now)
+			p, err := s.password(ctx, user, pass, ip, now)
 			if errors.Is(err, ErrBadCredentials) {
 				s.fails.Fail(user, ip, now)
 			}
@@ -288,19 +303,49 @@ func (s *Service) failed(user string, ip netip.Addr, now time.Time) error {
 	return ErrBadCredentials
 }
 
-// hashSlot waits for a free password hashing slot, up to hashWait. The
-// caller runs the returned release when its hashing is done.
-func (s *Service) hashSlot(ctx context.Context) (release func(), err error) {
+// hashSlot waits up to hashWait in total for the slot of ip's client
+// network and then for a free global slot. Holding the network slot first
+// means one client, whatever user names it sends, cannot hold every
+// global slot and refuse all other password sign-ins (#534). The caller
+// runs the returned release when its hashing is done.
+func (s *Service) hashSlot(ctx context.Context, ip netip.Addr) (release func(), err error) {
+	n := clientNet(ip)
+	s.hmu.Lock()
+	ns := s.hashNets[n]
+	if ns == nil {
+		ns = &netSlot{ch: make(chan struct{}, 1)}
+		s.hashNets[n] = ns
+	}
+	ns.refs++
+	s.hmu.Unlock()
+	done := func() {
+		s.hmu.Lock()
+		ns.refs--
+		if ns.refs == 0 {
+			delete(s.hashNets, n)
+		}
+		s.hmu.Unlock()
+	}
 	t := time.NewTimer(s.hashWait)
 	defer t.Stop()
 	select {
-	case s.hashSem <- struct{}{}:
-		return func() { <-s.hashSem }, nil
+	case ns.ch <- struct{}{}:
 	case <-ctx.Done():
+		done()
 		return nil, ErrBusy
 	case <-t.C:
+		done()
 		return nil, ErrBusy
 	}
+	select {
+	case s.hashSem <- struct{}{}:
+		return func() { <-s.hashSem; <-ns.ch; done() }, nil
+	case <-ctx.Done():
+	case <-t.C:
+	}
+	<-ns.ch
+	done()
+	return nil, ErrBusy
 }
 
 func (s *Service) dummyHash() string {
@@ -310,13 +355,13 @@ func (s *Service) dummyHash() string {
 	return s.dummy
 }
 
-func (s *Service) password(ctx context.Context, name, pw string, now time.Time) (Principal, error) {
+func (s *Service) password(ctx context.Context, name, pw string, ip netip.Addr, now time.Time) (Principal, error) {
 	u, ok, err := s.users.User(ctx, name)
 	if err != nil {
 		return Principal{}, fmt.Errorf("%w: %v", ErrUnavailable, err)
 	}
 	if !ok || u.Source != plugin.UserLocal || u.PasswordHash == "" || u.Disabled || !u.Role.Valid() {
-		release, err := s.hashSlot(ctx)
+		release, err := s.hashSlot(ctx, ip)
 		if err != nil {
 			return Principal{}, err
 		}
@@ -330,7 +375,7 @@ func (s *Service) password(ctx context.Context, name, pw string, now time.Time) 
 	c, hit := s.pwCache[name]
 	s.smu.Unlock()
 	if !hit || now.After(c.expires) || subtle.ConstantTimeCompare(c.key[:], key[:]) != 1 {
-		release, err := s.hashSlot(ctx)
+		release, err := s.hashSlot(ctx, ip)
 		if err != nil {
 			return Principal{}, err
 		}
@@ -441,7 +486,7 @@ func (s *Service) SignIn(w http.ResponseWriter, r *http.Request, name, pw string
 	if s.fails.Throttled(name, ip, now) {
 		return Principal{}, ErrThrottled
 	}
-	p, err := s.password(r.Context(), name, pw, now)
+	p, err := s.password(r.Context(), name, pw, ip, now)
 	if errors.Is(err, ErrBadCredentials) {
 		s.fails.Fail(name, ip, now)
 	}
@@ -819,7 +864,7 @@ func (s *Service) ChangePassword(w http.ResponseWriter, r *http.Request, p Princ
 	if next == current {
 		return invalid("the new password must differ from the current one")
 	}
-	release, err := s.hashSlot(r.Context())
+	release, err := s.hashSlot(r.Context(), ip)
 	if err != nil {
 		return err
 	}
