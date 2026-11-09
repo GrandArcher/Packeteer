@@ -16,7 +16,7 @@ make lint    # golangci-lint, staticcheck, deadcode -test, CHANGELOG line length
 make vuln    # govulncheck
 ```
 
-Go 1.26 is required (see `go.mod`). Docker is not needed for unit tests; the container image and the FRR lab run in CI.
+Go 1.26 is required (see `go.mod`). Docker is not needed for unit tests; the container image and the FRR lab run in CI. The image builder in `Dockerfile` is pinned by digest to the `golang:<go.mod minor>-alpine` tag; Dependabot bumps the digest weekly. Before tagging a release, merge any open Dependabot digest PR, or bump the digest by hand.
 
 ## Pull requests
 

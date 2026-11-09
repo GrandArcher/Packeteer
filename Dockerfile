@@ -1,7 +1,9 @@
 # syntax=docker/dockerfile:1
 
 # ---- build stage: cross-compiles for the target platform without QEMU ----
-FROM --platform=$BUILDPLATFORM golang:1.26-alpine@sha256:a2012b4a1d1f9f7e9f44e0d39b805a901e856b1dd80b4e6ee4338db547050308 AS build
+# The digest pins the Go patch release and its standard-library fixes. Dependabot
+# (docker ecosystem, .github/dependabot.yml) bumps it weekly.
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine@sha256:87c65a688975c0b1d4585d204874c45ca78354670e3a5f11368c5a492303d696 AS build
 ARG TARGETOS
 ARG TARGETARCH
 ARG VERSION=dev

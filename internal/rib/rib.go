@@ -217,6 +217,9 @@ type View struct {
 	anyBMP    bool                                 // some provider uses BMP (prefer or only)
 	bmpAlone  bool                                 // no iBGP neighbors: readiness comes from BMP (#237)
 	dropped   bool                                 // DropSessions ran; no session comes back
+	// dropMu orders DropSessions setting dropped against AddNeighbors
+	// enabling the peers it added admin-down (#529). Taken before mu.
+	dropMu    sync.Mutex
 	peers     map[netip.Addr]PeerState
 	neighbors map[netip.Addr]bool
 	addPath   map[netip.Addr]bool // neighbors configured to receive add-path
@@ -351,7 +354,7 @@ func (v *View) Start(ctx context.Context) error {
 	}
 
 	for _, n := range v.opt.Neighbors {
-		if err := v.addPeer(ctx, n); err != nil {
+		if err := v.addPeer(ctx, n, false); err != nil {
 			_ = v.Stop(context.Background())
 			return err
 		}
@@ -359,8 +362,9 @@ func (v *View) Start(ctx context.Context) error {
 	return nil
 }
 
-// addPeer adds one neighbor's session to the speaker.
-func (v *View) addPeer(ctx context.Context, n Neighbor) error {
+// addPeer adds one neighbor's session to the speaker. An adminDown peer
+// opens no session until EnablePeer.
+func (v *View) addPeer(ctx context.Context, n Neighbor, adminDown bool) error {
 	port := uint32(n.Port)
 	if port == 0 {
 		port = 179
@@ -384,7 +388,7 @@ func (v *View) addPeer(ctx context.Context, n Neighbor) error {
 		}
 	}
 	p := &api.Peer{
-		Conf:      &api.PeerConf{NeighborAddress: n.Address.String(), PeerAsn: v.opt.ASN, Description: n.Description},
+		Conf:      &api.PeerConf{NeighborAddress: n.Address.String(), PeerAsn: v.opt.ASN, Description: n.Description, AdminDown: adminDown},
 		Transport: &api.Transport{RemotePort: port, PassiveMode: n.Passive},
 		AfiSafis:  afiSafis,
 		// A hold time of zero negotiates the hold timer off (RFC 4271), so a
@@ -448,7 +452,7 @@ func (v *View) AddNeighbors(ctx context.Context, nbrs []Neighbor) error {
 	}
 	if v.dropped {
 		v.mu.Unlock()
-		return errors.New("rib: the sessions were dropped after a failed HA withdraw; adding neighbors needs a restart")
+		return errDropped
 	}
 	for _, n := range nbrs {
 		a := n.Address.Unmap()
@@ -469,24 +473,37 @@ func (v *View) AddNeighbors(ctx context.Context, nbrs []Neighbor) error {
 	v.mu.Unlock()
 	var errs []error
 	if v.srv != nil {
+		var added []Neighbor
 		for _, n := range nbrs {
-			if err := v.addPeer(ctx, n); err != nil {
+			if err := v.addPeer(ctx, n, true); err != nil {
 				errs = append(errs, err)
+				continue
 			}
+			added = append(added, n)
 		}
-		// DropSessions sets dropped before it lists the peers, so a peer
-		// added while it ran is either in its list or shut down here.
+		// A DropSessions that set dropped first finds these peers admin-down
+		// and they stay down. One that sets it later lists them after they
+		// are enabled and shuts them down.
+		v.dropMu.Lock()
 		v.mu.RLock()
 		dropped := v.dropped
 		v.mu.RUnlock()
 		if dropped {
-			for _, n := range nbrs {
-				if err := v.srv.DisablePeer(ctx, &api.DisablePeerRequest{Address: n.Address.String(), Communication: dropMessage}); err != nil {
-					errs = append(errs, fmt.Errorf("rib: shut down session to %s: %w", n.Address, err))
+			errs = append(errs, errDropped)
+		} else {
+			var enabled []string
+			for _, n := range added {
+				if err := v.srv.EnablePeer(ctx, &api.EnablePeerRequest{Address: n.Address.String()}); err != nil {
+					errs = append(errs, fmt.Errorf("rib: enable neighbor %s: %w", n.Address, err))
+					continue
 				}
+				enabled = append(enabled, n.Address.String())
 			}
-			errs = append(errs, errors.New("rib: the sessions were dropped after a failed HA withdraw; adding neighbors needs a restart"))
+			if err := v.waitAdminUp(ctx, enabled); err != nil {
+				errs = append(errs, err)
+			}
 		}
+		v.dropMu.Unlock()
 	}
 	v.notify()
 	return errors.Join(errs...)
@@ -510,6 +527,44 @@ func (v *View) SetEgress(egress map[string][]netip.Addr) error {
 	return nil
 }
 
+// waitAdminUp waits until the speaker reports every peer in addrs
+// admin-up. GoBGP queues one admin-state request per peer and drops a
+// second one sent before the peer takes the first, still returning nil, so
+// a DropSessions disable sent while an enable is queued would be lost and
+// the peer would open a session after the drop.
+func (v *View) waitAdminUp(ctx context.Context, addrs []string) error {
+	deadline := adminWaitDeadline(ctx)
+	for {
+		var waiting []string
+		for _, a := range addrs {
+			up := false
+			_ = v.srv.ListPeer(ctx, &api.ListPeerRequest{Address: a}, func(p *api.Peer) {
+				up = p.State.AdminState == api.PeerState_UP
+			})
+			if !up {
+				waiting = append(waiting, a)
+			}
+		}
+		if len(waiting) == 0 {
+			return nil
+		}
+		if !time.Now().Before(deadline) {
+			return fmt.Errorf("rib: neighbors not enabled: %s", strings.Join(waiting, ", "))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// adminWaitDeadline is quiesceTimeout from now or ctx's deadline, whichever
+// is first.
+func adminWaitDeadline(ctx context.Context) time.Time {
+	deadline := time.Now().Add(quiesceTimeout)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+	return deadline
+}
+
 func (v *View) stopServer() {
 	if v.srv == nil {
 		return
@@ -529,11 +584,16 @@ func (v *View) DropSessions(ctx context.Context) error {
 	if v.srv == nil {
 		return nil
 	}
+	v.dropMu.Lock()
 	v.mu.Lock()
 	v.dropped = true
 	v.mu.Unlock()
+	v.dropMu.Unlock()
 	return v.quiesceSessions(ctx, dropMessage)
 }
+
+// errDropped refuses AddNeighbors after DropSessions.
+var errDropped = errors.New("rib: the sessions were dropped after a failed HA withdraw; adding neighbors needs a restart")
 
 // dropMessage is the shutdown communication DropSessions sends.
 const dropMessage = "packeteer: HA standby could not withdraw its routes"
@@ -558,10 +618,7 @@ func (v *View) quiesceSessions(ctx context.Context, why string) error {
 			errs = append(errs, fmt.Errorf("rib: shut down session to %s: %w", a, err))
 		}
 	}
-	deadline := time.Now().Add(quiesceTimeout)
-	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
-		deadline = d
-	}
+	deadline := adminWaitDeadline(ctx)
 	for {
 		var up []string
 		_ = v.srv.ListPeer(ctx, &api.ListPeerRequest{}, func(p *api.Peer) {
@@ -1583,7 +1640,8 @@ func viaBit(via string) uint8 {
 // returns. The busiest hops are kept.
 const maxSuggestNextHops = 64
 
-// quiesceTimeout bounds the wait for sessions to drop at shutdown.
+// quiesceTimeout bounds the wait for sessions to drop at shutdown and for
+// added neighbors to report admin-up.
 const quiesceTimeout = 3 * time.Second
 
 // NextHops counts, for every next hop inside lans, the distinct prefixes

@@ -623,6 +623,12 @@ func parseExporters(in []string) ([]netip.Prefix, error) {
 		if a, err := netip.ParseAddr(s); err == nil {
 			a = a.Unmap().WithZone("")
 			s = netip.PrefixFrom(a, a.BitLen()).String()
+		} else if p, err := netip.ParsePrefix(s); err == nil && p.Addr().Is4In6() {
+			if p.Bits() < 96 {
+				return nil, fmt.Errorf("exporters[%d]: %q is shorter than the IPv4-mapped /96", i, s)
+			}
+			// Match the unmapped sender without hiding host bits or duplicates.
+			s = netip.PrefixFrom(p.Addr().Unmap(), p.Bits()-96).String()
 		}
 		nets[i] = s
 	}
