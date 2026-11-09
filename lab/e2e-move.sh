@@ -12,12 +12,12 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"
 compose=(docker compose -f lab/docker-compose.yml)
 prefix=198.51.100.0/24
-# ubuntu-26.04's apparmor package confines /usr/lib/frr/bgpd and staticd.
-# A privileged container is unconfined, so those host profiles attach when
-# the edge starts and refuse the update log (can't open logfile), including
-# under /var/log/frr. They are for a host FRR install. Unload them before
-# the edge starts (#542).
-updates_log=/var/log/frr/bgp-updates.log
+# ubuntu-26.04 loads enforce-mode AppArmor profiles for /usr/lib/frr/bgpd
+# and staticd. A privileged container is unconfined, so those profiles
+# attach at exec and refuse the update log. Unload them before the edge
+# starts. The log stays on /tmp: a root-owned /var/log/frr is not writable
+# by the daemon user, and /tmp is (#542).
+updates_log=/tmp/bgp-updates.log
 
 lab_dir=$(mktemp -d)
 trap 'rc=$?; if [ "$rc" -ne 0 ]; then echo "---- lab logs ----"; "${compose[@]}" logs --no-color || true; "${compose[@]}" ps || true; fi; "${compose[@]}" down -v --remove-orphans || true; rm -rf "$lab_dir"; exit "$rc"' EXIT
@@ -33,7 +33,12 @@ export PACKETEER_LAB_CONFIG="$lab_dir/config.yaml"
 # so this always goes through sudo.
 if [ -e /sys/kernel/security/apparmor/profiles ]; then
 	loaded=$(sudo -n cat /sys/kernel/security/apparmor/profiles)
+	sudo -n mkdir -p /etc/apparmor.d/disable
 	for name in bgpd staticd; do
+		if [ -f "/etc/apparmor.d/${name}" ]; then
+			# Keep a later reload from putting the profile back before exec.
+			sudo -n ln -sfn "/etc/apparmor.d/${name}" "/etc/apparmor.d/disable/${name}"
+		fi
 		if printf '%s\n' "$loaded" | grep -q "^${name} "; then
 			echo "unloading host AppArmor profile ${name}"
 			sudo -n apparmor_parser -R "/etc/apparmor.d/${name}"
@@ -116,8 +121,11 @@ echo "transit-b is faster: one Packeteer path via 192.0.2.2"
 wait_via 192.0.2.2
 
 echo "logging every UPDATE the edge receives"
-"${compose[@]}" exec -T edge sh -c 'mkdir -p /var/log/frr && chmod 0755 /var/log/frr'
-out=$(vtysh -c 'configure terminal' -c "log file $updates_log debugging" -c 'end' -c 'debug bgp updates in' 2>&1) || fail "FRR update log setup failed: $out"
+out=$(vtysh -c 'configure terminal' -c "log file $updates_log debugging" -c 'end' -c 'debug bgp updates in' 2>&1) || {
+	echo "---- edge log setup ----" >&2
+	"${compose[@]}" exec -T edge sh -c 'id; ls -ld /tmp; ps -o user,args; for p in /proc/[0-9]*; do c=$(tr "\0" " " < "$p/cmdline" 2>/dev/null || true); case "$c" in *bgpd*|*staticd*|*zebra*|*mgmtd*) printf "%s\n" "$c"; printf "aa: "; cat "$p/attr/current" 2>/dev/null || printf "(none)"; printf "\n"; esac; done' >&2 || true
+	fail "FRR update log setup failed: $out"
+}
 dbg=$(vtysh -c 'show debugging' 2>&1 || true)
 [[ "$dbg" == *"updates"* ]] || fail "FRR update debugging did not turn on: $dbg"
 
