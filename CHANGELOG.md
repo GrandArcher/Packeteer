@@ -8,6 +8,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 - HA step-down gives each withdraw try its own timeout inside a 10s total, a mitigation withdraw stops at its deadline, and an instance active again keeps its BGP sessions (#528).
 - A neighbor added by a reload is added admin-down and enabled only if no HA session drop has begun, so it never opens a session after the drop (#529).
+- PBR rollback of a failed `-pbr linux -apply` run stops after 10s, so a hung ip command cannot block it forever (#530).
 - Flow exporter allowlists normalize IPv4-mapped CIDRs before matching senders (#533).
 
 ### Security
