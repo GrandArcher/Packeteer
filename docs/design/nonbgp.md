@@ -17,7 +17,7 @@ REST or Linux `ip route`). User guide: [../nonbgp.md](../nonbgp.md).
   probe-source failure, and stale data. A new start removes tagged routes a
   previous process left.
 - Steerers are in-process only. Router credentials come from environment
-  variables and the URL must be https.
+  variables and the URL must be https (http only to a loopback host).
 - Nothing is exported over BGP; the herd sees the announced prefix only.
 
 ## Rules it does not meet

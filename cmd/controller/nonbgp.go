@@ -28,6 +28,7 @@ type nonbgpState struct {
 	meta   nonbgp.Meta
 	native string
 	asns   map[string]uint32
+	log    *slog.Logger
 }
 
 // newNonBGP builds the state for cfg, or returns nil when the mode is off.
@@ -76,7 +77,7 @@ func newNonBGP(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger) (*
 	if err != nil {
 		return nil, err
 	}
-	return &nonbgpState{table: table, steer: steer, meta: meta, native: n.DefaultProvider, asns: asns}, nil
+	return &nonbgpState{table: table, steer: steer, meta: meta, native: n.DefaultProvider, asns: asns, log: log}, nil
 }
 
 // wireLookup makes every flow source count destinations under
@@ -116,7 +117,13 @@ func (s *nonbgpState) Sync(imps []policy.Improvement) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), nonbgpSyncTimeout)
 	defer cancel()
-	return s.steer.Sync(ctx, imps)
+	err := s.steer.Sync(ctx, imps)
+	if err != nil {
+		// The announce event fires only when the state flips, so each failing
+		// round, a failed withdraw included, is logged here.
+		s.log.Error("non-BGP steer", "err", err)
+	}
+	return err
 }
 
 // WithdrawAll removes every route this process put on the router.
