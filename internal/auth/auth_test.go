@@ -686,6 +686,81 @@ func TestHashSlotsCapConcurrency(t *testing.T) {
 	if len(s.hashSem) != maxHashing-1 {
 		t.Fatalf("slot not released: %d held", len(s.hashSem))
 	}
+	if len(s.hashNets) != 0 {
+		t.Fatalf("network slots left after the checks ended: %d", len(s.hashNets))
+	}
+}
+
+// TestHashSlotPerNetwork (#534): while one client network has a password
+// check in progress, its next check under any user name, from the same
+// address or the same IPv6 /64, waits for that slot and gets ErrBusy, and
+// it holds no global slot meanwhile; a client on another network still
+// signs in. A waiting check runs once the slot is released.
+func TestHashSlotPerNetwork(t *testing.T) {
+	s, _, _ := newSvc(t, nil)
+	ctx := context.Background()
+	if _, err := s.CreateUser(ctx, "noc", plugin.RoleOperator, "operator-password"); err != nil {
+		t.Fatal(err)
+	}
+	s.hashWait = 20 * time.Millisecond
+	for _, held := range []struct{ holder, same string }{
+		{"192.0.2.20", "192.0.2.20:40000"},
+		{"2001:db8:0:5::1", "[2001:db8:0:5:ffff::2]:40000"},
+	} {
+		release, err := s.hashSlot(ctx, netip.MustParseAddr(held.holder))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, user := range []string{"noc", "nobody", "user-1", "user-2"} {
+			if _, err := s.Authenticate(req(held.same, basic(user, "guess-guess-guess"))); !errors.Is(err, ErrBusy) {
+				t.Fatalf("%s as %s while %s hashes: %v, want ErrBusy", held.same, user, held.holder, err)
+			}
+		}
+		if len(s.hashSem) != 1 {
+			t.Fatalf("one network holds %d global slots", len(s.hashSem))
+		}
+		// A wrong password is never cached, so this check needs a slot.
+		if _, err := s.Authenticate(req("198.51.100.7:40000", basic("noc", "wrong-password-2"))); !errors.Is(err, ErrBadCredentials) {
+			t.Fatalf("other network refused a slot while %s hashes: %v", held.holder, err)
+		}
+		release()
+	}
+	if len(s.hashSem) != 0 || len(s.hashNets) != 0 {
+		t.Fatalf("slots left: %d global, %d networks", len(s.hashSem), len(s.hashNets))
+	}
+
+	s.hashWait = 5 * time.Second
+	ip := netip.MustParseAddr("192.0.2.21")
+	release, err := s.hashSlot(ctx, ip)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := make(chan error, 1)
+	go func() {
+		_, err := s.Authenticate(req("192.0.2.21:40000", basic("nobody", "guess-guess-guess")))
+		res <- err
+	}()
+	for deadline := time.Now().Add(2 * time.Second); ; time.Sleep(time.Millisecond) {
+		s.hmu.Lock()
+		refs := s.hashNets[ip].refs
+		s.hmu.Unlock()
+		if refs == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("second check never waited: %d refs", refs)
+		}
+	}
+	if len(s.hashSem) != 1 {
+		t.Fatalf("a waiting check holds a global slot: %d held", len(s.hashSem))
+	}
+	release()
+	if err := <-res; !errors.Is(err, ErrBadCredentials) {
+		t.Fatalf("waiting check after release: %v, want ErrBadCredentials", err)
+	}
+	if len(s.hashSem) != 0 || len(s.hashNets) != 0 {
+		t.Fatalf("slots left: %d global, %d networks", len(s.hashSem), len(s.hashNets))
+	}
 }
 
 func TestSignInRefusals(t *testing.T) {

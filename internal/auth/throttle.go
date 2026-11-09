@@ -28,10 +28,16 @@ func newFailKey(user string, ip netip.Addr) failKey {
 	if !ValidUserName(user) {
 		user = ""
 	}
+	return failKey{user: user, net: clientNet(ip)}
+}
+
+// clientNet is the network one client is counted under: its IPv4 address,
+// or its IPv6 /64.
+func clientNet(ip netip.Addr) netip.Addr {
 	if ip.Is6() {
-		ip = netip.PrefixFrom(ip, 64).Masked().Addr()
+		return netip.PrefixFrom(ip, 64).Masked().Addr()
 	}
-	return failKey{user: user, net: ip}
+	return ip
 }
 
 // Throttle counts failed sign-ins per user name and client network. Past
