@@ -121,21 +121,10 @@ func (c *Config) validateNonBGP(add func(string, ...any)) {
 		add("nonbgp.idle %s must be between %s and %s", n.Idle, MinNonBGPIdle, MaxNonBGPIdle)
 	}
 	if n.MaxBlocks < 0 || n.MaxBlocks > MaxNonBGPMaxBlocks {
-		add("nonbgp.max_blocks %d must be between 1 and %d", n.MaxBlocks, MaxNonBGPMaxBlocks)
+		add("nonbgp.max_blocks %d must be between 0 (the default) and %d", n.MaxBlocks, MaxNonBGPMaxBlocks)
 	}
-	if c.Mode == ModeInject {
-		if n.Steerer == nil {
-			add("mode inject with nonbgp requires nonbgp.steerer")
-		}
-		if len(c.Allowlist.Prefixes) == 0 {
-			add("mode inject requires a non-empty allowlist.prefixes")
-		}
-		if c.HoldTime <= 0 {
-			add("mode inject requires a positive hold_time")
-		}
-		if c.Thresholds.MinLossDeltaPct <= 0 || c.Thresholds.MinRTTDeltaMs <= 0 {
-			add("mode inject requires positive thresholds.min_loss_delta_pct and thresholds.min_rtt_delta_ms")
-		}
+	if c.Mode == ModeInject && n.Steerer == nil {
+		add("mode inject with nonbgp requires nonbgp.steerer")
 	}
 }
 

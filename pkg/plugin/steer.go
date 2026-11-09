@@ -21,12 +21,11 @@ var (
 )
 
 // SteerRoute is one static route: traffic to Prefix leaves through
-// NextHop, the gateway of Provider. Everything else stays on the router's
-// default route.
+// NextHop, the gateway of the chosen provider. Everything else stays on the
+// router's default route.
 type SteerRoute struct {
-	Prefix   netip.Prefix
-	NextHop  netip.Addr
-	Provider string
+	Prefix  netip.Prefix
+	NextHop netip.Addr
 }
 
 // Steerer installs static routes on a router that has no BGP session with

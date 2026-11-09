@@ -161,7 +161,7 @@ func (s *Steer) installLocked(ctx context.Context, im policy.Improvement) error 
 	case !on && len(s.active) >= s.cfg.Max:
 		return fmt.Errorf("non-BGP: %s refused, %d routes is the max_improvements cap", p, s.cfg.Max)
 	}
-	if err := s.drv.Install(ctx, plugin.SteerRoute{Prefix: p, NextHop: nh, Provider: im.Provider}); err != nil {
+	if err := s.drv.Install(ctx, plugin.SteerRoute{Prefix: p, NextHop: nh}); err != nil {
 		return fmt.Errorf("non-BGP: install %s via %s: %w", p, im.Provider, err)
 	}
 	since := s.cfg.Now()

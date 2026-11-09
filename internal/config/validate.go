@@ -584,29 +584,39 @@ func (c *Config) validateMoreSpecific(add func(string, ...any)) {
 // validateInject enforces the extra safety requirements of inject mode
 // (see AGENTS.md).
 func (c *Config) validateInject(add func(string, ...any)) {
-	// The non-BGP mode checks its own inject rules (validateNonBGP).
-	if c.Mode == ModeInject && c.NonBGP == nil {
-		if len(c.Allowlist.Prefixes) == 0 {
-			add("mode inject requires a non-empty allowlist.prefixes")
-		}
-		if len(c.BGP.Neighbors) == 0 && len(c.RIBSources) == 0 {
-			add("mode inject requires at least one bgp.neighbors entry, or rib_sources with external_policy")
-		}
-		if c.PacketeerCommunity == "" {
-			add("mode inject requires packeteer_community to tag injected routes")
-		}
-		if c.LocalPref == 0 {
-			add("mode inject requires local_pref (the local preference set on injected routes)")
-		}
-		if c.Announcer == nil && !c.ExternalPolicyOn() {
-			add("mode inject requires an announcer or external_policy.enabled")
-		}
-		if c.HoldTime <= 0 {
-			add("mode inject requires a positive hold_time")
-		}
-		if c.Thresholds.MinLossDeltaPct <= 0 || c.Thresholds.MinRTTDeltaMs <= 0 {
-			add("mode inject requires positive thresholds.min_loss_delta_pct and thresholds.min_rtt_delta_ms")
-		}
+	if c.Mode != ModeInject {
+		return
+	}
+	c.validateInjectLimits(add)
+	// The non-BGP mode has no BGP session and no announcer (validateNonBGP).
+	if c.NonBGP != nil {
+		return
+	}
+	if len(c.BGP.Neighbors) == 0 && len(c.RIBSources) == 0 {
+		add("mode inject requires at least one bgp.neighbors entry, or rib_sources with external_policy")
+	}
+	if c.PacketeerCommunity == "" {
+		add("mode inject requires packeteer_community to tag injected routes")
+	}
+	if c.LocalPref == 0 {
+		add("mode inject requires local_pref (the local preference set on injected routes)")
+	}
+	if c.Announcer == nil && !c.ExternalPolicyOn() {
+		add("mode inject requires an announcer or external_policy.enabled")
+	}
+}
+
+// validateInjectLimits is what every inject mode needs: an allowlist, a hold
+// time and thresholds.
+func (c *Config) validateInjectLimits(add func(string, ...any)) {
+	if len(c.Allowlist.Prefixes) == 0 {
+		add("mode inject requires a non-empty allowlist.prefixes")
+	}
+	if c.HoldTime <= 0 {
+		add("mode inject requires a positive hold_time")
+	}
+	if c.Thresholds.MinLossDeltaPct <= 0 || c.Thresholds.MinRTTDeltaMs <= 0 {
+		add("mode inject requires positive thresholds.min_loss_delta_pct and thresholds.min_rtt_delta_ms")
 	}
 }
 

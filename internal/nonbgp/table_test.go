@@ -198,14 +198,40 @@ func TestWidenBitsBoundAndZero(t *testing.T) {
 		t.Fatalf("widen_bits 2 routes = %v", got)
 	}
 
-	none := &fakeCovering{ans: pfx("2001:db8::/32")}
-	zero, _ := newTestTable(0, none)
+	// widen_bits 0 never widens, but the announced prefix is still looked up
+	// for the herd.
+	asked := &fakeCovering{ans: pfx("2001:db8::/32"), asn: 64500}
+	zero, _ := newTestTable(0, asked)
 	zero.Lookup(addr("2001:db8:1::1"))
 	zero.Lookup(addr("2001:db8:2::1"))
-	zero.Run(context.Background())
+	for zero.lookupOne(context.Background()) {
+	}
 	zero.Refresh()
-	if none.count() != 0 || len(zero.Routes()) != 2 {
-		t.Fatalf("widen_bits 0 asked %d times, routes %v", none.count(), routePrefixes(zero))
+	if got := routePrefixes(zero); !equal(got, []string{"2001:db8:1::/48", "2001:db8:2::/48"}) {
+		t.Fatalf("widen_bits 0 routes = %v", got)
+	}
+	up, ok := zero.Announced(pfx("2001:db8:1::/48"))
+	if !ok || up.Prefix != pfx("2001:db8::/32") || up.Origin != 64500 {
+		t.Fatalf("widen_bits 0 Announced = %+v %v", up, ok)
+	}
+}
+
+func TestNestedGroupsMergeIntoOneRoute(t *testing.T) {
+	tbl, _ := newTestTable(4, nil)
+	for _, a := range []string{"2001:db8:2::1", "2001:db8:6::1", "2001:db8:8::1"} {
+		tbl.Lookup(addr(a))
+	}
+	// Block 2 sits in a /46 announced prefix, blocks 6 and 8 in a /44 that
+	// holds it: grouped apart they would make /48 inside /44.
+	tbl.known[pfx("2001:db8::/46")] = 64501
+	tbl.known[pfx("2001:db8::/44")] = 64500
+	tbl.Refresh()
+	got := tbl.Routes()
+	if len(got) != 1 || got[0].Prefix != pfx("2001:db8::/44") || got[0].Blocks != 3 || got[0].Upper != pfx("2001:db8::/44") || got[0].Origin != 64500 {
+		t.Fatalf("routes = %+v", got)
+	}
+	if p, _ := tbl.Lookup(addr("2001:db8:2::99")); p != pfx("2001:db8::/44") {
+		t.Fatalf("Lookup = %s, want the merged prefix", p)
 	}
 }
 

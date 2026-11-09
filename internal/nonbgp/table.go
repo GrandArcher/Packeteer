@@ -7,11 +7,13 @@
 package nonbgp
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/netip"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -213,12 +215,22 @@ func (t *Table) knownCover(blk netip.Prefix) (netip.Prefix, uint32) {
 	return netip.Prefix{}, 0
 }
 
-func (t *Table) recomputeLocked() {
-	type group struct {
-		blocks []netip.Prefix
-		upper  netip.Prefix
-		origin uint32
+// group is the blocks that make one synthetic prefix, and the most specific
+// announced prefix any of them sits in.
+type group struct {
+	blocks []netip.Prefix
+	upper  netip.Prefix
+	origin uint32
+	syn    netip.Prefix
+}
+
+func (g *group) take(upper netip.Prefix, origin uint32) {
+	if upper.IsValid() && (!g.upper.IsValid() || upper.Bits() > g.upper.Bits()) {
+		g.upper, g.origin = upper, origin
 	}
+}
+
+func (t *Table) recomputeLocked() {
 	groups := map[netip.Prefix]*group{}
 	for blk, b := range t.blocks {
 		limit := blk.Bits()
@@ -232,13 +244,36 @@ func (t *Table) recomputeLocked() {
 			groups[key] = g
 		}
 		g.blocks = append(g.blocks, blk)
-		if b.upper.IsValid() && (!g.upper.IsValid() || b.upper.Bits() > g.upper.Bits()) {
-			g.upper, g.origin = b.upper, b.origin
-		}
+		g.take(b.upper, b.origin)
 	}
-	routes := make(map[netip.Prefix]Route, len(groups))
+	ordered := make([]*group, 0, len(groups))
 	for _, g := range groups {
-		syn := commonPrefix(g.blocks)
+		g.syn = commonPrefix(g.blocks)
+		ordered = append(ordered, g)
+	}
+	// Blocks under different announced prefixes group apart, so one group's
+	// prefix can hold another's. Widest first, a nested group joins the
+	// group that holds it: two overlapping static routes are never made.
+	slices.SortFunc(ordered, func(a, b *group) int {
+		return cmp.Or(cmp.Compare(a.syn.Bits(), b.syn.Bits()), cmp.Compare(b.upper.Bits(), a.upper.Bits()), a.syn.Addr().Compare(b.syn.Addr()))
+	})
+	merged := map[netip.Prefix]*group{}
+	for _, g := range ordered {
+		var outer *group
+		for bits := g.syn.Bits(); bits >= 0 && outer == nil; bits-- {
+			p, _ := g.syn.Addr().Prefix(bits)
+			outer = merged[p]
+		}
+		if outer == nil {
+			merged[g.syn] = g
+			continue
+		}
+		// The outer group's announced prefix holds the merged prefix; the
+		// inner one may be narrower than it.
+		outer.blocks = append(outer.blocks, g.blocks...)
+	}
+	routes := make(map[netip.Prefix]Route, len(merged))
+	for syn, g := range merged {
 		r := Route{Prefix: syn, Upper: g.upper, Origin: g.origin, Blocks: len(g.blocks)}
 		for _, blk := range g.blocks {
 			b := t.blocks[blk]
@@ -339,14 +374,14 @@ func (t *Table) Stats() Stats {
 }
 
 func (t *Table) dueLocked(b *block, now time.Time) bool {
-	return t.cov != nil && t.opt.WidenBits > 0 && !b.upper.IsValid() && !b.settled && !now.Before(b.retryAt)
+	return t.cov != nil && !b.upper.IsValid() && !b.settled && !now.Before(b.retryAt)
 }
 
 // Run looks up the announced prefix of each block that has none, one at a
 // time (the covering plugin rate-limits itself), until ctx ends. Without a
 // covering plugin it returns at once.
 func (t *Table) Run(ctx context.Context) {
-	if t.cov == nil || t.opt.WidenBits == 0 {
+	if t.cov == nil {
 		return
 	}
 	tick := time.NewTicker(lookupWake)

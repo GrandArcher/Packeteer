@@ -2,7 +2,7 @@
 
 For a site with two internet links whose router has no BGP (#300). Packeteer reads NetFlow, IPFIX, or sFlow from the router to find the destinations in use, measures each over both links, and when the other link is clearly better it puts a specific static route for that destination on the router. Everything else stays on the default route. Covered by unit and daemon tests with a fake router, not by a lab job and not tested on a public edge.
 
-Packeteer speaks no BGP here. There is no iBGP session, no RIB view, no community, and no NO_EXPORT. The default stays `mode: observe`.
+Packeteer speaks no BGP here. There is no iBGP session, no RIB view, no community, and no NO_EXPORT. The default stays `mode: observe`. The mode is partial: it breaks four rules in AGENTS.md and waits on an owner decision ([design/nonbgp.md](design/nonbgp.md)). Keep it in a lab until then.
 
 ## How it works
 
@@ -43,7 +43,7 @@ nonbgp:
 | `nonbgp.default_provider` | required | The provider the router's default route uses. |
 | `nonbgp.steerer` | none | Installs the static routes. Required for `mode: inject`. |
 | `nonbgp.covering` | none | Announced-prefix lookup; the upper bound for widening and what the herd may see. |
-| `nonbgp.widen_bits` | 4 | Bits a synthetic prefix may widen past /24 or /48. 0 never widens (0 to 8). |
+| `nonbgp.widen_bits` | 4 | Bits a synthetic prefix may widen past /24 or /48. 0 never widens; the covering lookup still runs for the herd (0 to 8). |
 | `nonbgp.idle` | 30m | How long a block with no flow is kept (1m to 24h). |
 | `nonbgp.max_blocks` | 10000 | Cap on tracked /24 and /48 blocks. Blocks past it are not tracked and are counted in `packeteer_truncated_total{key="nonbgp.max_blocks"}` and `dropped_blocks` on `/api/synthetic`. |
 

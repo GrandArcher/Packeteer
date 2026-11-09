@@ -148,7 +148,7 @@ func TestInstallSwitchRemove(t *testing.T) {
 	rt := newFakeRouterOS()
 	s := newSteerer(t, rt)
 	ctx := context.Background()
-	r := plugin.SteerRoute{Prefix: pfx("198.51.100.0/24"), NextHop: netip.MustParseAddr("192.0.2.1"), Provider: "isp-b"}
+	r := plugin.SteerRoute{Prefix: pfx("198.51.100.0/24"), NextHop: netip.MustParseAddr("192.0.2.1")}
 	if err := s.Install(ctx, r); err != nil {
 		t.Fatal(err)
 	}
