@@ -9,6 +9,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 - HA step-down gives each withdraw try its own timeout inside a 10s total, a mitigation withdraw stops at its deadline, and an instance active again keeps its BGP sessions (#528).
 ### Security
 
+- The external policy feed closes a connection with no right token after 5 s and holds at most 8 such per address (an IPv6 /64), so clients without the token cannot hold its 128 slots (#531).
 - Herd per-address rate limit counts an IPv6 client per /64; hub endpoints in 0.0.0.0/8, 100.64.0.0/10, 198.18.0.0/15 or NAT64 prefixes are refused (#532).
 - The basic-auth account counts failed sign-ins per client network, not per supplied user name, so failures under other names no longer evict its lockout (#527).
 

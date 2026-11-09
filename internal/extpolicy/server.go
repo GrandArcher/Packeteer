@@ -15,9 +15,9 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
-	"golang.org/x/net/netutil"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/structpb"
@@ -40,13 +40,18 @@ const (
 	MinTokenLen = 16
 )
 
-// Listener limits. A consumer holds one connection, so the cap is far above
+// Listener limits. A consumer holds one connection, so the caps are far above
 // any real deployment. Requests have no read or write timeout: a long poll
 // and the stream are held open on purpose, and only an authorized request
-// gets that far.
+// gets that far. A connection that has not sent a right token within
+// authDeadline is closed, so clients without the token hold a slot for
+// seconds at most, and one address (an IPv6 /64) holds at most
+// maxConnsPerAddr such connections.
 const (
-	maxConns    = 128
-	idleTimeout = time.Minute
+	maxConns        = 128
+	maxConnsPerAddr = 8
+	authDeadline    = 5 * time.Second
+	idleTimeout     = time.Minute
 )
 
 // ServerConfig is the listener of the feed.
@@ -67,8 +72,10 @@ type Server struct {
 	hash [sha256.Size]byte
 	grpc *grpc.Server
 	srv  *http.Server
-	ln   net.Listener
+	ln   *connLimit
 	bad  *backoff
+	// authWait is authDeadline; tests change it.
+	authWait time.Duration
 }
 
 // NewServer checks cfg and loads the certificate.
@@ -83,7 +90,7 @@ func NewServer(feed *Feed, cfg ServerConfig, log *slog.Logger) (*Server, error) 
 	if err != nil {
 		return nil, fmt.Errorf("external_policy: cert_file/key_file: %w", err)
 	}
-	s := &Server{feed: feed, log: log, cfg: cfg, hash: sha256.Sum256([]byte(cfg.Token)), bad: newBackoff(time.Now)}
+	s := &Server{feed: feed, log: log, cfg: cfg, hash: sha256.Sum256([]byte(cfg.Token)), bad: newBackoff(time.Now), authWait: authDeadline}
 	s.grpc = grpc.NewServer()
 	s.grpc.RegisterService(&serviceDesc, s)
 	s.srv = &http.Server{
@@ -92,6 +99,15 @@ func NewServer(feed *Feed, cfg ServerConfig, log *slog.Logger) (*Server, error) 
 		IdleTimeout:       idleTimeout,
 		TLSConfig:         &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{cert}, NextProtos: []string{"h2", "http/1.1"}},
 		ErrorLog:          slog.NewLogLogger(log.Handler(), slog.LevelDebug),
+		ConnContext: func(ctx context.Context, c net.Conn) context.Context {
+			if tc, ok := c.(*tls.Conn); ok {
+				c = tc.NetConn()
+			}
+			if lc, ok := c.(*limitedConn); ok {
+				return context.WithValue(ctx, connKey{}, lc)
+			}
+			return ctx
+		},
 	}
 	return s, nil
 }
@@ -102,7 +118,7 @@ func (s *Server) Start() error {
 	if err != nil {
 		return fmt.Errorf("external_policy listen %s: %w", s.cfg.Listen, err)
 	}
-	s.ln = netutil.LimitListener(ln, maxConns)
+	s.ln = newConnLimit(ln, maxConns, maxConnsPerAddr, s.authWait)
 	go func() {
 		if err := s.srv.ServeTLS(s.ln, "", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			s.log.Error("external policy feed stopped", "err", err)
@@ -153,6 +169,9 @@ func (s *Server) handler() http.Handler {
 			return
 		}
 		s.bad.ok(ip)
+		if lc, ok := r.Context().Value(connKey{}).(*limitedConn); ok {
+			lc.authorized()
+		}
 		if r.ProtoMajor == 2 && strings.HasPrefix(r.Header.Get("Content-Type"), "application/grpc") {
 			s.grpc.ServeHTTP(w, r)
 			return
@@ -266,6 +285,114 @@ func documentStruct(d Document) (*structpb.Struct, error) {
 		return nil, err
 	}
 	return structpb.NewStruct(m)
+}
+
+type connKey struct{}
+
+// connLimit caps the open connections in total, and per address key (see
+// backoffKey) the ones that have not carried a right token yet. A
+// connection over the per-address cap is closed before TLS and does not
+// take a slot. A connection not marked authorized within authWait is
+// closed. Authorized connections do not count per address, so a consumer
+// that leaves idle keep-alive connections behind is not refused.
+type connLimit struct {
+	net.Listener
+	sem       chan struct{}
+	done      chan struct{}
+	closeOnce sync.Once
+	perAddr   int
+	authWait  time.Duration
+	mu        sync.Mutex
+	open      map[netip.Prefix]int
+}
+
+func newConnLimit(ln net.Listener, total, perAddr int, authWait time.Duration) *connLimit {
+	return &connLimit{Listener: ln, sem: make(chan struct{}, total), done: make(chan struct{}), perAddr: perAddr, authWait: authWait, open: map[netip.Prefix]int{}}
+}
+
+func (l *connLimit) Accept() (net.Conn, error) {
+	select {
+	case l.sem <- struct{}{}:
+	case <-l.done:
+		return nil, net.ErrClosed
+	}
+	for {
+		c, err := l.Listener.Accept()
+		if err != nil {
+			<-l.sem
+			return nil, err
+		}
+		var ip netip.Addr
+		if a, ok := c.RemoteAddr().(*net.TCPAddr); ok {
+			ip = a.AddrPort().Addr().Unmap()
+		}
+		key := backoffKey(ip)
+		l.mu.Lock()
+		full := l.open[key] >= l.perAddr
+		if !full {
+			l.open[key]++
+		}
+		l.mu.Unlock()
+		if full {
+			_ = c.Close()
+			continue
+		}
+		lc := &limitedConn{Conn: c, l: l, key: key}
+		// The timer closes only the socket; the server then closes lc,
+		// which gives the slot back.
+		lc.timer = time.AfterFunc(l.authWait, func() {
+			if !lc.settled.Load() {
+				_ = c.Close()
+			}
+		})
+		return lc, nil
+	}
+}
+
+// Close also wakes an Accept waiting for a free slot.
+func (l *connLimit) Close() error {
+	l.closeOnce.Do(func() { close(l.done) })
+	return l.Listener.Close()
+}
+
+type limitedConn struct {
+	net.Conn
+	l     *connLimit
+	key   netip.Prefix
+	timer *time.Timer
+	// settled is set once the connection carried a right token or
+	// closed; from then on it does not count against its address.
+	settled   atomic.Bool
+	closeOnce sync.Once
+}
+
+// authorized keeps the connection past authWait once it carried a right
+// token.
+func (c *limitedConn) authorized() {
+	if !c.settled.Swap(true) {
+		c.timer.Stop()
+		c.l.release(c.key)
+	}
+}
+
+func (c *limitedConn) Close() error {
+	err := c.Conn.Close()
+	c.closeOnce.Do(func() {
+		c.timer.Stop()
+		if !c.settled.Swap(true) {
+			c.l.release(c.key)
+		}
+		<-c.l.sem
+	})
+	return err
+}
+
+func (l *connLimit) release(key netip.Prefix) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.open[key]--; l.open[key] <= 0 {
+		delete(l.open, key)
+	}
 }
 
 // Token-failure backoff: after the nth wrong token in a row an address is
