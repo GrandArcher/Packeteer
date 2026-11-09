@@ -12,7 +12,10 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"
 compose=(docker compose -f lab/docker-compose.yml)
 prefix=198.51.100.0/24
-updates_log=/tmp/bgp-updates.log
+# ubuntu-26.04's apparmor package confines /usr/lib/frr/bgpd and staticd.
+# The edge container is privileged, so those host profiles attach to the
+# lab binaries. They allow a log file only under /var/log/frr (#542).
+updates_log=/var/log/frr/bgp-updates.log
 
 lab_dir=$(mktemp -d)
 trap 'rc=$?; if [ "$rc" -ne 0 ]; then echo "---- lab logs ----"; "${compose[@]}" logs --no-color || true; "${compose[@]}" ps || true; fi; "${compose[@]}" down -v --remove-orphans || true; rm -rf "$lab_dir"; exit "$rc"' EXIT
@@ -93,7 +96,10 @@ echo "transit-b is faster: one Packeteer path via 192.0.2.2"
 wait_via 192.0.2.2
 
 echo "logging every UPDATE the edge receives"
-vtysh -c 'configure terminal' -c "log file $updates_log debugging" -c 'end' -c 'debug bgp updates in' >/dev/null
+# The directory has to exist before the daemons open the log. bgpd cannot
+# create /var/log/frr (the profile does not allow writes in /var/log).
+"${compose[@]}" exec -T edge sh -c 'mkdir -p /var/log/frr && chmod 0755 /var/log/frr'
+out=$(vtysh -c 'configure terminal' -c "log file $updates_log debugging" -c 'end' -c 'debug bgp updates in' 2>&1) || fail "FRR update log setup failed: $out"
 dbg=$(vtysh -c 'show debugging' 2>&1 || true)
 [[ "$dbg" == *"updates"* ]] || fail "FRR update debugging did not turn on: $dbg"
 
