@@ -118,7 +118,7 @@ func (s *Server) Start() error {
 	if err != nil {
 		return fmt.Errorf("external_policy listen %s: %w", s.cfg.Listen, err)
 	}
-	s.ln = newConnLimit(ln, maxConns, maxConnsPerAddr, s.authWait)
+	s.ln = newConnLimit(ln, s.authWait)
 	go func() {
 		if err := s.srv.ServeTLS(s.ln, "", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			s.log.Error("external policy feed stopped", "err", err)
@@ -300,14 +300,13 @@ type connLimit struct {
 	sem       chan struct{}
 	done      chan struct{}
 	closeOnce sync.Once
-	perAddr   int
 	authWait  time.Duration
 	mu        sync.Mutex
 	open      map[netip.Prefix]int
 }
 
-func newConnLimit(ln net.Listener, total, perAddr int, authWait time.Duration) *connLimit {
-	return &connLimit{Listener: ln, sem: make(chan struct{}, total), done: make(chan struct{}), perAddr: perAddr, authWait: authWait, open: map[netip.Prefix]int{}}
+func newConnLimit(ln net.Listener, authWait time.Duration) *connLimit {
+	return &connLimit{Listener: ln, sem: make(chan struct{}, maxConns), done: make(chan struct{}), authWait: authWait, open: map[netip.Prefix]int{}}
 }
 
 func (l *connLimit) Accept() (net.Conn, error) {
@@ -328,7 +327,7 @@ func (l *connLimit) Accept() (net.Conn, error) {
 		}
 		key := backoffKey(ip)
 		l.mu.Lock()
-		full := l.open[key] >= l.perAddr
+		full := l.open[key] >= maxConnsPerAddr
 		if !full {
 			l.open[key]++
 		}
@@ -339,9 +338,11 @@ func (l *connLimit) Accept() (net.Conn, error) {
 		}
 		lc := &limitedConn{Conn: c, l: l, key: key}
 		// The timer closes only the socket; the server then closes lc,
-		// which gives the slot back.
+		// which gives the slot back. Settling here first means a right
+		// token that arrives at the deadline cannot race the close.
 		lc.timer = time.AfterFunc(l.authWait, func() {
-			if !lc.settled.Load() {
+			if lc.settled.CompareAndSwap(false, true) {
+				l.release(key)
 				_ = c.Close()
 			}
 		})
