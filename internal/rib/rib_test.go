@@ -397,6 +397,60 @@ func TestDropSessionsKeepsEverySessionDown(t *testing.T) {
 	}
 }
 
+// A neighbor added while DropSessions runs (#529) is added admin-down and
+// stays down once the drop has set dropped, so it opens no session. The
+// test holds dropMu where AddNeighbors re-checks the drop and sets dropped
+// as DropSessions does first.
+func TestAddNeighborDuringDropStaysAdminDown(t *testing.T) {
+	a := newRouter(t)
+	b := newRouterPeer(t, "127.0.0.3", "192.0.2.253", "127.0.0.4")
+	v := newView(t, a)
+	eventually(t, "session", v.Ready)
+
+	nb := Neighbor{Address: netip.MustParseAddr("127.0.0.3"), Port: uint16(b.port), LocalAddress: netip.MustParseAddr("127.0.0.4")}
+	peer := func() (found bool, admin api.PeerState_AdminState) {
+		_ = v.Server().ListPeer(context.Background(), &api.ListPeerRequest{Address: nb.Address.String()}, func(p *api.Peer) {
+			found, admin = true, p.State.AdminState
+		})
+		return found, admin
+	}
+	routerUp := func() bool {
+		up := false
+		_ = b.srv.ListPeer(context.Background(), &api.ListPeerRequest{}, func(p *api.Peer) {
+			up = up || p.State.SessionState == api.PeerState_ESTABLISHED
+		})
+		return up
+	}
+
+	v.dropMu.Lock()
+	done := make(chan error, 1)
+	go func() { done <- v.AddNeighbors(context.Background(), []Neighbor{nb}) }()
+	eventually(t, "peer on the speaker", func() bool { found, _ := peer(); return found })
+	if _, admin := peer(); admin != api.PeerState_DOWN {
+		v.dropMu.Unlock()
+		t.Fatalf("peer added with admin state %v before the drop re-check, want DOWN", admin)
+	}
+	v.mu.Lock()
+	v.dropped = true
+	v.mu.Unlock()
+	v.dropMu.Unlock()
+
+	if err := <-done; err == nil || !strings.Contains(err.Error(), "sessions were dropped") {
+		t.Fatalf("AddNeighbors racing DropSessions: %v", err)
+	}
+	// The router accepts the session; the peer must still never open it.
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, admin := peer(); admin != api.PeerState_DOWN {
+			t.Fatalf("peer admin state %v after the drop, want DOWN", admin)
+		}
+		if routerUp() {
+			t.Fatal("a neighbor added during the drop opened a session")
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
 func TestLocalPrefChangeUpdatesRoute(t *testing.T) {
 	p := netip.MustParsePrefix("198.51.100.0/24")
 	nbr := netip.MustParseAddr("192.0.2.254")
