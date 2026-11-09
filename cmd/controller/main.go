@@ -32,6 +32,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/httpapi"
 	"github.com/GrandArcher/Packeteer/internal/inbound"
 	"github.com/GrandArcher/Packeteer/internal/linkout"
+	"github.com/GrandArcher/Packeteer/internal/nonbgp"
 	"github.com/GrandArcher/Packeteer/internal/notify"
 	"github.com/GrandArcher/Packeteer/internal/pbr"
 	"github.com/GrandArcher/Packeteer/internal/pluginhost"
@@ -320,6 +321,14 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		fmt.Fprintf(stdout, "  - %s\n", line)
 	}
 	switch {
+	case cfg.NonBGP != nil:
+		fmt.Fprintf(stdout, "nonbgp: default_provider=%s steerer=%s covering=%s widen_bits=%d idle=%s max_blocks=%d (synthetic prefixes from flow data, /%d or /%d at the narrowest, never exported over BGP)\n",
+			cfg.NonBGP.DefaultProvider, pluginType(plugins.Steerer), pluginType(plugins.Covering), *cfg.NonBGP.WidenBits, cfg.NonBGP.Idle, cfg.NonBGP.MaxBlocks, nonbgp.FloorV4, nonbgp.FloorV6)
+		if cfg.Mode == config.ModeInject {
+			fmt.Fprintf(stdout, "steer: static routes via %s, max_improvements=%d, withdrawn on shutdown\n", pluginType(plugins.Steerer), *cfg.MaxImprovements)
+		} else {
+			fmt.Fprintln(stdout, "steer: none (mode is not inject; no route is installed)")
+		}
 	case cfg.Mode == config.ModeInject:
 		fmt.Fprintf(stdout, "announce: %s local_pref=%d%s%s\n", announcingVia(cfg, plugins), cfg.LocalPref, formatLocalPrefOverrides(cfg), formatCommunityOverrides(cfg))
 		if ms := cfg.MoreSpecific; ms != nil && ms.Enabled {
@@ -493,7 +502,19 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	var view *rib.View
 	health := syshealth.New(nil)
 	series := provseries.New(nil)
-	rec := newRecorder(cfg, plugins, log, func() *rib.View { return view }, health, series)
+	// The non-BGP mode (#300) is built before the recorder and the HTTP
+	// server, which label and list its synthetic prefixes.
+	nb, nerr := newNonBGP(cfg, plugins, log)
+	if nerr != nil {
+		log.Error("refusing to start", "err", nerr)
+		return 1
+	}
+	var syntheticAPI func() nonbgp.Status
+	if nb != nil {
+		syntheticAPI = nb.Status
+		col.SetSynthetic(nb.Has)
+	}
+	rec := newRecorder(cfg, plugins, log, func() *rib.View { return view }, nb.Has, health, series)
 	var reports httpapi.ReportSource
 	if rec != nil {
 		reports = rec
@@ -667,7 +688,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		httpSrv, err = httpapi.New(httpapi.Options{
 			Addr: addr, User: httpUser, Password: httpPass, Snapshot: col.Snapshot, Logger: log,
 			Auth: authSvc, Audit: audit, Events: evlog, AllowFrom: cfg.HTTPAllowFrom(),
-			Maintenance: maint, Reports: reports, Tools: tools, Inbound: inboundStatus, Verification: verificationStatus, Mitigation: mitAPI, Anomaly: anomAPI, ThreatFeeds: feedsAPI, Leaks: leakAPI,
+			Maintenance: maint, Reports: reports, Tools: tools, Inbound: inboundStatus, Verification: verificationStatus, Synthetic: syntheticAPI, Mitigation: mitAPI, Anomaly: anomAPI, ThreatFeeds: feedsAPI, Leaks: leakAPI,
 			Federation: fed.status, FederationPush: fedPush, HA: haStatus, Export: exportStats(exp), SourceErrors: plugins.SourceReadErrors,
 			ConfigEditor: editorAPI, FirstRun: firstRunAPI, Dashboards: dashboardStore(plugins), Subscriptions: subsAPI,
 			Setup: setupInfo(cfg, plugins, geo), Upgrade: upgradeAPI, Linkouts: linkout.New(cfg.Linkouts), RingLG: ringlg.New(cfg.RingLG, version), Atlas: atl,
@@ -760,7 +781,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		defer func() { _ = view.Stop(context.Background()) }()
 		go logRIB(ctx, view, log)
 	}
-	if cfg.Mode == config.ModeInject {
+	if cfg.Mode == config.ModeInject && nb == nil {
 		if view == nil || view.Server() == nil {
 			log.Error("refusing to start", "err", "inject mode requires an iBGP session")
 			return 1
@@ -803,7 +824,12 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			rec.Probe(r)
 		}
 	}
-	engine, err = newEngine(cfg, plugins, log, onRound, onProbe, herdBatch(cfg, &herdRef), pktLimiter, asnLimiter, func() *rib.View { return view })
+	onBatch := herdBatch(cfg, &herdRef)
+	if nb != nil && onBatch != nil {
+		share := onBatch
+		onBatch = func(b []probe.Result) { share(nb.forHerd(b)) }
+	}
+	engine, err = newEngine(cfg, plugins, log, onRound, onProbe, onBatch, pktLimiter, asnLimiter, func() *rib.View { return view })
 	if err != nil {
 		log.Error("refusing to start", "err", err)
 		return 1
@@ -827,6 +853,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		return 1
 	}
 	wirePrefixLookup(plugins, view)
+	nb.wireLookup(plugins)
 	wireFlowExport(plugins, exp, nativeProvider(view), exportFlowTags)
 	wireExchangeLANs(cfg, plugins)
 	wireProbeExclusion(cfg, plugins, view)
@@ -835,7 +862,11 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	wireOutage(plugins, engine, view, dispatch)
 	col.SetTelemetry(func() []plugin.Usage { return collectTelemetry(context.Background(), plugins) })
 	col.SetFlowTracked(func() int { return flowTracked(plugins) })
-	col.SetTruncated(func() map[string]uint64 { return truncated(plugins) })
+	col.SetTruncated(func() map[string]uint64 {
+		m := truncated(plugins)
+		nb.addTruncated(m)
+		return m
+	})
 	col.Attach(engine, decider, view)
 	if rpkiSet.Enabled() {
 		col.SetRPKI(rpkiSet.Lookup)
@@ -883,7 +914,14 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		return 1
 	}
 	bootstrapAdmin(ctx, authSvc, audit, besideStorage(plugins, firstRunPasswordFile), getenv, log)
-	hd, herr := startHerd(ctx, cfg, plugins, view, audit, dispatch.Emit, ha.active, log)
+	var herdView herd.RIB
+	switch {
+	case view != nil:
+		herdView = view
+	case nb != nil:
+		herdView = nb.herdView()
+	}
+	hd, herr := startHerd(ctx, cfg, plugins, herdView, audit, dispatch.Emit, ha.active, log)
 	if herr != nil {
 		log.Error("refusing to start", "err", herr)
 		return 1
@@ -1003,7 +1041,9 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 				return
 			}
 			leading = true
+			nb.Refresh()
 			in, rpkiRounds := decisionInput(loopCtx, now, engine, view, plugins, fed, rpkiSet, irrChecker)
+			nb.Fill(&in)
 			in.Held = lw.Held
 			in.Synthesize = ctl.Synthesizable(in.Results)
 			fillOverloadInputs(loopCtx, &in, snap, plugins)
@@ -1012,6 +1052,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			}
 			verified, backedOut, revertedIn := verifier.check(loopCtx, now, ctl.Injected, in.Results)
 			changes, err := runDecision(now, decider, in, ctl, log, snap.Mode, engine)
+			err = errors.Join(err, nb.Sync(decider.Improvements()))
 			policyFeed.Touch(now, decider.Improvements())
 			changes = append(backedOut, changes...)
 			atlasAfterMoves(atl, ctl.Injected, changes, in.Results)
@@ -1055,6 +1096,11 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 				watch.commit(now, exchange.WithPortCommit(collectTelemetry(loopCtx, plugins), portCommits))
 			}
 		})
+	}()
+	loopWG.Add(1)
+	go func() {
+		defer loopWG.Done()
+		nb.Run(loopCtx)
 	}()
 	if lw != nil {
 		// Stopped before the shutdown withdraw, like the decision loop.
@@ -1141,6 +1187,9 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	announcing := "disabled"
 	if cfg.Mode == config.ModeInject {
 		announcing = announcingVia(cfg, plugins)
+		if nb != nil {
+			announcing = "static routes via " + nb.meta.Steerer
+		}
 	}
 	log.Info("packeteer running", "version", version, "mode", cfg.Mode, "bgp_neighbors", len(cfg.BGP.Neighbors), "announce", announcing)
 	if cfg.Synthesizing() {
@@ -1165,7 +1214,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	// Withdraw while the session is still up, then stop plugins (the announcer
 	// withdraws again) and finally drop the session. Graceful restart is never
 	// enabled, so a missed withdraw still disappears with the session.
-	withdrawErr := errors.Join(mit.WithdrawAll(stopCtx), inb.WithdrawAll(stopCtx), ctl.WithdrawAll(stopCtx))
+	withdrawErr := errors.Join(mit.WithdrawAll(stopCtx), inb.WithdrawAll(stopCtx), ctl.WithdrawAll(stopCtx), nb.WithdrawAll(stopCtx))
 	// Consumers drop every route now rather than at the TTL.
 	policyFeed.Close()
 	exportFlowTags.set("", nil, nil)

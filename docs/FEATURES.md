@@ -19,6 +19,7 @@ Milestones:
 - **v0.8**: Internet exchanges and shared measurements: IXP observe-only mode (member import, fabric probes, route-server history and signals, incident correlation, member pages, multi-site health), RPKI labels, probe multiplexing and the path check, the shared IX port, PeeringDB lookup, events from measured health, settings forms for most config blocks, and the opt-in herd and its hub. Partial rows say what is missing.
 - **v0.9**: evidence and explanations (decision checks, probe confidence, steer verification, reordering, the `https` prober, probe agents, `probe.exclude`), registries (RPKI and IRR per provider path, registry hygiene, NetBox and Peering Manager), outputs (exporters, an SNMP agent, syslog, an external policy feed, BMP alone), plugin work (gRPC plugins, the author guide), opt-in outside sources (herd page, Atlas, NLNOG RING, threat feeds, GeoIP), MED and overload protection, `synthesize`, and the UI refresh. Lab only; partial rows say what is missing.
 - **v1.0**: no new rows. The pre-release audit and review pass over v0.9 (#486-#494, #501-#510, review #215): fixes to the allowlist and announce path, the BMP, flow, and policy-feed inputs, sign-in, probe agents, HA, and the signed upgrade, and probe and RIB cost at 100k targets. The counts below are unchanged. Lab only; nothing is field-proven (#54).
+- **v1.1**: post-1.0 features. Non-BGP mode for a dual-ISP site (#300), lab only.
 - **v1.0.1**: no new rows. A patch with the post-v1.0 hardening fixes (#527-#536). The counts below are unchanged. Lab only; nothing is field-proven (#54).
 
 ## Summary
@@ -33,12 +34,13 @@ Milestones:
 | v0.7 | 3 | 3 |
 | v0.8 | 20 | 16 |
 | v0.9 | 31 | 28 |
+| v1.1 | 1 | 1 |
 | won't do | 2 | - |
-| **total** | 142 | 130 |
+| **total** | 143 | 131 |
 
 | Status | Count |
 |---|---|
-| done | 130 |
+| done | 131 |
 | partial | 10 |
 | in progress | 0 |
 | planned | 0 |
@@ -60,6 +62,7 @@ The flow window keeps 20,000 exact cells by default, and a fixed HyperLogLog per
 | Active probing per provider: HTTPS | done (#306: a GET or HEAD over TLS from the provider source to the probe host, timed as TCP connect, TLS handshake, and time to first byte, which the reply RTT sums; a status outside `status_min`-`status_max` (default 200-399) is loss; TLS verification is on, with `ca_file` for a private CA and `insecure_skip_verify` only per `targets` entry; the three means show on `/api/probes` and the prefix card; a reply counts as evidence beyond ICMP; not in the default chain, meant for pinned hosts that serve HTTPS) | v0.9 | prober (`https`) | #306 | no |
 | Traceroute-based probe target discovery | done: the `traceroute` source pins its own targets; `probe.indirect` (opt-in) traces any silent prefix from each provider's source and scores each provider at its own highest stable hop, marked indirect (#123) | v0.2 | source (`traceroute`) + probe engine (`probe.indirect`) | #15, #123 | no |
 | Loss / latency / jitter measurement and scoring | done | v0.1 | prober + scorer (`weighted`) | #2, #7 | no |
+| Non-BGP mode: flow-driven static routes for a dual-ISP site whose router has no BGP | done (unit and daemon tests only; #300: the `nonbgp` block, off unless set, default `mode: observe`; flow destinations are tracked as synthetic prefixes (never more specific than /24 or /48) that widen inside the announced prefix a `covering` plugin looked up and narrow back as blocks go idle; an improvement becomes a static route through the other link's gateway on a RouterOS 7 router (REST API) or a Linux host (`ip route`), only inside the allowlist and `max_improvements`, tagged so only Packeteer's own routes are changed, removed on shutdown, retirement, or a new start; synthetic routes are labeled on `/api/synthetic`, `/api/improvements`, history, and the Improvements page and never exported over BGP; the herd sees only the announced prefix; a hard kill leaves routes until the next start; fake-router tests and a daemon test with NetFlow input, not a real router) | v1.1 | steerer (`mikrotik`, `linux`) + covering (`ripestat`) + source (`flow`) + core (`internal/nonbgp`) ([nonbgp.md](nonbgp.md)) | #300 | no (no lab job yet) |
 | Throughput-aware scoring (prefix volume weighting) | done (lab-proven) | v0.4 | scorer (`commit` uses flow volume, #18; `improvement_weights` rank performance moves for the cap by gain and volume, #34) | #18, #34 | no (lab-proven) |
 | Probe sources per provider (source-IP policy routing) | done | v0.1 | core + docs | #2 | no |
 | Static probe target lists | done | v0.1 | source (`static`) | #2 | no |

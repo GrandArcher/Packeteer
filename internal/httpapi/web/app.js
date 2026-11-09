@@ -7,6 +7,7 @@ var lastProviders = null;
 var lastProviderStats = null;
 var lastPrefixes = null;
 var lastImprovements = null;
+var lastSynthetic = null;
 var lastReady = null;
 var lastMitigation = null;
 var lastOverview = null;
@@ -583,7 +584,10 @@ function renderImprovements(data) {
   if (title) title.textContent = inject ? "Active improvements" : "Recommended improvements";
   var cap = lastOverview && lastOverview.counts && lastOverview.counts.max_improvements;
   var tag = document.getElementById("improvements-tag");
-  if (tag) tag.textContent = (inject ?
+  var synthetic = Boolean(lastSynthetic && lastSynthetic.enabled);
+  if (tag) tag.textContent = (synthetic ? (inject ?
+    "Installed as static routes on the router; the default route carries everything else. " :
+    "Recommendations only: the static routes inject mode would install. ") : inject ?
     "Announced to the edge with the Packeteer community and NO_EXPORT. " :
     "Recommendations only: what inject mode would announce. ") +
     (cap ? "At most " + cap + " at a time." : "");
@@ -623,6 +627,7 @@ function renderImprovements(data) {
   rows.forEach(function (im) {
     var tr = el("tr");
     tr.appendChild(prefixCell(im.prefix));
+    if (im.source) tr.lastChild.appendChild(el("span", "badge muted", im.source));
     tr.appendChild(el("td", "", im.native || "—"));
     tr.appendChild(el("td", "", im.provider || "—"));
     tr.appendChild(el("td", "", im.cause || "—"));
@@ -1140,6 +1145,57 @@ function renderVerification(data) {
   root.appendChild(table);
 }
 
+// fetchSynthetic reads the non-BGP mode's synthetic prefixes (#300) for the
+// Improvements page.
+function fetchSynthetic() {
+  if (document.body.getAttribute("data-page") !== "improvements") return Promise.resolve(null);
+  return getJSON("/api/synthetic");
+}
+
+// renderSynthetic lists the prefixes learned from flow data, each labeled
+// synthetic, with the announced prefix that bounds it and the link a steered
+// one leaves through. With the mode off the section stays hidden.
+function renderSynthetic(data) {
+  var sec = document.getElementById("synthetic-section");
+  var root = document.getElementById("synthetic");
+  if (!sec || !root) return;
+  sec.hidden = !(data && data.enabled);
+  if (sec.hidden) return;
+  clear(root);
+  var note = document.getElementById("synthetic-note");
+  if (note) {
+    note.textContent = "Learned from flow data, not from BGP, and never exported to a BGP peer. " +
+      "The default route (" + data.default_provider + ") carries every prefix that is not steered. " +
+      data.tracked_blocks + " blocks tracked" + (data.dropped_blocks ? ", " + data.dropped_blocks + " not tracked (max_blocks reached)" : "") + ".";
+  }
+  var rows = data.routes || [];
+  if (!rows.length) {
+    root.appendChild(el("p", "empty", "No destinations seen in flow data yet."));
+    return;
+  }
+  var table = el("table");
+  var hr = el("tr");
+  ["Prefix", "Source", "Announced prefix", "Blocks", "Last flow", "Steered to"].forEach(function (h) { hr.appendChild(el("th", "", h)); });
+  var thead = el("thead");
+  thead.appendChild(hr);
+  table.appendChild(thead);
+  var tb = el("tbody");
+  rows.forEach(function (r) {
+    var tr = el("tr");
+    tr.appendChild(prefixCell(r.prefix));
+    var src = el("td");
+    src.appendChild(el("span", "badge muted", r.source));
+    tr.appendChild(src);
+    tr.appendChild(el("td", "mono", r.upper || "not looked up"));
+    tr.appendChild(el("td", "", String(r.blocks)));
+    tr.appendChild(el("td", "", fmtTime(r.last_seen)));
+    tr.appendChild(el("td", "", r.steered_to ? r.steered_to + " via " + r.next_hop : "default route"));
+    tb.appendChild(tr);
+  });
+  table.appendChild(tb);
+  root.appendChild(table);
+}
+
 function refresh() {
   if (refreshing) {
     refreshAgain = true;
@@ -1158,7 +1214,8 @@ function refresh() {
     getJSON("/api/federation"),
     getJSON("/api/overview"),
     fetchProviderStats(),
-    fetchVerification()
+    fetchVerification(),
+    fetchSynthetic()
   ]).then(function (results) {
     var err = null;
     if (results[6].status === "fulfilled") {
@@ -1183,7 +1240,10 @@ function refresh() {
       renderASNMap(lastPrefixes);
       if (typeof prefixPageUpdate === "function") prefixPageUpdate(lastPrefixes);
     }
+    if (results[9].status === "fulfilled" && results[9].value) lastSynthetic = results[9].value;
     if (lastImprovements) renderImprovements(lastImprovements);
+    // The synthetic list is optional: a failed read leaves the section as it was.
+    if (lastSynthetic) renderSynthetic(lastSynthetic);
     // Verification is optional: a failed read leaves the section as it was.
     if (results[8].status === "fulfilled" && results[8].value) renderVerification(results[8].value);
     // Mitigation is optional; its failure does not mark the page stale.

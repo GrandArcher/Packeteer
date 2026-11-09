@@ -8,6 +8,7 @@ import (
 
 	"github.com/GrandArcher/Packeteer/internal/config"
 	"github.com/GrandArcher/Packeteer/internal/exchange"
+	"github.com/GrandArcher/Packeteer/internal/nonbgp"
 	"github.com/GrandArcher/Packeteer/internal/policy"
 	"github.com/GrandArcher/Packeteer/internal/probe"
 	"github.com/GrandArcher/Packeteer/internal/rib"
@@ -55,6 +56,9 @@ type Input struct {
 	// its origin AS for the prefix and the provider's as-set (#214). Nil
 	// leaves the label empty.
 	IRR func(netip.Prefix, uint32, string) plugin.IRRAnswer
+	// Synthetic, when set, reports a prefix learned from flow data in the
+	// non-BGP mode (#300). Its rows carry source "synthetic".
+	Synthetic func(netip.Prefix) bool
 
 	// Telemetry is interface usage. It is not a routing decision.
 	Telemetry []plugin.Usage
@@ -373,6 +377,9 @@ type Improvement struct {
 	Since    time.Time `json:"since,omitempty"`
 	Reason   string    `json:"reason,omitempty"`
 	Cause    string    `json:"cause,omitempty"`
+	// Source is "synthetic" for a prefix learned from flow data in the
+	// non-BGP mode (#300). Empty for a learned BGP route.
+	Source string `json:"source,omitempty"`
 	// CostDelta is the native cost per Mbps minus the steered provider's;
 	// EstSavings is that times the prefix volume. Estimates for reports.
 	CostDelta  float64 `json:"cost_delta,omitempty"`
@@ -716,6 +723,9 @@ func assembleImprovements(in Input) []Improvement {
 			VolumeMbps:  jsonFloat(im.VolumeMbps),
 			MEDOverride: im.MEDOverride,
 			Covering:    coveringText(im.Covering),
+		}
+		if in.Synthetic != nil && in.Synthetic(im.Prefix) {
+			row.Source = nonbgp.SourceSynthetic
 		}
 		explainImprovement(&row, cands[im.Prefix], in.Thresholds)
 		if left := im.Since.Add(in.Thresholds.HoldTime).Sub(in.At); left > 0 && !im.Since.IsZero() {

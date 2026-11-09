@@ -298,7 +298,15 @@ func (c *Config) validateHerd(add func(string, ...any)) {
 	if c.Storage == nil || c.Storage.Type != "sqlite" {
 		add("herd needs storage type sqlite: herd records live in its tables")
 	}
-	if len(c.BGP.Neighbors) == 0 {
+	switch {
+	case c.NonBGP != nil:
+		if c.NonBGP.Covering == nil {
+			add("herd with nonbgp needs nonbgp.covering: only the announced prefix of a synthetic route is shared")
+		}
+		if !slices.Contains(h.Share.Sources, "flow") {
+			add("herd with nonbgp shares only flow-sourced measurements: add flow to herd.share.sources")
+		}
+	case len(c.BGP.Neighbors) == 0:
 		add("herd needs bgp.neighbors: records are built from learned routes")
 	}
 	for _, p := range c.Probers {

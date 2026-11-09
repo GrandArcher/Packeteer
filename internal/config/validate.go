@@ -48,6 +48,7 @@ func (c *Config) Validate() error {
 	c.validateInject(add)
 	c.validateExternalPolicy(add)
 	c.validateIXP(add)
+	c.validateNonBGP(add)
 	c.validateHerd(add)
 
 	// Cause and provider overrides are optional in every mode. A set 0 is
@@ -583,7 +584,8 @@ func (c *Config) validateMoreSpecific(add func(string, ...any)) {
 // validateInject enforces the extra safety requirements of inject mode
 // (see AGENTS.md).
 func (c *Config) validateInject(add func(string, ...any)) {
-	if c.Mode == ModeInject {
+	// The non-BGP mode checks its own inject rules (validateNonBGP).
+	if c.Mode == ModeInject && c.NonBGP == nil {
 		if len(c.Allowlist.Prefixes) == 0 {
 			add("mode inject requires a non-empty allowlist.prefixes")
 		}

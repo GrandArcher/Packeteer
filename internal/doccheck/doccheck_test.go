@@ -23,7 +23,7 @@ func read(t *testing.T, rel ...string) string {
 
 type count struct{ rows, done int }
 
-var milestoneCell = regexp.MustCompile(`^v0\.\d+(, v0\.\d+)*$`)
+var milestoneCell = regexp.MustCompile(`^v\d+\.\d+(, v\d+\.\d+)*$`)
 
 // tableCounts counts the capability rows of docs/FEATURES.md by the first
 // milestone of each row, the rule the Summary section states. It also counts
@@ -52,7 +52,7 @@ func tableCounts(t *testing.T, features string) (map[string]count, map[string]in
 		case milestoneCell.MatchString(ms):
 			key = strings.Split(ms, ",")[0]
 		default:
-			t.Fatalf("FEATURES.md row %q: milestone %q is not v0.N", name, ms)
+			t.Fatalf("FEATURES.md row %q: milestone %q is not vN.N", name, ms)
 		}
 		word := strings.Fields(strings.NewReplacer(":", " ", "(", " ", ",", " ", ";", " ").Replace(status))[0]
 		if word == "in" {
@@ -89,7 +89,7 @@ func summaryCounts(t *testing.T, doc, heading string) map[string]count {
 	if j := strings.Index(section, "\n## "); j >= 0 {
 		section = section[:j]
 	}
-	row := regexp.MustCompile(`(?m)^\| (?:\*\*)?(v0\.\d+|won't do|[Tt]otal)(?:\*\*)? \| (?:\*\*)?(\d+)(?:\*\*)? \| (?:\*\*)?(\d+|-)(?:\*\*)? \|$`)
+	row := regexp.MustCompile(`(?m)^\| (?:\*\*)?(v\d+\.\d+|won't do|[Tt]otal)(?:\*\*)? \| (?:\*\*)?(\d+)(?:\*\*)? \| (?:\*\*)?(\d+|-)(?:\*\*)? \|$`)
 	got := map[string]count{}
 	for _, m := range row.FindAllStringSubmatch(section, -1) {
 		var c count

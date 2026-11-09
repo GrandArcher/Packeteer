@@ -41,7 +41,7 @@ Every page has the same chrome (#170). The mode banner is the first thing on the
 |---|---|---|
 | Overview | `/` | Latency and improvement charts, tiles, setup checklist (with a Fix in Settings link when the config editor is on), optional features, and POPs when federation is on (an admin also gets Push settings to peers there, [multi-pop.md](multi-pop.md#pushing-settings)) |
 | Dashboards | `/dashboards.html` | Custom dashboards (the existing page) |
-| Improvements | `/improvements.html` | Recommended or active improvements |
+| Improvements | `/improvements.html` | Recommended or active improvements; in the non-BGP mode (#300) also a Synthetic routes section ([nonbgp.md](nonbgp.md)) |
 | Prefixes & ASNs | `/prefixes.html` | The measured-prefix table, one page at a time, and the ASN map ([below](#prefix-list)) |
 | Graphs | `/graphs.html` | Before/after loss and latency charts (#129; [below](#graphs)). Empty state without history |
 | Reports | `/reports.html` | History reports by category with a range, filters, sortable columns, and CSV and XLSX export ([below](#reports)) |

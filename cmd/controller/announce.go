@@ -156,6 +156,11 @@ func formatCommunityOverrides(cfg *config.Config) string {
 }
 
 func newController(cfg *config.Config, plugins *pluginhost.Set, view *rib.View, inb *inbound.Controller, mit *mitigation.Controller, held func(netip.Prefix) bool, origins *rpki.Set, feed *extpolicy.Feed, log *slog.Logger) (*announce.Controller, error) {
+	if cfg.NonBGP != nil {
+		// No BGP session: the steer controller puts static routes on the
+		// router instead (#300).
+		return nil, nil
+	}
 	var ann plugin.Announcer
 	if plugins.Announcer != nil {
 		ann = plugins.Announcer.Plugin

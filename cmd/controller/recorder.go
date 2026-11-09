@@ -18,7 +18,7 @@ import (
 // newRecorder returns nil when no storage plugin is configured. It reads
 // the RIB view for origin ASNs and asks policy plugins that have a GeoIP
 // database for countries. History never announces or changes a decision.
-func newRecorder(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, view func() *rib.View, health *syshealth.Tracker, series *provseries.Series) *history.Recorder {
+func newRecorder(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, view func() *rib.View, synthetic func(netip.Prefix) bool, health *syshealth.Tracker, series *provseries.Series) *history.Recorder {
 	if plugins == nil || plugins.Storage == nil {
 		return nil
 	}
@@ -53,6 +53,7 @@ func newRecorder(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, 
 		Mode:      cfg.Mode,
 		Logger:    log.With("component", "history"),
 		Describe:  describe,
+		Synthetic: synthetic,
 		Volumes:   func(ctx context.Context) map[netip.Prefix]float64 { return collectVolumes(ctx, plugins) },
 		Exchanges: peers,
 		Series:    series,

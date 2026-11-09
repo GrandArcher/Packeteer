@@ -21,6 +21,7 @@ Set these on the container (`-e NAME`). Secrets belong here, never in the config
 | `PACKETEER_GEOIP_USER`, `PACKETEER_GEOIP_KEY` | Basic-authentication account for the `geoip` country database download (#135; for MaxMind, the account ID and the license key). Set both or neither. Sent only over https or to a loopback address, never logged or returned. |
 | `PACKETEER_POLICY_TOKEN` | Bearer token of the `external_policy` feed (#232) unless `token_env` names another variable. At least 16 characters; compared in constant time and never logged. `packeteer-policy` reads the same variable by default. See [external-policy.md](external-policy.md). |
 | `PACKETEER_ATLAS_API_KEY` | Your RIPE Atlas API key for the `atlas` block (#213). Sent only in the `Authorization` header to the Atlas API, never logged, never in the URL, and never in `GET /api/atlas`, the System page, or an error. Unset means the integration makes no request. |
+| `PACKETEER_ROUTER_USER`, `PACKETEER_ROUTER_PASSWORD` | Login of the router REST API for `nonbgp.steerer` type `mikrotik` (#300), named by `username_env` and `password_env`. Sent only as basic authentication to the https `url` (http only to a loopback host), never logged and never in an API answer. Use an account that can change routes only. |
 | `PACKETEER_NETBOX_TOKEN`, `PACKETEER_PEERING_MANAGER_TOKEN` | API token of the `inventory` type `netbox` or `peeringmanager`. Read only by `packeteer config plan`, `diff`, and `apply`; sent only as an `Authorization` header to `base_url`. See [inventory.md](inventory.md). |
 
 ## Referenced from config
@@ -41,6 +42,7 @@ A `*_env` key set through the config editor (raw YAML, the form, or a federation
 | `auth.sso` `oidc` | `PACKETEER_OIDC_` |
 | `threat_feeds.feeds` `http` | `PACKETEER_FEED_` |
 | `external_policy` | `PACKETEER_POLICY_` |
+| `nonbgp.steerer` `mikrotik` | `PACKETEER_ROUTER_` |
 
 Any other plugin takes only names the running config already uses there.
 

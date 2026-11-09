@@ -4,6 +4,10 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ## [Unreleased]
 
+### Added
+
+- Non-BGP mode: flow-driven static routes for a dual-ISP site whose router has no BGP, with `mikrotik` and `linux` steerers, synthetic prefixes, `/api/synthetic` (#300).
+
 ## [1.0.1] - 2026-11-09
 
 The v1.0.1 patch is the post-v1.0 hardening pass (#527-#536), with no new capability rows; the shipped config stays `mode: observe` and injection stays off by default.

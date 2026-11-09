@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/nonbgp"
 	"github.com/GrandArcher/Packeteer/internal/policy"
 	"github.com/GrandArcher/Packeteer/internal/probe"
 	"github.com/GrandArcher/Packeteer/internal/provseries"
@@ -61,6 +62,9 @@ type Options struct {
 	// Describe returns the origin ASN and country for a prefix. Either
 	// may be zero. Nil records neither.
 	Describe func(netip.Prefix) (asn uint32, country string)
+	// Synthetic reports a prefix learned from flow data in the non-BGP mode
+	// (#300); its records carry source "synthetic". Nil labels none.
+	Synthetic func(netip.Prefix) bool
 	// Volumes returns observed per-prefix rates in Mbps. Nil records none.
 	Volumes func(ctx context.Context) map[netip.Prefix]float64
 	// Exchanges maps each exchange peer (a provider name) to its exchange
@@ -554,6 +558,9 @@ func (r *Recorder) Decision(now time.Time, changes []policy.Change, results []pr
 			}
 			if rec.Cause == "" {
 				rec.Cause = plugin.CausePerformance
+			}
+			if r.opt.Synthetic != nil && r.opt.Synthetic(imp.Prefix) {
+				rec.Source = nonbgp.SourceSynthetic
 			}
 			if c.Explain != nil {
 				if b, err := json.Marshal(c.Explain); err == nil {
