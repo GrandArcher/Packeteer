@@ -18,9 +18,9 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/auth"
 )
 
-// The single basic-auth account is throttled per user and client network
-// like the auth service: ten bad attempts refuse even the right password
-// from that /64, while another network still signs in (#493).
+// The single basic-auth account is throttled per client network: ten bad
+// attempts refuse even the right password from that /64, while another
+// network still signs in (#493).
 func TestLegacyBasicAuthThrottled(t *testing.T) {
 	s, err := New(Options{User: "ops", Password: "secret", Snapshot: func() Snapshot { return Snapshot{} }})
 	if err != nil {
@@ -44,6 +44,46 @@ func TestLegacyBasicAuthThrottled(t *testing.T) {
 	}
 	if code := get("[2001:db8:0:8::1]:40000", "secret"); code != http.StatusOK {
 		t.Fatalf("right password from another /64: %d", code)
+	}
+}
+
+// The basic-auth account is counted per network, whatever user name is
+// sent: failures under other names lock it out, and 10,001 more attempts
+// under new names (more than the 10,000-entry throttle table) are refused
+// without adding entries, so the lockout holds (#527).
+func TestLegacyBasicAuthThrottleIgnoresUserName(t *testing.T) {
+	s, err := New(Options{User: "ops", Password: "secret", Snapshot: func() Snapshot { return Snapshot{} }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := s.Handler()
+	get := func(remote, user, pass string) int {
+		r := httptest.NewRequest(http.MethodGet, "/api/providers", nil)
+		r.RemoteAddr = remote
+		r.SetBasicAuth(user, pass)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, r)
+		return rec.Code
+	}
+	const remote = "192.0.2.10:40000"
+	for i := range 10 {
+		if code := get(remote, fmt.Sprintf("user%d", i), "guess"); code != http.StatusUnauthorized {
+			t.Fatalf("bad attempt %d: %d", i, code)
+		}
+	}
+	if code := get(remote, "ops", "secret"); code != http.StatusTooManyRequests {
+		t.Fatalf("right password after failures under other names: %d", code)
+	}
+	for i := range 10_001 {
+		if code := get(remote, fmt.Sprintf("flood%d", i), "guess"); code != http.StatusTooManyRequests {
+			t.Fatalf("flood attempt %d: %d", i, code)
+		}
+	}
+	if code := get(remote, "ops", "secret"); code != http.StatusTooManyRequests {
+		t.Fatalf("right password after the flood: %d", code)
+	}
+	if code := get("198.51.100.10:40000", "ops", "secret"); code != http.StatusOK {
+		t.Fatalf("right password from another network: %d", code)
 	}
 }
 

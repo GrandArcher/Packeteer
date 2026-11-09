@@ -708,7 +708,9 @@ type bgpBody struct {
 }
 
 // withAuth checks the single basic-auth account. Failures are counted per
-// user name and client network like the auth service's (#493).
+// client network only: there is one account, and a count per supplied user
+// name would let one network evict its own lockout from the full table with
+// cheap failures under other names (#527).
 func (s *Server) withAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user, pass, ok := r.BasicAuth()
@@ -716,7 +718,7 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 			user, pass = "", ""
 		}
 		ip, now := auth.RemoteIP(r), time.Now()
-		if s.basicFails.Throttled(user, ip, now) {
+		if s.basicFails.Throttled("", ip, now) {
 			writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": auth.ErrThrottled.Error()})
 			return
 		}
@@ -725,7 +727,7 @@ func (s *Server) withAuth(next http.Handler) http.Handler {
 		matchUser := secretEqual(user, s.user)
 		matchPass := secretEqual(pass, s.password)
 		if !ok || !matchUser || !matchPass {
-			s.basicFails.Fail(user, ip, now)
+			s.basicFails.Fail("", ip, now)
 			w.Header().Set("WWW-Authenticate", `Basic realm="packeteer"`)
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 			return
