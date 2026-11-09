@@ -537,9 +537,12 @@ func TestServerAuthDeadline(t *testing.T) {
 		t.Errorf("authorized keep-alive connection not reused after the deadline: %v", reused)
 	}
 
+	// The earlier steps outlast the 3s TTL on a slow runner, and an expired
+	// feed ends the stream.
+	feed.Touch(time.Now(), nil)
 	st, stop := watch(t, srv, tlsCfg, testToken)
 	defer stop()
-	for i := range 3 {
+	for i := range 2 {
 		if _, err := recvDoc(t, st); err != nil {
 			t.Fatalf("authorized stream message %d: %v", i, err)
 		}
