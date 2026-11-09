@@ -105,6 +105,7 @@ func TestOnlyInvalidValidation(t *testing.T) {
 		{"short stable_after", on + "    stable_after: 1m\n", "rpki.only_invalid.stable_after 1m0s must be between 1h0m0s and 8760h0m0s"},
 		{"feed without type", on + "    hijack_feeds: [{}]\n", "rpki.only_invalid.hijack_feeds[0]: type is required"},
 		{"feed name twice", on + "    hijack_feeds: [{type: file}, {type: file}]\n", "rpki.only_invalid.hijack_feeds[1]: name \"file\" is used twice"},
+		{"with ixp", slurm + "      prefixes: [198.51.100.0/24]\nixp: {}\n", "rpki.only_invalid.slurm cannot be combined with ixp"},
 		{"relative path", on + "    slurm: {path: slurm.json, prefixes: [198.51.100.0/24]}\n", "rpki.only_invalid.slurm.path \"slurm.json\" must be an absolute path"},
 		{"no prefixes", slurm, "rpki.only_invalid.slurm.prefixes: at least one prefix is required"},
 		{"host bits", slurm + "      prefixes: [198.51.100.1/24]\n", "rpki.only_invalid.slurm.prefixes[0]: 198.51.100.1/24 has host bits set"},

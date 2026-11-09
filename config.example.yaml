@@ -465,8 +465,8 @@ scorer:
 #   display_fallback:
 #     type: ripestat
 #   # RPKI-invalid only paths (off by default; docs/only-invalid.md). Reports
-#   # prefixes whose every learned route is invalid, classed stale ROA or
-#   # hijack with evidence. Report only. A SLURM (RFC 8416) exception for a
+#   # prefixes whose every learned route is invalid, classed stale ROA,
+#   # hijack, or unclear with evidence. A SLURM (RFC 8416) exception for a
 #   # prefix in slurm.prefixes is written only after an admin approves it.
 #   only_invalid:
 #     enabled: false

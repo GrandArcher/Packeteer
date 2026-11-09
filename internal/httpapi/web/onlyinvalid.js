@@ -33,7 +33,7 @@ function oiCases(root, data, act) {
   clear(root);
   var slurm = data.slurm || {};
   var held = {};
-  (slurm.exceptions || []).forEach(function (x) { if (x.prefix) held[x.prefix] = true; });
+  (slurm.held || []).forEach(function (p) { held[p] = true; });
   if (!data.cases.length) {
     root.appendChild(el("p", "empty", data.scanned ? "No RPKI-invalid only path in the last scan." : "No scan has finished yet. The first one runs about a minute after start."));
     return;

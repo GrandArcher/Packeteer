@@ -259,6 +259,91 @@ func TestAS0Filter(t *testing.T) {
 	}
 }
 
+func as0Detector(t *testing.T, roa string) (*Detector, *fakeRPKI) {
+	t.Helper()
+	r := newRIB()
+	r.add("198.51.100.0/24", "transit-a", t0.Add(-90*24*time.Hour), 64496, 64500)
+	r.add("198.51.100.0/24", "transit-b", t0.Add(-90*24*time.Hour), 64497, 64500)
+	v := newRPKI(plugin.RPKIVRP{Prefix: netip.MustParsePrefix(roa), MaxLen: 24, ASN: 0})
+	d := newDetector(r, v, irrAnswers(map[netip.Prefix][]uint32{fixture: {64500}}, 64500), &events{})
+	d.Scan(t.Context())
+	return d, v
+}
+
+// An AS0 filter drops every payload under the ROA's prefix, so a ROA wider
+// than slurm.prefixes is refused and nothing is audited as a proposal.
+func TestAS0FilterStaysInsideAllowlist(t *testing.T) {
+	d, _ := as0Detector(t, "198.51.0.0/16")
+	e, au, _ := newExceptions(t, d, 0)
+	if _, err := e.Propose(t.Context(), admin, fixture); !errors.Is(err, ErrNotAllowed) || !strings.Contains(err.Error(), "198.51.0.0/16") {
+		t.Fatalf("wide AS0 ROA: %v", err)
+	}
+	if len(au.recs) != 0 {
+		t.Fatalf("audited: %v", au.actions())
+	}
+}
+
+// What is written is what the admin reviewed: an AS0 ROA that appears
+// after the proposal changes the filters, so the approval is refused.
+func TestApproveRefusedWhenROAsChange(t *testing.T) {
+	d, v := as0Detector(t, "198.51.100.0/22")
+	e, au, path := newExceptions(t, d, 0)
+	p, err := e.Propose(t.Context(), admin, fixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v.vrps.Apply([]rpki.Change{{Prefix: fixture, MaxLen: 24, ASN: 0}})
+	d.Scan(t.Context())
+	if _, err := e.Approve(t.Context(), admin, p.ID, p.Digest); !errors.Is(err, ErrDigest) {
+		t.Fatalf("approve after the ROAs changed: %v", err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("file written: %v", err)
+	}
+	if got := strings.Join(au.actions(), " "); got != "rpki.slurm.propose:ok" {
+		t.Fatalf("audit = %s", got)
+	}
+}
+
+// A failed write is audited as a failed approval, not an approval that
+// worked.
+func TestApproveWriteFailureAudit(t *testing.T) {
+	d, _, _ := staleDetector(t)
+	e, au, _ := newExceptions(t, d, 0)
+	p, err := e.Propose(t.Context(), admin, fixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.cfg.Path = filepath.Join(t.TempDir(), "missing", "slurm.json")
+	if _, err := e.Approve(t.Context(), admin, p.ID, p.Digest); !errors.Is(err, ErrFile) {
+		t.Fatalf("approve: %v", err)
+	}
+	if got := strings.Join(au.actions(), " "); got != "rpki.slurm.propose:ok rpki.slurm.approve:failed rpki.slurm.write:failed" {
+		t.Fatalf("audit = %s", got)
+	}
+}
+
+// Held names the cases whose exception is in the file, also when an AS0
+// filter sits on a wider ROA prefix.
+func TestHeld(t *testing.T) {
+	d, _ := as0Detector(t, "198.51.100.0/22")
+	e, _, _ := newExceptions(t, d, 0)
+	cases := d.Status().Cases
+	if held, err := e.Held(cases); err != nil || len(held) != 0 {
+		t.Fatalf("before approval: %v %v", held, err)
+	}
+	p, err := e.Propose(t.Context(), admin, fixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.Approve(t.Context(), admin, p.ID, p.Digest); err != nil {
+		t.Fatal(err)
+	}
+	if held, err := e.Held(cases); err != nil || len(held) != 1 || held[0] != fixture {
+		t.Fatalf("after approval: %v %v", held, err)
+	}
+}
+
 // #401 acceptance: the review reminder fires once for an exception past
 // review_after, and without review_after there is none.
 func TestReviewReminder(t *testing.T) {

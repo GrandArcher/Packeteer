@@ -47,6 +47,25 @@ func TestIncidentsOverlap(t *testing.T) {
 	}
 }
 
+// An incident on a covering prefix counts for every case inside it. That
+// is deliberate: a hijack of the covering block is evidence against a
+// stale-ROA reading of its sub-prefix, and the cost of a false match is
+// only that no exception is proposed.
+func TestIncidentsCoveringPrefix(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "incidents.json")
+	if err := os.WriteFile(path, []byte(`{"incidents":[{"prefix":"198.51.0.0/16","origin":64511}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f := newFeed(t, path)
+	got, err := f.Incidents(t.Context(), netip.MustParsePrefix("198.51.100.0/24"))
+	if err != nil || len(got) != 1 || got[0].Prefix != netip.MustParsePrefix("198.51.0.0/16") || got[0].Origin != 64511 {
+		t.Fatalf("covering incident: %+v %v", got, err)
+	}
+	if got, _ = f.Incidents(t.Context(), netip.MustParsePrefix("203.0.113.0/24")); len(got) != 0 {
+		t.Fatalf("outside the incident: %+v", got)
+	}
+}
+
 // #401: a missing or broken file is an error, never an empty answer, so
 // it is not read as "no incident"; a good list survives a later broken
 // write but not the file's removal.

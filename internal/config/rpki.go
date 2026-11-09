@@ -30,7 +30,8 @@ type RPKI struct {
 	DisplayFallback *PluginSpec `yaml:"display_fallback"`
 	// OnlyInvalid reports RPKI-invalid routes that are the only path to a
 	// destination, classed from evidence (#401). Nil or not enabled is
-	// off. It never announces and never changes ROV policy.
+	// off. It never announces and never changes the learned RIB; an
+	// approved slurm exception changes the validation data the RTR cache serves.
 	OnlyInvalid *OnlyInvalid `yaml:"only_invalid"`
 }
 
@@ -158,6 +159,9 @@ func (c *Config) validateOnlyInvalid(add func(string, ...any)) {
 	s := o.SLURM
 	if s == nil {
 		return
+	}
+	if c.IXP != nil {
+		add("rpki.only_invalid.slurm cannot be combined with ixp: an exception changes what the exchange's RTR cache serves, and IXP mode may not change member routing")
 	}
 	if !filepath.IsAbs(s.Path) {
 		add("rpki.only_invalid.slurm.path %q must be an absolute path (a mounted volume the RTR cache also reads)", s.Path)

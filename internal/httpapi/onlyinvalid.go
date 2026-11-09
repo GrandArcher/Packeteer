@@ -27,7 +27,9 @@ type slurmView struct {
 	Path       string                  `json:"path,omitempty"`
 	Prefixes   []netip.Prefix          `json:"prefixes"`
 	Exceptions []onlyinvalid.Exception `json:"exceptions"`
-	Error      string                  `json:"error,omitempty"`
+	// Held are the case prefixes whose exception is already in the file.
+	Held  []netip.Prefix `json:"held"`
+	Error string         `json:"error,omitempty"`
 }
 
 // handleOnlyInvalid serves the open cases with their evidence and the
@@ -39,7 +41,7 @@ func (s *Server) handleOnlyInvalid(w http.ResponseWriter, r *http.Request) {
 		onlyinvalid.Status
 		SLURM slurmView `json:"slurm"`
 	}{meta: s.snapshot().meta(), Status: onlyinvalid.Status{Cases: []onlyinvalid.Case{}},
-		SLURM: slurmView{Prefixes: []netip.Prefix{}, Exceptions: []onlyinvalid.Exception{}}}
+		SLURM: slurmView{Prefixes: []netip.Prefix{}, Exceptions: []onlyinvalid.Exception{}, Held: []netip.Prefix{}}}
 	svc := s.onlyInvalid.Load()
 	if svc != nil {
 		body.Enabled = true
@@ -66,8 +68,11 @@ func (s *Server) handleOnlyInvalid(w http.ResponseWriter, r *http.Request) {
 		if list, err := ex.List(); err != nil {
 			s.log.Error("rpki only_invalid: slurm file", "err", err)
 			body.SLURM.Error = "the SLURM file is not valid RFC 8416; see the controller log"
+		} else if held, err := ex.Held(body.Cases); err != nil {
+			s.log.Error("rpki only_invalid: slurm file", "err", err)
+			body.SLURM.Error = "the SLURM file is not valid RFC 8416; see the controller log"
 		} else {
-			body.SLURM.Exceptions = list
+			body.SLURM.Exceptions, body.SLURM.Held = list, held
 		}
 	}
 	writeJSON(w, http.StatusOK, body)

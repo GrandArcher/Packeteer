@@ -136,10 +136,17 @@ function settle() { return new Promise(function (r) { setTimeout(r, 0); }); }
   context.shellAdmin = false;
   var withEx = JSON.parse(JSON.stringify(data));
   withEx.slurm.exceptions = [{id: "ab12", kind: "prefix_assertion", prefix: "198.51.100.0/24", asn: 64500, comment: "packeteer audit=a01", review_due: true}];
+  withEx.slurm.held = ["198.51.100.0/24"];
   context.renderOnlyInvalidPage(withEx, context.onOnlyInvalid);
   assert(buttons(ids["only-invalid-exceptions"], "Remove").length === 0, "non-admin remove");
   assert(ids["only-invalid-exceptions"].textContent.indexOf("ab12prefix_assertion198.51.100.0/24AS64500packeteer audit=a01due") >= 0, "exception row: " + ids["only-invalid-exceptions"].textContent);
   assert(cases.textContent.indexOf("An exception is in the file.") >= 0 && buttons(cases, "Propose exception").length === 0, "held case");
+  // An AS0 filter sits on the wider ROA prefix, so the case is held by the server's list, not by prefix equality.
+  var wide = JSON.parse(JSON.stringify(data));
+  wide.slurm.exceptions = [{id: "cd34", kind: "prefix_filter", prefix: "198.51.100.0/22", asn: 0, comment: "packeteer audit=a02"}];
+  wide.slurm.held = ["198.51.100.0/24"];
+  context.renderOnlyInvalidPage(wide, context.onOnlyInvalid);
+  assert(cases.textContent.indexOf("An exception is in the file.") >= 0 && buttons(cases, "Propose exception").length === 0, "held by wider filter");
   context.oiProposal = proposal;
   vm.runInContext("oiProposal = " + JSON.stringify(proposal) + ";", context);
   context.renderOnlyInvalidPage(data, context.onOnlyInvalid);

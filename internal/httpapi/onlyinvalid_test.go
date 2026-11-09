@@ -162,9 +162,13 @@ func TestOnlyInvalidProposeApprove(t *testing.T) {
 				ID      string `json:"id"`
 				AuditID string `json:"audit_id"`
 			} `json:"exceptions"`
+			Held []string `json:"held"`
 		} `json:"slurm"`
 	}
 	jsonOf(t, e.do("GET", "/api/rpki/only-invalid", e.tokens[plugin.RoleViewer], "").Body, &ex)
+	if len(ex.SLURM.Held) != 1 || ex.SLURM.Held[0] != "198.51.100.0/24" {
+		t.Fatalf("held = %v", ex.SLURM.Held)
+	}
 	if len(ex.SLURM.Exceptions) != 1 || ex.SLURM.Exceptions[0].AuditID != prop.ID {
 		t.Fatalf("exceptions = %+v", ex)
 	}

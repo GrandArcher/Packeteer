@@ -100,7 +100,8 @@ type Proposal struct {
 	// Evidence is the case as it was proposed.
 	Evidence Case `json:"evidence"`
 
-	doc SLURM
+	doc     SLURM
+	comment string
 }
 
 // Exception is one entry of the SLURM file.
@@ -246,6 +247,21 @@ func (e *Exceptions) List() ([]Exception, error) {
 	return e.exceptions(doc, e.det.deps.Now()), nil
 }
 
+// Held is the prefixes of cases whose exception is already in the file.
+func (e *Exceptions) Held(cases []Case) ([]netip.Prefix, error) {
+	doc, err := e.read()
+	if err != nil {
+		return nil, err
+	}
+	held := []netip.Prefix{}
+	for _, c := range cases {
+		if add, _ := entries(c, ""); has(doc, add) {
+			held = append(held, c.Prefix)
+		}
+	}
+	return held, nil
+}
+
 // File is the file as an RTR cache would read it, or an empty SLURM
 // document before the first approval.
 func (e *Exceptions) File() ([]byte, error) {
@@ -262,11 +278,7 @@ func (e *Exceptions) File() ([]byte, error) {
 // prefix, which keeps every other origin invalid.
 func entries(c Case, comment string) (SLURM, string) {
 	doc := emptySLURM()
-	allAS0 := len(c.VRPs) > 0
-	for _, v := range c.VRPs {
-		allAS0 = allAS0 && v.ASN == 0
-	}
-	if allAS0 {
+	if allAS0(c) {
 		seen := map[netip.Prefix]bool{}
 		for _, v := range c.VRPs {
 			if seen[v.Prefix] {
@@ -281,6 +293,15 @@ func entries(c Case, comment string) (SLURM, string) {
 	ml := uint8(c.Prefix.Bits())
 	doc.Assertions.Prefix = append(doc.Assertions.Prefix, PrefixAssertion{ASN: c.Origin, Prefix: c.Prefix, MaxLength: &ml, Comment: comment})
 	return doc, KindAssertion
+}
+
+func allAS0(c Case) bool {
+	for _, v := range c.VRPs {
+		if v.ASN != 0 {
+			return false
+		}
+	}
+	return len(c.VRPs) > 0
 }
 
 func digest(b []byte) string {
@@ -303,6 +324,15 @@ func (e *Exceptions) openCase(prefix netip.Prefix) (Case, error) {
 		return Case{}, ErrNotStale
 	case !netpfx.CoveredBy(e.cfg.Prefixes, c.Prefix):
 		return Case{}, ErrNotAllowed
+	}
+	// A prefixFilter drops every payload under the ROA's own prefix, so a
+	// ROA wider than the allowlist would reach past it.
+	if allAS0(c) {
+		for _, v := range c.VRPs {
+			if !netpfx.CoveredBy(e.cfg.Prefixes, v.Prefix) {
+				return Case{}, fmt.Errorf("%w: the AS0 ROA %s is wider than it", ErrNotAllowed, v.Prefix)
+			}
+		}
 	}
 	return c, nil
 }
@@ -352,16 +382,23 @@ func (e *Exceptions) Propose(ctx context.Context, who Actor, prefix netip.Prefix
 	comment := fmt.Sprintf("packeteer audit=%s date=%s: %s AS%d, %s", rec.ID, now.Format(time.RFC3339), c.Prefix, c.Origin, classText(c.Class))
 	doc, _ := entries(c, comment)
 	text := doc.Marshal()
+	before, after := states(c, doc)
+	p := Proposal{ID: rec.ID, Digest: digest(text), Prefix: c.Prefix, Origin: c.Origin, Kind: kind, Entries: json.RawMessage(text),
+		Before: before, After: after,
+		Path: e.cfg.Path, Expires: now.Add(proposalTTL), Evidence: c, doc: doc, comment: comment}
+	e.pruneLocked(now)
+	e.proposals[p.ID] = p
+	return p, nil
+}
+
+// states is the validity of the case's route before and after doc, from
+// the ROAs covering it.
+func states(c Case, doc SLURM) (before, after plugin.RPKIValidity) {
 	vrps := make([]plugin.RPKIVRP, 0, len(c.VRPs))
 	for _, v := range c.VRPs {
 		vrps = append(vrps, plugin.RPKIVRP{Prefix: v.Prefix, MaxLen: v.MaxLength, ASN: v.ASN})
 	}
-	p := Proposal{ID: rec.ID, Digest: digest(text), Prefix: c.Prefix, Origin: c.Origin, Kind: kind, Entries: json.RawMessage(text),
-		Before: validity(vrps, c.Prefix, c.Origin), After: validity(doc.Apply(vrps), c.Prefix, c.Origin),
-		Path: e.cfg.Path, Expires: now.Add(proposalTTL), Evidence: c, doc: doc}
-	e.pruneLocked(now)
-	e.proposals[p.ID] = p
-	return p, nil
+	return validity(vrps, c.Prefix, c.Origin), validity(doc.Apply(vrps), c.Prefix, c.Origin)
 }
 
 func (e *Exceptions) pruneLocked(now time.Time) {
@@ -401,6 +438,12 @@ func (e *Exceptions) Approve(ctx context.Context, who Actor, id, dig string) (Pr
 	if c.Origin != p.Origin {
 		return p, ErrNoCase
 	}
+	// The covering ROAs may have changed since the proposal; what is
+	// written must be what the admin reviewed.
+	fresh, _ := entries(c, p.comment)
+	if before, after := states(c, fresh); digest(fresh.Marshal()) != p.Digest || before != p.Before || after != p.After {
+		return p, ErrDigest
+	}
 	cur, err := e.read()
 	if err != nil {
 		return p, err
@@ -410,13 +453,18 @@ func (e *Exceptions) Approve(ctx context.Context, who Actor, id, dig string) (Pr
 		return p, ErrExists
 	}
 	compact := strings.Join(strings.Fields(string(p.Entries)), " ")
-	e.record(ctx, who, ActionApprove, p.Prefix.String(), "ok",
-		fmt.Sprintf("approved proposal %s digest %s: %s; evidence: %s", p.ID, p.Digest, compact, c.Evidence()))
 	cur.Assertions.Prefix = append(cur.Assertions.Prefix, p.doc.Assertions.Prefix...)
 	cur.Filters.Prefix = append(cur.Filters.Prefix, p.doc.Filters.Prefix...)
-	if err := e.write(cur); err != nil {
-		e.record(ctx, who, ActionWrite, e.cfg.Path, "failed", fmt.Sprintf("proposal %s not written: %v; evidence: %s", p.ID, err, c.Evidence()))
-		return p, err
+	werr := e.write(cur)
+	result := "ok"
+	if werr != nil {
+		result = "failed"
+	}
+	e.record(ctx, who, ActionApprove, p.Prefix.String(), result,
+		fmt.Sprintf("approved proposal %s digest %s: %s; evidence: %s", p.ID, p.Digest, compact, c.Evidence()))
+	if werr != nil {
+		e.record(ctx, who, ActionWrite, e.cfg.Path, "failed", fmt.Sprintf("proposal %s not written: %v; evidence: %s", p.ID, werr, c.Evidence()))
+		return p, werr
 	}
 	e.record(ctx, who, ActionWrite, e.cfg.Path, "ok",
 		fmt.Sprintf("wrote proposal %s for %s AS%d: %d prefix assertions and %d prefix filters in the file now; added %s; evidence: %s",
