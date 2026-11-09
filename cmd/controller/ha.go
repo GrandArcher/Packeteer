@@ -32,6 +32,18 @@ var haWithdrawSettle = time.Second
 // it treats the failure as persistent and drops the BGP sessions.
 const haWithdrawTries = 3
 
+// haWithdrawTimeout bounds one withdraw try. Each try gets its own, so a
+// slow first try does not leave the next ones without time (#528).
+var haWithdrawTimeout = 3 * time.Second
+
+// haStepDownBudget bounds all withdraw tries together, and separately the
+// session drop and the resign. It is the same bound the tries shared
+// before #528. A standby takes over at least ttl/2 after this instance
+// steps down, so with a short ttl and a short edge hold time the other
+// instance can announce before a hung withdraw or drop ends; the budget
+// is not derived from the lease ttl.
+var haStepDownBudget = 10 * time.Second
+
 // haRIB is the RIB surface candidacy reads (*rib.View).
 type haRIB interface {
 	Ready() bool
@@ -108,9 +120,7 @@ func (h *haControl) changed() {
 	}
 	// Withdraw now, not at the next decision round: the other instance
 	// may take over as soon as this one resigns.
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	err := h.withdrawTries(ctx)
+	err := h.withdrawTries()
 	h.mu.Lock()
 	was := h.was
 	h.was = false
@@ -122,6 +132,14 @@ func (h *haControl) changed() {
 			map[string]string{"id": st.ID, "holder": st.Holder, "detail": st.Detail, "withdrawn": strconv.FormatBool(err == nil)})
 	}
 	h.poke()
+	if err != nil && h.el.Active() {
+		// The lease came back while the withdraw failed. This instance is
+		// the holder again and its routes are its own. Dropping the
+		// sessions now would leave the active instance without them until
+		// a restart.
+		h.log.Warn("ha: active again after a failed standby withdraw; keeping the BGP sessions", "err", err)
+		return
+	}
 	if err != nil {
 		// The other instance takes over once the lease runs out, on the
 		// assumption that this one's routes are gone, which holds only
@@ -130,7 +148,7 @@ func (h *haControl) changed() {
 		// hold time, the backstop if a session does not close.
 		h.log.Error("ha: withdraw on standby failed; dropping the BGP sessions so the routers remove Packeteer routes, not resigning; restart this instance to bring it back",
 			"err", err, "tries", haWithdrawTries)
-		dctx, dcancel := context.WithTimeout(context.Background(), 10*time.Second)
+		dctx, dcancel := context.WithTimeout(context.Background(), haStepDownBudget)
 		defer dcancel()
 		if derr := h.dropSessions(dctx); derr != nil {
 			h.log.Error("ha: dropping the BGP sessions failed; the routers keep Packeteer routes until the hold timer expires", "err", derr)
@@ -142,17 +160,22 @@ func (h *haControl) changed() {
 		return
 	}
 	time.Sleep(haWithdrawSettle)
+	ctx, cancel := context.WithTimeout(context.Background(), haStepDownBudget)
+	defer cancel()
 	if err := h.el.Resign(ctx); err != nil {
 		h.log.Warn("ha: resign", "err", err)
 	}
 }
 
 // withdrawTries runs the withdraw up to haWithdrawTries times,
-// haWithdrawSettle apart, and returns the last error.
-func (h *haControl) withdrawTries(ctx context.Context) error {
+// haWithdrawSettle apart, each with its own haWithdrawTimeout but all
+// inside haStepDownBudget, and returns the last error.
+func (h *haControl) withdrawTries() error {
+	budget, cancel := context.WithTimeout(context.Background(), haStepDownBudget)
+	defer cancel()
 	var err error
 	for i := range haWithdrawTries {
-		if err = h.withdraw(ctx); err == nil {
+		if err = h.withdrawOnce(budget); err == nil {
 			return nil
 		}
 		if i == haWithdrawTries-1 {
@@ -161,11 +184,17 @@ func (h *haControl) withdrawTries(ctx context.Context) error {
 		h.log.Warn("ha: withdraw on standby failed; trying again", "err", err, "try", i+1)
 		select {
 		case <-time.After(haWithdrawSettle):
-		case <-ctx.Done():
-			return errors.Join(err, ctx.Err())
+		case <-budget.Done():
+			return errors.Join(err, budget.Err())
 		}
 	}
 	return err
+}
+
+func (h *haControl) withdrawOnce(budget context.Context) error {
+	ctx, cancel := context.WithTimeout(budget, haWithdrawTimeout)
+	defer cancel()
+	return h.withdraw(ctx)
 }
 
 // shutdown resigns after the shutdown withdraw, so the standby takes over

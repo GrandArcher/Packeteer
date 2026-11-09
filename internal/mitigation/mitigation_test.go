@@ -617,3 +617,77 @@ func TestRuntimeEnterInjectChecks(t *testing.T) {
 		t.Errorf("observe needs no checks: %v", err)
 	}
 }
+
+// slowAnn blocks every Announce until release is closed, as a speaker
+// that is slow to take an UPDATE.
+type slowAnn struct {
+	*fakeAnn
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (a slowAnn) Announce(ctx context.Context, r plugin.MitigationRoute) error {
+	a.entered <- struct{}{}
+	<-a.release
+	return a.fakeAnn.Announce(ctx, r)
+}
+
+// An already-ended context never takes the free wire lock (#528).
+func TestWithdrawAllEndedContextFails(t *testing.T) {
+	c, err := New(testConfig(config.ModeInject), newFakeAnn(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	for range 50 {
+		if err := c.WithdrawAll(ctx); !errors.Is(err, context.Canceled) {
+			t.Fatalf("WithdrawAll with an ended context: %v, want context.Canceled", err)
+		}
+	}
+}
+
+// A WithdrawAll behind a slow Sync gives up when its context ends (#528),
+// so an HA step-down can try again with a fresh deadline instead of
+// spending it all on the wait.
+func TestWithdrawAllHonorsContextBehindSlowSync(t *testing.T) {
+	ann := slowAnn{fakeAnn: newFakeAnn(), entered: make(chan struct{}, 1), release: make(chan struct{})}
+	c, err := New(testConfig(config.ModeInject), ann, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.SetRIB(&fakeRIB{ready: true, learned: map[netip.Prefix]bool{victim: true}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Add(Request{Prefix: victim, Action: plugin.MitigationBlackhole}, t0); err != nil {
+		t.Fatal(err)
+	}
+	synced := make(chan error, 1)
+	go func() { synced <- c.Sync(context.Background(), t0) }()
+	<-ann.entered
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	err = c.WithdrawAll(ctx)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("WithdrawAll behind a held wire: %v, want a deadline error", err)
+	}
+	if d := time.Since(start); d > 500*time.Millisecond {
+		t.Fatalf("WithdrawAll returned after %v, not at its deadline", d)
+	}
+
+	close(ann.release)
+	if err := <-synced; err != nil {
+		t.Fatal(err)
+	}
+	if _, on := ann.on(victim); !on {
+		t.Fatal("the slow Sync did not announce, or the timed-out WithdrawAll ran after it")
+	}
+	if err := c.WithdrawAll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, on := ann.on(victim); on {
+		t.Fatal("the route stayed on the wire after WithdrawAll")
+	}
+}
