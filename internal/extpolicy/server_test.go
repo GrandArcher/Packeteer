@@ -6,9 +6,11 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"net/netip"
 	"os"
 	"strconv"
@@ -34,12 +36,18 @@ var loopback = netip.MustParseAddr("127.0.0.1")
 
 func startServer(t *testing.T, feed *Feed) (*Server, *tls.Config) {
 	t.Helper()
+	return startServerAuthWait(t, feed, authDeadline)
+}
+
+func startServerAuthWait(t *testing.T, feed *Feed, authWait time.Duration) (*Server, *tls.Config) {
+	t.Helper()
 	ca := pkitest.New(t)
 	leaf := ca.Issue(t, "packeteer")
 	srv, err := NewServer(feed, ServerConfig{Listen: "127.0.0.1:0", CertFile: leaf.CertFile, KeyFile: leaf.KeyFile, Token: testToken}, quiet())
 	if err != nil {
 		t.Fatal(err)
 	}
+	srv.authWait = authWait
 	if err := srv.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -320,12 +328,66 @@ func TestBackoff(t *testing.T) {
 	}
 }
 
+// dialFrom opens a TCP connection to addr from the loopback address
+// 127.0.0.<host>, so tests can act as several clients.
+func dialFrom(t *testing.T, host byte, addr string) net.Conn {
+	t.Helper()
+	d := net.Dialer{LocalAddr: &net.TCPAddr{IP: net.IPv4(127, 0, 0, host)}, Timeout: 5 * time.Second}
+	c, err := d.Dial("tcp", addr)
+	if err != nil {
+		t.Skipf("dial from 127.0.0.%d (needs all of 127.0.0.0/8 on loopback): %v", host, err)
+	}
+	return c
+}
+
+// getFrom sends an authorized GET from 127.0.0.<host>.
+func getFrom(srv *Server, tlsCfg *tls.Config, host byte, timeout time.Duration, query string) (int, error) {
+	d := &net.Dialer{LocalAddr: &net.TCPAddr{IP: net.IPv4(127, 0, 0, host)}}
+	client := &http.Client{Transport: &http.Transport{TLSClientConfig: tlsCfg, DialContext: d.DialContext}, Timeout: timeout}
+	defer client.CloseIdleConnections()
+	req, _ := http.NewRequest(http.MethodGet, "https://"+srv.Addr()+DocumentPath+query, nil)
+	req.Header.Set("Authorization", "Bearer "+testToken)
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode, nil
+}
+
+// closedByServer reports whether the server closes c within d.
+func closedByServer(c net.Conn, d time.Duration) bool {
+	_ = c.SetReadDeadline(time.Now().Add(d))
+	_, err := c.Read(make([]byte, 1))
+	var ne net.Error
+	return err != nil && !(errors.As(err, &ne) && ne.Timeout())
+}
+
+// waitOpen waits up to 3s for ok to hold for the per-address counts.
+func waitOpen(t *testing.T, srv *Server, ok func(map[netip.Prefix]int) bool) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		srv.ln.mu.Lock()
+		done := ok(srv.ln.open)
+		open := fmt.Sprint(srv.ln.open)
+		srv.ln.mu.Unlock()
+		if done {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("connection counts %s, %d slots taken", open, len(srv.ln.sem))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 // The listener holds at most maxConns connections; one more waits until a
 // connection closes. An authorized long poll is not cut by a timeout.
 func TestServerConnCap(t *testing.T) {
 	feed := New(true, 6*time.Second, nil)
 	feed.Touch(time.Now(), nil)
-	srv, tlsCfg := startServer(t, feed)
+	srv, tlsCfg := startServerAuthWait(t, feed, time.Minute)
 	if srv.srv.IdleTimeout != idleTimeout || srv.srv.ReadTimeout != 0 || srv.srv.WriteTimeout != 0 {
 		t.Errorf("timeouts: idle %s, read %s, write %s", srv.srv.IdleTimeout, srv.srv.ReadTimeout, srv.srv.WriteTimeout)
 	}
@@ -335,31 +397,15 @@ func TestServerConnCap(t *testing.T) {
 			c.Close()
 		}
 	}()
-	for range maxConns {
-		c, err := net.Dial("tcp", srv.Addr())
-		if err != nil {
-			t.Fatal(err)
-		}
-		held = append(held, c)
+	for i := range maxConns {
+		held = append(held, dialFrom(t, byte(2+i/maxConnsPerAddr), srv.Addr()))
 	}
-	get := func(timeout time.Duration, query string) (int, error) {
-		client := &http.Client{Transport: &http.Transport{TLSClientConfig: tlsCfg}, Timeout: timeout}
-		defer client.CloseIdleConnections()
-		req, _ := http.NewRequest(http.MethodGet, "https://"+srv.Addr()+DocumentPath+query, nil)
-		req.Header.Set("Authorization", "Bearer "+testToken)
-		resp, err := client.Do(req)
-		if err != nil {
-			return 0, err
-		}
-		defer resp.Body.Close()
-		return resp.StatusCode, nil
-	}
-	if code, err := get(500*time.Millisecond, ""); err == nil {
+	if code, err := getFrom(srv, tlsCfg, 100, 500*time.Millisecond, ""); err == nil {
 		t.Fatalf("connection %d was served (status %d)", maxConns+1, code)
 	}
 	held[0].Close()
 	held = held[1:]
-	if code, err := get(5*time.Second, ""); err != nil || code != http.StatusOK {
+	if code, err := getFrom(srv, tlsCfg, 100, 5*time.Second, ""); err != nil || code != http.StatusOK {
 		t.Fatalf("after a connection closed: %d %v", code, err)
 	}
 	for _, c := range held {
@@ -367,7 +413,138 @@ func TestServerConnCap(t *testing.T) {
 	}
 	held = nil
 	start := time.Now()
-	if code, err := get(10*time.Second, "?wait="+strconv.FormatUint(feed.Document().Revision, 10)); err != nil || code != http.StatusOK || time.Since(start) < 1500*time.Millisecond {
+	if code, err := getFrom(srv, tlsCfg, 1, 10*time.Second, "?wait="+strconv.FormatUint(feed.Document().Revision, 10)); err != nil || code != http.StatusOK || time.Since(start) < 1500*time.Millisecond {
 		t.Errorf("long poll: %d %v after %s, want the 2s heartbeat", code, err, time.Since(start))
+	}
+}
+
+// One address holds at most maxConnsPerAddr connections that have not
+// carried a right token. One more from it is closed at once and takes no
+// slot, so another address is still served. Authorized connections do not
+// count against their address.
+func TestServerConnPerAddr(t *testing.T) {
+	feed := New(true, 6*time.Second, nil)
+	feed.Touch(time.Now(), nil)
+	srv, tlsCfg := startServerAuthWait(t, feed, time.Minute)
+	var held []net.Conn
+	defer func() {
+		for _, c := range held {
+			c.Close()
+		}
+	}()
+	for range maxConnsPerAddr {
+		held = append(held, dialFrom(t, 2, srv.Addr()))
+	}
+	extra := dialFrom(t, 2, srv.Addr())
+	defer extra.Close()
+	if !closedByServer(extra, 2*time.Second) {
+		t.Fatal("a connection over the per-address cap stayed open")
+	}
+	if code, err := getFrom(srv, tlsCfg, 2, 2*time.Second, ""); err == nil {
+		t.Fatalf("the full address was served (status %d)", code)
+	}
+	// Each client leaves its authorized connection open and idle.
+	for i := range maxConnsPerAddr + 1 {
+		d := &net.Dialer{LocalAddr: &net.TCPAddr{IP: net.IPv4(127, 0, 0, 3)}}
+		tr := &http.Transport{TLSClientConfig: tlsCfg, DialContext: d.DialContext}
+		defer tr.CloseIdleConnections()
+		req, _ := http.NewRequest(http.MethodGet, "https://"+srv.Addr()+DocumentPath, nil)
+		req.Header.Set("Authorization", "Bearer "+testToken)
+		resp, err := (&http.Client{Transport: tr, Timeout: 5 * time.Second}).Do(req)
+		if err != nil {
+			t.Fatalf("authorized connection %d from another address: %v", i+1, err)
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("authorized connection %d from another address: status %d", i+1, resp.StatusCode)
+		}
+	}
+	srv.ln.mu.Lock()
+	n := srv.ln.open[netip.MustParsePrefix("127.0.0.3/32")]
+	srv.ln.mu.Unlock()
+	if n != 0 {
+		t.Errorf("%d authorized connections count against their address", n)
+	}
+	held[0].Close()
+	held = held[1:]
+	waitOpen(t, srv, func(open map[netip.Prefix]int) bool {
+		return open[netip.MustParsePrefix("127.0.0.2/32")] < maxConnsPerAddr
+	})
+	if code, err := getFrom(srv, tlsCfg, 2, 5*time.Second, ""); err != nil || code != http.StatusOK {
+		t.Fatalf("after one of its connections closed: %d %v", code, err)
+	}
+}
+
+// A connection without a right token is closed after authWait, whether it
+// stalls before TLS or idles after the handshake, and gives its slot back.
+// A connection that carried a right token stays: an HTTP/1 keep-alive is
+// reused and a gRPC stream keeps sending heartbeats.
+func TestServerAuthDeadline(t *testing.T) {
+	const wait = 300 * time.Millisecond
+	feed := New(true, 3*time.Second, nil)
+	feed.Touch(time.Now(), nil)
+	srv, tlsCfg := startServerAuthWait(t, feed, wait)
+
+	raw := dialFrom(t, 2, srv.Addr())
+	defer raw.Close()
+	h2 := tlsCfg.Clone()
+	h2.NextProtos = []string{"h2"}
+	tc, err := tls.Dial("tcp", srv.Addr(), h2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tc.Close()
+	if _, err := tc.Write([]byte("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n")); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	if !closedByServer(raw, 3*time.Second) {
+		t.Error("a silent TCP connection stayed open")
+	}
+	if took := time.Since(start); took > 2*time.Second {
+		t.Errorf("silent TCP connection closed after %s, want about %s", took, wait)
+	}
+	_ = tc.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if _, err := io.Copy(io.Discard, tc); err != nil {
+		var ne net.Error
+		if errors.As(err, &ne) && ne.Timeout() {
+			t.Error("an HTTP/2 connection without a request stayed open")
+		}
+	}
+	// The one slot left is the one Accept holds while it waits.
+	waitOpen(t, srv, func(open map[netip.Prefix]int) bool { return len(open) == 0 && len(srv.ln.sem) <= 1 })
+
+	var reused []bool
+	client := &http.Client{Transport: &http.Transport{TLSClientConfig: tlsCfg}, Timeout: 5 * time.Second}
+	defer client.CloseIdleConnections()
+	for range 2 {
+		req, _ := http.NewRequest(http.MethodGet, "https://"+srv.Addr()+DocumentPath, nil)
+		req.Header.Set("Authorization", "Bearer "+testToken)
+		req = req.WithContext(httptrace.WithClientTrace(req.Context(), &httptrace.ClientTrace{GotConn: func(i httptrace.GotConnInfo) { reused = append(reused, i.Reused) }}))
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("authorized GET: status %d", resp.StatusCode)
+		}
+		time.Sleep(2 * wait)
+	}
+	if len(reused) != 2 || !reused[1] {
+		t.Errorf("authorized keep-alive connection not reused after the deadline: %v", reused)
+	}
+
+	// The earlier steps outlast the 3s TTL on a slow runner, and an expired
+	// feed ends the stream.
+	feed.Touch(time.Now(), nil)
+	st, stop := watch(t, srv, tlsCfg, testToken)
+	defer stop()
+	for i := range 2 {
+		if _, err := recvDoc(t, st); err != nil {
+			t.Fatalf("authorized stream message %d: %v", i, err)
+		}
 	}
 }
