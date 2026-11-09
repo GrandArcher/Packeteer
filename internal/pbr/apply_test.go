@@ -2,12 +2,14 @@ package pbr
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/config"
 )
@@ -469,5 +471,49 @@ func TestPlanThreeProvidersRemoveTheMiddleOne(t *testing.T) {
 	}
 	if errs := Verify(context.Background(), h.exec, kept); len(errs) != 0 {
 		t.Fatalf("verify = %v", errs)
+	}
+}
+
+// An undo that hangs does not hold Apply forever: the rollback has its own
+// deadline, the undo steps after it fail with it, and the original error is
+// still returned. A cancelled caller context does not cut the rollback short.
+func TestRollbackStopsAtItsDeadline(t *testing.T) {
+	old := rollbackTimeout
+	rollbackTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { rollbackTimeout = old })
+
+	steps := []Step{
+		{Args: []string{"rule", "add", "a"}, Undo: []string{"rule", "del", "a"}},
+		{Args: []string{"rule", "add", "b"}, Undo: []string{"rule", "del", "b"}},
+		{Args: []string{"rule", "add", "c"}},
+	}
+	var undone []string
+	ctx, cancel := context.WithCancel(context.Background())
+	run := func(ctx context.Context, args ...string) (string, error) {
+		switch {
+		case args[1] == "add" && args[2] == "c":
+			cancel()
+			return "", errors.New("File exists")
+		case args[1] == "del":
+			undone = append(undone, args[2])
+			if args[2] == "b" {
+				<-ctx.Done()
+			}
+		}
+		return "", ctx.Err()
+	}
+	start := time.Now()
+	err := Apply(ctx, run, steps)
+	if time.Since(start) > 5*time.Second {
+		t.Fatalf("apply took %v", time.Since(start))
+	}
+	if err == nil || !strings.Contains(err.Error(), "File exists") {
+		t.Fatalf("apply = %v, want the original error", err)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "rollback: ") {
+		t.Fatalf("apply = %v, want a rollback deadline error", err)
+	}
+	if !slices.Equal(undone, []string{"b", "a"}) {
+		t.Fatalf("undone = %v, want b (hangs to the deadline) then a (fails on it)", undone)
 	}
 }

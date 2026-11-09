@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // managedSpan is how many tables and rule priorities above tableBase and
@@ -297,10 +298,17 @@ func Apply(ctx context.Context, run Exec, steps []Step) error {
 	return nil
 }
 
+// rollbackTimeout bounds the whole rollback, so an ip command that hangs
+// cannot keep Apply from returning.
+var rollbackTimeout = 10 * time.Second
+
 // rollback runs the Undo of each done step, newest first. It ignores a
-// cancelled ctx: the undo is what keeps the host consistent.
+// cancelled ctx: the undo is what keeps the host consistent. It keeps a
+// deadline of its own: undo steps still waiting when it passes fail with the
+// context error and are reported.
 func rollback(ctx context.Context, run Exec, done []Step) error {
-	ctx = context.WithoutCancel(ctx)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), rollbackTimeout)
+	defer cancel()
 	var errs []error
 	for i := len(done) - 1; i >= 0; i-- {
 		if done[i].Undo == nil {
