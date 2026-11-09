@@ -13,8 +13,10 @@ cd "$root"
 compose=(docker compose -f lab/docker-compose.yml)
 prefix=198.51.100.0/24
 # ubuntu-26.04's apparmor package confines /usr/lib/frr/bgpd and staticd.
-# The edge container is privileged, so those host profiles attach to the
-# lab binaries. They allow a log file only under /var/log/frr (#542).
+# A privileged container is unconfined, so those host profiles attach when
+# the edge starts and refuse the update log (can't open logfile), including
+# under /var/log/frr. They are for a host FRR install. Unload them before
+# the edge starts (#542).
 updates_log=/var/log/frr/bgp-updates.log
 
 lab_dir=$(mktemp -d)
@@ -25,6 +27,29 @@ cp lab/packeteer-move.yaml "$lab_dir/config.yaml"
 chmod 0644 "$lab_dir/config.yaml"
 export PACKETEER_LAB_DIR="$lab_dir"
 export PACKETEER_LAB_CONFIG="$lab_dir/config.yaml"
+
+# A daemon keeps the profile it was started under, so unload first.
+if [ -e /sys/kernel/security/apparmor/profiles ]; then
+	read_aa() {
+		if [ -r /sys/kernel/security/apparmor/profiles ]; then
+			cat /sys/kernel/security/apparmor/profiles
+		else
+			sudo -n cat /sys/kernel/security/apparmor/profiles
+		fi
+	}
+	loaded=$(read_aa)
+	for name in bgpd staticd; do
+		if printf '%s\n' "$loaded" | grep -q "^${name} "; then
+			echo "unloading host AppArmor profile ${name}"
+			sudo -n apparmor_parser -R "/etc/apparmor.d/${name}"
+		fi
+	done
+	loaded=$(read_aa)
+	if printf '%s\n' "$loaded" | grep -qE '^(bgpd|staticd) '; then
+		echo "host AppArmor profiles bgpd and staticd are still loaded" >&2
+		exit 1
+	fi
+fi
 
 echo "building lab"
 "${compose[@]}" build
@@ -96,8 +121,6 @@ echo "transit-b is faster: one Packeteer path via 192.0.2.2"
 wait_via 192.0.2.2
 
 echo "logging every UPDATE the edge receives"
-# The directory has to exist before the daemons open the log. bgpd cannot
-# create /var/log/frr (the profile does not allow writes in /var/log).
 "${compose[@]}" exec -T edge sh -c 'mkdir -p /var/log/frr && chmod 0755 /var/log/frr'
 out=$(vtysh -c 'configure terminal' -c "log file $updates_log debugging" -c 'end' -c 'debug bgp updates in' 2>&1) || fail "FRR update log setup failed: $out"
 dbg=$(vtysh -c 'show debugging' 2>&1 || true)
