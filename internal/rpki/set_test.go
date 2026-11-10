@@ -170,3 +170,42 @@ func TestSetCovering(t *testing.T) {
 		t.Fatalf("a stale source answered %+v", got)
 	}
 }
+
+type vrpSource struct {
+	plugin.Base
+	*VRPs
+}
+
+func (v vrpSource) Status() plugin.RPKIStatus {
+	return plugin.RPKIStatus{Source: "bench", Up: true, VRPs: v.Len(), Updated: time.Unix(0, 0)}
+}
+
+// BenchmarkSetLookup is the per-route cost of the rpki.only_invalid scan
+// (#401), which looks up every selected route each scan: 500k IPv4 /24
+// payloads, and /24 lookups that are half covered, half not.
+func BenchmarkSetLookup(b *testing.B) {
+	const n = 500000
+	vrps := NewVRPs()
+	changes := make([]Change, 0, n)
+	for i := range n {
+		p := netip.PrefixFrom(netip.AddrFrom4([4]byte{byte(i >> 16), byte(i >> 8), byte(i), 0}), 24)
+		changes = append(changes, Change{Prefix: p, MaxLen: 24, ASN: 64500})
+	}
+	vrps.Apply(changes)
+	s := NewSet([]plugin.RPKI{vrpSource{VRPs: vrps}})
+	routes := make([]netip.Prefix, 2*n)
+	for i := range routes {
+		routes[i] = netip.PrefixFrom(netip.AddrFrom4([4]byte{byte(i >> 16), byte(i >> 8), byte(i), 0}), 24)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	invalid := 0
+	for i := 0; i < b.N; i++ {
+		if s.Lookup(routes[i%len(routes)], 64501).State == plugin.RPKIInvalid {
+			invalid++
+		}
+	}
+	if b.N >= n && invalid == 0 {
+		b.Fatal("no lookup was invalid")
+	}
+}

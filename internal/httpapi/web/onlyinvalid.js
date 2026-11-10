@@ -49,7 +49,8 @@ function oiCases(root, data, act) {
     if (held[c.prefix]) td.appendChild(el("span", "tag", "An exception is in the file."));
     else if (c.class !== "stale_roa") td.appendChild(el("span", "tag", "No exception: not a likely stale ROA."));
     else if (!slurm.enabled) td.appendChild(el("span", "tag", "Exceptions are off (rpki.only_invalid.slurm)."));
-    else if (slurm.writable) td.appendChild(oiButton("Propose exception", "small", function () { act({op: "propose", prefix: c.prefix}); }));
+    else if (!slurm.writable) td.appendChild(el("span", "tag", "Exceptions can be proposed once auth or basic auth is on (PACKETEER_HTTP_USER and PACKETEER_HTTP_PASSWORD)."));
+    else td.appendChild(oiButton("Propose exception", "small", function () { act({op: "propose", prefix: c.prefix}); }));
   });
   root.appendChild(t);
 }

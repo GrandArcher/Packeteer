@@ -301,7 +301,7 @@ function renderOnlyInvalid(data) {
   var c = data && data.enabled && (data.cases || [])[0];
   document.getElementById("only-invalid-panel").hidden = !c;
   if (!c) return;
-  var body = document.getElementById("only-invalid-body");
+  var body = document.getElementById("only-invalid-evidence");
   clear(body);
   body.appendChild(onlyInvalidView(c, data.slurm || {}));
 }

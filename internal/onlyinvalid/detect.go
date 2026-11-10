@@ -224,12 +224,28 @@ func (d *Detector) Scan(ctx context.Context) {
 			found[c.Prefix] = c
 		}
 	}
+	// A scan cut short never reached the routes that sort after the last
+	// one it inspected, so their cases neither clear nor count as gone.
+	inspected := func(netip.Prefix) bool { return true }
+	if matched > len(cands) && len(cands) > 0 {
+		last := cands[len(cands)-1].Prefix
+		inspected = func(p netip.Prefix) bool { return !netpfx.Less(last, p) }
+	}
 	d.mu.Lock()
 	prev := d.open
 	for p, c := range found {
 		if old, ok := prev[p]; ok {
 			c.First = old.First
 			found[p] = c
+		}
+	}
+	// Up to maxCases of those stay open as last seen, which keeps the
+	// open set within twice maxCases.
+	kept := 0
+	for _, p := range netpfx.SortedKeys(prev) {
+		if _, ok := found[p]; !ok && !inspected(p) && kept < maxCases {
+			found[p] = prev[p]
+			kept++
 		}
 	}
 	d.open = found
@@ -245,7 +261,7 @@ func (d *Detector) Scan(ctx context.Context) {
 		}
 	}
 	for _, p := range netpfx.SortedKeys(prev) {
-		if _, ok := found[p]; !ok {
+		if _, ok := found[p]; !ok && inspected(p) {
 			old := prev[p]
 			d.deps.Emit(plugin.NewEvent(plugin.EventRPKIOnlyInvalidCleared, now,
 				fmt.Sprintf("%s AS%d is no longer an RPKI-invalid only path", p, old.Origin),

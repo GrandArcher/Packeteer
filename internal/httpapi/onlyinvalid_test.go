@@ -1,7 +1,10 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"flag"
 	"net/http"
 	"net/netip"
 	"os"
@@ -42,18 +45,28 @@ func (o oneRouteRIB) Covering(p netip.Prefix) (rib.Route, bool) {
 	return rib.Route{}, false
 }
 
-type vrpView struct{ *rpki.VRPs }
+type vrpView struct {
+	*rpki.VRPs
+	at time.Time
+}
 
 func (v vrpView) Lookup(p netip.Prefix, origin uint32) plugin.RPKIAnswer {
-	return plugin.RPKIAnswer{State: v.Validate(p, origin), Source: "routinator", Updated: time.Now()}
+	return plugin.RPKIAnswer{State: v.Validate(p, origin), Source: "routinator", Updated: v.at}
 }
-func (vrpView) Updated() time.Time { return time.Now() }
+func (v vrpView) Updated() time.Time { return v.at }
 
 func onlyInvalidEnv(t *testing.T) (*rbacEnv, string) {
 	t.Helper()
 	e := newRBAC(t, nil)
+	path := filepath.Join(t.TempDir(), "slurm.json")
+	onlyInvalidAt(e, time.Now(), path, auth.NewAuditor(e.store, nil, nil))
+	return e, path
+}
+
+// onlyInvalidAt installs a stale ROA case for 198.51.100.0/24 seen at now.
+func onlyInvalidAt(e *rbacEnv, now time.Time, path string, audit onlyinvalid.Auditor) {
 	p := netip.MustParsePrefix("198.51.100.0/24")
-	long := time.Now().Add(-90 * 24 * time.Hour)
+	long := now.Add(-90 * 24 * time.Hour)
 	r := oneRouteRIB{paths: []rib.Route{
 		{Prefix: p, Provider: "transit-a", ASPath: []uint32{64496, 64500}, Age: long},
 		{Prefix: p, Provider: "transit-b", ASPath: []uint32{64497, 64500}, Age: long},
@@ -63,12 +76,65 @@ func onlyInvalidEnv(t *testing.T) (*rbacEnv, string) {
 	irr := func(netip.Prefix, uint32, string) plugin.IRRAnswer {
 		return plugin.IRRAnswer{State: plugin.IRRRegistered, Source: "radb-file", Database: "RADB", Origins: []uint32{64500}}
 	}
-	det := onlyinvalid.NewDetector(onlyinvalid.Deps{RIB: r, RPKI: vrpView{vrps}, IRR: irr}, 0)
+	det := onlyinvalid.NewDetector(onlyinvalid.Deps{RIB: r, RPKI: vrpView{vrps, now}, IRR: irr, Now: func() time.Time { return now }}, 0)
 	det.Scan(context.Background())
-	path := filepath.Join(t.TempDir(), "slurm.json")
-	ex := onlyinvalid.NewExceptions(onlyinvalid.SLURMConfig{Path: path, Prefixes: []netip.Prefix{p}}, det, auth.NewAuditor(e.store, nil, nil))
+	ex := onlyinvalid.NewExceptions(onlyinvalid.SLURMConfig{Path: path, Prefixes: []netip.Prefix{p}}, det, audit)
 	e.srv.SetOnlyInvalid(&onlyinvalid.Service{Detector: det, Exceptions: ex})
-	return e, path
+}
+
+var updateFixtures = flag.Bool("update", false, "rewrite lab/ui-fixtures/only-invalid from the API")
+
+// fixedAudit gives every record the same ID so the recorded proposal, whose
+// entry comment and digest carry it, is the same on every run.
+type fixedAudit struct{}
+
+func (fixedAudit) Record(_ context.Context, r plugin.AuditRecord) plugin.AuditRecord {
+	r.ID = "5a1e0f2c3b4d6e7f"
+	return r
+}
+
+// The UI smoke test in CI serves lab/ui-fixtures/only-invalid in place of
+// the API and matches the digest shown on the page, so the fixtures must be
+// what the handlers return. Run go test ./internal/httpapi -run
+// TestOnlyInvalidFixtures -update after an intended change.
+func TestOnlyInvalidFixtures(t *testing.T) {
+	e := newRBAC(t, nil)
+	now := time.Date(2026, 11, 9, 12, 0, 0, 0, time.UTC)
+	path := filepath.Join(t.TempDir(), "slurm.json")
+	onlyInvalidAt(e, now, path, fixedAudit{})
+	// The page reads the path only as text; the recorded one is the
+	// default under the container's data directory.
+	const shown = "/var/lib/packeteer/slurm/slurm.json"
+	for _, f := range []struct {
+		file, method, target, body string
+	}{
+		{"only-invalid.json", "GET", "/api/rpki/only-invalid", ""},
+		{"propose.json", "POST", "/api/rpki/only-invalid/propose", `{"prefix":"198.51.100.0/24"}`},
+	} {
+		rec := e.do(f.method, f.target, e.tokens[plugin.RoleOperator], f.body)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s %s: %d %s", f.method, f.target, rec.Code, rec.Body)
+		}
+		var out bytes.Buffer
+		if err := json.Indent(&out, rec.Body.Bytes(), "", "  "); err != nil {
+			t.Fatal(err)
+		}
+		got := strings.TrimSpace(strings.ReplaceAll(out.String(), path, shown)) + "\n"
+		file := filepath.Join("..", "..", "lab", "ui-fixtures", "only-invalid", f.file)
+		if *updateFixtures {
+			if err := os.WriteFile(file, []byte(got), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			continue
+		}
+		want, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != string(want) {
+			t.Errorf("%s is not what %s %s returns; run go test ./internal/httpapi -run TestOnlyInvalidFixtures -update:\n%s", file, f.method, f.target, got)
+		}
+	}
 }
 
 // #401: with nothing configured the endpoints report off and change

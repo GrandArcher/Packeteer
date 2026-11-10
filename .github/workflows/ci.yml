@@ -1614,7 +1614,8 @@ jobs:
           test "$ok" = 1
           # uiproxy answers /api/rpki/only-invalid and the proposal from
           # lab/ui-fixtures/only-invalid (documentation prefixes and ASNs,
-          # recorded from the API in the Go tests) and drives the Registry
+          # recorded from the handlers by TestOnlyInvalidFixtures, which
+          # fails when they differ) and drives the Registry
           # page: it presses Propose exception and never Approve. The
           # propose, approve, write, and audit path is checked against the
           # real API in TestOnlyInvalidProposeApprove.
@@ -1633,7 +1634,7 @@ jobs:
             --absent 'Cannot reach' 'mode-inject'
           bash lab/ui-smoke.sh 'http://127.0.0.1:18402/registry.html' 'mode-observe' 'RPKI-invalid only paths' 'stale_roa' \
             'the route goes from invalid to valid. Approving adds exactly this to /var/lib/packeteer/slurm/slurm.json. Nothing is written until an admin approves.' \
-            '"maxPrefixLength": 24' 'Digest a0263b1da076ee36, audit 5a1e0f2c3b4d6e7f.' 'driver: review box shown, nothing approved' \
+            '"maxPrefixLength": 24' 'Digest 92da6fe6aa0623e5, audit 5a1e0f2c3b4d6e7f.' 'driver: review box shown, nothing approved' \
             --absent 'Cannot reach' 'mode-inject' 'Could not load the RPKI-invalid only paths'
       - name: UI Why panel smoke (#201; the gate table for one decision, the stored checks on the timeline, a prefix with no decision)
         run: |

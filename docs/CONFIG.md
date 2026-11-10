@@ -869,7 +869,7 @@ RPKI-invalid only paths (#401, not on a public edge). Off by default; needs `rpk
 |---|---|---|
 | `path` | none | Required. Absolute path of the SLURM file Packeteer writes, on a volume the RTR cache also reads (Routinator `--exceptions`, StayRTR `-slurm`, FORT `--slurm`). Its directory must exist. A file that is not valid RFC 8416 is never overwritten. |
 | `prefixes` | none | Required. Only a case inside one of these prefixes may get an exception; an AS0 filter also needs every AS0 ROA it names inside them. No default route. Refused with `ixp`. |
-| `review_after` | none | When set, an exception older than this raises `rpki.slurm_review` once per run. 24h-8760h; omitted means no reminder. |
+| `review_after` | `720h` | An exception older than this raises `rpki.slurm_review` once per run. 24h-8760h. It cannot be turned off: an exception is not re-checked once its case clears. |
 
 ### Hijack feed `file`
 

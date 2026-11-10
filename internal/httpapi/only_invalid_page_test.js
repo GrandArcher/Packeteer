@@ -166,6 +166,11 @@ function settle() { return new Promise(function (r) { setTimeout(r, 0); }); }
   hj.cases[0].class = "hijack";
   context.renderOnlyInvalidPage(hj, context.onOnlyInvalid);
   assert(buttons(cases, "Propose exception").length === 0 && cases.textContent.indexOf("No exception: not a likely stale ROA.") >= 0, "hijack row");
+  // With auth off nothing can be proposed, and the row says why.
+  var ro = JSON.parse(JSON.stringify(data));
+  ro.slurm.writable = false;
+  context.renderOnlyInvalidPage(ro, context.onOnlyInvalid);
+  assert(buttons(cases, "Propose exception").length === 0 && cases.textContent.indexOf("Exceptions can be proposed once auth or basic auth is on") >= 0, "read-only row: " + cases.textContent);
   context.renderOnlyInvalidPage({enabled: false, cases: [], slurm: {}}, context.onOnlyInvalid);
   assert(ids["only-invalid-body"].hidden === true, "off hides the section");
   console.log("ok");

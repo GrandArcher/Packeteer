@@ -22,6 +22,10 @@ import (
 
 // Bounds.
 const (
+	// DefaultReviewAfter is slurm.review_after when it is not set. An
+	// exception is never re-checked once its case clears, and it stays in
+	// the file after Packeteer stops, so the reminder is always on.
+	DefaultReviewAfter = 30 * 24 * time.Hour
 	// MinReviewAfter and MaxReviewAfter bound slurm.review_after.
 	MinReviewAfter = 24 * time.Hour
 	MaxReviewAfter = 365 * 24 * time.Hour
@@ -63,8 +67,8 @@ type SLURMConfig struct {
 	Path string
 	// Prefixes are the only prefixes an exception may cover.
 	Prefixes []netip.Prefix
-	// ReviewAfter, when set, raises rpki.slurm_review for an exception
-	// older than it.
+	// ReviewAfter raises rpki.slurm_review for an exception older than
+	// it. Zero is DefaultReviewAfter.
 	ReviewAfter time.Duration
 }
 
@@ -135,6 +139,9 @@ type Exceptions struct {
 // read and validated before every change, and one that is not valid SLURM
 // is never overwritten.
 func NewExceptions(cfg SLURMConfig, det *Detector, audit Auditor) *Exceptions {
+	if cfg.ReviewAfter == 0 {
+		cfg.ReviewAfter = DefaultReviewAfter
+	}
 	return &Exceptions{cfg: cfg, det: det, audit: audit, proposals: map[string]Proposal{}, reminded: map[string]bool{}}
 }
 
@@ -223,7 +230,7 @@ func (e *Exceptions) exceptions(doc SLURM, now time.Time) []Exception {
 			x.AuditID = m[1]
 			if t, err := time.Parse(time.RFC3339, m[2]); err == nil {
 				x.Date = t
-				x.ReviewDue = e.cfg.ReviewAfter > 0 && now.Sub(t) >= e.cfg.ReviewAfter
+				x.ReviewDue = now.Sub(t) >= e.cfg.ReviewAfter
 			}
 		}
 		out = append(out, x)
@@ -520,11 +527,8 @@ func (e *Exceptions) evidenceFor(x Exception) string {
 }
 
 // Remind raises rpki.slurm_review once per run for each exception past
-// review_after. Without review_after it does nothing.
+// review_after.
 func (e *Exceptions) Remind() {
-	if e.cfg.ReviewAfter == 0 {
-		return
-	}
 	list, err := e.List()
 	if err != nil {
 		e.det.deps.Log.Warn("slurm review check", "err", err)

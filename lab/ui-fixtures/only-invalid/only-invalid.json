@@ -1,4 +1,8 @@
 {
+  "version": "test",
+  "mode": "observe",
+  "ready": true,
+  "generated_at": "2026-01-02T03:04:05Z",
   "enabled": true,
   "scanned": "2026-11-09T12:00:00Z",
   "cases": [
@@ -72,6 +76,7 @@
     "prefixes": [
       "198.51.100.0/24"
     ],
-    "exceptions": []
+    "exceptions": [],
+    "held": []
   }
 }

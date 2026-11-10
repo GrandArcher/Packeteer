@@ -289,6 +289,61 @@ func TestClearsOnlyOnFreshData(t *testing.T) {
 	}
 }
 
+// A scan cut short at maxCases does not reach the routes past the last one
+// it inspects, so their cases stay open and nothing clears.
+func TestCutShortScanKeepsUninspectedCases(t *testing.T) {
+	r := newRIB()
+	v := newRPKI()
+	for i := range maxCases {
+		p := netip.PrefixFrom(netip.AddrFrom4([4]byte{198, 18, byte(i / 256), byte(i % 256)}), 32)
+		r.add(p.String(), "transit-a", t0.Add(-time.Hour), 64496, 64501)
+		v.vrps.Apply([]rpki.Change{{Prefix: p, MaxLen: 32, ASN: 64499}})
+	}
+	last := netip.MustParsePrefix("203.0.113.0/24")
+	r.add(last.String(), "transit-a", t0.Add(-time.Hour), 64496, 64502)
+	v.vrps.Apply([]rpki.Change{{Prefix: last, MaxLen: 24, ASN: 64499}})
+	ev := &events{}
+	d := newDetector(r, v, nil, ev)
+	d.Scan(t.Context())
+	if _, ok := d.Case(last); ok || d.Status().Note == "" {
+		t.Fatalf("first scan inspected past maxCases: %q", d.Status().Note)
+	}
+	delete(r.paths, netip.MustParsePrefix("198.18.0.0/32"))
+	d.Scan(t.Context())
+	if _, ok := d.Case(last); !ok || len(d.Status().Cases) != maxCases || d.Status().Note != "" {
+		t.Fatalf("the case moved into range is not open: %d cases, note %q", len(d.Status().Cases), d.Status().Note)
+	}
+
+	// A new invalid prefix that sorts first pushes the last case past the
+	// cut; it stays open and no cleared event is sent.
+	first := netip.MustParsePrefix("192.0.2.0/24")
+	r.add(first.String(), "transit-a", t0.Add(-time.Hour), 64496, 64503)
+	v.vrps.Apply([]rpki.Change{{Prefix: first, MaxLen: 24, ASN: 64499}})
+	before := len(ev.kinds())
+	d.Scan(t.Context())
+	if _, ok := d.Case(last); !ok || d.Status().Note == "" {
+		t.Fatalf("the uninspected case was dropped: note %q", d.Status().Note)
+	}
+	if _, ok := d.Case(first); !ok {
+		t.Fatal("the new case is not open")
+	}
+	if k := ev.kinds()[before:]; !slices.Equal(k, []string{plugin.EventRPKIOnlyInvalid}) {
+		t.Fatalf("events = %v", k)
+	}
+
+	// Once the route is inspected again and is valid, it clears.
+	delete(r.paths, first)
+	v.vrps.Apply([]rpki.Change{{Prefix: last, MaxLen: 24, ASN: 64502}})
+	before = len(ev.kinds())
+	d.Scan(t.Context())
+	if _, ok := d.Case(last); ok {
+		t.Fatal("a valid route stayed open")
+	}
+	if k := ev.kinds()[before:]; !slices.Contains(k, plugin.EventRPKIOnlyInvalidCleared) {
+		t.Fatalf("events = %v", k)
+	}
+}
+
 // Without IRR, history, or feeds the evidence is thin: the case is still
 // reported, as unclear, and each missing source says so.
 func TestUnclearWithoutEvidence(t *testing.T) {

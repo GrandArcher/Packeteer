@@ -11,7 +11,7 @@ Every 5 minutes, starting 1 minute after start, Packeteer scans the selected rou
 - its selected route is `invalid`, and every learned path for the prefix (add-path and BMP included) is `invalid`, and
 - no less specific learned route has a path that is `valid`, `notfound`, or `unknown`.
 
-A path the edge originates (empty AS path) or one with no RPKI answer is not invalid. The scan inspects at most the first 1000 invalid selected routes, in prefix order, and says so in `note`. While the RIB is not ready or no `rpki.sources` entry has fresh data, it skips and keeps the open cases, so an outage is never read as cases clearing.
+A path the edge originates (empty AS path) or one with no RPKI answer is not invalid. The scan inspects at most the first 1000 invalid selected routes, in prefix order, and says so in `note`. Open cases past the last inspected route stay open as last seen (up to 1000) and do not clear. While the RIB is not ready or no `rpki.sources` entry has fresh data, it skips and keeps the open cases, so an outage is never read as cases clearing.
 
 ## Evidence and class
 
@@ -55,7 +55,7 @@ Each entry's `comment` is `packeteer audit=<id> date=<time>: ...`, where `<id>` 
 
 The RTR cache reads the file from a shared volume: Routinator with `--exceptions <path>`, StayRTR with `-slurm <path>`, FORT with `--slurm <path>`. `GET /api/rpki/slurm` returns the file (or an empty RFC 8416 document) for an operator who installs it by hand. Once the cache serves the exception, the route turns valid (not found for an AS0 filter) and the case clears.
 
-With `slurm.review_after` set, each Packeteer exception older than it raises `rpki.slurm_review` once per run, counted from the date in its comment, and the exception shows `review_due`. Without it there is no reminder.
+Each Packeteer exception older than `slurm.review_after` (default 720h) raises `rpki.slurm_review` once per run, counted from the date in its comment, and the exception shows `review_due`. Once a case clears, Packeteer does not look at its prefix again, so a later hijack feed incident or IRR change raises nothing; the reminder is the check.
 
 ## Config
 
@@ -82,7 +82,7 @@ Keys are in [CONFIG.md](CONFIG.md#rpkionly_invalid). Events are `rpki.only_inval
 
 ## Rollback
 
-Remove `rpki.only_invalid` and restart. To drop the exceptions, delete them with the API or remove the SLURM file and let the RTR cache reload it.
+Remove `rpki.only_invalid` and restart. The exceptions stay in the SLURM file, and the RTR cache keeps serving them, until they are deleted: delete them with the API first, or remove the SLURM file and let the RTR cache reload it.
 
 ## Tests
 
