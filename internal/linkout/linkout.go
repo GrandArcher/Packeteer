@@ -38,7 +38,9 @@ type site struct {
 
 // builtin is every site Packeteer knows. NLNOG RING is a public looking
 // glass page the operator opens by hand; this link makes no request (the
-// opt-in panel in internal/ringlg does), so it is off by default.
+// opt-in panel in internal/ringlg does), so it is off by default. Qrator
+// Radar is off by default too (#402): its incident data is a paid feed with
+// no published API Packeteer could read, so the link is the integration.
 var builtin = []site{
 	{"he", "HE BGP Toolkit", "https://bgp.he.net/net/{prefix}", "https://bgp.he.net/AS{asn}"},
 	{"he_lg", "HE looking glass", "https://lg.he.net/", ""},
@@ -48,6 +50,7 @@ var builtin = []site{
 	{"cloudflare_radar", "Cloudflare Radar", "", "https://radar.cloudflare.com/routing/as{asn}"},
 	{"irr_explorer", "IRR Explorer", "https://irrexplorer.nlnog.net/prefix/{prefix}", ""},
 	{"nlnog_ring", "NLNOG RING looking glass", "https://lg.ring.nlnog.net/prefix?q={prefix}", ""},
+	{"qrator_radar", "Qrator Radar", "", "https://radar.qrator.net/as/{asn}"},
 }
 
 // defaults are the sites shown when linkouts.enabled is not set.
