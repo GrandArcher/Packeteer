@@ -409,7 +409,7 @@ func TestPassIsNotCutHalfwayThroughARoute(t *testing.T) {
 			}
 		}
 	})
-	err := rig.s.Sync(ctx, []policy.Improvement{imp("198.51.100.0/24", "isp-b"), imp("203.0.113.0/24", "isp-b")})
+	err := rig.s.Sync(ctx, []policy.Improvement{imp("198.51.100.0/24", "isp-b"), imp("203.0.113.0/24", "isp-b"), imp("2001:db8:1::/48", "isp-b6")})
 	if during != nil {
 		t.Fatalf("the route in progress lost its context: %v", during)
 	}
@@ -418,6 +418,9 @@ func TestPassIsNotCutHalfwayThroughARoute(t *testing.T) {
 	}
 	if _, ok := rig.r.has("198.51.100.0/24"); !ok || rig.r.installs != 1 || !errors.Is(err, context.Canceled) {
 		t.Fatalf("the pass did not finish the route in progress and stop before the next: installs %d err %v", rig.r.installs, err)
+	}
+	if n := strings.Count(err.Error(), "context canceled"); n != 1 {
+		t.Fatalf("the stop is reported %d times, want once: %v", n, err)
 	}
 }
 

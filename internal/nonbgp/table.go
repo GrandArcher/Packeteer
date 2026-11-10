@@ -91,8 +91,11 @@ type block struct {
 	last atomic.Int64
 	// upper and origin are the announced prefix of the block, invalid when
 	// the announced prefix is more specific than the block (no bound).
+	// own is set when they are the block's own lookup answer; otherwise
+	// they are copied from known and follow it.
 	upper  netip.Prefix
 	origin uint32
+	own    bool
 	// askAt is when the block is asked next: zero for a new block, a
 	// minute after a failed lookup, a day after an answer.
 	askAt time.Time
@@ -110,7 +113,7 @@ type Table struct {
 	blocks map[netip.Prefix]*block
 	routes map[netip.Prefix]Route
 	// known holds the announced prefixes of tracked blocks, so a new block
-	// inside one is not asked. Refresh drops the ones no block uses.
+	// inside one is not asked. Refresh drops the ones no block answered.
 	known   map[netip.Prefix]uint32
 	lastErr string
 
@@ -201,11 +204,13 @@ func (t *Table) Refresh() {
 			delete(t.blocks, blk)
 		}
 	}
-	// Pruned first: a prefix no block holds any more (aged out, or
-	// announced differently since) must not bound a new block.
+	// Only answers keep a prefix known: a copied upper must not keep alive
+	// a prefix every answering block has since seen withdrawn.
 	used := make(map[netip.Prefix]bool, len(t.known))
 	for _, b := range t.blocks {
-		used[b.upper] = true
+		if b.own {
+			used[b.upper] = true
+		}
 	}
 	for p := range t.known {
 		if !used[p] {
@@ -213,12 +218,18 @@ func (t *Table) Refresh() {
 		}
 	}
 	for blk, b := range t.blocks {
-		if b.upper.IsValid() {
+		if b.own {
 			continue
 		}
-		if b.upper, b.origin = t.knownCover(blk); b.upper.IsValid() {
+		up, origin := t.knownCover(blk)
+		switch {
+		case up.IsValid() && !b.upper.IsValid():
 			b.askAt = now.Add(relookup)
+		case !up.IsValid() && b.upper.IsValid():
+			// The copied bound is gone: ask for the block's own.
+			b.askAt = time.Time{}
 		}
+		b.upper, b.origin = up, origin
 	}
 	t.recomputeLocked()
 }
@@ -450,7 +461,7 @@ func (t *Table) lookupOne(ctx context.Context) bool {
 		t.known[ans.Prefix] = ans.Origin
 	}
 	if ok {
-		b.upper, b.origin, b.askAt = ans.Prefix, ans.Origin, now.Add(relookup)
+		b.upper, b.origin, b.own, b.askAt = ans.Prefix, ans.Origin, true, now.Add(relookup)
 	}
 	return true
 }

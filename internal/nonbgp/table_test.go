@@ -71,7 +71,7 @@ func announce(t *Table, upper netip.Prefix, origin uint32) {
 	t.known[upper] = origin
 	for blk, b := range t.blocks {
 		if upper.Contains(blk.Addr()) && (!b.upper.IsValid() || b.upper.Bits() < upper.Bits()) {
-			b.upper, b.origin = upper, origin
+			b.upper, b.origin, b.own = upper, origin, true
 		}
 	}
 }
@@ -499,5 +499,41 @@ func TestAnswerIsAskedAgainAndForgotten(t *testing.T) {
 	tbl.Refresh()
 	if len(tbl.known) != 0 || len(tbl.Routes()) != 0 {
 		t.Fatalf("known %v and routes %v outlived their blocks", tbl.known, tbl.Routes())
+	}
+}
+
+// Blocks under one announced prefix are asked again one at a time, with
+// rounds between: once each has seen the prefix withdrawn, none keeps it
+// alive for the others.
+func TestWithdrawnPrefixIsNotKeptAliveBySiblings(t *testing.T) {
+	cov := &fakeCovering{ans: pfx("2001:db8::/32")}
+	tbl, clk := newTestTable(4, cov)
+	blocks := []string{"2001:db8::1", "2001:db8:1::1", "2001:db8:2::1", "2001:db8:3::1"}
+	keep := func() {
+		for _, a := range blocks {
+			tbl.Lookup(addr(a))
+		}
+	}
+	keep()
+	tbl.lookupOne(context.Background())
+	tbl.Refresh()
+	if got := routePrefixes(tbl); !equal(got, []string{"2001:db8::/46"}) || cov.count() != 1 {
+		t.Fatalf("routes = %v after %d lookups", got, cov.count())
+	}
+
+	cov.set(pfx("2001:db8:0:8000::/49"), nil)
+	for day := 1; day <= 2; day++ {
+		clk.add(relookup)
+		for range blocks {
+			keep()
+			tbl.lookupOne(context.Background())
+			tbl.Refresh()
+		}
+	}
+	if got := routePrefixes(tbl); !equal(got, []string{"2001:db8::/48", "2001:db8:1::/48", "2001:db8:2::/48", "2001:db8:3::/48"}) {
+		t.Fatalf("routes after the /32 was withdrawn = %v", got)
+	}
+	if len(tbl.known) != 0 {
+		t.Fatalf("known = %v", tbl.known)
 	}
 }

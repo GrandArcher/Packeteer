@@ -113,7 +113,7 @@ func (s *Steer) Sync(ctx context.Context, imps []policy.Improvement) error {
 	}
 	errs := s.removeLeftoversLocked(ctx)
 	if !s.cfg.Inject {
-		return errors.Join(errs...)
+		return joinStopped(ctx, errs)
 	}
 	want := make(map[netip.Prefix]policy.Improvement, len(imps))
 	for _, im := range imps {
@@ -125,14 +125,29 @@ func (s *Steer) Sync(ctx context.Context, imps []policy.Improvement) error {
 		if _, ok := want[p]; ok {
 			continue
 		}
+		if ctx.Err() != nil {
+			break
+		}
 		if err := s.removeLocked(ctx, p); err != nil {
 			errs = append(errs, err)
 		}
 	}
 	for _, p := range netpfx.SortedKeys(want) {
+		if ctx.Err() != nil {
+			break
+		}
 		if err := s.installLocked(ctx, want[p]); err != nil {
 			errs = append(errs, err)
 		}
+	}
+	return joinStopped(ctx, errs)
+}
+
+// joinStopped adds, once, that ctx ended the pass before every route was
+// tried, instead of one error per route left.
+func joinStopped(ctx context.Context, errs []error) error {
+	if err := ctx.Err(); err != nil {
+		errs = append(errs, fmt.Errorf("non-BGP: pass stopped: %w", err))
 	}
 	return errors.Join(errs...)
 }
@@ -141,6 +156,9 @@ func (s *Steer) Sync(ctx context.Context, imps []policy.Improvement) error {
 func (s *Steer) removeLeftoversLocked(ctx context.Context) []error {
 	var errs []error
 	for _, p := range netpfx.SortedKeys(s.leftover) {
+		if ctx.Err() != nil {
+			break
+		}
 		if err := s.op(ctx, func(c context.Context) error { return s.drv.Remove(c, p) }); err != nil {
 			errs = append(errs, fmt.Errorf("non-BGP: remove left-over route %s: %w", p, err))
 			continue
@@ -238,11 +256,14 @@ func (s *Steer) removeAllLocked(ctx context.Context) error {
 	var errs []error
 	errs = append(errs, s.removeLeftoversLocked(ctx)...)
 	for _, p := range netpfx.SortedKeys(s.active) {
+		if ctx.Err() != nil {
+			break
+		}
 		if err := s.removeLocked(ctx, p); err != nil {
 			errs = append(errs, err)
 		}
 	}
-	return errors.Join(errs...)
+	return joinStopped(ctx, errs)
 }
 
 // WithdrawAll removes every route this process installed, and tries the
