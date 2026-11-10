@@ -10,7 +10,7 @@
 # 198.51.100.77 (not allowlisted). The fixed prober makes isp-b faster.
 # Checked on the router's main table on every step: no route with proto 250
 # other than 203.0.113.0/24, and only through isp-b's gateway.
-#  1. install: 203.0.113.0/24 via 198.51.100.1 proto 250; the start-up
+#  1. install: 203.0.113.0/24 via 198.51.100.3 proto 250; the start-up
 #     warning is logged;
 #  2. withdraw: isp-b's probe source fails, the route is removed; it comes
 #     back when the source does;
@@ -59,7 +59,7 @@ dump() {
 check() {
 	local r
 	r=$(routes)
-	if [ -n "$r" ] && ! grep -Eq '^203\.0\.113\.0/24 via 198\.51\.100\.1 ' <<<"$r"; then
+	if [ -n "$r" ] && ! grep -Eq '^203\.0\.113\.0/24 via 198\.51\.100\.3 ' <<<"$r"; then
 		echo "FAIL: unexpected Packeteer route on the router: $r" >&2
 		dump
 		exit 1
