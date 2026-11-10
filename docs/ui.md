@@ -218,6 +218,7 @@ Prefix, ASN, and exchange-peer views link to the same object in public tools (#2
 | Prefix page (`/prefix/<prefix>`) and an open row on `/prefixes.html` | The prefix, and on the prefix page the origin AS of its first learned path |
 | `/prefixes.html?asn=<asn>` and each ASN map heading | The AS |
 | Providers table (`/providers.html`), exchange peers only | The peer's AS (`peer_asn` in `GET /api/providers`) |
+| RPKI-invalid only panel on the prefix page ([only-invalid.md](only-invalid.md)) | The case's origin AS (#402) |
 
 Built-in sites (names for `linkouts.enabled`; defaults marked):
 
@@ -231,8 +232,9 @@ Built-in sites (names for `linkouts.enabled`; defaults marked):
 | `cloudflare_radar` (default) | Cloudflare Radar | - | `radar.cloudflare.com/routing/as<asn>` |
 | `irr_explorer` (default) | IRR Explorer | `irrexplorer.nlnog.net/prefix/<prefix>` | - |
 | `nlnog_ring` (off) | NLNOG RING looking glass | `lg.ring.nlnog.net/prefix?q=<prefix>` | - |
+| `qrator_radar` (off) | Qrator Radar | - | `radar.qrator.net/as/<asn>` |
 
-The RING link is a page the operator opens by hand and makes no request. The separate, opt-in [NLNOG RING panel](#nlnog-ring-panel) reads the public API. PeeringDB is linked per AS: its AS page lists the exchanges the AS is on, and the exchange name in `exchanges` is a local label, not a PeeringDB object.
+Qrator Radar's AS page links to the hijacks, route leaks, and bogons Radar saw for the AS; Packeteer has no Qrator client, see [only-invalid.md](only-invalid.md#qrator-radar) (#402). The RING link is a page the operator opens by hand and makes no request. The separate, opt-in [NLNOG RING panel](#nlnog-ring-panel) reads the public API. PeeringDB is linked per AS: its AS page lists the exchanges the AS is on, and the exchange name in `exchanges` is a local label, not a PeeringDB object.
 
 The server builds every URL, so the browser never assembles one. `GET /api/linkouts?prefix=<cidr>&asn=<n>` (viewer; both repeatable, at most 300 values; a bad value is a `400`) returns `{"prefix": {<cidr>: [{"name", "url"}]}, "asn": {<n>: [...]}}`. A prefix is masked and written as CIDR with `/` and `:` left readable; an AS is decimal digits. With `linkouts.hide_internal` on (default) an RFC 1918, ULA, loopback, or link-local prefix and a private-use AS (RFC 6996: 64512-65534, 4200000000-4294967294) get an empty list, so the page shows no link for it. Documentation prefixes and ASNs are not internal. Settings and the `linkouts` keys are in [CONFIG.md](CONFIG.md#linkouts); a change needs a restart.
 

@@ -1004,7 +1004,7 @@ plugin_dir: /etc/packeteer/plugins
 # Link-outs (#211). The prefix, ASN, and exchange-peer pages link to public
 # tools for the same prefix or AS. Display only: Packeteer requests none of
 # them. Defaults: he, he_lg, ripestat, peeringdb, bgptools, cloudflare_radar,
-# irr_explorer. nlnog_ring is off unless listed.
+# irr_explorer. nlnog_ring and qrator_radar are off unless listed.
 # linkouts:
 #   enabled: [he, ripestat, bgptools, nlnog_ring]
 #   hide_internal: true               # no link for RFC 1918/ULA or a private-use AS

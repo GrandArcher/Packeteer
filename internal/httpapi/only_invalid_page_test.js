@@ -1,12 +1,13 @@
 "use strict";
 // Runs the RPKI-invalid only path UI (#401) against a small DOM stand-in,
 // on the JSON the API returned for a fixture case. The prefix page panel
-// is read-only: class, score, evidence, ROAs, and a link to the Registry
-// page. On the Registry page an operator proposes, the box shows the exact
-// entries and digest, only an admin gets the approve and remove buttons,
-// and a hijack never gets a propose button. The functions are cut out of
-// the real prefix.js, onlyinvalid.js, ui.js, and app.js, so the test runs
-// what ships. Run by TestOnlyInvalidPages with the fixture file.
+// is read-only: class, score, evidence, ROAs, the origin's link-outs
+// (#402), and a link to the Registry page. On the Registry page an
+// operator proposes, the box shows the exact entries and digest, only an
+// admin gets the approve and remove buttons, and a hijack never gets a
+// propose button. The functions are cut out of the real prefix.js,
+// onlyinvalid.js, ui.js, and app.js, so the test runs what ships. Run by
+// TestOnlyInvalidPages with the fixture file.
 
 var fs = require("fs");
 var path = require("path");
@@ -58,6 +59,11 @@ var context = {
   },
   Promise: Promise, JSON: JSON, Date: Date,
   encodeURIComponent: encodeURIComponent,
+  URLSearchParams: URLSearchParams, setTimeout: setTimeout,
+  getJSON: function (url) {
+    calls.push({method: "GET", url: url});
+    return Promise.resolve({asn: {"64500": [{name: "Qrator Radar", url: "https://radar.qrator.net/as/64500"}]}});
+  },
   shellAdmin: true,
   api: function (method, url, body) {
     calls.push({method: method, url: url, body: body});
@@ -85,7 +91,8 @@ var app = fs.readFileSync(path.join(web, "app.js"), "utf8");
 var prefix = fs.readFileSync(path.join(web, "prefix.js"), "utf8");
 var page = fs.readFileSync(path.join(web, "onlyinvalid.js"), "utf8");
 ["el", "clear", "ixpTable", "ixpCell"].forEach(function (n) { vm.runInContext(fn(ui, n), context); });
-vm.runInContext(fn(app, "fmtTime"), context);
+["fmtTime", "linkoutSpan", "fillLinkouts", "flushLinkouts"].forEach(function (n) { vm.runInContext(fn(app, n), context); });
+vm.runInContext("var LINKOUT_BATCH = 200; var linkoutCache = {}; var linkoutWaiting = {}; var linkoutTimer = null;", context);
 var classes = prefix.slice(prefix.indexOf("var ONLY_INVALID_CLASS"), prefix.indexOf("};", prefix.indexOf("var ONLY_INVALID_CLASS")) + 2);
 vm.runInContext(classes, context);
 vm.runInContext(fn(prefix, "onlyInvalidView"), context);
@@ -112,6 +119,14 @@ function settle() { return new Promise(function (r) { setTimeout(r, 0); }); }
   var hijack = Object.assign({}, c, {class: "hijack", score: -7, action: "Keep dropping it."});
   var hv = context.onlyInvalidView(hijack, data.slurm);
   assert(hv.children[0].className === "reason bad" && walk(hv).filter(function (n) { return n.tag === "a"; }).length === 0, "hijack on the prefix page");
+  // The origin's link-outs (Qrator Radar when listed in linkouts.enabled, #402) come from /api/linkouts; the page fetches no outside site.
+  await settle();
+  assert(calls.length === 1 && calls[0].url === "/api/linkouts?asn=64500", "one linkouts read for the origin: " + JSON.stringify(calls));
+  [view, hv].forEach(function (v) {
+    var out = walk(v).filter(function (n) { return n.tag === "a" && n.href.indexOf("https:") === 0; });
+    assert(out.length === 1 && out[0].href === "https://radar.qrator.net/as/64500" && out[0].rel === "noopener noreferrer", "origin link-out: " + JSON.stringify(out.map(function (n) { return n.href; })));
+  });
+  calls.length = 0;
 
   // Registry page: proposing posts the prefix and shows the exact entries.
   await context.oiLoad();

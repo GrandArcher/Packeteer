@@ -913,7 +913,7 @@ The "open in" links on the prefix, ASN, and exchange-peer views (#211). Display 
 
 | Key | Default | Meaning |
 |---|---|---|
-| `enabled` | `he`, `he_lg`, `ripestat`, `peeringdb`, `bgptools`, `cloudflare_radar`, `irr_explorer` | Built-in sites to show: those names plus `nlnog_ring` (off unless listed). A name twice or unknown is an error. `[]` shows no built-in site. |
+| `enabled` | `he`, `he_lg`, `ripestat`, `peeringdb`, `bgptools`, `cloudflare_radar`, `irr_explorer` | Built-in sites to show: those names plus `nlnog_ring` and `qrator_radar` (off unless listed). A name twice or unknown is an error. `[]` shows no built-in site. |
 | `custom` | none | Up to 20 entries of `name` (1-40 printable characters, unique) and `url`. The URL must be `https` with a host, hold exactly one of `{prefix}` or `{asn}` (any other `{...}` is an error), carry no credentials or fragment, and keep the placeholder out of the host. `{prefix}` is the CIDR with `/` and `:` unescaped; `{asn}` is decimal digits. Custom links are always shown. |
 | `hide_internal` | `true` | No link for an RFC 1918, ULA, loopback, or link-local prefix or a private-use AS. `false` links them too. |
 

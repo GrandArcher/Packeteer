@@ -258,7 +258,8 @@ function loadRing() {
 
 // The RPKI-invalid only path panel (#401): the case and its evidence. It
 // is read-only like the rest of the page; exceptions are proposed and
-// approved on the Registry page.
+// approved on the Registry page. The origin's link-outs are where outside
+// incident data such as Qrator Radar is checked (#402).
 var ONLY_INVALID_CLASS = {
   stale_roa: "Likely a stale ROA or misconfiguration",
   hijack: "Likely a hijack",
@@ -269,6 +270,7 @@ function onlyInvalidView(c, slurm) {
   var box = el("div", "");
   box.appendChild(el("p", c.class === "hijack" ? "reason bad" : "reason",
     (ONLY_INVALID_CLASS[c.class] || c.class) + " (score " + c.score + ") for AS" + c.origin + ". " + c.action));
+  box.appendChild(linkoutSpan("asn", c.origin));
   var t = el("table", "");
   var head = el("tr", "");
   ["Evidence", "Points", "Detail"].forEach(function (h) { head.appendChild(el("th", "", h)); });
