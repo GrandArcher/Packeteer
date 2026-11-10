@@ -48,6 +48,7 @@ func (c *Config) Validate() error {
 	c.validateInject(add)
 	c.validateExternalPolicy(add)
 	c.validateIXP(add)
+	c.validateNonBGP(add)
 	c.validateHerd(add)
 
 	// Cause and provider overrides are optional in every mode. A set 0 is
@@ -588,7 +589,11 @@ func (c *Config) validateInject(add func(string, ...any)) {
 		if len(c.Allowlist.Prefixes) == 0 {
 			add("mode inject requires a non-empty allowlist.prefixes")
 		}
-		if len(c.BGP.Neighbors) == 0 && len(c.RIBSources) == 0 {
+		// The non-BGP mode has no BGP session and no announcer. It still
+		// needs the community and local_pref: a static route cannot carry
+		// them, so they are what the router's filter must set, with
+		// NO_EXPORT, if it redistributes the tagged routes (docs/nonbgp.md).
+		if c.NonBGP == nil && len(c.BGP.Neighbors) == 0 && len(c.RIBSources) == 0 {
 			add("mode inject requires at least one bgp.neighbors entry, or rib_sources with external_policy")
 		}
 		if c.PacketeerCommunity == "" {
@@ -597,7 +602,7 @@ func (c *Config) validateInject(add func(string, ...any)) {
 		if c.LocalPref == 0 {
 			add("mode inject requires local_pref (the local preference set on injected routes)")
 		}
-		if c.Announcer == nil && !c.ExternalPolicyOn() {
+		if c.NonBGP == nil && c.Announcer == nil && !c.ExternalPolicyOn() {
 			add("mode inject requires an announcer or external_policy.enabled")
 		}
 		if c.HoldTime <= 0 {

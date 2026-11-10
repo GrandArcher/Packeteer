@@ -857,3 +857,41 @@ func TestRecorderRequeueIsCapped(t *testing.T) {
 		t.Fatalf("stored %d improvements after the outage, want %d", len(store.h.Improvements), maxPending)
 	}
 }
+
+// A prefix learned from flow data in the non-BGP mode is recorded with its
+// own source, and a learned BGP route is not (#300).
+func TestRecorderLabelsSyntheticImprovements(t *testing.T) {
+	ctx := context.Background()
+	clock := t0
+	store := &memStore{}
+	rec := New(Options{
+		Store: store, Mode: "observe", FlushEvery: time.Hour, Now: func() time.Time { return clock },
+		Synthetic: func(p netip.Prefix) bool { return p == pfxA },
+	})
+	if err := rec.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	results := []probe.Result{
+		result(pfxA, "transit-a", 20, 50*time.Millisecond, t0), result(pfxA, "transit-b", 0, 30*time.Millisecond, t0),
+		result(pfxB, "transit-a", 20, 50*time.Millisecond, t0), result(pfxB, "transit-b", 0, 30*time.Millisecond, t0),
+	}
+	rec.Decision(t0, []policy.Change{
+		{Action: policy.ActionImprove, New: policy.Improvement{Prefix: pfxA, Provider: "transit-b", Native: "transit-a"}},
+		{Action: policy.ActionImprove, New: policy.Improvement{Prefix: pfxB, Provider: "transit-b", Native: "transit-a"}},
+	}, results)
+	if err := rec.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	h, _ := store.Read(ctx, plugin.HistoryQuery{OpenOnly: true})
+	got := map[netip.Prefix]string{}
+	for _, r := range h.Improvements {
+		got[r.Prefix] = r.Source
+	}
+	if len(got) != 2 || got[pfxA] != "synthetic" || got[pfxB] != "" {
+		t.Fatalf("sources = %v", got)
+	}
+	row := improvementRow(h.Improvements[0], 1)
+	if (h.Improvements[0].Prefix == pfxA) != (row.Source == "synthetic") {
+		t.Fatalf("the report row lost the source: %+v", row)
+	}
+}

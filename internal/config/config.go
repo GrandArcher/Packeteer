@@ -257,6 +257,9 @@ type Config struct {
 	// IXP is exchange-operator mode (#160). Nil is an edge controller.
 	// Set, Packeteer observes only and never announces.
 	IXP *IXP `yaml:"ixp"`
+	// NonBGP is the flow-driven mode for a dual-ISP site whose router has
+	// no BGP (#300). Nil is the BGP controller.
+	NonBGP *NonBGP `yaml:"nonbgp"`
 }
 
 // GlobalCommit is one commit shared by several providers, usually links

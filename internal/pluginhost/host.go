@@ -29,6 +29,13 @@ type Set struct {
 	Sources   []Instance[plugin.TargetSource]
 	Scorer    *Instance[plugin.Scorer]
 	Announcer *Instance[plugin.Announcer]
+	// Steerer installs the static routes of the non-BGP mode
+	// (nonbgp.steerer, #300). In-process only, like Announcer. Nil when
+	// the mode is off or has no steerer.
+	Steerer *Instance[plugin.Steerer]
+	// Covering finds the announced prefix of a destination
+	// (nonbgp.covering). Read-only; nil when not configured.
+	Covering *Instance[plugin.Covering]
 	// Inbound is the inbound announcer (inbound.announcer). Nil when
 	// inbound is off or has no announcer.
 	Inbound *Instance[plugin.InboundAnnouncer]
@@ -167,6 +174,16 @@ func Build(cfg *config.Config, opts Options) (*Set, error) {
 	if cfg.Announcer != nil {
 		if b := build(plugin.Announcers, "announcer", []config.PluginSpec{*cfg.Announcer}, base, &errs); len(b) == 1 {
 			s.Announcer = &b[0]
+		}
+	}
+	if cfg.NonBGP != nil && cfg.NonBGP.Steerer != nil {
+		if b := build(plugin.Steerers, "nonbgp.steerer", []config.PluginSpec{*cfg.NonBGP.Steerer}, base, &errs); len(b) == 1 {
+			s.Steerer = &b[0]
+		}
+	}
+	if cfg.NonBGP != nil && cfg.NonBGP.Covering != nil {
+		if b := build(plugin.Coverings, "nonbgp.covering", []config.PluginSpec{*cfg.NonBGP.Covering}, base, &errs); len(b) == 1 {
+			s.Covering = &b[0]
 		}
 	}
 	if cfg.Inbound != nil && cfg.Inbound.Announcer != nil {
@@ -390,6 +407,14 @@ func (s *Set) all() []namedLifecycle {
 	}
 	if s.Announcer != nil {
 		add(plugin.KindAnnouncer, s.Announcer.Name, s.Announcer.Plugin)
+	}
+	if s.Covering != nil {
+		add(plugin.KindCovering, s.Covering.Name, s.Covering.Plugin)
+	}
+	// The steerer's routes are removed by the non-BGP controller before any
+	// plugin stops.
+	if s.Steerer != nil {
+		add(plugin.KindSteerer, s.Steerer.Name, s.Steerer.Plugin)
 	}
 	// Started after, and so stopped before, the outbound announcer.
 	if s.Inbound != nil {

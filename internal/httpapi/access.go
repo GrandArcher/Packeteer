@@ -110,6 +110,7 @@ func (s *Server) routeTable() []route {
 		{"GET /api/threat-feeds", viewer, s.handleThreatFeeds},
 		{"GET /api/quarantine", viewer, s.handleQuarantine},
 		{"POST /api/quarantine/release", operator, s.handleQuarantineRelease},
+		{"GET /api/synthetic", viewer, s.handleSynthetic},
 		{"GET /api/leaks", viewer, s.handleLeaks},
 		{"POST /api/leaks/clear", operator, s.handleLeakClear},
 		{"GET /api/registry", viewer, s.handleRegistry},

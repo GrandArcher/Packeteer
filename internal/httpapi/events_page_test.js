@@ -48,7 +48,8 @@ var context = {
     getElementById: function (id) { return ids[id] || (ids[id] = new Node("div")); }
   },
   fmtTime: function (s) { return s; },
-  lastOverview: null
+  lastOverview: null,
+  lastSynthetic: null
 };
 vm.createContext(context);
 

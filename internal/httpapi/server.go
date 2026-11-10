@@ -37,6 +37,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/federation"
 	"github.com/GrandArcher/Packeteer/internal/inbound"
 	"github.com/GrandArcher/Packeteer/internal/linkout"
+	"github.com/GrandArcher/Packeteer/internal/nonbgp"
 	"github.com/GrandArcher/Packeteer/internal/onlyinvalid"
 	"github.com/GrandArcher/Packeteer/internal/pluginhost"
 	"github.com/GrandArcher/Packeteer/internal/ringlg"
@@ -77,6 +78,9 @@ type Options struct {
 	Inbound func() inbound.Status
 	// Verification lists the steer checks (#305). Nil means verify is off.
 	Verification func() []verify.Result
+	// Synthetic is the non-BGP mode's synthetic prefixes and steered routes
+	// (#300). Nil means the mode is off.
+	Synthetic func() nonbgp.Status
 	// Mitigation is threat mitigation (#28). Nil means it is not
 	// configured.
 	Mitigation MitigationControl
@@ -152,6 +156,7 @@ type Server struct {
 	tools        *troubleshoot.Tools
 	inbound      func() inbound.Status
 	verification func() []verify.Result
+	synthetic    func() nonbgp.Status
 	mitigation   MitigationControl
 	anomaly      func() anomaly.Status
 	threatFeeds  func() threatfeed.Status
@@ -287,7 +292,7 @@ func New(opt Options) (*Server, error) {
 	if opt.Logger == nil {
 		opt.Logger = slog.Default()
 	}
-	s := &Server{addr: opt.Addr, user: opt.User, password: opt.Password, auth: opt.Auth, audit: opt.Audit, events: opt.Events, allowFrom: opt.AllowFrom, snap: opt.Snapshot, maint: opt.Maintenance, reports: opt.Reports, tools: opt.Tools, inbound: opt.Inbound, verification: opt.Verification, mitigation: opt.Mitigation, anomaly: opt.Anomaly, threatFeeds: opt.ThreatFeeds, leaks: opt.Leaks, federation: opt.Federation, fedPush: opt.FederationPush, ha: opt.HA, export: opt.Export, srcErrs: opt.SourceErrors,
+	s := &Server{addr: opt.Addr, user: opt.User, password: opt.Password, auth: opt.Auth, audit: opt.Audit, events: opt.Events, allowFrom: opt.AllowFrom, snap: opt.Snapshot, maint: opt.Maintenance, reports: opt.Reports, tools: opt.Tools, inbound: opt.Inbound, verification: opt.Verification, synthetic: opt.Synthetic, mitigation: opt.Mitigation, anomaly: opt.Anomaly, threatFeeds: opt.ThreatFeeds, leaks: opt.Leaks, federation: opt.Federation, fedPush: opt.FederationPush, ha: opt.HA, export: opt.Export, srcErrs: opt.SourceErrors,
 		editor: opt.ConfigEditor, firstRun: opt.FirstRun, dashboards: opt.Dashboards, subs: opt.Subscriptions, upgrade: opt.Upgrade, log: opt.Logger}
 	setup := opt.Setup
 	s.setup.Store(&setup)

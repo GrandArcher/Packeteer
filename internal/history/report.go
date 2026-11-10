@@ -398,6 +398,9 @@ type ImprovementRow struct {
 	VolumeMbps    float64   `json:"volume_mbps,omitempty"`
 	CostDelta     float64   `json:"cost_delta,omitempty"`
 	EstSavings    float64   `json:"est_savings,omitempty"`
+	// Source is "synthetic" for a prefix learned from flow data in the
+	// non-BGP mode (#300).
+	Source string `json:"source,omitempty"`
 	// Explain is the gate list of the decision that started the
 	// improvement (#201). Only the prefix history carries it.
 	Explain json.RawMessage `json:"explain,omitempty"`
@@ -424,6 +427,7 @@ func improvementRow(r plugin.ImprovementRecord, hours float64) ImprovementRow {
 		BeforeLossPct: opt(r.HasBefore, r.BeforeLoss), BeforeRTTMs: opt(r.HasBefore, r.BeforeRTT),
 		AfterLossPct: opt(r.HasAfter, r.AfterLoss), AfterRTTMs: opt(r.HasAfter, r.AfterRTT),
 		OriginASN: r.OriginASN, Country: r.Country, VolumeMbps: r.VolumeMbps, CostDelta: r.CostDelta, EstSavings: r.EstSavings,
+		Source: r.Source,
 	}
 	if !r.End.IsZero() {
 		row.End = r.End.UTC()

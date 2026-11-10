@@ -181,6 +181,7 @@ Leave graceful restart off on the session. Guides:
 - [docs/adopting.md](docs/adopting.md) - moving from or alongside an existing route optimizer: concepts mapped to config and an observe-first cut-over plan
 - [docs/roi.md](docs/roi.md) - worksheet to estimate the return: transit cost, commit relief, and measured gain
 - [docs/walkthrough.md](docs/walkthrough.md) - observe, suggest, inject, and roll back on a simulated FRR edge, then the same steps on a real one. CI runs every command
+- [docs/nonbgp.md](docs/nonbgp.md) - flow-driven static routes for a dual-ISP site whose router has no BGP (opt-in, read the warning first)
 - [docs/mikrotik.md](docs/mikrotik.md) - RouterOS 7 iBGP, filters, Traffic Flow, port mirroring, and SNMP
 - [docs/frr.md](docs/frr.md) - FRR; the walkthrough lab runs this configuration in CI
 - [docs/junos.md](docs/junos.md) - Juniper Junos
@@ -335,9 +336,9 @@ Status on main after the 1.0.1 release, capability rows per milestone and how ma
 | v0.7 | 3 | 3 |
 | v0.8 | 20 | 16 |
 | v0.9 | 31 | 28 |
-| v1.1 | 2 | 0 |
+| v1.1 | 3 | 0 |
 | won't do | 2 | - |
-| **Total** | 144 | 130 |
+| **Total** | 145 | 130 |
 
 v0.1 is the outbound loop: probes, static and flow targets, an iBGP RIB, scoring with hysteresis, optional injection, the read-only UI and API, the container, and the FRR lab. v0.2 adds cost and commit control, SNMP, policies, alerts, and reports. v0.3 adds inbound optimization, BMP and add-path, multiple routers and IX, RTBH/FlowSpec mitigation, transit classification, and capped more-specific injection, all lab-proven. v0.4 adds multi-POP federation, active/standby HA and backup, RBAC/SSO/audit, flow-baseline anomaly detection that mitigates only on explicit rules, and the remaining UI rows. v0.5 is hardening on that matrix: dashboard clarity and a first-run checklist, CI-tested install and walkthrough docs, load and soak budgets, a MikroTik CHR lab in CI, and a scheduled router interop matrix. Field feedback from real observe-mode deployments (#54) is still open. v0.6 closes the gaps from the 2026-10-07 review of prefix selection, measurement, and the UI, adds flap quarantine, live apply, scale budgets up to multi-million path tables, upgrade from the UI, and a failure-mode e2e matrix. v0.7 adds exchange (IX) visibility for an edge network: an exchange view, IX LAN health probes, route-server vs bilateral prefix views, offload and potential-peers reports, dashboard widgets, Commit & Cost, Reports, search, System, and maintenance pages, and link-outs.
 

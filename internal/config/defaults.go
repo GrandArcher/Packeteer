@@ -7,6 +7,7 @@ func (c *Config) applyDefaults() {
 	c.defaultUpgrade()
 	c.defaultMCP()
 	c.defaultHerd()
+	c.defaultNonBGP()
 	// A file without mode observes (#49): the safe default. Inject is
 	// never a default; it needs an explicit mode: inject and its checks.
 	if strings.TrimSpace(c.Mode) == "" {

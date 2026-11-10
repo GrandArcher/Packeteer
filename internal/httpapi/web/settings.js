@@ -950,6 +950,7 @@ function describe(res) {
   else if (res.reload_online) parts.push("applies online");
   if (res.enables_inject) parts.push("turns inject on");
   if (res.synthesize_warning) parts.push(res.synthesize_warning);
+  if (res.nonbgp_warning) parts.push(res.nonbgp_warning);
   return parts.join(" · ");
 }
 
@@ -1054,6 +1055,7 @@ function showPreview(p) {
   if (res.valid) head += changes.length ? ". " + changes.length + (changes.length === 1 ? " setting differs" : " settings differ") + " from the file." : ". Nothing differs from the file.";
   if (res.enables_inject) head += " This turns inject on: tick the confirmation to Save.";
   if (res.synthesize_warning) head += " " + res.synthesize_warning;
+  if (res.nonbgp_warning) head += " " + res.nonbgp_warning;
   pvState(head);
   pvList("pv-restart", "Needs a restart: ", res.restart);
   pvList("pv-online", "Applies when you Save: ", res.online);

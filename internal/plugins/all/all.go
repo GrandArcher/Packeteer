@@ -4,6 +4,7 @@ package all
 
 import (
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/announcer/gobgp"          // gobgp announcer
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/covering/ripestat"        // RIPEstat announced-prefix lookup (non-BGP mode)
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/detector/baseline"        // baseline anomaly detector
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/elector/lease"            // lease-file HA elector
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/exec"                     // exec prober/source/notifier
@@ -57,6 +58,8 @@ import (
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/source/traceroute"        // traceroute target discovery
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/source/vip"               // VIP prefix/ASN target source
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/sso/oidc"                 // OIDC single sign-on
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/steerer/linux"            // static routes over netlink (non-BGP mode)
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/steerer/mikrotik"         // static routes over the RouterOS REST API (non-BGP mode)
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/storage/sqlite"           // sqlite history storage
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/telemetry/fixed"          // fixed (lab) telemetry
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/telemetry/snmp"           // SNMP interface telemetry

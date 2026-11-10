@@ -27,6 +27,9 @@ type Setup struct {
 	// SimulatedProbes is config.SimulatedProbesNotice while a sim prober
 	// is configured (#103), else empty.
 	SimulatedProbes string
+	// NonBGPWarning is config.NonBGPWarning while the nonbgp block is set
+	// (#300), else empty.
+	NonBGPWarning string
 	// GeoIP reports the state of the country databases (#135). Nil when no
 	// country rule and no download is configured.
 	GeoIP func() GeoIPState
@@ -141,6 +144,9 @@ type Overview struct {
 	// SimulatedProbes is set while a sim prober is configured (#103);
 	// every page shows it so no probe number reads as measured.
 	SimulatedProbes string `json:"simulated_probes,omitempty"`
+	// NonBGPWarning is set while the non-BGP mode is on (#300); every page
+	// shows it.
+	NonBGPWarning string `json:"nonbgp_warning,omitempty"`
 }
 
 // OverviewCounts are the headline numbers.
@@ -204,6 +210,7 @@ func BuildOverview(snap Snapshot, setup Setup, features []Feature) Overview {
 
 		SynthesizeWarning: setup.SynthesizeWarning,
 		SimulatedProbes:   setup.SimulatedProbes,
+		NonBGPWarning:     setup.NonBGPWarning,
 	}
 	if setup.GeoIP != nil {
 		out.geoip = setup.GeoIP()

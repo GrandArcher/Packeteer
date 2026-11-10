@@ -54,6 +54,9 @@ type ImprovementRecord struct {
 	// Explain is the JSON gate list of the decision that started the
 	// improvement (#201). Empty for a record made before it existed.
 	Explain string
+	// Source is "synthetic" for a prefix learned from flow data in the
+	// non-BGP mode (#300). Empty for a learned BGP route.
+	Source string
 }
 
 // PrefixInfo is what reports know about a prefix: the origin ASN from the

@@ -245,6 +245,16 @@ func classify(a, b *config.Config) (restart, online []string) {
 		online = slices.Delete(online, i, i+1)
 		restart = append(restart, "max_improvements (shared with inbound)")
 	}
+	// The non-BGP steering (#300) is built once at start from the mode, the
+	// allowlist, the cap, and the flow source.
+	if a.NonBGP != nil || b.NonBGP != nil {
+		for _, k := range []string{"mode", "allowlist", "max_improvements", "sources"} {
+			if i := slices.Index(online, k); i >= 0 {
+				online = slices.Delete(online, i, i+1)
+				restart = append(restart, k+" (non-BGP steering is built at start)")
+			}
+		}
+	}
 	slices.Sort(online)
 	return restart, online
 }

@@ -6,6 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Added
 
+- Non-BGP mode, opt-in (`nonbgp.install_routes`): flow-driven static routes for a dual-ISP router with no BGP, not from a learned RIB view; `mikrotik` and `linux` steerers, start-up sweep (#300).
 - MCP server for AI assistants: opt-in `mcp` block, `POST /mcp` with 17 read tools, `packeteer-mcp` stdio bridge, `mcp` and `mcp:write` token scopes, maintenance write tools off by default (#302).
 - `rpki.only_invalid` reports RPKI-invalid only paths, classed stale ROA, hijack, or unclear with evidence; opt-in SLURM exceptions are written only after admin approval (#401).
 - Origin AS link-outs on the RPKI-invalid only panel, and an opt-in `qrator_radar` link-out to the Qrator Radar AS page; no Qrator API client, as Qrator has not confirmed API access or polling (#402).

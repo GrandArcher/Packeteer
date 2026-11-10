@@ -2904,6 +2904,8 @@ jobs:
         run: bash lab/e2e-more-specific.sh
       - name: FRR synthesize lab (#122; synthesized /25 inside a learned /24 with community, marker, NO_EXPORT; route cap holds a second; covering-prefix leave, SIGTERM, SIGKILL; nothing reaches the other transit)
         run: bash lab/e2e-synthesize.sh
+      - name: Non-BGP lab (#300; linux steerer in a simulated router namespace, flow-derived static route installed through the faster link, withdrawn on probe-source failure and SIGTERM, kill -9 leaves it and the next start sweeps it)
+        run: bash lab/e2e-nonbgp.sh
       - name: FRR internet VRF and partial-table lab (#206; every session in a VRF, no full-table provider, learned prefix steered in the VRF only, default route and unlearned prefix never steered, SIGTERM, SIGKILL)
         run: bash lab/e2e-vrf.sh
       - name: FRR leak watch lab (clean run no false positive, misconfigured export leaks one route and only that route is withdrawn, hold until cleared, BMP feed loss is unknown, SIGTERM, SIGKILL)

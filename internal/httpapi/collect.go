@@ -30,6 +30,7 @@ type Collector struct {
 	reorder     func() []probe.ReorderResult
 	flowTracked func() int
 	truncated   func() map[string]uint64
+	synthetic   func(netip.Prefix) bool
 	exchanges   []exchange.Exchange
 	hops        func() []rib.NextHopCount
 	health      *exchange.Health
@@ -60,6 +61,14 @@ func (c *Collector) Attach(engine *probe.Engine, decider *policy.Engine, view *r
 func (c *Collector) SetFlowTracked(fn func() int) {
 	c.mu.Lock()
 	c.flowTracked = fn
+	c.mu.Unlock()
+}
+
+// SetSynthetic installs the test for a prefix learned from flow data in the
+// non-BGP mode (#300). Nil leaves every row unlabeled.
+func (c *Collector) SetSynthetic(fn func(netip.Prefix) bool) {
+	c.mu.Lock()
+	c.synthetic = fn
 	c.mu.Unlock()
 }
 
@@ -170,6 +179,7 @@ func (c *Collector) Snapshot() Snapshot {
 	started, engine, decider, view, telemetry := c.started, c.engine, c.decider, c.view, c.telemetry
 	reorder := c.reorder
 	exs, hops, flowTracked, truncated := c.exchanges, c.hops, c.flowTracked, c.truncated
+	synthetic := c.synthetic
 	health, peerPrefix, rpki, registry, portMaxAge := c.health, c.peerPrefix, c.rpki, c.irr, c.portMaxAge
 	c.mu.RUnlock()
 
@@ -181,6 +191,7 @@ func (c *Collector) Snapshot() Snapshot {
 		Providers: c.providers,
 		RPKI:      rpki,
 		IRR:       registry,
+		Synthetic: synthetic,
 	}
 	if telemetry != nil {
 		in.Telemetry = telemetry()

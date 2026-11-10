@@ -435,6 +435,17 @@ func TestOverviewSynthesizeWarning(t *testing.T) {
 	}
 }
 
+// With the non-BGP mode on (#300) the overview carries its warning.
+func TestOverviewNonBGPWarning(t *testing.T) {
+	if o := BuildOverview(Assemble(firstRun()), Setup{}, nil); o.NonBGPWarning != "" {
+		t.Fatalf("warning with the mode off: %q", o.NonBGPWarning)
+	}
+	body, err := json.Marshal(BuildOverview(Assemble(firstRun()), Setup{NonBGPWarning: "WARNING: non-BGP mode is on."}, nil))
+	if err != nil || !strings.Contains(string(body), `"nonbgp_warning":"WARNING: non-BGP mode is on."`) {
+		t.Fatalf("json = %s %v", body, err)
+	}
+}
+
 // While a sim prober is configured (#103) the overview carries the notice
 // every page shows; without one it carries none.
 func TestOverviewSimulatedProbes(t *testing.T) {
