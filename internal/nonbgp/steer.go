@@ -29,19 +29,16 @@ type SteerConfig struct {
 	// for one that aged out is removed even if the decision engine still
 	// lists its improvement.
 	Live func(netip.Prefix) bool
-	// RouteTimeout bounds the router requests for one route: the listing,
-	// an install, or a removal. Each route gets its own budget, so a pass
-	// never stops halfway through moving a route. 0 is DefaultRouteTimeout.
-	RouteTimeout time.Duration
 	// Now is the clock; nil is time.Now.
 	Now func() time.Time
 }
 
-// DefaultRouteTimeout covers the requests one route takes: the mikrotik
+// RouteTimeout bounds the router requests for one route: the listing, an
+// install, or a removal. It covers what one route takes: the mikrotik
 // steerer lists, deletes a duplicate tagged row, and patches, each with
 // its own 10s timeout. Only Packeteer adds tagged rows, so more than one
 // duplicate is not expected.
-const DefaultRouteTimeout = 30 * time.Second
+const RouteTimeout = 30 * time.Second
 
 // Steered is one static route this process put on the router.
 type Steered struct {
@@ -85,9 +82,6 @@ func NewSteer(cfg SteerConfig, drv plugin.Steerer, log *slog.Logger) (*Steer, er
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
-	if cfg.RouteTimeout <= 0 {
-		cfg.RouteTimeout = DefaultRouteTimeout
-	}
 	if log == nil {
 		log = slog.Default()
 	}
@@ -113,15 +107,7 @@ func (s *Steer) Sync(ctx context.Context, imps []policy.Improvement) error {
 			return err
 		}
 	}
-	var errs []error
-	for _, p := range netpfx.SortedKeys(s.leftover) {
-		if err := s.op(ctx, func(c context.Context) error { return s.drv.Remove(c, p) }); err != nil {
-			errs = append(errs, fmt.Errorf("non-BGP: remove left-over route %s: %w", p, err))
-			continue
-		}
-		delete(s.leftover, p)
-		s.log.Warn("non-BGP: removed a route left on the router by an earlier run", "prefix", p)
-	}
+	errs := s.removeLeftoversLocked(ctx)
 	if !s.cfg.Inject {
 		return errors.Join(errs...)
 	}
@@ -147,13 +133,32 @@ func (s *Steer) Sync(ctx context.Context, imps []policy.Improvement) error {
 	return errors.Join(errs...)
 }
 
-// op runs one route's router requests under their own deadline. ctx only
-// ends a pass between routes: a route is never cut off halfway.
+// removeLeftoversLocked tries every left-over route once more.
+func (s *Steer) removeLeftoversLocked(ctx context.Context) []error {
+	var errs []error
+	for _, p := range netpfx.SortedKeys(s.leftover) {
+		if err := s.op(ctx, func(c context.Context) error { return s.drv.Remove(c, p) }); err != nil {
+			errs = append(errs, fmt.Errorf("non-BGP: remove left-over route %s: %w", p, err))
+			continue
+		}
+		delete(s.leftover, p)
+		s.log.Warn("non-BGP: removed a route left on the router by an earlier run", "prefix", p)
+	}
+	return errs
+}
+
+// op runs one route's router requests under their own deadline.
+// Cancelling ctx only ends a pass between routes, so a route is never cut
+// off halfway. A deadline on ctx (the shutdown budget) still bounds them.
 func (s *Steer) op(ctx context.Context, fn func(context.Context) error) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	c, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.cfg.RouteTimeout)
+	end := time.Now().Add(RouteTimeout)
+	if d, ok := ctx.Deadline(); ok && d.Before(end) {
+		end = d
+	}
+	c, cancel := context.WithDeadline(context.WithoutCancel(ctx), end)
 	defer cancel()
 	return fn(c)
 }
@@ -186,10 +191,7 @@ func (s *Steer) installLocked(ctx context.Context, im policy.Improvement) error 
 		return nil
 	}
 	_, stale := s.leftover[p]
-	floor := FloorV4
-	if p.Addr().Is6() {
-		floor = FloorV6
-	}
+	floor := floorBits(p.Addr())
 	nh, known := s.cfg.NextHops[im.Provider]
 	switch {
 	case p.Bits() == 0 || p.Bits() > floor:
@@ -226,6 +228,7 @@ func (s *Steer) removeLocked(ctx context.Context, p netip.Prefix) error {
 
 func (s *Steer) removeAllLocked(ctx context.Context) error {
 	var errs []error
+	errs = append(errs, s.removeLeftoversLocked(ctx)...)
 	for _, p := range netpfx.SortedKeys(s.active) {
 		if err := s.removeLocked(ctx, p); err != nil {
 			errs = append(errs, err)
@@ -234,8 +237,9 @@ func (s *Steer) removeAllLocked(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-// WithdrawAll removes every route this process installed. It is called on
-// shutdown. It leaves a route this process did not install alone.
+// WithdrawAll removes every route this process installed, and tries the
+// left-over routes of an earlier run once more. It is called on shutdown.
+// It leaves alone a tagged route that appeared after the start-up sweep.
 func (s *Steer) WithdrawAll(ctx context.Context) error {
 	if s == nil {
 		return nil

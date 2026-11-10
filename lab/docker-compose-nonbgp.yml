@@ -1,6 +1,6 @@
 # Non-BGP mode lab (#300): a simulated Linux router with two links and no
 # BGP, and Packeteer in the router's network namespace driving its routes
-# with the linux steerer. Documentation addresses (RFC 5737) and a private
+# with the linux steerer. Documentation addresses (RFC 5737) and a documentation
 # ASN only. Brought up by lab/e2e-nonbgp.sh, which sends synthetic NetFlow
 # v5 from the host to 192.0.2.10:2055 and reads the router's routes. The
 # router container holds the namespace, so routes outlive a killed Packeteer

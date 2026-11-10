@@ -413,11 +413,45 @@ func TestPassIsNotCutHalfwayThroughARoute(t *testing.T) {
 	if during != nil {
 		t.Fatalf("the route in progress lost its context: %v", during)
 	}
-	if deadline <= 0 || deadline > DefaultRouteTimeout {
-		t.Fatalf("route deadline %s, want within %s", deadline, DefaultRouteTimeout)
+	if deadline <= 0 || deadline > RouteTimeout {
+		t.Fatalf("route deadline %s, want within %s", deadline, RouteTimeout)
 	}
 	if _, ok := rig.r.has("198.51.100.0/24"); !ok || rig.r.installs != 1 || !errors.Is(err, context.Canceled) {
 		t.Fatalf("the pass did not finish the route in progress and stop before the next: installs %d err %v", rig.r.installs, err)
+	}
+}
+
+// Shutdown tries a stuck left-over once more, under the shutdown deadline.
+func TestWithdrawAllRetriesLeftOversWithinTheDeadline(t *testing.T) {
+	rig := newRig(t, true, 5)
+	ctx := context.Background()
+	rig.r.set(func() {
+		rig.r.routes[pfx("192.0.2.0/24")] = addr("198.51.100.1")
+		rig.r.removeFail = pfx("192.0.2.0/24")
+	})
+	if err := rig.s.Sync(ctx, []policy.Improvement{imp("198.51.100.0/24", "isp-b")}); err == nil {
+		t.Fatal("the stuck left-over was not reported")
+	}
+	rig.r.set(func() { rig.r.removeFail = netip.Prefix{} })
+	stop, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := rig.s.WithdrawAll(stop); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{"192.0.2.0/24", "198.51.100.0/24"} {
+		if _, ok := rig.r.has(p); ok {
+			t.Errorf("%s stayed after WithdrawAll", p)
+		}
+	}
+	// A route's own budget never outlasts the caller's deadline.
+	var left time.Duration
+	_ = rig.s.op(stop, func(c context.Context) error {
+		d, _ := c.Deadline()
+		left = time.Until(d)
+		return nil
+	})
+	if left <= 0 || left > 5*time.Second {
+		t.Fatalf("route deadline %s, want within the 5s shutdown budget", left)
 	}
 }
 

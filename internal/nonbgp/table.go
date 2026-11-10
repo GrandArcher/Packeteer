@@ -73,7 +73,6 @@ type Route struct {
 // Stats is the table's size and lookup health.
 type Stats struct {
 	Blocks  int
-	Routes  int
 	Pending int
 	// Dropped counts destinations not tracked because the block cap was
 	// reached.
@@ -360,7 +359,7 @@ func (t *Table) Fill(in *policy.Input, native string) {
 func (t *Table) Stats() Stats {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	st := Stats{Blocks: len(t.blocks), Routes: len(t.routes), Dropped: t.dropped.Load(), LookupErrors: t.errs.Load(), LastError: t.lastErr}
+	st := Stats{Blocks: len(t.blocks), Dropped: t.dropped.Load(), LookupErrors: t.errs.Load(), LastError: t.lastErr}
 	now := t.opt.Now()
 	for _, b := range t.blocks {
 		if t.dueLocked(b, now) {

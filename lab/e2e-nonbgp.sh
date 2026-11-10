@@ -3,7 +3,7 @@
 # BGP. Packeteer runs in the router's network namespace with the linux
 # steerer, as on a real Linux router; the router container keeps the
 # namespace, so a killed Packeteer leaves its routes behind. Documentation
-# prefixes and a private ASN only. Lab only: these routes are derived from
+# prefixes and a documentation ASN only. Lab only: these routes are derived from
 # flow data, not from a learned BGP RIB view.
 #
 # lab/sendflow sends NetFlow v5 for 203.0.113.7 (allowlisted) and

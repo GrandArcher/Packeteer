@@ -2,7 +2,7 @@
 
 For a site whose router has no BGP. Flow records name the destinations in
 use, and an improvement becomes a static route on the router (RouterOS 7
-REST or Linux `ip route`). User guide: [../nonbgp.md](../nonbgp.md).
+REST, or netlink with protocol 250 on Linux). User guide: [../nonbgp.md](../nonbgp.md).
 
 ## Owner decision
 

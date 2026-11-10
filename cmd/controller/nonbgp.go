@@ -111,7 +111,7 @@ func (s *nonbgpState) Fill(in *policy.Input) {
 
 // Sync puts the improvements on the router. In observe and suggest it
 // installs nothing. The pass has no overall deadline: each route has its
-// own (nonbgp.DefaultRouteTimeout), so a pass never stops halfway.
+// own (nonbgp.RouteTimeout), so a pass never stops halfway.
 func (s *nonbgpState) Sync(imps []policy.Improvement) error {
 	if s == nil {
 		return nil

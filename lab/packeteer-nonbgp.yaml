@@ -1,4 +1,4 @@
-# Lab only (#300). Documentation prefixes, private ASN. The routes this
+# Lab only (#300). Documentation prefixes and ASN. The routes this
 # installs are derived from flow data, NOT from a learned BGP RIB view.
 #
 # lab/sendflow sends traffic to 203.0.113.7 (allowlisted) and 198.51.100.77
@@ -6,9 +6,9 @@
 # lab/e2e-nonbgp.sh rewrites: isp-b is faster, so 203.0.113.0/24 gets a
 # static route through isp-b's gateway in the router's main table.
 mode: inject
-asn: 64512
+asn: 64496
 router_id: 192.0.2.10
-packeteer_community: "64512:666"
+packeteer_community: "64496:666"
 local_pref: 200
 max_improvements: 5
 hold_time: 2s
