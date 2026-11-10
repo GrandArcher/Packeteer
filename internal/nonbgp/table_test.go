@@ -63,6 +63,19 @@ func newTestTable(widen int, cov plugin.Covering) (*Table, *clock) {
 	return NewTable(Options{WidenBits: widen, Idle: 30 * time.Minute, MaxBlocks: 100, Now: c.now}, cov), c
 }
 
+// announce is a lookup answer of upper for every tracked block inside it,
+// unless the block already sits in a more specific announced prefix.
+func announce(t *Table, upper netip.Prefix, origin uint32) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.known[upper] = origin
+	for blk, b := range t.blocks {
+		if upper.Contains(blk.Addr()) && (!b.upper.IsValid() || b.upper.Bits() < upper.Bits()) {
+			b.upper, b.origin = upper, origin
+		}
+	}
+}
+
 func pfx(s string) netip.Prefix { return netip.MustParsePrefix(s) }
 func addr(s string) netip.Addr  { return netip.MustParseAddr(s) }
 
@@ -222,8 +235,8 @@ func TestNestedGroupsMergeIntoOneRoute(t *testing.T) {
 	for _, a := range []string{"2001:db8:2::1", "2001:db8:4::1", "2001:db8:5::1", "2001:db8:6::1", "2001:db8:7::1", "2001:db8:8::1", "2001:db8:9::1", "2001:db8:a::1", "2001:db8:b::1"} {
 		tbl.Lookup(addr(a))
 	}
-	tbl.known[pfx("2001:db8::/46")] = 64501
-	tbl.known[pfx("2001:db8::/44")] = 64500
+	announce(tbl, pfx("2001:db8::/46"), 64501)
+	announce(tbl, pfx("2001:db8::/44"), 64500)
 	tbl.Refresh()
 	got := tbl.Routes()
 	if len(got) != 1 || got[0].Prefix != pfx("2001:db8::/44") || got[0].Blocks != 9 || got[0].Upper != pfx("2001:db8::/44") || got[0].Origin != 64500 {
@@ -239,10 +252,10 @@ func TestNestedGroupsMergeIntoOneRoute(t *testing.T) {
 func TestWidenedPrefixIsAtLeastHalfActive(t *testing.T) {
 	table := func(addrs ...string) *Table {
 		tbl, _ := newTestTable(4, nil)
-		tbl.known[pfx("2001:db8::/44")] = 64500
 		for _, a := range addrs {
 			tbl.Lookup(addr(a))
 		}
+		announce(tbl, pfx("2001:db8::/44"), 64500)
 		tbl.Refresh()
 		return tbl
 	}
@@ -434,5 +447,57 @@ func TestReportJoinsRoutesWithSteeredOnes(t *testing.T) {
 	obs := Report(Meta{Mode: "observe"}, tbl, nil)
 	if len(obs.Routes) != 2 || obs.Routes[0].SteeredTo != "" {
 		t.Fatalf("observe status = %+v", obs)
+	}
+}
+
+// A block is asked again a day after its answer, so a prefix announced
+// differently since is picked up, and an announced prefix no block holds
+// any more is forgotten.
+func TestAnswerIsAskedAgainAndForgotten(t *testing.T) {
+	cov := &fakeCovering{ans: pfx("2001:db8::/32")}
+	tbl, clk := newTestTable(4, cov)
+	keep := func() {
+		tbl.Lookup(addr("2001:db8::1"))
+		tbl.Lookup(addr("2001:db8:1::1"))
+	}
+	keep()
+	for tbl.lookupOne(context.Background()) {
+	}
+	tbl.Refresh()
+	if got := routePrefixes(tbl); !equal(got, []string{"2001:db8::/47"}) {
+		t.Fatalf("routes = %v", got)
+	}
+	if tbl.lookupOne(context.Background()) {
+		t.Fatal("an answered block was asked again within a day")
+	}
+
+	// The /32 is now announced as more specifics: nothing bounds the blocks.
+	cov.set(pfx("2001:db8:0:8000::/49"), nil)
+	clk.add(relookup)
+	keep()
+	for tbl.lookupOne(context.Background()) {
+	}
+	tbl.Refresh()
+	if got := routePrefixes(tbl); !equal(got, []string{"2001:db8::/48", "2001:db8:1::/48"}) {
+		t.Fatalf("routes after the announcement changed = %v", got)
+	}
+	if cov.count() != 4 || len(tbl.known) != 0 {
+		t.Fatalf("covering calls %d, known %v", cov.count(), tbl.known)
+	}
+
+	clk.add(relookup)
+	cov.set(pfx("2001:db8::/32"), nil)
+	keep()
+	for tbl.lookupOne(context.Background()) {
+	}
+	tbl.Refresh()
+	if len(tbl.known) != 1 {
+		t.Fatalf("known = %v", tbl.known)
+	}
+	// Every block ages out: the cache of announced prefixes empties with them.
+	clk.add(time.Hour)
+	tbl.Refresh()
+	if len(tbl.known) != 0 || len(tbl.Routes()) != 0 {
+		t.Fatalf("known %v and routes %v outlived their blocks", tbl.known, tbl.Routes())
 	}
 }

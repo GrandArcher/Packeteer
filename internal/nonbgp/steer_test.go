@@ -473,3 +473,40 @@ func TestNewSteerRefusesUnsafeInject(t *testing.T) {
 		t.Errorf("observe without a steerer: %v", err)
 	}
 }
+
+// The status API reads the routes while a pass waits on a slow router.
+func TestActiveDoesNotWaitForAPass(t *testing.T) {
+	rig := newRig(t, true, 5)
+	if err := rig.s.Sync(context.Background(), []policy.Improvement{imp("198.51.100.0/24", "isp-b")}); err != nil {
+		t.Fatal(err)
+	}
+	started, release := make(chan struct{}), make(chan struct{})
+	rig.r.set(func() {
+		rig.r.onInstall = func(context.Context) {
+			close(started)
+			<-release
+		}
+	})
+	done := make(chan error, 1)
+	go func() {
+		done <- rig.s.Sync(context.Background(), []policy.Improvement{imp("198.51.100.0/24", "isp-b"), imp("203.0.113.0/24", "isp-b")})
+	}()
+	<-started
+	got := make(chan []Steered, 1)
+	go func() { got <- rig.s.Active() }()
+	select {
+	case a := <-got:
+		if len(a) != 1 || a[0].Prefix != pfx("198.51.100.0/24") || a[0].Provider != "isp-b" {
+			t.Errorf("Active during a pass = %+v, want the installed route", a)
+		}
+	case <-time.After(5 * time.Second):
+		t.Error("Active waited for the router")
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if a := rig.s.Active(); len(a) != 2 {
+		t.Fatalf("Active after the pass = %+v", a)
+	}
+}

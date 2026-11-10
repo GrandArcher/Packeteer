@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
@@ -31,6 +32,9 @@ type routerFake struct {
 	plugin.Base
 	mu     sync.Mutex
 	routes map[netip.Prefix]netip.Addr
+	// before runs ahead of each install, outside the lock; an error fails
+	// the install. It stands in for a slow or failing router API.
+	before func(netip.Prefix) error
 }
 
 var nonbgpRouter = &routerFake{routes: map[netip.Prefix]netip.Addr{}}
@@ -40,6 +44,14 @@ func init() {
 }
 
 func (r *routerFake) Install(_ context.Context, s plugin.SteerRoute) error {
+	r.mu.Lock()
+	before := r.before
+	r.mu.Unlock()
+	if before != nil {
+		if err := before(s.Prefix); err != nil {
+			return err
+		}
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.routes[s.Prefix] = s.NextHop
@@ -66,6 +78,7 @@ func (r *routerFake) Owned(context.Context) ([]netip.Prefix, error) {
 func (r *routerFake) reset() {
 	r.mu.Lock()
 	r.routes = map[netip.Prefix]netip.Addr{}
+	r.before = nil
 	r.mu.Unlock()
 }
 
@@ -177,7 +190,7 @@ func (r *nonbgpRig) round(t *testing.T, dst string, edit ...func(*policy.Input))
 	}
 	r.decider.Evaluate(in, now)
 	imps := r.decider.Improvements()
-	if err := r.nb.Sync(imps); err != nil {
+	if err := r.nb.Sync(context.Background(), imps); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
 	return imps
@@ -291,7 +304,7 @@ func TestNonBGPStateIsInertWhenOff(t *testing.T) {
 	nb.Refresh()
 	in := policy.Input{}
 	nb.Fill(&in)
-	if in.RIBEnabled || in.RIBReady || nb.Sync(nil) != nil || nb.WithdrawAll(context.Background()) != nil || nb.Has(netip.MustParsePrefix("192.0.2.0/24")) {
+	if in.RIBEnabled || in.RIBReady || nb.Sync(context.Background(), nil) != nil || nb.WithdrawAll(context.Background()) != nil || nb.Has(netip.MustParsePrefix("192.0.2.0/24")) {
 		t.Fatal("a nil state changed something")
 	}
 	m := map[string]uint64{}
@@ -408,11 +421,19 @@ func v5Flow(dst string, octets uint32) []byte {
 // destination, the probes find isp-b faster, a static route goes to the
 // router through isp-b's gateway, and a SIGTERM (context cancel) removes it
 // again (#300).
-func TestNonBGPDaemonSteersFromFlowAndWithdrawsOnShutdown(t *testing.T) {
-	nonbgpRouter.reset()
-	// A killed run left a tagged route: the start removes it.
-	leftover := netip.MustParsePrefix("203.0.113.0/24")
-	_ = nonbgpRouter.Install(context.Background(), plugin.SteerRoute{Prefix: leftover, NextHop: netip.MustParseAddr("198.51.100.1")})
+// nonbgpDaemon is the whole daemon in non-BGP inject mode, fed NetFlow
+// over UDP and steering nonbgpRouter.
+type nonbgpDaemon struct {
+	conn        net.Conn
+	cancel      context.CancelFunc
+	done        chan int
+	out, errOut bytes.Buffer
+}
+
+// startNonBGPDaemon runs the daemon with the fixed prober making isp-b
+// faster. allowlist replaces the test config's allowlist prefixes.
+func startNonBGPDaemon(t *testing.T, allowlist string) *nonbgpDaemon {
+	t.Helper()
 	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -422,23 +443,50 @@ func TestNonBGPDaemonSteersFromFlowAndWithdrawsOnShutdown(t *testing.T) {
 	y := strings.Replace(nonbgpTestConfig, "%MODE%", "inject", 1)
 	y = strings.Replace(y, "  - type: icmp\n", "  - type: fixed\n    config: {paths: [{provider: isp-a, rtt_ms: 90}, {provider: isp-b, rtt_ms: 20}]}\n", 1)
 	y = strings.Replace(y, "127.0.0.1:2055", "127.0.0.1:"+strconv.Itoa(port), 1)
+	y = strings.Replace(y, "[198.51.100.0/24]", allowlist, 1)
 	y += "probe: {interval: 2s, timeout: 500ms}\n"
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(y), 0o600); err != nil {
 		t.Fatal(err)
 	}
-
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	var out, errOut bytes.Buffer
-	done := make(chan int, 1)
-	go func() { done <- run(ctx, []string{"-config", path}, noEnv, &out, &errOut) }()
-
-	conn, err := net.Dial("udp", "127.0.0.1:"+strconv.Itoa(port))
+	d := &nonbgpDaemon{cancel: cancel, done: make(chan int, 1)}
+	go func() { d.done <- run(ctx, []string{"-config", path}, noEnv, &d.out, &d.errOut) }()
+	d.conn, err = net.Dial("udp", "127.0.0.1:"+strconv.Itoa(port))
 	if err != nil {
+		cancel()
+		<-d.done
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	t.Cleanup(func() {
+		cancel()
+		_ = d.conn.Close()
+	})
+	return d
+}
+
+// stop is SIGTERM: it fails the test unless the daemon exits 0 within
+// limit.
+func (d *nonbgpDaemon) stop(t *testing.T, limit time.Duration) {
+	t.Helper()
+	d.cancel()
+	select {
+	case code := <-d.done:
+		if code != 0 {
+			t.Fatalf("exit %d\nstderr: %s", code, d.errOut.String())
+		}
+	case <-time.After(limit):
+		t.Fatalf("the daemon did not stop within %s", limit)
+	}
+}
+
+func TestNonBGPDaemonSteersFromFlowAndWithdrawsOnShutdown(t *testing.T) {
+	nonbgpRouter.reset()
+	// A killed run left a tagged route: the start removes it.
+	leftover := netip.MustParsePrefix("203.0.113.0/24")
+	_ = nonbgpRouter.Install(context.Background(), plugin.SteerRoute{Prefix: leftover, NextHop: netip.MustParseAddr("198.51.100.1")})
+	d := startNonBGPDaemon(t, "[198.51.100.0/24]")
+	conn, out, errOut := d.conn, &d.out, &d.errOut
 	route := netip.MustParsePrefix("198.51.100.0/24")
 	deadline := time.Now().Add(20 * time.Second)
 	for {
@@ -453,8 +501,8 @@ func TestNonBGPDaemonSteersFromFlowAndWithdrawsOnShutdown(t *testing.T) {
 			break
 		}
 		if time.Now().After(deadline) {
-			cancel()
-			<-done
+			d.cancel()
+			<-d.done
 			t.Fatalf("no static route after 20s\nstdout: %s\nstderr: %s", out.String(), errOut.String())
 		}
 		time.Sleep(200 * time.Millisecond)
@@ -466,15 +514,7 @@ func TestNonBGPDaemonSteersFromFlowAndWithdrawsOnShutdown(t *testing.T) {
 		t.Fatalf("router routes = %v, want only the allowlisted prefix", routes)
 	}
 
-	cancel()
-	select {
-	case code := <-done:
-		if code != 0 {
-			t.Fatalf("exit %d\nstderr: %s", code, errOut.String())
-		}
-	case <-time.After(20 * time.Second):
-		t.Fatal("the daemon did not stop")
-	}
+	d.stop(t, 20*time.Second)
 	if routes := nonbgpRouter.snapshot(); len(routes) != 0 {
 		t.Fatalf("routes left on the router after shutdown: %v", routes)
 	}
@@ -482,5 +522,85 @@ func TestNonBGPDaemonSteersFromFlowAndWithdrawsOnShutdown(t *testing.T) {
 		if !strings.Contains(errOut.String()+out.String(), want) {
 			t.Errorf("the log lacks %q", want)
 		}
+	}
+}
+
+// SIGTERM while a pass waits on a slow router API: the pass ends after the
+// route in flight, no further route is started, and the shutdown withdraw
+// removes what is on the router within the 10-second budget (#300).
+func TestNonBGPDaemonSIGTERMStopsASlowPass(t *testing.T) {
+	nonbgpRouter.reset()
+	first, second := netip.MustParsePrefix("198.51.100.0/24"), netip.MustParsePrefix("203.0.113.0/24")
+	var mu sync.Mutex
+	tried := map[netip.Prefix]bool{}
+	gated, started, release := false, make(chan struct{}), make(chan struct{})
+	late := 0
+	slow := false
+	nonbgpRouter.mu.Lock()
+	nonbgpRouter.before = func(p netip.Prefix) error {
+		mu.Lock()
+		switch {
+		case !slow:
+			// Until both prefixes are wanted in every round, the router refuses.
+			tried[p] = true
+			mu.Unlock()
+			return errors.New("router busy")
+		case gated:
+			late++
+			mu.Unlock()
+			return nil
+		case p != first:
+			mu.Unlock()
+			return errors.New("router busy")
+		}
+		gated = true
+		mu.Unlock()
+		close(started)
+		<-release
+		return nil
+	}
+	nonbgpRouter.mu.Unlock()
+	t.Cleanup(nonbgpRouter.reset)
+	d := startNonBGPDaemon(t, "[198.51.100.0/24, 203.0.113.0/24]")
+
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		_, _ = d.conn.Write(v5Flow("198.51.100.7", 100000))
+		_, _ = d.conn.Write(v5Flow("203.0.113.9", 100000))
+		mu.Lock()
+		both := tried[first] && tried[second]
+		if both {
+			slow = true
+		}
+		mu.Unlock()
+		if both {
+			break
+		}
+		if time.Now().After(deadline) {
+			d.cancel()
+			<-d.done
+			t.Fatalf("both prefixes were not wanted after 20s\nstderr: %s", d.errOut.String())
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	select {
+	case <-started:
+	case <-time.After(20 * time.Second):
+		t.Fatal("no install reached the slow router")
+	}
+	d.cancel()
+	close(release)
+	at := time.Now()
+	d.stop(t, 15*time.Second)
+	if took := time.Since(at); took > 10*time.Second {
+		t.Errorf("shutdown took %s after the slow route finished", took)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if late != 0 {
+		t.Errorf("%d routes were installed after SIGTERM", late)
+	}
+	if routes := nonbgpRouter.snapshot(); len(routes) != 0 {
+		t.Fatalf("routes left on the router after shutdown: %v", routes)
 	}
 }

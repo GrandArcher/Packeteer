@@ -59,8 +59,8 @@ func TestNonBGPObserveDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	n := cfg.NonBGP
-	if !(cfg.NonBGP != nil) || cfg.Mode != ModeObserve {
-		t.Fatalf("nonbgp on = %v, mode %q", (cfg.NonBGP != nil), cfg.Mode)
+	if n == nil || cfg.Mode != ModeObserve {
+		t.Fatalf("nonbgp = %v, mode %q", n, cfg.Mode)
 	}
 	if *n.WidenBits != DefaultNonBGPWidenBits || n.Idle != DefaultNonBGPIdle || n.MaxBlocks != DefaultNonBGPMaxBlocks {
 		t.Fatalf("defaults = %d %s %d", *n.WidenBits, n.Idle, n.MaxBlocks)
@@ -94,6 +94,7 @@ func TestNonBGPInjectRails(t *testing.T) {
 		{"min_rtt_delta_ms: 15", "min_rtt_delta_ms: 0", "positive thresholds"},
 		{"packeteer_community: \"64512:666\"\n", "", "requires packeteer_community"},
 		{"local_pref: 200\n", "", "requires local_pref"},
+		{"[203.0.113.0/24]", "[203.0.113.0/24, 2001:db8::/32]", `allowlist prefix 2001:db8::/32 and provider "isp-a" next_hop 192.0.2.1 are of different address families`},
 	} {
 		_, err := Parse([]byte(edit(t, nonBGPInjectYAML, tc.old, tc.new)))
 		if err == nil || !strings.Contains(err.Error(), tc.want) {

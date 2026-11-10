@@ -920,7 +920,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		log.Error("refusing to start", "err", err)
 		return 1
 	}
-	nb.start()
+	nb.start(ctx)
 	bootstrapAdmin(ctx, authSvc, audit, besideStorage(plugins, firstRunPasswordFile), getenv, log)
 	hd, herr := startHerd(ctx, cfg, plugins, view, audit, dispatch.Emit, ha.active, log)
 	if herr != nil {
@@ -1060,7 +1060,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			}
 			verified, backedOut, revertedIn := verifier.check(loopCtx, now, ctl.Injected, in.Results)
 			changes, err := runDecision(now, decider, in, ctl, log, snap.Mode, engine)
-			err = errors.Join(err, nb.Sync(decider.Improvements()))
+			err = errors.Join(err, nb.Sync(loopCtx, decider.Improvements()))
 			policyFeed.Touch(now, decider.Improvements())
 			changes = append(backedOut, changes...)
 			atlasAfterMoves(atl, ctl.Injected, changes, in.Results)

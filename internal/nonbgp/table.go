@@ -34,6 +34,9 @@ const (
 	// lookupRetry is how long a block waits after a failed covering
 	// lookup. A block with no answer stays at its floor.
 	lookupRetry = time.Minute
+	// relookup is how long an answer is kept before the block is asked
+	// again, so a prefix announced differently since is picked up.
+	relookup = 24 * time.Hour
 	// lookupWake is how often the lookup worker looks for blocks due.
 	lookupWake = 5 * time.Second
 	// probeSpan is how many bits wider than the floor a known announced
@@ -60,14 +63,14 @@ type Options struct {
 // blocks inside one announced prefix, within WidenBits of the floor, with at
 // least as many active blocks as idle ones.
 type Route struct {
-	Prefix netip.Prefix `json:"prefix"`
+	Prefix netip.Prefix
 	// Upper is the announced prefix that bounds Prefix, and Origin its
 	// origin AS (0 when unknown). Upper is invalid when no lookup answered;
 	// the route then stays at its floor.
-	Upper    netip.Prefix `json:"upper,omitzero"`
-	Origin   uint32       `json:"origin,omitempty"`
-	Blocks   int          `json:"blocks"`
-	LastSeen time.Time    `json:"last_seen"`
+	Upper    netip.Prefix
+	Origin   uint32
+	Blocks   int
+	LastSeen time.Time
 }
 
 // Stats is the table's size and lookup health.
@@ -86,14 +89,14 @@ type block struct {
 	// last is the latest flow, unix nanoseconds. It is stored under the
 	// read lock; every other field is guarded by the table's lock.
 	last atomic.Int64
-	// upper and origin are the announced prefix of the block. settled is
-	// set once a lookup answered, even with no bound (the announced prefix
-	// is more specific than the block), so it is not asked again.
-	upper   netip.Prefix
-	origin  uint32
-	settled bool
-	retryAt time.Time
-	syn     netip.Prefix
+	// upper and origin are the announced prefix of the block, invalid when
+	// the announced prefix is more specific than the block (no bound).
+	upper  netip.Prefix
+	origin uint32
+	// askAt is when the block is asked next: zero for a new block, a
+	// minute after a failed lookup, a day after an answer.
+	askAt time.Time
+	syn   netip.Prefix
 }
 
 // Table tracks destinations as synthetic prefixes. Lookup is safe to call
@@ -103,9 +106,11 @@ type Table struct {
 	cov plugin.Covering
 	log *slog.Logger
 
-	mu      sync.RWMutex
-	blocks  map[netip.Prefix]*block
-	routes  map[netip.Prefix]Route
+	mu     sync.RWMutex
+	blocks map[netip.Prefix]*block
+	routes map[netip.Prefix]Route
+	// known holds the announced prefixes of tracked blocks, so a new block
+	// inside one is not asked. Refresh drops the ones no block uses.
 	known   map[netip.Prefix]uint32
 	lastErr string
 
@@ -196,9 +201,23 @@ func (t *Table) Refresh() {
 			delete(t.blocks, blk)
 		}
 	}
+	// Pruned first: a prefix no block holds any more (aged out, or
+	// announced differently since) must not bound a new block.
+	used := make(map[netip.Prefix]bool, len(t.known))
+	for _, b := range t.blocks {
+		used[b.upper] = true
+	}
+	for p := range t.known {
+		if !used[p] {
+			delete(t.known, p)
+		}
+	}
 	for blk, b := range t.blocks {
-		if !b.upper.IsValid() {
-			b.upper, b.origin = t.knownCover(blk)
+		if b.upper.IsValid() {
+			continue
+		}
+		if b.upper, b.origin = t.knownCover(blk); b.upper.IsValid() {
+			b.askAt = now.Add(relookup)
 		}
 	}
 	t.recomputeLocked()
@@ -370,7 +389,7 @@ func (t *Table) Stats() Stats {
 }
 
 func (t *Table) dueLocked(b *block, now time.Time) bool {
-	return t.cov != nil && !b.upper.IsValid() && !b.settled && !now.Before(b.retryAt)
+	return t.cov != nil && !now.Before(b.askAt)
 }
 
 // Run looks up the announced prefix of each block that has none, one at a
@@ -422,7 +441,7 @@ func (t *Table) lookupOne(ctx context.Context) bool {
 		t.errs.Add(1)
 		t.lastErr = err.Error()
 		if ok {
-			b.retryAt = now.Add(lookupRetry)
+			b.askAt = now.Add(lookupRetry)
 		}
 		t.log.Warn("non-BGP: covering prefix lookup failed", "block", pick, "err", err)
 		return true
@@ -431,7 +450,7 @@ func (t *Table) lookupOne(ctx context.Context) bool {
 		t.known[ans.Prefix] = ans.Origin
 	}
 	if ok {
-		b.upper, b.origin, b.settled = ans.Prefix, ans.Origin, true
+		b.upper, b.origin, b.askAt = ans.Prefix, ans.Origin, now.Add(relookup)
 	}
 	return true
 }
@@ -439,7 +458,7 @@ func (t *Table) lookupOne(ctx context.Context) bool {
 // ask validates the answer: it must hold the block, be of its family, and
 // not be a default route. An announced prefix more specific than the block
 // bounds nothing, so the answer is the zero value: the block stays at its
-// floor and is not asked again.
+// floor until it is asked again a day later.
 func (t *Table) ask(ctx context.Context, blk netip.Prefix) (plugin.Announced, error) {
 	a, err := t.cov.Covering(ctx, blk.Addr())
 	if err != nil {

@@ -17,11 +17,10 @@ import (
 // controller that turns improvements into static routes. A nil state is
 // every other deployment, and its methods do nothing.
 type nonbgpState struct {
-	table  *nonbgp.Table
-	steer  *nonbgp.Steer
-	meta   nonbgp.Meta
-	native string
-	log    *slog.Logger
+	table *nonbgp.Table
+	steer *nonbgp.Steer
+	meta  nonbgp.Meta
+	log   *slog.Logger
 }
 
 // newNonBGP builds the state for cfg, or returns nil when the mode is off.
@@ -66,18 +65,18 @@ func newNonBGP(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger) (*
 	if err != nil {
 		return nil, err
 	}
-	return &nonbgpState{table: table, steer: steer, meta: meta, native: n.DefaultProvider, log: log}, nil
+	return &nonbgpState{table: table, steer: steer, meta: meta, log: log}, nil
 }
 
 // start logs the warning and removes the tagged routes a killed process
 // left on the router, before the first decision round.
-func (s *nonbgpState) start() {
+func (s *nonbgpState) start(ctx context.Context) {
 	if s == nil {
 		return
 	}
 	s.log.Warn(config.NonBGPWarning, "mode", s.meta.Mode, "install_routes", s.meta.InstallRoutes, "steerer", s.meta.Steerer)
 	// A failed sweep is logged by Sync and retried on the next round.
-	_ = s.Sync(nil)
+	_ = s.Sync(ctx, nil)
 }
 
 // wireLookup makes every flow source count destinations under
@@ -105,18 +104,19 @@ func (s *nonbgpState) Refresh() {
 // exited through the default route's provider.
 func (s *nonbgpState) Fill(in *policy.Input) {
 	if s != nil {
-		s.table.Fill(in, s.native)
+		s.table.Fill(in, s.meta.DefaultProvider)
 	}
 }
 
 // Sync puts the improvements on the router. In observe and suggest it
-// installs nothing. The pass has no overall deadline: each route has its
-// own (nonbgp.RouteTimeout), so a pass never stops halfway.
-func (s *nonbgpState) Sync(imps []policy.Improvement) error {
+// installs nothing. Each route has its own deadline (nonbgp.RouteTimeout);
+// cancelling ctx (SIGTERM) ends the pass between routes, so the shutdown
+// withdraw waits for at most the route in flight.
+func (s *nonbgpState) Sync(ctx context.Context, imps []policy.Improvement) error {
 	if s == nil {
 		return nil
 	}
-	err := s.steer.Sync(context.Background(), imps)
+	err := s.steer.Sync(ctx, imps)
 	if err != nil {
 		// The announce event fires only when the state flips, so each failing
 		// round, a failed withdraw included, is logged here.

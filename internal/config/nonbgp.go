@@ -1,6 +1,7 @@
 package config
 
 import (
+	"net/netip"
 	"time"
 )
 
@@ -135,8 +136,29 @@ func (c *Config) validateNonBGP(add func(string, ...any)) {
 	if c.Mode == ModeInject && n.Steerer == nil {
 		add("mode inject with nonbgp requires nonbgp.steerer")
 	}
+	if n.InstallRoutes {
+		c.validateNonBGPFamilies(add)
+	}
 	if c.Mode == ModeInject && !n.InstallRoutes {
 		add("mode inject with nonbgp requires nonbgp.install_routes: true, the opt-in to static routes that are derived from flow data and not from a learned BGP RIB view (docs/nonbgp.md)")
+	}
+}
+
+// validateNonBGPFamilies refuses an allowlisted family that a provider has
+// no gateway for: the static route for any prefix of it could never be
+// installed, and every round would fail again.
+func (c *Config) validateNonBGPFamilies(add func(string, ...any)) {
+	for _, s := range c.Allowlist.Prefixes {
+		pfx, err := netip.ParsePrefix(s)
+		if err != nil {
+			continue
+		}
+		for _, p := range c.Providers {
+			nh, err := netip.ParseAddr(p.NextHop)
+			if err == nil && nh.Is4() != pfx.Addr().Is4() {
+				add("nonbgp.install_routes: allowlist prefix %s and provider %q next_hop %s are of different address families; a static route needs a gateway of its own family", s, p.Name, p.NextHop)
+			}
+		}
 	}
 }
 

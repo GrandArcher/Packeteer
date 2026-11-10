@@ -42,10 +42,10 @@ const RouteTimeout = 30 * time.Second
 
 // Steered is one static route this process put on the router.
 type Steered struct {
-	Prefix   netip.Prefix `json:"prefix"`
-	Provider string       `json:"provider"`
-	NextHop  netip.Addr   `json:"next_hop"`
-	Since    time.Time    `json:"since"`
+	Prefix   netip.Prefix
+	Provider string
+	NextHop  netip.Addr
+	Since    time.Time
 }
 
 // Steer turns improvements into static routes. It installs only inside the
@@ -57,7 +57,11 @@ type Steer struct {
 	drv plugin.Steerer
 	log *slog.Logger
 
-	mu     sync.Mutex
+	// mu serializes passes and is held through router I/O.
+	mu sync.Mutex
+	// amu also guards writes to active, so Active (the status API) does
+	// not wait for a pass on a slow router.
+	amu    sync.RWMutex
 	active map[netip.Prefix]Steered
 	// leftover holds tagged routes an earlier process left that could not
 	// be removed yet. They count against the cap until they are gone.
@@ -212,7 +216,9 @@ func (s *Steer) installLocked(ctx context.Context, im policy.Improvement) error 
 	if on {
 		since = cur.Since
 	}
+	s.amu.Lock()
 	s.active[p] = Steered{Prefix: p, Provider: im.Provider, NextHop: nh, Since: since}
+	s.amu.Unlock()
 	s.log.Info("non-BGP: steered", "prefix", p, "provider", im.Provider, "next_hop", nh)
 	return nil
 }
@@ -221,7 +227,9 @@ func (s *Steer) removeLocked(ctx context.Context, p netip.Prefix) error {
 	if err := s.op(ctx, func(c context.Context) error { return s.drv.Remove(c, p) }); err != nil {
 		return fmt.Errorf("non-BGP: remove %s: %w", p, err)
 	}
+	s.amu.Lock()
 	delete(s.active, p)
+	s.amu.Unlock()
 	s.log.Info("non-BGP: route removed", "prefix", p)
 	return nil
 }
@@ -254,8 +262,8 @@ func (s *Steer) Active() []Steered {
 	if s == nil {
 		return nil
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.amu.RLock()
+	defer s.amu.RUnlock()
 	out := make([]Steered, 0, len(s.active))
 	for _, p := range netpfx.SortedKeys(s.active) {
 		out = append(out, s.active[p])
