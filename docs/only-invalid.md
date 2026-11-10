@@ -44,12 +44,12 @@ Public collector agreement (RIS, RouteViews) is not a signal yet.
 
 Qrator Radar publishes BGP incidents (hijacks, route leaks, bogons), but Packeteer has no Qrator client and makes no request to Qrator (#402). What we found on 2026-11-09:
 
-- The incident feeds (created and affected hijacks, route leaks, peering leaks, bogon prefixes and paths) are listed only under Enterprise on [radar.qrator.net/pricing](https://radar.qrator.net/pricing). The free and Pro plans are the web application.
+- The incident feeds (created and affected hijacks, route leaks, peering leaks, bogon prefixes and paths) are listed only under Enterprise on [radar.qrator.net/pricing](https://radar.qrator.net/pricing). The free and Pro plans list the web application, not the feeds.
 - The API at [api.qrator.net](https://api.qrator.net/) (JSON-RPC 1.0 over HTTPS POST, token in the `X-Qrator-Auth` header) lists no incident method. No incident feed format is published; sample data is by request to radar@qrator.net.
 - The [free trial agreement](https://radar.qrator.net/docs/ToS_trial_RADAR.pdf), section 2.2.1(d), forbids scripts that "generate automated searches, requests or queries, or ... strip or mine data from the Services" unless Qrator permits it in writing.
 - The [Radar Terms of Service](https://radar.qrator.net/docs/Terms_of_Services_Radar.pdf) (effective 2026-04-01) do not mention an API or automated polling.
 
-Qrator has not confirmed which endpoints an operator's own key may use or whether polling is allowed, so the integration is a link-out only. Add `qrator_radar` to `linkouts.enabled` ([ui.md](ui.md#link-outs)): the case's origin AS on the prefix page panel, and every other AS link-out, then opens the AS on Radar, whose page links to the security issues (hijacks, route leaks, bogons) Radar saw for it. The link changes no class, score, or decision. An operator whose own written agreement with Qrator allows automated use can write the incidents into a `file` hijack feed (above).
+Qrator has not confirmed which endpoints an operator's own key may use or whether polling is allowed, so the integration is a link-out only. Add `qrator_radar` to `linkouts.enabled` ([ui.md](ui.md#link-outs)): the case's origin AS on the prefix page panel, and every other AS link-out, then opens the AS on Radar, whose page links to the security issues, such as hijacks, Radar saw for it. The link changes no class, score, or decision. An operator whose own written agreement with Qrator allows automated use can write the incidents into a `file` hijack feed (above).
 
 ## SLURM exceptions
 

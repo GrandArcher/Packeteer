@@ -8,7 +8,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 - MCP server for AI assistants: opt-in `mcp` block, `POST /mcp` with 17 read tools, `packeteer-mcp` stdio bridge, `mcp` and `mcp:write` token scopes, maintenance write tools off by default (#302).
 - `rpki.only_invalid` reports RPKI-invalid only paths, classed stale ROA, hijack, or unclear with evidence; opt-in SLURM exceptions are written only after admin approval (#401).
-- Opt-in `qrator_radar` link-out to the Qrator Radar AS page, also on the RPKI-invalid only panel's origin AS; no Qrator API client, as the terms and feed format do not allow one (#402).
+- Opt-in `qrator_radar` link-out to the Qrator Radar AS page, also on the RPKI-invalid only panel's origin AS; no Qrator API client, as Qrator has not confirmed API access or polling (#402).
 
 ## [1.0.1] - 2026-11-09
 
