@@ -321,6 +321,7 @@ function shellRefresh() {
     shellRenderAuthBanner(ov && ov.auth);
     shellRenderNotice("synth-banner", ov && ov.synthesize_warning);
     shellRenderNotice("sim-banner", ov && ov.simulated_probes);
+    shellRenderNotice("nonbgp-banner", ov && ov.nonbgp_warning);
     shellRenderStatus(ov, ready, err);
     shellRenderConn(err);
   });

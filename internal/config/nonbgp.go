@@ -15,22 +15,31 @@ const (
 	MaxNonBGPMaxBlocks     = 100000
 )
 
+// NonBGPWarning is logged at start, printed by -check, and shown on every
+// page and in the config editor while the nonbgp block is set (#300).
+const NonBGPWarning = "WARNING: non-BGP mode is on. Its static routes are derived from flow data, NOT from a learned BGP RIB view; " +
+	"they can black-hole or misroute traffic, and they leak into BGP if the router redistributes static routes."
+
 // NonBGP is the flow-driven mode for a site with two internet links whose
 // router has no BGP (#300). A non-nil value, including an empty block, is
 // that mode. Flow records name the destinations in use, each is tracked by
 // a synthetic prefix (never more specific than /24 or /48), and an
 // improvement becomes a static route on the router through its API. The
-// default route carries everything else. Nothing is announced over BGP.
+// default route carries everything else. Packeteer speaks no BGP here, but
+// a router that redistributes static routes can still export them.
 type NonBGP struct {
+	// InstallRoutes is the explicit opt-in to static routes that come from
+	// flow data, not from a learned BGP RIB view (owner exception for #300,
+	// docs/design/nonbgp.md). mode inject requires it; without it nothing
+	// is installed in any mode. Default false.
+	InstallRoutes bool `yaml:"install_routes"`
 	// DefaultProvider is the link the router's default route uses. It is
 	// the native provider of every synthetic prefix.
 	DefaultProvider string `yaml:"default_provider"`
 	// Steerer installs the static routes. Required for mode inject.
 	Steerer *PluginSpec `yaml:"steerer,omitempty"`
-	// Covering looks up the announced prefix of a destination. It is the
-	// upper bound for widening a synthetic prefix and the prefix a herd
-	// share is mapped to. Without it no prefix widens and nothing is
-	// shared with the herd.
+	// Covering looks up the announced prefix of a destination, the upper
+	// bound for widening a synthetic prefix. Without it no prefix widens.
 	Covering *PluginSpec `yaml:"covering,omitempty"`
 	// WidenBits is how many bits a synthetic prefix may widen beyond its
 	// /24 or /48 floor when flow data shows active addresses elsewhere
@@ -125,6 +134,9 @@ func (c *Config) validateNonBGP(add func(string, ...any)) {
 	}
 	if c.Mode == ModeInject && n.Steerer == nil {
 		add("mode inject with nonbgp requires nonbgp.steerer")
+	}
+	if c.Mode == ModeInject && !n.InstallRoutes {
+		add("mode inject with nonbgp requires nonbgp.install_routes: true, the opt-in to static routes that are derived from flow data and not from a learned BGP RIB view (docs/nonbgp.md)")
 	}
 }
 

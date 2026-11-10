@@ -300,5 +300,8 @@ func setupInfo(cfg *config.Config, plugins *pluginhost.Set, geo *geoip.Fetcher) 
 	if cfg.SimulatedProbes() {
 		st.SimulatedProbes = config.SimulatedProbesNotice
 	}
+	if cfg.NonBGP != nil {
+		st.NonBGPWarning = config.NonBGPWarning
+	}
 	return st
 }

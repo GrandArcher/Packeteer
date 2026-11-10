@@ -95,6 +95,8 @@ const nonbgpTestConfig = `mode: %MODE%
 asn: 64512
 router_id: 192.0.2.10
 hold_time: 1s
+packeteer_community: "64512:666"
+local_pref: 200
 thresholds: {min_loss_delta_pct: 1, min_rtt_delta_ms: 10}
 http: {listen: ""}
 providers:
@@ -107,6 +109,7 @@ sources:
   - type: flow
     config: {listen: "127.0.0.1:2055"}
 nonbgp:
+  install_routes: true
   default_provider: isp-a
   steerer: {type: test-router}
 `
@@ -150,8 +153,9 @@ func newNonBGPRig(t *testing.T, mode string) *nonbgpRig {
 
 // round is one decision round for a destination: the flow source counts it
 // under its synthetic prefix, isp-b answers faster, and Decide sees the
-// synthetic prefix as exited through the default route.
-func (r *nonbgpRig) round(t *testing.T, dst string) []policy.Improvement {
+// synthetic prefix as exited through the default route. edit changes the
+// input before Decide sees it.
+func (r *nonbgpRig) round(t *testing.T, dst string, edit ...func(*policy.Input)) []policy.Improvement {
 	t.Helper()
 	p, ok := r.flow.lookup(netip.MustParseAddr(dst))
 	if !ok {
@@ -168,12 +172,52 @@ func (r *nonbgpRig) round(t *testing.T, dst string) []policy.Improvement {
 		Native:     map[netip.Prefix]string{},
 	}
 	r.nb.Fill(&in)
+	for _, e := range edit {
+		e(&in)
+	}
 	r.decider.Evaluate(in, now)
 	imps := r.decider.Improvements()
 	if err := r.nb.Sync(imps); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
 	return imps
+}
+
+// The static route leaves the router when what justified it is gone: the
+// steered link is lost, its probe source fails, or its measurements go
+// stale (#300).
+func TestNonBGPWithdrawsOnProviderLossProbeSourceFailureAndStaleData(t *testing.T) {
+	route := netip.MustParsePrefix("198.51.100.0/24")
+	for name, edit := range map[string]func(*policy.Input){
+		// The link is down: every probe through it fails to send.
+		"provider loss": func(in *policy.Input) {
+			for i := range in.Results {
+				if in.Results[i].Provider == "isp-b" {
+					in.Results[i].Err = "sendto: network is unreachable"
+				}
+			}
+		},
+		"probe-source failure": func(in *policy.Input) { in.ProviderUp["isp-b"] = false },
+		"stale data": func(in *policy.Input) {
+			for i := range in.Results {
+				in.Results[i].Time = in.Results[i].Time.Add(-time.Hour)
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rig := newNonBGPRig(t, "inject")
+			rig.round(t, "198.51.100.7")
+			if _, ok := nonbgpRouter.snapshot()[route]; !ok {
+				t.Fatal("no route was installed")
+			}
+			if imps := rig.round(t, "198.51.100.7", edit); len(imps) != 0 {
+				t.Fatalf("the improvement survived: %+v", imps)
+			}
+			if routes := nonbgpRouter.snapshot(); len(routes) != 0 {
+				t.Fatalf("routes left on the router: %v", routes)
+			}
+		})
+	}
 }
 
 func TestNonBGPInjectSteersAndWithdraws(t *testing.T) {
@@ -228,6 +272,17 @@ func TestNonBGPObserveRecommendsAndInstallsNothing(t *testing.T) {
 	}
 	if st := rig.nb.Status(); st.Mode != "observe" || len(st.Routes[0].SteeredTo) != 0 {
 		t.Fatalf("status = %+v", st)
+	}
+}
+
+func TestNonBGPSetupWarning(t *testing.T) {
+	cfg := &config.Config{}
+	if st := setupInfo(cfg, &pluginhost.Set{}, nil); st.NonBGPWarning != "" {
+		t.Fatalf("warning with the mode off: %q", st.NonBGPWarning)
+	}
+	cfg.NonBGP = &config.NonBGP{}
+	if st := setupInfo(cfg, &pluginhost.Set{}, nil); !strings.Contains(st.NonBGPWarning, "NOT from a learned BGP RIB view") || !strings.Contains(st.NonBGPWarning, "redistributes static routes") {
+		t.Fatalf("warning = %q", st.NonBGPWarning)
 	}
 }
 
@@ -325,13 +380,16 @@ func TestNonBGPCheckOutput(t *testing.T) {
 	if code := run(context.Background(), []string{"-check", "-config", path}, noEnv, &out, &errOut); code != 0 {
 		t.Fatalf("-check = %d: %s", code, errOut.String())
 	}
-	for _, want := range []string{"mode: inject", "nonbgp: default_provider=isp-a steerer=test-router covering=none", "steer: static routes via test-router, max_improvements=50, withdrawn on shutdown", "bgp: disabled"} {
+	for _, want := range []string{"mode: inject", "nonbgp: install_routes=true default_provider=isp-a steerer=test-router covering=none",
+		"WARNING: non-BGP mode is on. Its static routes are derived from flow data, NOT from a learned BGP RIB view",
+		"steer: static routes via test-router, max_improvements=50, withdrawn on shutdown; a hard kill leaves them until the next start",
+		"set packeteer_community=64512:666 and no-export", "bgp: disabled"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("-check output lacks %q:\n%s", want, out.String())
 		}
 	}
-	if strings.Contains(out.String(), "announce:") {
-		t.Errorf("-check shows a BGP announce line for a non-BGP site:\n%s", out.String())
+	if strings.Contains(out.String(), "announce:") || strings.Contains(out.String(), "never exported") {
+		t.Errorf("-check shows a BGP announce line or an export claim for a non-BGP site:\n%s", out.String())
 	}
 }
 
@@ -352,6 +410,9 @@ func v5Flow(dst string, octets uint32) []byte {
 // again (#300).
 func TestNonBGPDaemonSteersFromFlowAndWithdrawsOnShutdown(t *testing.T) {
 	nonbgpRouter.reset()
+	// A killed run left a tagged route: the start removes it.
+	leftover := netip.MustParsePrefix("203.0.113.0/24")
+	_ = nonbgpRouter.Install(context.Background(), plugin.SteerRoute{Prefix: leftover, NextHop: netip.MustParseAddr("198.51.100.1")})
 	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -386,6 +447,9 @@ func TestNonBGPDaemonSteersFromFlowAndWithdrawsOnShutdown(t *testing.T) {
 			if nh != netip.MustParseAddr("198.51.100.1") {
 				t.Fatalf("route next hop = %s, want isp-b's gateway", nh)
 			}
+			if _, ok := nonbgpRouter.snapshot()[leftover]; ok {
+				t.Fatal("the route a killed run left is still on the router")
+			}
 			break
 		}
 		if time.Now().After(deadline) {
@@ -413,5 +477,10 @@ func TestNonBGPDaemonSteersFromFlowAndWithdrawsOnShutdown(t *testing.T) {
 	}
 	if routes := nonbgpRouter.snapshot(); len(routes) != 0 {
 		t.Fatalf("routes left on the router after shutdown: %v", routes)
+	}
+	for _, want := range []string{"NOT from a learned BGP RIB view", "removed a route left on the router by an earlier run"} {
+		if !strings.Contains(errOut.String()+out.String(), want) {
+			t.Errorf("the log lacks %q", want)
+		}
 	}
 }

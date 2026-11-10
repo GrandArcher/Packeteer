@@ -6,13 +6,13 @@ import (
 )
 
 // SourceSynthetic labels a route learned from flow data. A route from a BGP
-// session never carries it, and a synthetic one is never exported to a BGP
-// peer or the herd as a real route.
+// session never carries it.
 const SourceSynthetic = "synthetic"
 
 // Meta is the configuration shown beside the routes.
 type Meta struct {
 	Mode            string `json:"mode"`
+	InstallRoutes   bool   `json:"install_routes"`
 	DefaultProvider string `json:"default_provider"`
 	Steerer         string `json:"steerer,omitempty"`
 	Covering        string `json:"covering,omitempty"`
@@ -26,6 +26,7 @@ type RouteStatus struct {
 	Source       string       `json:"source"`
 	Prefix       netip.Prefix `json:"prefix"`
 	Upper        netip.Prefix `json:"upper,omitzero"`
+	Origin       uint32       `json:"origin,omitempty"`
 	Blocks       int          `json:"blocks"`
 	LastSeen     time.Time    `json:"last_seen"`
 	SteeredTo    string       `json:"steered_to,omitempty"`
@@ -55,7 +56,7 @@ func Report(meta Meta, t *Table, s *Steer) Status {
 		steered[r.Prefix] = r
 	}
 	for _, r := range t.Routes() {
-		row := RouteStatus{Source: SourceSynthetic, Prefix: r.Prefix, Upper: r.Upper, Blocks: r.Blocks, LastSeen: r.LastSeen}
+		row := RouteStatus{Source: SourceSynthetic, Prefix: r.Prefix, Upper: r.Upper, Origin: r.Origin, Blocks: r.Blocks, LastSeen: r.LastSeen}
 		if sr, ok := steered[r.Prefix]; ok {
 			row.SteeredTo, row.NextHop, row.SteeredSince = sr.Provider, sr.NextHop, sr.Since
 		}

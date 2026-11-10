@@ -135,6 +135,9 @@ type Result struct {
 	// SynthesizeWarning is config.SynthesizeWarning when the candidate
 	// turns synthesize on (#122), else empty.
 	SynthesizeWarning string `json:"synthesize_warning,omitempty"`
+	// NonBGPWarning is config.NonBGPWarning when the candidate sets the
+	// nonbgp block (#300), else empty.
+	NonBGPWarning string `json:"nonbgp_warning,omitempty"`
 	// Changes lists the scalar keys Save changed in the file, old and new
 	// value. Only Save sets it.
 	Changes []Change `json:"changes,omitempty"`
@@ -184,6 +187,9 @@ func (e *Editor) checkLocked(data []byte) Result {
 	res.EnablesInject = injectOn(next, e.diskConfig())
 	if next.Synthesizing() {
 		res.SynthesizeWarning = config.SynthesizeWarning
+	}
+	if next.NonBGP != nil {
+		res.NonBGPWarning = config.NonBGPWarning
 	}
 	return res
 }

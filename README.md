@@ -25,7 +25,7 @@ The feature matrix is [docs/FEATURES.md](docs/FEATURES.md).
 - **Outputs (v0.9).** `exporters` push events, decisions, and flows to Kafka, NATS, OTLP, InfluxDB, or IPFIX (#207, #287). A read-only SNMP agent with a MIB, SNMP informs, and a `syslog` notifier serve an existing NMS (#212). The `external_policy` feed publishes the routes inject would announce for your own BIRD, OpenBGPD, or ExaBGP (#232; only BIRD is lab-tested). A `timeseries` report email carries before and after charts (#136). BMP alone can be the whole RIB view (#237). `grpc` plugins keep a prober, source, or notifier running (#286, [guide](docs/PLUGIN_AUTHORING.md)).
 - **Opt-in outside data (v0.9).** The herd page (#296), RIPE Atlas measurements (#213), the NLNOG RING looking-glass panel (#283), and threat-intelligence feeds that become mitigation rules only through explicit rules (#134). All are off by default and display only, except a threat rule you write.
 
-Everything in v0.9 and v1.0 is lab-proven (simulated routers or sink containers, documentation prefixes) or tested on fixtures only; [docs/FEATURES.md](docs/FEATURES.md) says which for each row. Registry hygiene, onboarding, herd, the eBPF data path, and non-BGP mode are partial. Nothing is field-proven (#54).
+Everything in v0.9 and v1.0 is lab-proven (simulated routers or sink containers, documentation prefixes) or tested on fixtures only; [docs/FEATURES.md](docs/FEATURES.md) says which for each row. Registry hygiene, onboarding, herd, and the eBPF data path are partial. Nothing is field-proven (#54).
 
 ![Overview](docs/assets/ui-overview.png)
 
@@ -181,7 +181,7 @@ Leave graceful restart off on the session. Guides:
 - [docs/adopting.md](docs/adopting.md) - moving from or alongside an existing route optimizer: concepts mapped to config and an observe-first cut-over plan
 - [docs/roi.md](docs/roi.md) - worksheet to estimate the return: transit cost, commit relief, and measured gain
 - [docs/walkthrough.md](docs/walkthrough.md) - observe, suggest, inject, and roll back on a simulated FRR edge, then the same steps on a real one. CI runs every command
-- [docs/nonbgp.md](docs/nonbgp.md) - flow-driven static routes for a dual-ISP site whose router has no BGP
+- [docs/nonbgp.md](docs/nonbgp.md) - flow-driven static routes for a dual-ISP site whose router has no BGP (opt-in, read the warning first)
 - [docs/mikrotik.md](docs/mikrotik.md) - RouterOS 7 iBGP, filters, Traffic Flow, port mirroring, and SNMP
 - [docs/frr.md](docs/frr.md) - FRR; the walkthrough lab runs this configuration in CI
 - [docs/junos.md](docs/junos.md) - Juniper Junos
@@ -335,8 +335,8 @@ Status on main after the 1.0.1 release, capability rows per milestone and how ma
 | v0.6 | 7 | 7 |
 | v0.7 | 3 | 3 |
 | v0.8 | 20 | 16 |
-| v0.9 | 32 | 28 |
-| v1.1 | 2 | 0 |
+| v0.9 | 31 | 28 |
+| v1.1 | 3 | 0 |
 | won't do | 2 | - |
 | **Total** | 145 | 130 |
 
@@ -344,7 +344,7 @@ v0.1 is the outbound loop: probes, static and flow targets, an iBGP RIB, scoring
 
 v0.8 is about Internet exchanges and shared measurements: IXP observe-only mode with IX-F import, fabric probes, Birdseye route-server history and signals, fabric incident correlation, member pages, and multi-site health; RPKI origin labels; probe multiplexing with a PBR generator and a probe-path check; a shared IX port; PeeringDB lookup; BMP exchange peer monitoring; events from measured provider health; settings forms for most blocks of the config (the raw YAML covers the rest); and the opt-in herd with its hub. Some rows are partial: the shared IX port, potential peers, exchange autoconfig, the settings form, and herd (phase 1 and the hub; the hub has unit and integration tests only, not lab-proven). The rows say what is missing. No row is field-proven yet (#54), and none of it relaxes the safety rules above.
 
-v0.9 is about evidence, explanations, and plugins: the Why? panel and confidence on every decision, steer verification, RPKI and IRR per provider path, registry hygiene, NetBox and Peering Manager inventory, exporters, an SNMP agent, gRPC plugins, probe agents, an external policy feed, BMP alone, MED and overload protection, and a refreshed UI (plain language, phone layout, keyboard and screen reader access, provider latency and loss). The opt-in `synthesize` block is lab only. Four v0.9 rows are partial (the eBPF data path, registry hygiene, onboarding, which does not read the router over a management API, and non-BGP mode, which has no lab proof) and herd keeps its v0.8 gaps. Nothing is field-proven (#54). The shipped config and every example stay `mode: observe`.
+v0.9 is about evidence, explanations, and plugins: the Why? panel and confidence on every decision, steer verification, RPKI and IRR per provider path, registry hygiene, NetBox and Peering Manager inventory, exporters, an SNMP agent, gRPC plugins, probe agents, an external policy feed, BMP alone, MED and overload protection, and a refreshed UI (plain language, phone layout, keyboard and screen reader access, provider latency and loss). The opt-in `synthesize` block is lab only. Three v0.9 rows are partial (the eBPF data path, registry hygiene, and onboarding, which does not read the router over a management API) and herd keeps its v0.8 gaps. Nothing is field-proven (#54). The shipped config and every example stay `mode: observe`.
 
 v1.0 adds no capability rows. It is the pre-release audit and review pass over v0.9: fixes to the allowlist and announce path, mitigation, the BMP, flow, and policy-feed inputs, sign-in and SSO, the probe agents, HA step-down, the signed upgrade, and probe and RIB cost at 100k targets, with fuzz targets for the decoders in CI ([CHANGELOG](CHANGELOG.md#100---2026-11-04), audit #486-#494 and #501-#510, review #215). The feature counts above are unchanged. Nothing is field-proven (#54). The shipped config stays `mode: observe`, sign-in stays on by default, and injection stays off by default.
 

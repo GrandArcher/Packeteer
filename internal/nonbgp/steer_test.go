@@ -25,15 +25,21 @@ type fakeRouter struct {
 	listErr    error
 	removeErr  error
 	installErr error
+	// removeFail fails the removal of this one prefix.
+	removeFail netip.Prefix
+	onInstall  func(context.Context)
 }
 
 func newFakeRouter() *fakeRouter {
 	return &fakeRouter{routes: map[netip.Prefix]netip.Addr{}}
 }
 
-func (f *fakeRouter) Install(_ context.Context, r plugin.SteerRoute) error {
+func (f *fakeRouter) Install(ctx context.Context, r plugin.SteerRoute) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.onInstall != nil {
+		f.onInstall(ctx)
+	}
 	if f.installErr != nil {
 		return f.installErr
 	}
@@ -47,6 +53,9 @@ func (f *fakeRouter) Remove(_ context.Context, p netip.Prefix) error {
 	defer f.mu.Unlock()
 	if f.removeErr != nil {
 		return f.removeErr
+	}
+	if p == f.removeFail {
+		return errors.New("route is locked")
 	}
 	f.removes++
 	delete(f.routes, p)
@@ -88,7 +97,7 @@ type steerRig struct {
 func newRig(t *testing.T, inject bool, max int) *steerRig {
 	t.Helper()
 	rig := &steerRig{r: newFakeRouter(), live: map[netip.Prefix]bool{}}
-	for _, p := range []string{"192.0.2.0/24", "198.51.100.0/24", "203.0.113.0/24", "2001:db8:1::/48", "2001:db8::/46", "198.51.100.0/25"} {
+	for _, p := range []string{"192.0.2.0/24", "198.51.100.0/24", "203.0.113.0/24", "2001:db8:1::/48", "2001:db8::/46", "198.51.100.0/25", "0.0.0.0/0"} {
 		rig.live[pfx(p)] = true
 	}
 	cfg := SteerConfig{
@@ -112,17 +121,22 @@ func imp(p, provider string) policy.Improvement {
 	return policy.Improvement{Prefix: pfx(p), Provider: provider, Native: "isp-a"}
 }
 
-func TestObserveNeverCallsTheSteerer(t *testing.T) {
+func TestObserveInstallsNothingButSweepsLeftOvers(t *testing.T) {
 	rig := newRig(t, false, 5)
+	// A killed inject run left a route; the restart is in observe.
+	rig.r.set(func() { rig.r.routes[pfx("203.0.113.0/24")] = addr("198.51.100.1") })
 	if err := rig.s.Sync(context.Background(), []policy.Improvement{imp("198.51.100.0/24", "isp-b")}); err != nil {
 		t.Fatal(err)
 	}
 	if rig.r.installs != 0 || len(rig.s.Active()) != 0 {
 		t.Fatalf("observe installed %d routes, tracked %d", rig.r.installs, len(rig.s.Active()))
 	}
+	if _, ok := rig.r.has("203.0.113.0/24"); ok {
+		t.Fatal("observe left the route a killed run installed")
+	}
 	rig.r.set(func() { rig.r.listErr = errors.New("must not be asked") })
 	if err := rig.s.Sync(context.Background(), nil); err != nil {
-		t.Fatalf("observe asked the router: %v", err)
+		t.Fatalf("observe listed the router again after the sweep: %v", err)
 	}
 	var none *Steer
 	if err := none.Sync(context.Background(), nil); err != nil || none.WithdrawAll(context.Background()) != nil || len(none.Active()) != 0 || none.Active() != nil {
@@ -189,10 +203,14 @@ func TestInstallRefusals(t *testing.T) {
 			t.Errorf("%s: the router was changed", tc.name)
 		}
 	}
+	// An improvement whose prefix left the table is skipped without an
+	// error, every round, until the decision engine retires it.
 	rig := newRig(t, true, 5)
 	rig.live[pfx("203.0.113.0/24")] = false
-	if err := rig.s.Sync(context.Background(), []policy.Improvement{imp("203.0.113.0/24", "isp-b")}); err == nil || !strings.Contains(err.Error(), "not a tracked synthetic prefix") || rig.r.installs != 0 {
-		t.Fatalf("a prefix that is not live was steered: %v", err)
+	for range 2 {
+		if err := rig.s.Sync(context.Background(), []policy.Improvement{imp("203.0.113.0/24", "isp-b")}); err != nil || rig.r.installs != 0 {
+			t.Fatalf("a prefix that is not live: err %v installs %d", err, rig.r.installs)
+		}
 	}
 }
 
@@ -230,12 +248,13 @@ func TestAgedOutPrefixIsRemovedEvenWithItsImprovement(t *testing.T) {
 		t.Fatal(err)
 	}
 	rig.live[pfx("198.51.100.0/24")] = false
-	err := rig.s.Sync(ctx, imps)
-	if _, ok := rig.r.has("198.51.100.0/24"); ok || len(rig.s.Active()) != 0 {
-		t.Fatal("a route for a prefix that left the table stayed on the router")
+	for range 2 {
+		if err := rig.s.Sync(ctx, imps); err != nil {
+			t.Fatalf("a round with an improvement for an aged-out prefix failed: %v", err)
+		}
 	}
-	if err == nil {
-		t.Fatal("the refused re-install was not reported")
+	if _, ok := rig.r.has("198.51.100.0/24"); ok || len(rig.s.Active()) != 0 || rig.r.installs != 1 {
+		t.Fatalf("a route for a prefix that left the table stayed on the router or came back: installs %d", rig.r.installs)
 	}
 }
 
@@ -314,14 +333,91 @@ func TestFirstSyncSweepsLeftOvers(t *testing.T) {
 	if _, ok := rig.r.has("203.0.113.0/24"); ok {
 		t.Error("the left-over route stayed")
 	}
-	if _, ok := rig.r.has("198.51.100.0/24"); !ok {
-		t.Error("a wanted route was removed")
+	if _, ok := rig.r.has("198.51.100.0/24"); !ok || len(rig.s.Active()) != 1 {
+		t.Error("a wanted route was not installed again and tracked")
 	}
 	// The sweep runs once: a later foreign-tagged route is left for withdraw handling.
 	removes := rig.r.removes
 	rig.r.set(func() { rig.r.routes[pfx("192.0.2.0/24")] = addr("192.0.2.1") })
 	if err := rig.s.Sync(ctx, []policy.Improvement{imp("198.51.100.0/24", "isp-b")}); err != nil || rig.r.removes != removes {
 		t.Fatalf("a later sync swept again: err %v removes %d->%d", err, removes, rig.r.removes)
+	}
+}
+
+func TestStuckLeftOverDoesNotStopSteering(t *testing.T) {
+	rig := newRig(t, true, 2)
+	ctx := context.Background()
+	rig.r.set(func() {
+		rig.r.routes[pfx("192.0.2.0/24")] = addr("198.51.100.1")
+		rig.r.removeFail = pfx("192.0.2.0/24")
+	})
+	imps := []policy.Improvement{imp("198.51.100.0/24", "isp-b"), imp("203.0.113.0/24", "isp-b")}
+	err := rig.s.Sync(ctx, imps)
+	if err == nil || !strings.Contains(err.Error(), "left-over route 192.0.2.0/24") {
+		t.Fatalf("the stuck left-over was not reported: %v", err)
+	}
+	// The stuck route counts against the cap of 2: one new route fits.
+	if _, ok := rig.r.has("198.51.100.0/24"); !ok || len(rig.s.Active()) != 1 || !strings.Contains(err.Error(), "cap") {
+		t.Fatalf("steering stopped behind a stuck left-over, or the cap ignored it: active %v err %v", rig.s.Active(), err)
+	}
+	rig.r.set(func() { rig.r.removeFail = netip.Prefix{} })
+	if err := rig.s.Sync(ctx, imps); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := rig.r.has("192.0.2.0/24"); ok {
+		t.Error("the left-over was not retried")
+	}
+	if _, ok := rig.r.has("203.0.113.0/24"); !ok || len(rig.s.Active()) != 2 {
+		t.Errorf("the freed cap slot was not used: %v", rig.s.Active())
+	}
+}
+
+func TestLeftOverReplacedByWantedRouteIsTracked(t *testing.T) {
+	rig := newRig(t, true, 1)
+	ctx := context.Background()
+	rig.r.set(func() {
+		rig.r.routes[pfx("198.51.100.0/24")] = addr("192.0.2.1")
+		rig.r.removeFail = pfx("198.51.100.0/24")
+	})
+	imps := []policy.Improvement{imp("198.51.100.0/24", "isp-b")}
+	if err := rig.s.Sync(ctx, imps); err == nil {
+		t.Fatal("the failed left-over removal was not reported")
+	}
+	if nh, ok := rig.r.has("198.51.100.0/24"); !ok || nh != addr("198.51.100.1") || len(rig.s.Active()) != 1 {
+		t.Fatalf("the wanted route did not replace the left-over under a cap of 1: %s %v", nh, rig.s.Active())
+	}
+	rig.r.set(func() { rig.r.removeFail = netip.Prefix{} })
+	if err := rig.s.Sync(ctx, imps); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := rig.r.has("198.51.100.0/24"); !ok {
+		t.Fatal("the next round removed the tracked route as a left-over")
+	}
+}
+
+func TestPassIsNotCutHalfwayThroughARoute(t *testing.T) {
+	rig := newRig(t, true, 5)
+	ctx, cancel := context.WithCancel(context.Background())
+	var during error
+	var deadline time.Duration
+	rig.r.set(func() {
+		rig.r.onInstall = func(c context.Context) {
+			cancel()
+			during = c.Err()
+			if d, ok := c.Deadline(); ok {
+				deadline = time.Until(d)
+			}
+		}
+	})
+	err := rig.s.Sync(ctx, []policy.Improvement{imp("198.51.100.0/24", "isp-b"), imp("203.0.113.0/24", "isp-b")})
+	if during != nil {
+		t.Fatalf("the route in progress lost its context: %v", during)
+	}
+	if deadline <= 0 || deadline > DefaultRouteTimeout {
+		t.Fatalf("route deadline %s, want within %s", deadline, DefaultRouteTimeout)
+	}
+	if _, ok := rig.r.has("198.51.100.0/24"); !ok || rig.r.installs != 1 || !errors.Is(err, context.Canceled) {
+		t.Fatalf("the pass did not finish the route in progress and stop before the next: installs %d err %v", rig.r.installs, err)
 	}
 }
 

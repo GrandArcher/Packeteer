@@ -29,9 +29,19 @@ type SteerConfig struct {
 	// for one that aged out is removed even if the decision engine still
 	// lists its improvement.
 	Live func(netip.Prefix) bool
+	// RouteTimeout bounds the router requests for one route: the listing,
+	// an install, or a removal. Each route gets its own budget, so a pass
+	// never stops halfway through moving a route. 0 is DefaultRouteTimeout.
+	RouteTimeout time.Duration
 	// Now is the clock; nil is time.Now.
 	Now func() time.Time
 }
+
+// DefaultRouteTimeout covers the requests one route takes: the mikrotik
+// steerer lists, deletes a duplicate tagged row, and patches, each with
+// its own 10s timeout. Only Packeteer adds tagged rows, so more than one
+// duplicate is not expected.
+const DefaultRouteTimeout = 30 * time.Second
 
 // Steered is one static route this process put on the router.
 type Steered struct {
@@ -52,7 +62,10 @@ type Steer struct {
 
 	mu     sync.Mutex
 	active map[netip.Prefix]Steered
-	swept  bool
+	// leftover holds tagged routes an earlier process left that could not
+	// be removed yet. They count against the cap until they are gone.
+	leftover map[netip.Prefix]struct{}
+	swept    bool
 }
 
 // NewSteer returns a controller that drives drv. drv may be nil in
@@ -72,34 +85,54 @@ func NewSteer(cfg SteerConfig, drv plugin.Steerer, log *slog.Logger) (*Steer, er
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
+	if cfg.RouteTimeout <= 0 {
+		cfg.RouteTimeout = DefaultRouteTimeout
+	}
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Steer{cfg: cfg, drv: drv, log: log, active: map[netip.Prefix]Steered{}}, nil
+	return &Steer{cfg: cfg, drv: drv, log: log, active: map[netip.Prefix]Steered{}, leftover: map[netip.Prefix]struct{}{}}, nil
 }
 
-// Sync makes the routes on the router match imps. The first sync also
-// removes tagged routes a previous process left behind. It returns the
-// failures; a route whose removal failed stays tracked and is retried by the
-// next sync.
+// Sync makes the routes on the router match imps. The first sync removes
+// the tagged routes a previous process left behind; it runs in every mode
+// with a steerer, so a restart in observe also cleans up after a crash.
+// Observe and suggest install nothing. An improvement for a prefix that is
+// no longer in the table is skipped. Sync returns the failures; a route
+// whose removal failed stays tracked and is retried by the next sync.
 func (s *Steer) Sync(ctx context.Context, imps []policy.Improvement) error {
-	if s == nil || !s.cfg.Inject {
+	if s == nil || s.drv == nil {
 		return nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	want := make(map[netip.Prefix]policy.Improvement, len(imps))
-	for _, im := range imps {
-		want[im.Prefix.Masked()] = im
-	}
-	var errs []error
 	if !s.swept {
-		if err := s.sweepLocked(ctx); err != nil {
+		if err := s.listLeftoversLocked(ctx); err != nil {
+			// The router's routes are unknown: nothing is installed on top of
+			// them this round, and the next sync lists again.
 			return err
 		}
 	}
+	var errs []error
+	for _, p := range netpfx.SortedKeys(s.leftover) {
+		if err := s.op(ctx, func(c context.Context) error { return s.drv.Remove(c, p) }); err != nil {
+			errs = append(errs, fmt.Errorf("non-BGP: remove left-over route %s: %w", p, err))
+			continue
+		}
+		delete(s.leftover, p)
+		s.log.Warn("non-BGP: removed a route left on the router by an earlier run", "prefix", p)
+	}
+	if !s.cfg.Inject {
+		return errors.Join(errs...)
+	}
+	want := make(map[netip.Prefix]policy.Improvement, len(imps))
+	for _, im := range imps {
+		if p := im.Prefix.Masked(); s.cfg.Live(p) {
+			want[p] = im
+		}
+	}
 	for _, p := range netpfx.SortedKeys(s.active) {
-		if _, ok := want[p]; ok && s.cfg.Live(p) {
+		if _, ok := want[p]; ok {
 			continue
 		}
 		if err := s.removeLocked(ctx, p); err != nil {
@@ -114,25 +147,33 @@ func (s *Steer) Sync(ctx context.Context, imps []policy.Improvement) error {
 	return errors.Join(errs...)
 }
 
-// sweepLocked removes every tagged route on the router: this process owns
-// none yet, so each one is left by an earlier run. A wanted route is
-// installed again afterwards, which keeps every route on the router tracked.
-func (s *Steer) sweepLocked(ctx context.Context) error {
-	owned, err := s.drv.Owned(ctx)
+// op runs one route's router requests under their own deadline. ctx only
+// ends a pass between routes: a route is never cut off halfway.
+func (s *Steer) op(ctx context.Context, fn func(context.Context) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	c, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.cfg.RouteTimeout)
+	defer cancel()
+	return fn(c)
+}
+
+// listLeftoversLocked records every tagged route on the router: this
+// process owns none yet, so each one is left by an earlier run. They are
+// removed even when wanted; a wanted route is installed again afterwards,
+// which keeps every route on the router tracked.
+func (s *Steer) listLeftoversLocked(ctx context.Context) error {
+	var owned []netip.Prefix
+	err := s.op(ctx, func(c context.Context) error {
+		var err error
+		owned, err = s.drv.Owned(c)
+		return err
+	})
 	if err != nil {
 		return fmt.Errorf("non-BGP: list routes left on the router: %w", err)
 	}
-	var errs []error
 	for _, p := range owned {
-		p = p.Masked()
-		if err := s.drv.Remove(ctx, p); err != nil {
-			errs = append(errs, fmt.Errorf("non-BGP: remove left-over route %s: %w", p, err))
-			continue
-		}
-		s.log.Warn("non-BGP: removed a route left on the router by an earlier run", "prefix", p)
-	}
-	if err := errors.Join(errs...); err != nil {
-		return err
+		s.leftover[p.Masked()] = struct{}{}
 	}
 	s.swept = true
 	return nil
@@ -144,6 +185,7 @@ func (s *Steer) installLocked(ctx context.Context, im policy.Improvement) error 
 	if on && cur.Provider == im.Provider {
 		return nil
 	}
+	_, stale := s.leftover[p]
 	floor := FloorV4
 	if p.Addr().Is6() {
 		floor = FloorV6
@@ -154,16 +196,16 @@ func (s *Steer) installLocked(ctx context.Context, im policy.Improvement) error 
 		return fmt.Errorf("non-BGP: %s is more specific than /%d or a default route and is never steered", p, floor)
 	case !netpfx.CoveredBy(s.cfg.Allowlist, p):
 		return fmt.Errorf("non-BGP: %s is outside the allowlist", p)
-	case !s.cfg.Live(p):
-		return fmt.Errorf("non-BGP: %s is not a tracked synthetic prefix", p)
 	case !known || nh.Is4() != p.Addr().Is4():
 		return fmt.Errorf("non-BGP: provider %q has no next hop for %s", im.Provider, p)
-	case !on && len(s.active) >= s.cfg.Max:
-		return fmt.Errorf("non-BGP: %s refused, %d routes is the max_improvements cap", p, s.cfg.Max)
+	case !on && !stale && len(s.active)+len(s.leftover) >= s.cfg.Max:
+		return fmt.Errorf("non-BGP: %s refused, %d routes on the router is the max_improvements cap", p, s.cfg.Max)
 	}
-	if err := s.drv.Install(ctx, plugin.SteerRoute{Prefix: p, NextHop: nh}); err != nil {
+	if err := s.op(ctx, func(c context.Context) error { return s.drv.Install(c, plugin.SteerRoute{Prefix: p, NextHop: nh}) }); err != nil {
 		return fmt.Errorf("non-BGP: install %s via %s: %w", p, im.Provider, err)
 	}
+	// The install replaced the left-over route for p, so it is tracked now.
+	delete(s.leftover, p)
 	since := s.cfg.Now()
 	if on {
 		since = cur.Since
@@ -174,7 +216,7 @@ func (s *Steer) installLocked(ctx context.Context, im policy.Improvement) error 
 }
 
 func (s *Steer) removeLocked(ctx context.Context, p netip.Prefix) error {
-	if err := s.drv.Remove(ctx, p); err != nil {
+	if err := s.op(ctx, func(c context.Context) error { return s.drv.Remove(c, p) }); err != nil {
 		return fmt.Errorf("non-BGP: remove %s: %w", p, err)
 	}
 	delete(s.active, p)

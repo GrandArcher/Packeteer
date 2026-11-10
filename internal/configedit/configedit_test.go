@@ -460,6 +460,29 @@ synthesize:
 	}
 }
 
+// A candidate with the nonbgp block carries its warning (#300).
+func TestCheckWarnsWhenNonBGPIsOn(t *testing.T) {
+	e, _ := editor(t, observeYAML)
+	if res := e.Check([]byte(observeYAML)); res.NonBGPWarning != "" {
+		t.Fatalf("plain observe = %+v", res)
+	}
+	nb := `mode: observe
+asn: 64512
+router_id: 192.0.2.10
+providers:
+  - {name: isp-a, source_ip: 192.0.2.11, next_hop: 192.0.2.1}
+  - {name: isp-b, source_ip: 198.51.100.11, next_hop: 198.51.100.1}
+sources:
+  - type: flow
+    config: {listen: "127.0.0.1:2055"}
+nonbgp: {default_provider: isp-a}
+`
+	res := e.Check([]byte(nb))
+	if !res.Valid || res.NonBGPWarning != config.NonBGPWarning || !strings.Contains(res.NonBGPWarning, "NOT from a learned BGP RIB view") {
+		t.Fatalf("nonbgp = %+v", res)
+	}
+}
+
 // TestWriteFileAtomicReportsDirectorySync checks that a directory that
 // cannot be synced after the rename is an error (#492), and that WriteFile,
 // which the editor saves with, returns it instead of falling back to an

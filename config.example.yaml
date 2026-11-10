@@ -1088,17 +1088,21 @@ plugin_dir: /etc/packeteer/plugins
 #     links: true                      # needs no other block; ris needs leak_watch, rpki needs rpki
 
 # Non-BGP mode (#300, docs/nonbgp.md). For a site with two links whose router
-# has no BGP: flow records name the destinations, and in inject mode a better
-# link gets a static route on the router. Replaces the bgp, announcer, and
-# community settings, which it refuses. Keep mode: observe until the
-# recommendations look right. Changes need a restart.
+# has no BGP: flow records name the destinations, and in inject mode with
+# install_routes a better link gets a static route on the router.
+# WARNING: those routes are derived from flow data, NOT from a learned BGP RIB
+# view. They can black-hole or misroute traffic, and they leak into BGP if the
+# router redistributes static routes. A hard kill leaves them until the next
+# start. Refuses the bgp, announcer, inbound, and mitigation blocks. Keep
+# mode: observe until the recommendations look right. Changes need a restart.
 # mode: observe
 # sources:
 #   - type: flow
 #     config: {listen: "0.0.0.0:2055"}
 # nonbgp:
+#   install_routes: false              # true is required for mode: inject
 #   default_provider: transit-a        # the link the router's default route uses
-#   covering: {type: ripestat}         # announced prefix: widening bound, herd mapping
+#   covering: {type: ripestat}         # announced prefix: the widening bound
 #   steerer:                           # only used in mode: inject
 #     type: mikrotik                   # or linux
 #     config:

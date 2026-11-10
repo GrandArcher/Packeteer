@@ -84,21 +84,23 @@ context.renderSynthetic(null);
 assert(section.hidden === true, "the section is shown with no answer");
 
 // On with nothing seen yet.
-context.renderSynthetic({enabled: true, default_provider: "isp-a", tracked_blocks: 0, dropped_blocks: 0, routes: []});
+context.renderSynthetic({enabled: true, mode: "observe", install_routes: true, default_provider: "isp-a", tracked_blocks: 0, dropped_blocks: 0, routes: []});
 assert(section.hidden === false && root.textContent === "No destinations seen in flow data yet.", "empty note: " + root.textContent);
-assert(note.textContent.indexOf("not from BGP") >= 0 && note.textContent.indexOf("never exported to a BGP peer") >= 0 && note.textContent.indexOf("isp-a") >= 0, "note: " + note.textContent);
+assert(note.textContent.indexOf("not from a learned BGP RIB view") >= 0 && note.textContent.indexOf("Nothing is installed on the router (mode observe)") >= 0 &&
+  note.textContent.indexOf("isp-a") >= 0 && note.textContent.indexOf("never exported") < 0, "note: " + note.textContent);
 
-var data = {enabled: true, default_provider: "isp-a", tracked_blocks: 3, dropped_blocks: 2, routes: [
-  {source: "synthetic", prefix: "198.51.100.0/24", upper: "198.51.100.0/23", blocks: 1, last_seen: "2026-11-09T12:00:00Z", steered_to: "isp-b", next_hop: "198.51.100.1"},
-  {source: "synthetic", prefix: "2001:db8::/46", blocks: 2, last_seen: "2026-11-09T12:00:00Z"}
+var data = {enabled: true, mode: "inject", install_routes: true, default_provider: "isp-a", tracked_blocks: 3, dropped_blocks: 2, routes: [
+  {source: "synthetic", prefix: "2001:db8:1::/48", upper: "2001:db8::/32", origin: 64496, blocks: 1, last_seen: "2026-11-09T12:00:00Z", steered_to: "isp-b", next_hop: "2001:db8:ffff::1"},
+  {source: "synthetic", prefix: "2001:db8:4::/46", blocks: 2, last_seen: "2026-11-09T12:00:00Z"}
 ]};
 context.renderSynthetic(data);
 assert(note.textContent.indexOf("2 not tracked (max_blocks reached)") >= 0, "dropped blocks are not shown: " + note.textContent);
+assert(note.textContent.indexOf("installed as static routes on the router") >= 0, "inject note: " + note.textContent);
 var rows = walk(root).filter(function (n) { return n.tag === "tr"; });
 assert(rows.length === 3, "rows (header and two routes): " + rows.length);
-assert(rows[1].textContent.indexOf("198.51.100.0/24") >= 0 && rows[1].textContent.indexOf("synthetic") >= 0 &&
-  rows[1].textContent.indexOf("198.51.100.0/23") >= 0 && rows[1].textContent.indexOf("isp-b via 198.51.100.1") >= 0, "steered row: " + rows[1].textContent);
-assert(rows[2].textContent.indexOf("2001:db8::/46") >= 0 && rows[2].textContent.indexOf("not looked up") >= 0 &&
+assert(rows[1].textContent.indexOf("2001:db8:1::/48") >= 0 && rows[1].textContent.indexOf("synthetic") >= 0 &&
+  rows[1].textContent.indexOf("2001:db8::/32 (AS64496)") >= 0 && rows[1].textContent.indexOf("isp-b via 2001:db8:ffff::1") >= 0, "steered row: " + rows[1].textContent);
+assert(rows[2].textContent.indexOf("2001:db8:4::/46") >= 0 && rows[2].textContent.indexOf("not looked up") >= 0 &&
   rows[2].textContent.indexOf("default route") >= 0, "default row: " + rows[2].textContent);
 assert(walk(rows[1]).some(function (n) { return n.tag === "span" && n.className === "badge muted" && n.textContent === "synthetic"; }), "no synthetic label");
 

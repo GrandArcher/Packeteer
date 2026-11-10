@@ -29,6 +29,8 @@ mode: inject
 asn: 64512
 router_id: 192.0.2.10
 hold_time: 15m
+packeteer_community: "64512:666"
+local_pref: 200
 thresholds:
   min_loss_delta_pct: 1.0
   min_rtt_delta_ms: 15
@@ -45,6 +47,7 @@ sources:
   - type: flow
     config: {listen: "127.0.0.1:2055"}
 nonbgp:
+  install_routes: true
   default_provider: isp-a
   steerer:
     type: mikrotik
@@ -67,22 +70,30 @@ func TestNonBGPObserveDefaults(t *testing.T) {
 	}
 }
 
-func TestNonBGPInjectNeedsNoBGPFields(t *testing.T) {
+func TestNonBGPInjectNeedsNoBGPSession(t *testing.T) {
 	cfg, err := Parse([]byte(nonBGPInjectYAML))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Mode != ModeInject || cfg.PacketeerCommunity != "" || cfg.LocalPref != 0 || cfg.Announcer != nil {
-		t.Fatalf("inject config picked up BGP fields: %+v", cfg)
+	if cfg.Mode != ModeInject || !cfg.NonBGP.InstallRoutes || len(cfg.BGP.Neighbors) != 0 || cfg.Announcer != nil {
+		t.Fatalf("inject config = %+v", cfg)
+	}
+	obs, err := Parse([]byte(nonBGPYAML))
+	if err != nil || obs.NonBGP.InstallRoutes {
+		t.Fatalf("install_routes is not off by default: %v", err)
 	}
 }
 
 func TestNonBGPInjectRails(t *testing.T) {
 	for _, tc := range []struct{ old, new, want string }{
 		{"  steerer:\n    type: mikrotik\n", "", "requires nonbgp.steerer"},
+		{"  install_routes: true\n", "", "requires nonbgp.install_routes: true"},
+		{"  install_routes: true\n", "  install_routes: false\n", "requires nonbgp.install_routes: true"},
 		{"allowlist:\n  prefixes: [203.0.113.0/24]\n", "", "non-empty allowlist.prefixes"},
 		{"hold_time: 15m", "hold_time: 0s", "positive hold_time"},
 		{"min_rtt_delta_ms: 15", "min_rtt_delta_ms: 0", "positive thresholds"},
+		{"packeteer_community: \"64512:666\"\n", "", "requires packeteer_community"},
+		{"local_pref: 200\n", "", "requires local_pref"},
 	} {
 		_, err := Parse([]byte(edit(t, nonBGPInjectYAML, tc.old, tc.new)))
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
@@ -133,36 +144,6 @@ func TestNonBGPBlockChecks(t *testing.T) {
 	}
 	if *cfg.NonBGP.WidenBits != 0 || cfg.NonBGP.Idle != 2*time.Hour {
 		t.Fatalf("explicit values lost: %d %s", *cfg.NonBGP.WidenBits, cfg.NonBGP.Idle)
-	}
-}
-
-const nonBGPHerd = `
-storage: {type: sqlite}
-herd:
-  enabled: true
-  share:
-    classes: [measurements]
-    sources: [flow]
-  vantage: {country: US}
-  listen: 192.0.2.10:9444
-  peers:
-    - url: https://192.0.2.30:9444
-      key: ` + herdKey + `
-`
-
-func TestNonBGPHerdSharesOnlyThroughACoveringLookup(t *testing.T) {
-	withCovering := edit(t, nonBGPYAML, "  default_provider: isp-a", "  default_provider: isp-a\n  covering: {type: ripestat}")
-	if _, err := Parse([]byte(withCovering + nonBGPHerd)); err != nil {
-		t.Fatalf("herd with nonbgp and covering: %v", err)
-	}
-	_, err := Parse([]byte(nonBGPYAML + nonBGPHerd))
-	if err == nil || !strings.Contains(err.Error(), "needs nonbgp.covering") {
-		t.Errorf("no covering: %v", err)
-	}
-	noFlow := strings.Replace(nonBGPHerd, "sources: [flow]", "sources: [static]", 1)
-	_, err = Parse([]byte(withCovering + noFlow))
-	if err == nil || !strings.Contains(err.Error(), "add flow to herd.share.sources") {
-		t.Errorf("no flow source: %v", err)
 	}
 }
 

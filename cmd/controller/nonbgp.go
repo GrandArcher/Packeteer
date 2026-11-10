@@ -4,19 +4,13 @@ import (
 	"context"
 	"log/slog"
 	"net/netip"
-	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/config"
-	"github.com/GrandArcher/Packeteer/internal/herd"
 	"github.com/GrandArcher/Packeteer/internal/nonbgp"
 	"github.com/GrandArcher/Packeteer/internal/pluginhost"
 	"github.com/GrandArcher/Packeteer/internal/policy"
-	"github.com/GrandArcher/Packeteer/internal/probe"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
-
-// nonbgpSyncTimeout bounds one pass over the router's API.
-const nonbgpSyncTimeout = 10 * time.Second
 
 // nonbgpState is the flow-driven mode for a site whose router has no BGP
 // (#300): the synthetic prefix table the flow source reads, and the steer
@@ -27,7 +21,6 @@ type nonbgpState struct {
 	steer  *nonbgp.Steer
 	meta   nonbgp.Meta
 	native string
-	asns   map[string]uint32
 	log    *slog.Logger
 }
 
@@ -40,27 +33,23 @@ func newNonBGP(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger) (*
 		return nil, nil
 	}
 	var cov plugin.Covering
-	meta := nonbgp.Meta{Mode: cfg.Mode, DefaultProvider: n.DefaultProvider, WidenBits: *n.WidenBits, MaxBlocks: n.MaxBlocks}
+	meta := nonbgp.Meta{Mode: cfg.Mode, InstallRoutes: n.InstallRoutes, DefaultProvider: n.DefaultProvider, WidenBits: *n.WidenBits, MaxBlocks: n.MaxBlocks}
 	if plugins.Covering != nil {
 		cov, meta.Covering = plugins.Covering.Plugin, plugins.Covering.Type
 	}
 	table := nonbgp.NewTable(nonbgp.Options{WidenBits: *n.WidenBits, Idle: n.Idle, MaxBlocks: n.MaxBlocks, Log: log}, cov)
 	sc := nonbgp.SteerConfig{
-		Inject:   cfg.Mode == config.ModeInject,
+		Inject:   cfg.Mode == config.ModeInject && n.InstallRoutes,
 		Max:      *cfg.MaxImprovements,
 		NextHops: map[string]netip.Addr{},
 		Live:     table.Has,
 	}
-	asns := map[string]uint32{}
 	for _, p := range cfg.Providers {
 		nh, err := parseAddr(p.NextHop)
 		if err != nil {
 			return nil, err
 		}
 		sc.NextHops[p.Name] = nh
-		if p.ASN != 0 {
-			asns[p.Name] = p.ASN
-		}
 	}
 	for _, s := range cfg.Allowlist.Prefixes {
 		p, err := netip.ParsePrefix(s)
@@ -77,7 +66,18 @@ func newNonBGP(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger) (*
 	if err != nil {
 		return nil, err
 	}
-	return &nonbgpState{table: table, steer: steer, meta: meta, native: n.DefaultProvider, asns: asns, log: log}, nil
+	return &nonbgpState{table: table, steer: steer, meta: meta, native: n.DefaultProvider, log: log}, nil
+}
+
+// start logs the warning and removes the tagged routes a killed process
+// left on the router, before the first decision round.
+func (s *nonbgpState) start() {
+	if s == nil {
+		return
+	}
+	s.log.Warn(config.NonBGPWarning, "mode", s.meta.Mode, "install_routes", s.meta.InstallRoutes, "steerer", s.meta.Steerer)
+	// A failed sweep is logged by Sync and retried on the next round.
+	_ = s.Sync(nil)
 }
 
 // wireLookup makes every flow source count destinations under
@@ -110,14 +110,13 @@ func (s *nonbgpState) Fill(in *policy.Input) {
 }
 
 // Sync puts the improvements on the router. In observe and suggest it
-// does nothing.
+// installs nothing. The pass has no overall deadline: each route has its
+// own (nonbgp.DefaultRouteTimeout), so a pass never stops halfway.
 func (s *nonbgpState) Sync(imps []policy.Improvement) error {
 	if s == nil {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), nonbgpSyncTimeout)
-	defer cancel()
-	err := s.steer.Sync(ctx, imps)
+	err := s.steer.Sync(context.Background(), imps)
 	if err != nil {
 		// The announce event fires only when the state flips, so each failing
 		// round, a failed withdraw included, is logged here.
@@ -150,16 +149,6 @@ func (s *nonbgpState) addTruncated(m map[string]uint64) {
 	if s != nil {
 		m["nonbgp.max_blocks"] += s.table.Stats().Dropped
 	}
-}
-
-// herdView is the herd's stand-in for a RIB view.
-func (s *nonbgpState) herdView() herd.RIB {
-	return nonbgp.HerdView{Table: s.table, ProviderASN: s.asns}
-}
-
-// forHerd maps a probe round to the announced prefixes the herd may see.
-func (s *nonbgpState) forHerd(b []probe.Result) []probe.Result {
-	return nonbgp.ForHerd(s.table, b)
 }
 
 // Run looks up the announced prefix of new blocks until ctx ends.

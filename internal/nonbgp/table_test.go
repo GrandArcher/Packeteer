@@ -166,8 +166,8 @@ func TestWidenStopsAtAnnouncedPrefix(t *testing.T) {
 	if got := routePrefixes(tbl); !equal(got, []string{"2001:db8::/48"}) {
 		t.Fatalf("routes = %v", got)
 	}
-	if _, ok := tbl.Announced(pfx("2001:db8::/48")); ok {
-		t.Fatal("a block that is not inside an announced prefix reported one")
+	if r := tbl.Routes(); r[0].Upper.IsValid() {
+		t.Fatalf("a block that is not inside an announced prefix has the bound %s", r[0].Upper)
 	}
 	if tbl.lookupOne(context.Background()) || cov.count() != 1 {
 		t.Fatalf("a settled block was asked again (%d calls)", cov.count())
@@ -199,7 +199,7 @@ func TestWidenBitsBoundAndZero(t *testing.T) {
 	}
 
 	// widen_bits 0 never widens, but the announced prefix is still looked up
-	// for the herd.
+	// and shown.
 	asked := &fakeCovering{ans: pfx("2001:db8::/32"), asn: 64500}
 	zero, _ := newTestTable(0, asked)
 	zero.Lookup(addr("2001:db8:1::1"))
@@ -210,28 +210,53 @@ func TestWidenBitsBoundAndZero(t *testing.T) {
 	if got := routePrefixes(zero); !equal(got, []string{"2001:db8:1::/48", "2001:db8:2::/48"}) {
 		t.Fatalf("widen_bits 0 routes = %v", got)
 	}
-	up, ok := zero.Announced(pfx("2001:db8:1::/48"))
-	if !ok || up.Prefix != pfx("2001:db8::/32") || up.Origin != 64500 {
-		t.Fatalf("widen_bits 0 Announced = %+v %v", up, ok)
+	if r := zero.Routes(); r[0].Upper != pfx("2001:db8::/32") || r[0].Origin != 64500 {
+		t.Fatalf("widen_bits 0 bound = %+v", r[0])
 	}
 }
 
 func TestNestedGroupsMergeIntoOneRoute(t *testing.T) {
 	tbl, _ := newTestTable(4, nil)
-	for _, a := range []string{"2001:db8:2::1", "2001:db8:6::1", "2001:db8:8::1"} {
+	// Block 2 sits in a /46 announced prefix, blocks 4 to 11 in a /44 that
+	// holds it: grouped apart they would make /48 inside /44.
+	for _, a := range []string{"2001:db8:2::1", "2001:db8:4::1", "2001:db8:5::1", "2001:db8:6::1", "2001:db8:7::1", "2001:db8:8::1", "2001:db8:9::1", "2001:db8:a::1", "2001:db8:b::1"} {
 		tbl.Lookup(addr(a))
 	}
-	// Block 2 sits in a /46 announced prefix, blocks 6 and 8 in a /44 that
-	// holds it: grouped apart they would make /48 inside /44.
 	tbl.known[pfx("2001:db8::/46")] = 64501
 	tbl.known[pfx("2001:db8::/44")] = 64500
 	tbl.Refresh()
 	got := tbl.Routes()
-	if len(got) != 1 || got[0].Prefix != pfx("2001:db8::/44") || got[0].Blocks != 3 || got[0].Upper != pfx("2001:db8::/44") || got[0].Origin != 64500 {
+	if len(got) != 1 || got[0].Prefix != pfx("2001:db8::/44") || got[0].Blocks != 9 || got[0].Upper != pfx("2001:db8::/44") || got[0].Origin != 64500 {
 		t.Fatalf("routes = %+v", got)
 	}
 	if p, _ := tbl.Lookup(addr("2001:db8:2::99")); p != pfx("2001:db8::/44") {
 		t.Fatalf("Lookup = %s, want the merged prefix", p)
+	}
+}
+
+// A widened prefix holds at least as many blocks with flow as idle ones, so
+// two /48s far apart in an announced /44 are never one /44 route (#300).
+func TestWidenedPrefixIsAtLeastHalfActive(t *testing.T) {
+	table := func(addrs ...string) *Table {
+		tbl, _ := newTestTable(4, nil)
+		tbl.known[pfx("2001:db8::/44")] = 64500
+		for _, a := range addrs {
+			tbl.Lookup(addr(a))
+		}
+		tbl.Refresh()
+		return tbl
+	}
+	if got := routePrefixes(table("2001:db8::1", "2001:db8:f::1")); !equal(got, []string{"2001:db8::/48", "2001:db8:f::/48"}) {
+		t.Fatalf("two /48s in a /44 widened over idle space: %v", got)
+	}
+	// Three of the four /48s of a /46 have flow: one /46 with one idle /48.
+	if got := routePrefixes(table("2001:db8:4::1", "2001:db8:5::1", "2001:db8:7::1")); !equal(got, []string{"2001:db8:4::/46"}) {
+		t.Fatalf("routes = %v", got)
+	}
+	// Two of the four, at the ends of a /46: half idle is allowed. A third
+	// block in the next /46 does not make a /45 that is five-eighths idle.
+	if got := routePrefixes(table("2001:db8:4::1", "2001:db8:7::1", "2001:db8:9::1")); !equal(got, []string{"2001:db8:4::/46", "2001:db8:9::/48"}) {
+		t.Fatalf("routes = %v", got)
 	}
 }
 
@@ -306,7 +331,7 @@ func TestBlockCap(t *testing.T) {
 	}
 }
 
-func TestAnnouncedAndFill(t *testing.T) {
+func TestUpperAndFill(t *testing.T) {
 	cov := &fakeCovering{ans: pfx("2001:db8::/32"), asn: 64496}
 	tbl, _ := newTestTable(4, cov)
 	tbl.Lookup(addr("2001:db8:1::1"))
@@ -314,20 +339,9 @@ func TestAnnouncedAndFill(t *testing.T) {
 	for tbl.lookupOne(context.Background()) {
 	}
 	tbl.Refresh()
-	if up, ok := tbl.Announced(pfx("2001:db8:1::/48")); !ok || up.Prefix != pfx("2001:db8::/32") || up.Origin != 64496 {
-		t.Fatalf("Announced = %+v %v", up, ok)
-	}
-	if origin, ok := tbl.IsAnnounced(pfx("2001:db8::/32")); !ok || origin != 64496 {
-		t.Fatalf("IsAnnounced = %d %v", origin, ok)
-	}
-	if _, ok := tbl.IsAnnounced(pfx("2001:db8:1::/48")); ok {
-		t.Fatal("a synthetic prefix that is not announced was reported as announced")
-	}
-	if _, ok := tbl.Announced(pfx("203.0.113.0/24")); ok {
-		t.Fatal("a block with no covering answer reported an announced prefix")
-	}
-	if _, ok := tbl.Announced(pfx("192.0.2.0/24")); ok {
-		t.Fatal("an untracked prefix reported an announced prefix")
+	got := tbl.Routes()
+	if len(got) != 2 || got[0].Prefix != pfx("203.0.113.0/24") || got[0].Upper.IsValid() || got[1].Upper != pfx("2001:db8::/32") || got[1].Origin != 64496 {
+		t.Fatalf("routes = %+v, want the v6 block bounded by its announced prefix and origin, the v4 one unbounded", got)
 	}
 
 	in := policy.Input{Results: []probe.Result{

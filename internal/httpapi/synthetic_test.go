@@ -41,22 +41,22 @@ func TestSyntheticEndpoint(t *testing.T) {
 	}
 	at := time.Date(2026, 11, 9, 12, 0, 0, 0, time.UTC)
 	st := nonbgp.Status{
-		Meta:   nonbgp.Meta{Mode: "inject", DefaultProvider: "isp-a", Steerer: "mikrotik", Covering: "ripestat", WidenBits: 4, MaxBlocks: 10000},
+		Meta:   nonbgp.Meta{Mode: "inject", InstallRoutes: true, DefaultProvider: "isp-a", Steerer: "mikrotik", Covering: "ripestat", WidenBits: 4, MaxBlocks: 10000},
 		Blocks: 3, Dropped: 2, LookupErrors: 1, LastError: "ripestat: 429 Too Many Requests",
 		Routes: []nonbgp.RouteStatus{
-			{Source: nonbgp.SourceSynthetic, Prefix: netip.MustParsePrefix("198.51.100.0/24"), Upper: netip.MustParsePrefix("198.51.100.0/23"), Blocks: 1, LastSeen: at,
+			{Source: nonbgp.SourceSynthetic, Prefix: netip.MustParsePrefix("198.51.100.0/24"), Upper: netip.MustParsePrefix("198.51.100.0/24"), Origin: 64496, Blocks: 1, LastSeen: at,
 				SteeredTo: "isp-b", NextHop: netip.MustParseAddr("198.51.100.1"), SteeredSince: at},
 			{Source: nonbgp.SourceSynthetic, Prefix: netip.MustParsePrefix("2001:db8::/46"), Blocks: 2, LastSeen: at},
 		},
 	}
 	on := getSynthetic(t, Options{Synthetic: func() nonbgp.Status { return st }})
-	if on["enabled"] != true || on["mode"] != "inject" || on["default_provider"] != "isp-a" || on["steerer"] != "mikrotik" ||
+	if on["enabled"] != true || on["mode"] != "inject" || on["install_routes"] != true || on["default_provider"] != "isp-a" || on["steerer"] != "mikrotik" ||
 		on["tracked_blocks"] != float64(3) || on["dropped_blocks"] != float64(2) || on["last_error"] != "ripestat: 429 Too Many Requests" {
 		t.Fatalf("body = %v", on)
 	}
 	rows := on["routes"].([]any)
 	steered, plain := rows[0].(map[string]any), rows[1].(map[string]any)
-	if steered["source"] != "synthetic" || steered["prefix"] != "198.51.100.0/24" || steered["upper"] != "198.51.100.0/23" ||
+	if steered["source"] != "synthetic" || steered["prefix"] != "198.51.100.0/24" || steered["upper"] != "198.51.100.0/24" || steered["origin"] != float64(64496) ||
 		steered["steered_to"] != "isp-b" || steered["next_hop"] != "198.51.100.1" {
 		t.Fatalf("steered row = %v", steered)
 	}

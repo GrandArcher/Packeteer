@@ -329,10 +329,12 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 	}
 	switch {
 	case cfg.NonBGP != nil:
-		fmt.Fprintf(stdout, "nonbgp: default_provider=%s steerer=%s covering=%s widen_bits=%d idle=%s max_blocks=%d (synthetic prefixes from flow data, /%d or /%d at the narrowest, never exported over BGP)\n",
-			cfg.NonBGP.DefaultProvider, pluginType(plugins.Steerer), pluginType(plugins.Covering), *cfg.NonBGP.WidenBits, cfg.NonBGP.Idle, cfg.NonBGP.MaxBlocks, nonbgp.FloorV4, nonbgp.FloorV6)
+		fmt.Fprintf(stdout, "nonbgp: install_routes=%t default_provider=%s steerer=%s covering=%s widen_bits=%d idle=%s max_blocks=%d (synthetic prefixes from flow data, /%d or /%d at the narrowest)\n",
+			cfg.NonBGP.InstallRoutes, cfg.NonBGP.DefaultProvider, pluginType(plugins.Steerer), pluginType(plugins.Covering), *cfg.NonBGP.WidenBits, cfg.NonBGP.Idle, cfg.NonBGP.MaxBlocks, nonbgp.FloorV4, nonbgp.FloorV6)
+		fmt.Fprintln(stdout, config.NonBGPWarning)
 		if cfg.Mode == config.ModeInject {
-			fmt.Fprintf(stdout, "steer: static routes via %s, max_improvements=%d, withdrawn on shutdown\n", pluginType(plugins.Steerer), *cfg.MaxImprovements)
+			fmt.Fprintf(stdout, "steer: static routes via %s, max_improvements=%d, withdrawn on shutdown; a hard kill leaves them until the next start\n", pluginType(plugins.Steerer), *cfg.MaxImprovements)
+			fmt.Fprintf(stdout, "steer: if the router redistributes static routes, reject the tagged ones or set packeteer_community=%s and no-export on them\n", cfg.PacketeerCommunity)
 		} else {
 			fmt.Fprintln(stdout, "steer: none (mode is not inject; no route is installed)")
 		}
@@ -512,8 +514,6 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	var view *rib.View
 	health := syshealth.New(nil)
 	series := provseries.New(nil)
-	// The non-BGP mode (#300) is built before the recorder and the HTTP
-	// server, which label and list its synthetic prefixes.
 	nb, nerr := newNonBGP(cfg, plugins, log)
 	if nerr != nil {
 		log.Error("refusing to start", "err", nerr)
@@ -834,12 +834,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			rec.Probe(r)
 		}
 	}
-	onBatch := herdBatch(cfg, &herdRef)
-	if nb != nil && onBatch != nil {
-		share := onBatch
-		onBatch = func(b []probe.Result) { share(nb.forHerd(b)) }
-	}
-	engine, err = newEngine(cfg, plugins, log, onRound, onProbe, onBatch, pktLimiter, asnLimiter, func() *rib.View { return view })
+	engine, err = newEngine(cfg, plugins, log, onRound, onProbe, herdBatch(cfg, &herdRef), pktLimiter, asnLimiter, func() *rib.View { return view })
 	if err != nil {
 		log.Error("refusing to start", "err", err)
 		return 1
@@ -925,15 +920,9 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		log.Error("refusing to start", "err", err)
 		return 1
 	}
+	nb.start()
 	bootstrapAdmin(ctx, authSvc, audit, besideStorage(plugins, firstRunPasswordFile), getenv, log)
-	var herdView herd.RIB
-	switch {
-	case view != nil:
-		herdView = view
-	case nb != nil:
-		herdView = nb.herdView()
-	}
-	hd, herr := startHerd(ctx, cfg, plugins, herdView, audit, dispatch.Emit, ha.active, log)
+	hd, herr := startHerd(ctx, cfg, plugins, view, audit, dispatch.Emit, ha.active, log)
 	if herr != nil {
 		log.Error("refusing to start", "err", herr)
 		return 1

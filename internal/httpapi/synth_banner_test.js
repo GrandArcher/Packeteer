@@ -42,6 +42,7 @@ var shell = fs.readFileSync(path.join(__dirname, "web", "shell.js"), "utf8");
 vm.runInContext(fn(shell, "shellRenderNotice"), context);
 assert(shell.indexOf('shellRenderNotice("synth-banner", ov && ov.synthesize_warning)') >= 0 && shell.indexOf('shellRenderNotice("sim-banner", ov && ov.simulated_probes)') >= 0, "shellRefresh does not render the banners");
 var app = fs.readFileSync(path.join(__dirname, "web", "app.js"), "utf8");
+assert(shell.indexOf('shellRenderNotice("nonbgp-banner", ov && ov.nonbgp_warning)') >= 0 && app.indexOf('shellRenderNotice("nonbgp-banner", o.nonbgp_warning)') >= 0, "the non-BGP warning (#300) is not rendered on every page");
 assert(app.indexOf('shellRenderNotice("synth-banner", o.synthesize_warning)') >= 0 && app.indexOf('shellRenderNotice("sim-banner", o.simulated_probes)') >= 0, "the dashboard does not render the banners");
 
 context.shellRenderNotice("synth-banner", "");

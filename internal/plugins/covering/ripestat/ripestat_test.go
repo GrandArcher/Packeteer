@@ -43,14 +43,14 @@ func TestCoveringReadsTheAnnouncedPrefix(t *testing.T) {
 	var gotPath, gotResource string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath, gotResource = r.URL.Path, r.URL.Query().Get("resource")
-		_, _ = w.Write([]byte(`{"status":"ok","data":{"asns":["64496"],"prefix":"198.51.100.0/23"}}`))
+		_, _ = w.Write([]byte(`{"status":"ok","data":{"asns":["64496"],"prefix":"198.51.100.0/24"}}`))
 	}))
 	defer srv.Close()
 	got, err := newClient(t, srv).Covering(context.Background(), netip.MustParseAddr("198.51.100.0"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Prefix != netip.MustParsePrefix("198.51.100.0/23") || got.Origin != 64496 {
+	if got.Prefix != netip.MustParsePrefix("198.51.100.0/24") || got.Origin != 64496 {
 		t.Fatalf("answer = %+v", got)
 	}
 	if gotPath != "/data/network-info/data.json" || gotResource != "198.51.100.0" {

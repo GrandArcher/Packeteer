@@ -844,6 +844,7 @@ function renderOverview(o) {
   if (typeof shellRenderNotice === "function") {
     shellRenderNotice("synth-banner", o.synthesize_warning);
     shellRenderNotice("sim-banner", o.simulated_probes);
+    shellRenderNotice("nonbgp-banner", o.nonbgp_warning);
   }
   renderHeadline(o);
   renderTiles(o);
@@ -1154,7 +1155,8 @@ function fetchSynthetic() {
 
 // renderSynthetic lists the prefixes learned from flow data, each labeled
 // synthetic, with the announced prefix that bounds it and the link a steered
-// one leaves through. With the mode off the section stays hidden.
+// one leaves through. With the mode off the section stays hidden. The page
+// warning banner (nonbgp_warning) says what these routes can do.
 function renderSynthetic(data) {
   var sec = document.getElementById("synthetic-section");
   var root = document.getElementById("synthetic");
@@ -1164,7 +1166,8 @@ function renderSynthetic(data) {
   clear(root);
   var note = document.getElementById("synthetic-note");
   if (note) {
-    note.textContent = "Learned from flow data, not from BGP, and never exported to a BGP peer. " +
+    note.textContent = "Learned from flow data, not from a learned BGP RIB view. " +
+      (data.mode === "inject" && data.install_routes ? "Improvements are installed as static routes on the router. " : "Nothing is installed on the router (mode " + data.mode + "). ") +
       "The default route (" + data.default_provider + ") carries every prefix that is not steered. " +
       data.tracked_blocks + " blocks tracked" + (data.dropped_blocks ? ", " + data.dropped_blocks + " not tracked (max_blocks reached)" : "") + ".";
   }
@@ -1186,7 +1189,7 @@ function renderSynthetic(data) {
     var src = el("td");
     src.appendChild(el("span", "badge muted", r.source));
     tr.appendChild(src);
-    tr.appendChild(el("td", "mono", r.upper || "not looked up"));
+    tr.appendChild(el("td", "mono", r.upper ? r.upper + (r.origin ? " (AS" + r.origin + ")" : "") : "not looked up"));
     tr.appendChild(el("td", "", String(r.blocks)));
     tr.appendChild(el("td", "", fmtTime(r.last_seen)));
     tr.appendChild(el("td", "", r.steered_to ? r.steered_to + " via " + r.next_hop : "default route"));

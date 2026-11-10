@@ -14,6 +14,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/herd"
 	"github.com/GrandArcher/Packeteer/internal/pluginhost"
 	"github.com/GrandArcher/Packeteer/internal/probe"
+	"github.com/GrandArcher/Packeteer/internal/rib"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -115,10 +116,9 @@ func newHerd(cfg *config.Config, plugins *pluginhost.Set, view herd.RIB, audit *
 	})
 }
 
-// startHerd builds herd and opens its pull API. Herd needs a view to know
-// which routes were learned (the RIB view, or the non-BGP table's announced
-// prefixes), so it is refused without one.
-func startHerd(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, view herd.RIB, audit *auth.Auditor, emit func(plugin.Event), active func() bool, log *slog.Logger) (*herd.Herd, error) {
+// startHerd builds herd and opens its pull API. Herd needs the RIB view
+// to know which routes were learned, so it is refused without one.
+func startHerd(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, view *rib.View, audit *auth.Auditor, emit func(plugin.Event), active func() bool, log *slog.Logger) (*herd.Herd, error) {
 	if !cfg.HerdOn() {
 		return nil, nil
 	}

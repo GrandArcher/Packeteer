@@ -1,22 +1,25 @@
 // Package linux is the non-BGP mode's steerer for a Linux router (#300):
 // Packeteer runs on the router itself (the container needs host networking
 // and NET_ADMIN) and keeps one static route per steered prefix in the main
-// table with `ip route`. Every route carries protocol number Proto. The
-// plugin lists and deletes only routes with that protocol, and refuses to
-// add a route for a prefix the host already routes, because `ip route
-// replace` would take that route over.
+// table over netlink. Every route carries protocol number Proto. The plugin
+// lists the main table and changes or deletes only routes with that
+// protocol, checked here rather than left to a filter of the ip tool
+// (BusyBox's, in the image, does not filter by protocol). It refuses to add
+// a route for a prefix the host already routes, because a replace would
+// take that route over.
 package linux
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/netip"
 	"runtime"
-	"strconv"
-	"strings"
 
-	"github.com/GrandArcher/Packeteer/internal/pbr"
+	"github.com/vishvananda/netlink"
+	"golang.org/x/sys/unix"
+
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -33,13 +36,30 @@ func init() { plugin.Steerers.Register(TypeName, New) }
 // Config has no keys: the routes go in the main table, tagged with Proto.
 type Config struct{}
 
-// Steerer runs ip route on this host.
-type Steerer struct {
-	plugin.Base
-	run pbr.Exec
+// routeTable is the main routing table as the steerer reaches it.
+type routeTable interface {
+	// list returns every main-table route of one family, any protocol.
+	list(family int) ([]netlink.Route, error)
+	replace(r *netlink.Route) error
+	del(r *netlink.Route) error
 }
 
-// New is the plugin factory. It validates the config and runs nothing.
+// kernel is this host's main table over netlink.
+type kernel struct{}
+
+func (kernel) list(family int) ([]netlink.Route, error) {
+	return netlink.RouteListFiltered(family, &netlink.Route{Table: unix.RT_TABLE_MAIN}, netlink.RT_FILTER_TABLE)
+}
+func (kernel) replace(r *netlink.Route) error { return netlink.RouteReplace(r) }
+func (kernel) del(r *netlink.Route) error     { return netlink.RouteDel(r) }
+
+// Steerer keeps static routes in this host's main table.
+type Steerer struct {
+	plugin.Base
+	table routeTable
+}
+
+// New is the plugin factory. It validates the config and changes nothing.
 func New(c plugin.Config, _ plugin.Env) (plugin.Steerer, error) {
 	var cfg Config
 	if err := c.Decode(&cfg); err != nil {
@@ -48,104 +68,105 @@ func New(c plugin.Config, _ plugin.Env) (plugin.Steerer, error) {
 	if runtime.GOOS != "linux" {
 		return nil, errors.New("the linux steerer runs only on Linux")
 	}
-	return &Steerer{run: pbr.HostExec}, nil
+	return &Steerer{table: kernel{}}, nil
 }
 
-func family(p netip.Prefix) string {
+func family(p netip.Prefix) int {
 	if p.Addr().Is6() {
-		return "-6"
+		return netlink.FAMILY_V6
 	}
-	return "-4"
+	return netlink.FAMILY_V4
 }
 
-// list reads the destinations of the main table for one family. With
-// onlyOurs the kernel filters to the routes that carry Proto.
-func (s *Steerer) list(ctx context.Context, fam string, onlyOurs bool) ([]netip.Prefix, error) {
-	args := []string{fam, "route", "show"}
-	if onlyOurs {
-		args = append(args, "proto", strconv.Itoa(Proto))
+// dst is a route's destination; a route with none is the default route.
+func dst(r netlink.Route, fam int) netip.Prefix {
+	if r.Dst == nil {
+		if fam == netlink.FAMILY_V6 {
+			return netip.MustParsePrefix("::/0")
+		}
+		return netip.MustParsePrefix("0.0.0.0/0")
 	}
-	out, err := s.run(ctx, args...)
+	a, ok := netip.AddrFromSlice(r.Dst.IP)
+	if !ok {
+		return netip.Prefix{}
+	}
+	ones, _ := r.Dst.Mask.Size()
+	return netip.PrefixFrom(a.Unmap(), ones).Masked()
+}
+
+// routes lists the main-table routes for p.
+func (s *Steerer) routes(p netip.Prefix) ([]netlink.Route, error) {
+	all, err := s.table.list(family(p))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("list routes: %w", err)
 	}
-	var ps []netip.Prefix
-	for _, line := range strings.Split(out, "\n") {
-		f := strings.Fields(line)
-		if len(f) == 0 {
-			continue
-		}
-		if p, ok := parseDst(f[0]); ok {
-			ps = append(ps, p)
+	var out []netlink.Route
+	for _, r := range all {
+		if dst(r, family(p)) == p {
+			out = append(out, r)
 		}
 	}
-	return ps, nil
-}
-
-// parseDst reads the destination column: a prefix, or a bare address for a
-// host route. "default" and other words are not a destination here.
-func parseDst(s string) (netip.Prefix, bool) {
-	if p, err := netip.ParsePrefix(s); err == nil {
-		return p.Masked(), true
-	}
-	if a, err := netip.ParseAddr(s); err == nil {
-		return netip.PrefixFrom(a, a.BitLen()), true
-	}
-	return netip.Prefix{}, false
+	return out, nil
 }
 
 // Install replaces nothing it does not own: a prefix with a route lacking
 // Proto is refused.
-func (s *Steerer) Install(ctx context.Context, r plugin.SteerRoute) error {
+func (s *Steerer) Install(_ context.Context, r plugin.SteerRoute) error {
 	p := r.Prefix.Masked()
-	all, err := s.list(ctx, family(p), false)
+	have, err := s.routes(p)
 	if err != nil {
 		return err
 	}
-	ours, err := s.list(ctx, family(p), true)
-	if err != nil {
-		return err
-	}
-	if has(all, p) && !has(ours, p) {
-		return fmt.Errorf("the host already has a route for %s that was not added with proto %d; remove it or leave the prefix out of the allowlist", p, Proto)
-	}
-	_, err = s.run(ctx, family(p), "route", "replace", p.String(), "via", r.NextHop.String(), "proto", strconv.Itoa(Proto))
-	return err
-}
-
-func has(ps []netip.Prefix, p netip.Prefix) bool {
-	for _, q := range ps {
-		if q == p {
-			return true
+	for _, h := range have {
+		if h.Protocol != Proto {
+			return fmt.Errorf("the host already has a route for %s that was not added with proto %d; remove it or leave the prefix out of the allowlist", p, Proto)
 		}
 	}
-	return false
+	route := &netlink.Route{
+		Dst:      &net.IPNet{IP: p.Addr().AsSlice(), Mask: net.CIDRMask(p.Bits(), p.Addr().BitLen())},
+		Gw:       r.NextHop.AsSlice(),
+		Protocol: Proto,
+		Table:    unix.RT_TABLE_MAIN,
+	}
+	if err := s.table.replace(route); err != nil {
+		return fmt.Errorf("add route %s via %s: %w", p, r.NextHop, err)
+	}
+	return nil
 }
 
-// Remove deletes the route for p that carries Proto. A route that is gone
+// Remove deletes the routes for p that carry Proto. A route that is gone
 // is not an error.
-func (s *Steerer) Remove(ctx context.Context, p netip.Prefix) error {
+func (s *Steerer) Remove(_ context.Context, p netip.Prefix) error {
 	p = p.Masked()
-	ours, err := s.list(ctx, family(p), true)
+	have, err := s.routes(p)
 	if err != nil {
 		return err
 	}
-	if !has(ours, p) {
-		return nil
+	var errs []error
+	for i := range have {
+		if have[i].Protocol != Proto {
+			continue
+		}
+		if err := s.table.del(&have[i]); err != nil {
+			errs = append(errs, fmt.Errorf("delete route %s: %w", p, err))
+		}
 	}
-	_, err = s.run(ctx, family(p), "route", "del", p.String(), "proto", strconv.Itoa(Proto))
-	return err
+	return errors.Join(errs...)
 }
 
 // Owned lists the routes that carry Proto, both families.
-func (s *Steerer) Owned(ctx context.Context) ([]netip.Prefix, error) {
+func (s *Steerer) Owned(context.Context) ([]netip.Prefix, error) {
 	var out []netip.Prefix
-	for _, fam := range []string{"-4", "-6"} {
-		ps, err := s.list(ctx, fam, true)
+	for _, fam := range []int{netlink.FAMILY_V4, netlink.FAMILY_V6} {
+		all, err := s.table.list(fam)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("list routes: %w", err)
 		}
-		out = append(out, ps...)
+		for _, r := range all {
+			if r.Protocol == Proto {
+				out = append(out, dst(r, fam))
+			}
+		}
 	}
 	return out, nil
 }

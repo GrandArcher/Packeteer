@@ -1,9 +1,9 @@
 // Package nonbgp is the flow-driven mode for a site with two internet
 // links whose router has no BGP (#300). The Table tracks the destinations
 // flow records show as synthetic prefixes, and the Steer controller turns
-// the decision engine's improvements into static routes on the router. A
-// synthetic prefix is never exported to a BGP peer: nothing in this
-// package speaks BGP.
+// the decision engine's improvements into static routes on the router.
+// Nothing in this package speaks BGP, but a router that redistributes
+// static routes exports them (docs/nonbgp.md).
 package nonbgp
 
 import (
@@ -56,8 +56,9 @@ type Options struct {
 	Log *slog.Logger
 }
 
-// Route is one synthetic prefix: the smallest prefix that holds every
-// active block inside one announced prefix, within WidenBits of the floor.
+// Route is one synthetic prefix: the smallest prefix that holds active
+// blocks inside one announced prefix, within WidenBits of the floor, with at
+// least as many active blocks as idle ones.
 type Route struct {
 	Prefix netip.Prefix `json:"prefix"`
 	// Upper is the announced prefix that bounds Prefix, and Origin its
@@ -248,8 +249,9 @@ func (t *Table) recomputeLocked() {
 	}
 	ordered := make([]*group, 0, len(groups))
 	for _, g := range groups {
-		g.syn = commonPrefix(g.blocks)
-		ordered = append(ordered, g)
+		for _, part := range dense(g.blocks) {
+			ordered = append(ordered, &group{blocks: part, upper: g.upper, origin: g.origin, syn: commonPrefix(part)})
+		}
 	}
 	// Blocks under different announced prefixes group apart, so one group's
 	// prefix can hold another's. Widest first, a nested group joins the
@@ -287,6 +289,27 @@ func (t *Table) recomputeLocked() {
 	t.routes = routes
 }
 
+// dense splits blocks so that the smallest prefix holding each part has at
+// least as many blocks with flow as without. A route then never moves more
+// unmeasured address space than measured: the probes measured targets in
+// the active blocks only.
+func dense(blocks []netip.Prefix) [][]netip.Prefix {
+	p := commonPrefix(blocks)
+	if 2*len(blocks) >= 1<<(blocks[0].Bits()-p.Bits()) {
+		return [][]netip.Prefix{blocks}
+	}
+	low, _ := p.Addr().Prefix(p.Bits() + 1)
+	var a, b []netip.Prefix
+	for _, blk := range blocks {
+		if low.Contains(blk.Addr()) {
+			a = append(a, blk)
+		} else {
+			b = append(b, blk)
+		}
+	}
+	return append(dense(a), dense(b)...)
+}
+
 // commonPrefix is the smallest prefix that holds every block.
 func commonPrefix(blocks []netip.Prefix) netip.Prefix {
 	p := blocks[0]
@@ -315,32 +338,6 @@ func (t *Table) Has(p netip.Prefix) bool {
 	defer t.mu.RUnlock()
 	_, ok := t.routes[p.Masked()]
 	return ok
-}
-
-// Announced is the announced prefix that bounds the synthetic prefix p:
-// the only form of it that may leave this site (#300). It reports false
-// when p is not tracked or no lookup answered.
-func (t *Table) Announced(p netip.Prefix) (plugin.Announced, bool) {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	r, ok := t.routes[p.Masked()]
-	if !ok || !r.Upper.IsValid() {
-		return plugin.Announced{}, false
-	}
-	return plugin.Announced{Prefix: r.Upper, Origin: r.Origin}, true
-}
-
-// IsAnnounced reports whether p is the announced prefix of a current
-// synthetic prefix, and its origin AS.
-func (t *Table) IsAnnounced(p netip.Prefix) (origin uint32, ok bool) {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	for _, r := range t.routes {
-		if r.Upper == p.Masked() {
-			return r.Origin, true
-		}
-	}
-	return 0, false
 }
 
 // Fill gives Decide what a RIB would: every synthetic prefix with a

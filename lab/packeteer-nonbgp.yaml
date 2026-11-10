@@ -1,0 +1,46 @@
+# Lab only (#300). Documentation prefixes, private ASN. The routes this
+# installs are derived from flow data, NOT from a learned BGP RIB view.
+#
+# lab/sendflow sends traffic to 203.0.113.7 (allowlisted) and 198.51.100.77
+# (not allowlisted). The fixed prober reads /lab/fixed/paths.yaml, which
+# lab/e2e-nonbgp.sh rewrites: isp-b is faster, so 203.0.113.0/24 gets a
+# static route through isp-b's gateway in the router's main table.
+mode: inject
+asn: 64512
+router_id: 192.0.2.10
+packeteer_community: "64512:666"
+local_pref: 200
+max_improvements: 5
+hold_time: 2s
+thresholds:
+  min_loss_delta_pct: 1
+  min_rtt_delta_ms: 15
+http:
+  listen: ""
+providers:
+  - name: isp-a
+    source_ip: 192.0.2.10
+    next_hop: 192.0.2.1
+  - name: isp-b
+    source_ip: 198.51.100.10
+    next_hop: 198.51.100.1
+allowlist:
+  prefixes:
+    - 203.0.113.0/24
+probe:
+  interval: 2s
+  timeout: 500ms
+probers:
+  - type: fixed
+    config:
+      file: /lab/fixed/paths.yaml
+sources:
+  - type: flow
+    config:
+      listen: 0.0.0.0:2055
+      window: 30s
+nonbgp:
+  install_routes: true
+  default_provider: isp-a
+  steerer:
+    type: linux
