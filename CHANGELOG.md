@@ -6,7 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ## [1.1.0] - 2026-11-10
 
-The v1.1 release adds three capability rows, all opt-in and off by default, and no change to an existing config: non-BGP mode, the MCP server, and RPKI-invalid only paths. The shipped config stays `mode: observe` and injection stays off by default.
+The v1.1 release adds three capability rows, non-BGP mode, the MCP server, and RPKI-invalid only paths, all opt-in and off by default, with no change to an existing config; the shipped config stays `mode: observe` and injection stays off by default.
 
 ### Added
 
