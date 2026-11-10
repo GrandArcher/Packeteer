@@ -17,6 +17,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/plugins/exporter/snmpagent"
 	"github.com/GrandArcher/Packeteer/internal/plugins/federation/mtls"
 	"github.com/GrandArcher/Packeteer/internal/plugins/grpcplugin"
+	hijackfile "github.com/GrandArcher/Packeteer/internal/plugins/hijackfeed/file"
 	"github.com/GrandArcher/Packeteer/internal/plugins/inventory/invcommon"
 	"github.com/GrandArcher/Packeteer/internal/plugins/inventory/netbox"
 	"github.com/GrandArcher/Packeteer/internal/plugins/inventory/peeringmanager"
@@ -128,6 +129,7 @@ func TestConfigDocCoversStructs(t *testing.T) {
 		rtr.Config{},
 		irrwhois.Config{},
 		irrfile.Config{},
+		hijackfile.Config{},
 		fabricicmp.Config{},
 		birdseye.Config{},
 		birdseye.ServerConfig{},

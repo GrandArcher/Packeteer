@@ -68,6 +68,19 @@ func TestNLNOGRingOffByDefault(t *testing.T) {
 	}
 }
 
+func TestQratorRadarOffByDefault(t *testing.T) {
+	if _, ok := urls(New(Config{}).ASN(64500))["Qrator Radar"]; ok {
+		t.Fatal("Qrator Radar shown by default")
+	}
+	s := New(Config{Enabled: []string{"qrator_radar"}})
+	if got := urls(s.ASN(64500)); !reflect.DeepEqual(got, map[string]string{"Qrator Radar": "https://radar.qrator.net/as/64500"}) {
+		t.Fatalf("asn = %v", got)
+	}
+	if n := len(s.Prefix(netip.MustParsePrefix("198.51.100.0/24"))); n != 0 {
+		t.Fatalf("Qrator Radar has no prefix page, got %d links", n)
+	}
+}
+
 func TestEnabledListSelectsSites(t *testing.T) {
 	s := New(Config{Enabled: []string{"bgptools"}})
 	if got := urls(s.ASN(64496)); !reflect.DeepEqual(got, map[string]string{"bgp.tools": "https://bgp.tools/as/64496"}) {

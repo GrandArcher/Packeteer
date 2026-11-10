@@ -170,3 +170,44 @@ func TestSetCovering(t *testing.T) {
 		t.Fatalf("a stale source answered %+v", got)
 	}
 }
+
+type vrpSource struct {
+	plugin.Base
+	*VRPs
+}
+
+func (v vrpSource) Status() plugin.RPKIStatus {
+	return plugin.RPKIStatus{Source: "bench", Up: true, VRPs: v.Len(), Updated: time.Unix(0, 0)}
+}
+
+// BenchmarkSetLookup is the per-route cost of the rpki.only_invalid scan
+// (#401), which looks up every selected route each scan: 500k /56
+// payloads in 2001:db8::/32, and /56 lookups that are half covered, half
+// not.
+func BenchmarkSetLookup(b *testing.B) {
+	const n = 500000
+	vrps := NewVRPs()
+	changes := make([]Change, 0, n)
+	for i := range n {
+		changes = append(changes, Change{Prefix: benchPrefix(i), MaxLen: 56, ASN: 64500})
+	}
+	vrps.Apply(changes)
+	s := NewSet([]plugin.RPKI{vrpSource{VRPs: vrps}})
+	routes := make([]netip.Prefix, 2*n)
+	for i := range routes {
+		routes[i] = benchPrefix(i)
+	}
+	if s.Lookup(routes[0], 64501).State != plugin.RPKIInvalid || s.Lookup(routes[n], 64501).State != plugin.RPKINotFound {
+		b.Fatal("the payloads do not cover the first half of the routes")
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		s.Lookup(routes[i%len(routes)], 64501)
+	}
+}
+
+// benchPrefix is the i-th /56 in 2001:db8::/32.
+func benchPrefix(i int) netip.Prefix {
+	return netip.PrefixFrom(netip.AddrFrom16([16]byte{0x20, 0x01, 0x0d, 0xb8, byte(i >> 16), byte(i >> 8), byte(i)}), 56)
+}

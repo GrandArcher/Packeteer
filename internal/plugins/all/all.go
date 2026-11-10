@@ -16,6 +16,7 @@ import (
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/exporter/snmpagent"       // read-only SNMP agent with the Packeteer MIB
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/federation/mtls"          // mTLS multi-POP federation
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/grpcplugin"               // grpc prober/source/notifier (long-running)
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/hijackfeed/file"          // local hijack incident file (evidence only)
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/inventory/netbox"         // NetBox provider inventory (read-only)
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/inventory/peeringmanager" // Peering Manager provider inventory (read-only)
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/irr/file"                 // local IRR file source (RPSL or bgpq4)
