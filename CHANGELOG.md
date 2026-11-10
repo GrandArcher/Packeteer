@@ -7,6 +7,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 ### Added
 
 - MCP server for AI assistants: opt-in `mcp` block, `POST /mcp` with 17 read tools, `packeteer-mcp` stdio bridge, `mcp` and `mcp:write` token scopes, maintenance write tools off by default (#302).
+- `rpki.only_invalid` reports RPKI-invalid only paths, classed stale ROA, hijack, or unclear with evidence; opt-in SLURM exceptions are written only after admin approval (#401).
 
 ## [1.0.1] - 2026-11-09
 

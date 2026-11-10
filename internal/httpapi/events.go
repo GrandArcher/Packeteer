@@ -47,6 +47,9 @@ var eventHelp = map[string]string{
 	"herd":            "docs/herd.md",
 	"rpki":            "docs/CONFIG.md#rpki",
 
+	"rpki_only_invalid": "docs/only-invalid.md",
+	"rpki_slurm":        "docs/only-invalid.md#slurm-exceptions",
+
 	"ixp_api_key":         "docs/design/ixp.md",
 	"ixp_fabric":          "docs/design/ixp.md",
 	"ixp_member":          "docs/design/ixp.md",

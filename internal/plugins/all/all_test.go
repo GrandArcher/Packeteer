@@ -34,6 +34,7 @@ func TestProgramTypesAreOnlyProbersSourcesNotifiers(t *testing.T) {
 		"leak sources":          plugin.LeakSources.Types(),
 		"sso":                   plugin.SSOs.Types(),
 		"irr":                   plugin.IRRs.Types(),
+		"hijack feeds":          plugin.HijackFeeds.Types(),
 		"rpki":                  plugin.RPKIs.Types(),
 		"lookup":                plugin.Lookups.Types(),
 		"inventory":             plugin.Inventories.Types(),

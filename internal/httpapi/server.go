@@ -37,6 +37,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/federation"
 	"github.com/GrandArcher/Packeteer/internal/inbound"
 	"github.com/GrandArcher/Packeteer/internal/linkout"
+	"github.com/GrandArcher/Packeteer/internal/onlyinvalid"
 	"github.com/GrandArcher/Packeteer/internal/pluginhost"
 	"github.com/GrandArcher/Packeteer/internal/ringlg"
 	"github.com/GrandArcher/Packeteer/internal/threatfeed"
@@ -156,23 +157,26 @@ type Server struct {
 	threatFeeds  func() threatfeed.Status
 	leaks        LeakControl
 	// registry is registry hygiene (#289). Nil until SetRegistry.
-	registry   atomic.Pointer[registryHolder]
-	federation func() federation.Status
-	fedPush    FederationPusher
-	ha         func() plugin.ElectorStatus
-	export     func() []export.Stat
-	srcErrs    func() []pluginhost.SourceReadErrors
-	editor     ConfigEditor
-	firstRun   FirstRun
-	dashboards plugin.DashboardStore
-	subs       Subscriptions
-	upgrade    UpgradeControl
-	linkouts   *linkout.Set
-	ringLG     *ringlg.Client
-	atlas      *atlas.Client
-	sysFacts   func() SystemFacts
-	usage      UsageReader
-	setup      atomic.Pointer[Setup]
+	registry atomic.Pointer[registryHolder]
+	// onlyInvalid is the RPKI-invalid only path report (#401). Nil until
+	// SetOnlyInvalid.
+	onlyInvalid atomic.Pointer[onlyinvalid.Service]
+	federation  func() federation.Status
+	fedPush     FederationPusher
+	ha          func() plugin.ElectorStatus
+	export      func() []export.Stat
+	srcErrs     func() []pluginhost.SourceReadErrors
+	editor      ConfigEditor
+	firstRun    FirstRun
+	dashboards  plugin.DashboardStore
+	subs        Subscriptions
+	upgrade     UpgradeControl
+	linkouts    *linkout.Set
+	ringLG      *ringlg.Client
+	atlas       *atlas.Client
+	sysFacts    func() SystemFacts
+	usage       UsageReader
+	setup       atomic.Pointer[Setup]
 	// suggest lists next hops the operator may accept as a draft provider
 	// row (#102). Nil means there is nothing to suggest. It must not write
 	// config or announce.

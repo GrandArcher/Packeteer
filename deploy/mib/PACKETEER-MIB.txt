@@ -20,13 +20,17 @@ IMPORTS
         FROM SNMPv2-CONF;
 
 packeteer MODULE-IDENTITY
-    LAST-UPDATED "202611040000Z"
+    LAST-UPDATED "202611090000Z"
     ORGANIZATION "Packeteer project"
     CONTACT-INFO
         "https://github.com/GrandArcher/Packeteer"
     DESCRIPTION
         "Status and notifications of a Packeteer BGP performance
          controller. Nothing in this module is writable."
+    REVISION "202611090000Z"
+    DESCRIPTION
+        "Adds pktrRpkiOnlyInvalid, pktrRpkiOnlyInvalidCleared, and
+         pktrRpkiSlurmReview."
     REVISION "202611040000Z"
     DESCRIPTION
         "Adds pktrLeakUnconfirmed."
@@ -1011,6 +1015,35 @@ pktrLeakUnconfirmed NOTIFICATION-TYPE
          collector relay such a route, so nothing is withdrawn or held until
          an operator confirms it."
     ::= { pktrNotifications 72 }
+
+pktrRpkiOnlyInvalid NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event rpki.only_invalid. Every learned route of a prefix is
+         RPKI-invalid and no valid or not-found route covers it, so strict
+         ROV would black-hole it. Classed as a likely stale ROA, a likely
+         hijack, or unclear. Report only."
+    ::= { pktrNotifications 73 }
+
+pktrRpkiOnlyInvalidCleared NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event rpki.only_invalid_cleared. The prefix is no longer an
+         RPKI-invalid only path. Resolves rpki.only_invalid."
+    ::= { pktrNotifications 74 }
+
+pktrRpkiSlurmReview NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event rpki.slurm_review. An approved SLURM exception is older than
+         its review_after and is due for review."
+    ::= { pktrNotifications 75 }
 -- Conformance.
 
 pktrCompliances OBJECT IDENTIFIER ::= { pktrConformance 1 }
@@ -1081,7 +1114,9 @@ pktrNotificationsGroup NOTIFICATION-GROUP
         pktrBgpSessionNotEstablished, pktrHerdRestarted, pktrRpkiStale,
         pktrRpkiFresh, pktrSteerUnverified, pktrSteerVerified,
         pktrOverloadRefused, pktrOverloadShed, pktrOverloadCleared,
-        pktrMedOverridden, pktrLeakUnconfirmed
+        pktrMedOverridden, pktrLeakUnconfirmed,
+        pktrRpkiOnlyInvalid, pktrRpkiOnlyInvalidCleared,
+        pktrRpkiSlurmReview
     }
     STATUS current
     DESCRIPTION

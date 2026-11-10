@@ -850,6 +850,34 @@ A source that was answering and goes stale or empty emits `rpki.stale` (warning)
 | `sources` | none | Origin-validation plugins, tried in order. The first with a fresh, non-empty cache answers, including one whose server is unreachable but whose data time (`rpki_updated`) is inside `staleness`; a stale or empty source is skipped, so a second server takes over. Each is a plugin entry (`type`, optional `name`, `config`): `rtr` ([RPKI source `rtr`](#rpki-source-rtr)) or `json` ([RPKI source `json`](#rpki-source-json)). At least one is required when enabled. `ripestat` is refused here. |
 | `avoid_invalid` | `false` | `true` refuses a new improvement onto a provider with an `invalid` learned path for the prefix. With several paths from one provider (add-path, or BMP from several routers), the decision candidate carries the worst state, so one invalid path is enough. An active improvement on a path that becomes invalid is retired through the normal path. Off changes nothing. |
 | `display_fallback` | none | A plugin entry asked only for the learned paths on `/api/prefixes` and the prefix card, and only when no source has fresh data. Only `ripestat` is accepted ([RPKI display fallback `ripestat`](#rpki-display-fallback-ripestat)). Its answers never reach decisions, `avoid_invalid`, leak watch, or the exchange counts. |
+| `only_invalid` | none | Report RPKI-invalid routes that are the only path to a destination, with evidence ([`rpki.only_invalid`](#rpkionly_invalid)). |
+
+### `rpki.only_invalid`
+
+RPKI-invalid only paths (#401, not on a public edge). Off by default; needs `rpki.enabled`. Every 5 minutes Packeteer lists the prefixes whose every learned path is RPKI-invalid and that no valid or not-found learned route covers, classes each as a likely stale ROA, a likely hijack, or unclear from IRR, route age, the ROAs, the providers, and hijack feeds, and raises `rpki.only_invalid`. It only reports: nothing is announced or withdrawn and ROV policy is unchanged. An optional SLURM (RFC 8416) exception is written only after an admin approves the exact entry. See [only-invalid.md](only-invalid.md). A change needs a restart.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `enabled` | `false` | `true` turns the report on. A block that is not enabled must not set `hijack_feeds` or `slurm`. |
+| `stable_after` | `720h` | How long the oldest learned path with the origin must be in the RIB to count as a stable origin (+2). 1h-8760h. |
+| `hijack_feeds` | none | `hijack_feed` plugin entries asked for incidents for each case: `file` ([hijack feed `file`](#hijack-feed-file)). Instance names must differ. Evidence only. |
+| `slurm` | none | Allows proposing SLURM exceptions, with the keys below. Without it no exception can be proposed. |
+
+`slurm` keys:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `path` | none | Required. Absolute path of the SLURM file Packeteer writes, on a volume the RTR cache also reads (Routinator `--exceptions`, StayRTR `-slurm`, FORT `--slurm`). Its directory must exist. Mount the directory, not the file: the file is replaced by a rename, which fails on a file bind mount. A file that is not valid RFC 8416 is never overwritten. |
+| `prefixes` | none | Required. Only a case inside one of these prefixes may get an exception; an AS0 filter also needs every AS0 ROA it names inside them. No default route. Refused with `ixp`. |
+| `review_after` | `720h` | An exception older than this raises `rpki.slurm_review` once per run. 24h-8760h, or `0s` for no reminder. An exception is not re-checked once its case clears. |
+
+### Hijack feed `file`
+
+Reads a mounted JSON file `{"incidents": [{"prefix": "...", "origin": 64511, "detail": "..."}]}`. `origin` and `detail` are optional. An incident counts for a case when its prefix overlaps the case's prefix. The file is read again when its size or modification time changes; a file that does not parse keeps the last good list, and a missing file, or a broken one with no good read before, is no evidence. At most 16 MiB and 100,000 incidents.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `path` | none | Required. The file inside the container, for example `/etc/packeteer/hijacks.json`. |
 
 ### `irr`
 

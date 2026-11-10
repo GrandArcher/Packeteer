@@ -92,6 +92,9 @@ type Set struct {
 	// IRRSources answer IRR lookups (irr.sources, #214). They are asked in
 	// order and never announce.
 	IRRSources []Instance[plugin.IRR]
+	// HijackFeeds report hijack incidents (rpki.only_invalid.hijack_feeds,
+	// #401). Evidence only: they never announce or change a decision.
+	HijackFeeds []Instance[plugin.HijackFeed]
 	// RegistryCheckers are the registry.sources (#289): they read PeeringDB
 	// and apply a change a person confirmed. None announces.
 	RegistryCheckers []Instance[plugin.RegistryChecker]
@@ -218,6 +221,9 @@ func Build(cfg *config.Config, opts Options) (*Set, error) {
 	if cfg.IRROn() {
 		s.IRRSources = build(plugin.IRRs, "irr.sources", cfg.IRR.Sources, base, &errs)
 	}
+	if cfg.OnlyInvalidOn() {
+		s.HijackFeeds = build(plugin.HijackFeeds, "rpki.only_invalid.hijack_feeds", cfg.RPKI.OnlyInvalid.HijackFeeds, base, &errs)
+	}
 	if cfg.RegistryOn() {
 		s.RegistryCheckers = build(plugin.RegistryCheckers, "registry.sources", cfg.Registry.Sources, base, &errs)
 	}
@@ -321,6 +327,9 @@ func (s *Set) all() []namedLifecycle {
 	}
 	if s.RPKIDisplay != nil {
 		add(plugin.KindRPKI, s.RPKIDisplay.Name, s.RPKIDisplay.Plugin)
+	}
+	for _, p := range s.HijackFeeds {
+		add(plugin.KindHijackFeed, p.Name, p.Plugin)
 	}
 	for _, p := range s.IRRSources {
 		add(plugin.KindIRR, p.Name, p.Plugin)

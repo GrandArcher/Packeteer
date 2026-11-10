@@ -77,7 +77,7 @@ func tableCounts(t *testing.T, features string) (map[string]count, map[string]in
 	return byMilestone, byStatus
 }
 
-// summaryCounts reads "| v0.N | rows | done |" lines (and the bold total
+// summaryCounts reads "| vN.N | rows | done |" lines (and the bold total
 // row) from one section of a document, from the heading to the next "## ".
 func summaryCounts(t *testing.T, doc, heading string) map[string]count {
 	t.Helper()

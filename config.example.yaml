@@ -464,6 +464,21 @@ scorer:
 #         # data time is the publisher's, so keep it well above its cycle.
 #   display_fallback:
 #     type: ripestat
+#   # RPKI-invalid only paths (off by default; docs/only-invalid.md). Reports
+#   # prefixes whose every learned route is invalid, classed stale ROA,
+#   # hijack, or unclear with evidence. A SLURM (RFC 8416) exception for a
+#   # prefix in slurm.prefixes is written only after an admin approves it.
+#   only_invalid:
+#     enabled: false
+#     stable_after: 720h
+#     hijack_feeds:
+#       - type: file
+#         config:
+#           path: /etc/packeteer/hijacks.json
+#     slurm:
+#       path: /var/lib/packeteer/slurm/slurm.json
+#       prefixes: [198.51.100.0/24]
+#       review_after: 720h       # default; 0s turns the review reminder off
 
 # IRR origin check (off by default; docs/CONFIG.md#irr). Labels each learned
 # path registered, not registered, or unknown from route/route6 objects for

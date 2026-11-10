@@ -62,11 +62,19 @@
     <div id="registry-sections"></div>
     <div id="registry-findings"></div>
   </section>
+  <section id="only-invalid-body" hidden>
+    <h2>RPKI-invalid only paths</h2>
+    <p class="tag">Every learned route of these prefixes is RPKI-invalid and no valid or not-found route covers them, so strict ROV would drop the destination. Report only. An operator can propose a SLURM exception for a likely stale ROA; it is written only after an admin approves the exact entry.</p>
+    <p id="only-invalid-status" class="tag" role="status"></p>
+    <div id="only-invalid-cases"></div>
+    <div id="only-invalid-exceptions"></div>
+  </section>
 </main>
 </div>
 </div>
 <script src="/ui.js"></script>
 <script src="/shell.js"></script>
 <script src="/registry.js"></script>
+<script src="/onlyinvalid.js"></script>
 </body>
 </html>
