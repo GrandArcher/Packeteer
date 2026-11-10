@@ -345,9 +345,9 @@ func TestHeld(t *testing.T) {
 }
 
 // #401 acceptance: the review reminder fires once for an exception past
-// review_after, which defaults to 30 days, and not before.
+// review_after and not before, and with review_after 0 there is none.
 func TestReviewReminder(t *testing.T) {
-	for _, review := range []time.Duration{0, 90 * 24 * time.Hour} {
+	for _, review := range []time.Duration{0, DefaultReviewAfter, 90 * 24 * time.Hour} {
 		d, _, ev := staleDetector(t)
 		e, _, _ := newExceptions(t, d, review)
 		p, err := e.Propose(t.Context(), admin, fixture)
@@ -368,9 +368,9 @@ func TestReviewReminder(t *testing.T) {
 			}
 		}
 		list, _ := e.List()
-		if review != 0 {
+		if review != DefaultReviewAfter {
 			if len(got) != 0 || list[0].ReviewDue {
-				t.Fatalf("reminder before review_after %s: %v %+v", review, got, list)
+				t.Fatalf("review_after %s: reminders %v %+v", review, got, list)
 			}
 			continue
 		}

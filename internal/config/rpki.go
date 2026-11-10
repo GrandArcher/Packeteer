@@ -54,8 +54,9 @@ type OnlyInvalidSLURM struct {
 	Path     string   `yaml:"path"`
 	Prefixes []string `yaml:"prefixes"`
 	// ReviewAfter raises rpki.slurm_review for an exception older than
-	// it (default 720h).
-	ReviewAfter time.Duration `yaml:"review_after"`
+	// it. Omitted is onlyinvalid.DefaultReviewAfter; 0s turns the
+	// reminder off.
+	ReviewAfter *time.Duration `yaml:"review_after"`
 }
 
 // OnlyInvalidOn reports whether rpki.only_invalid is on.
@@ -96,8 +97,9 @@ func (c *Config) normalizeRPKI() {
 		if o.StableAfter == 0 {
 			o.StableAfter = onlyinvalid.DefaultStableAfter
 		}
-		if o.SLURM != nil && o.SLURM.ReviewAfter == 0 {
-			o.SLURM.ReviewAfter = onlyinvalid.DefaultReviewAfter
+		if o.SLURM != nil && o.SLURM.ReviewAfter == nil {
+			d := onlyinvalid.DefaultReviewAfter
+			o.SLURM.ReviewAfter = &d
 		}
 		for i := range o.HijackFeeds {
 			o.HijackFeeds[i].Type = strings.TrimSpace(o.HijackFeeds[i].Type)
@@ -183,7 +185,7 @@ func (c *Config) validateOnlyInvalid(add func(string, ...any)) {
 			add("rpki.only_invalid.slurm.prefixes[%d]: a default route would allow an exception anywhere", i)
 		}
 	}
-	if s.ReviewAfter < onlyinvalid.MinReviewAfter || s.ReviewAfter > onlyinvalid.MaxReviewAfter {
-		add("rpki.only_invalid.slurm.review_after %s must be between %s and %s", s.ReviewAfter, onlyinvalid.MinReviewAfter, onlyinvalid.MaxReviewAfter)
+	if r := s.ReviewAfter; r != nil && *r != 0 && (*r < onlyinvalid.MinReviewAfter || *r > onlyinvalid.MaxReviewAfter) {
+		add("rpki.only_invalid.slurm.review_after %s must be 0s (no reminder) or between %s and %s", *r, onlyinvalid.MinReviewAfter, onlyinvalid.MaxReviewAfter)
 	}
 }

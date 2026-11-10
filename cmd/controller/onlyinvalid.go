@@ -34,7 +34,7 @@ func newOnlyInvalid(cfg *config.Config, plugins *pluginhost.Set, view *rib.View,
 	o := cfg.RPKI.OnlyInvalid
 	svc := &onlyinvalid.Service{Detector: onlyinvalid.NewDetector(deps, o.StableAfter)}
 	if s := o.SLURM; s != nil {
-		svc.Exceptions = onlyinvalid.NewExceptions(onlyinvalid.SLURMConfig{Path: s.Path, Prefixes: s.SLURMPrefixes(), ReviewAfter: s.ReviewAfter}, svc.Detector, audit)
+		svc.Exceptions = onlyinvalid.NewExceptions(onlyinvalid.SLURMConfig{Path: s.Path, Prefixes: s.SLURMPrefixes(), ReviewAfter: *s.ReviewAfter}, svc.Detector, audit)
 		if _, err := svc.Exceptions.List(); err != nil {
 			log.Error("rpki.only_invalid.slurm: proposals and approvals are refused until the file is fixed", "err", err)
 		}

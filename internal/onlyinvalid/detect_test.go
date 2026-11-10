@@ -295,27 +295,27 @@ func TestCutShortScanKeepsUninspectedCases(t *testing.T) {
 	r := newRIB()
 	v := newRPKI()
 	for i := range maxCases {
-		p := netip.PrefixFrom(netip.AddrFrom4([4]byte{198, 18, byte(i / 256), byte(i % 256)}), 32)
+		p := netip.PrefixFrom(netip.AddrFrom16([16]byte{0x20, 0x01, 0x0d, 0xb8, 6: byte(i >> 8), 7: byte(i)}), 64)
 		r.add(p.String(), "transit-a", t0.Add(-time.Hour), 64496, 64501)
-		v.vrps.Apply([]rpki.Change{{Prefix: p, MaxLen: 32, ASN: 64499}})
+		v.vrps.Apply([]rpki.Change{{Prefix: p, MaxLen: 64, ASN: 64499}})
 	}
-	last := netip.MustParsePrefix("203.0.113.0/24")
+	last := netip.MustParsePrefix("2001:db8:ffff::/48")
 	r.add(last.String(), "transit-a", t0.Add(-time.Hour), 64496, 64502)
-	v.vrps.Apply([]rpki.Change{{Prefix: last, MaxLen: 24, ASN: 64499}})
+	v.vrps.Apply([]rpki.Change{{Prefix: last, MaxLen: 48, ASN: 64499}})
 	ev := &events{}
 	d := newDetector(r, v, nil, ev)
 	d.Scan(t.Context())
 	if _, ok := d.Case(last); ok || d.Status().Note == "" {
 		t.Fatalf("first scan inspected past maxCases: %q", d.Status().Note)
 	}
-	delete(r.paths, netip.MustParsePrefix("198.18.0.0/32"))
+	delete(r.paths, netip.MustParsePrefix("2001:db8::/64"))
 	d.Scan(t.Context())
 	if _, ok := d.Case(last); !ok || len(d.Status().Cases) != maxCases || d.Status().Note != "" {
 		t.Fatalf("the case moved into range is not open: %d cases, note %q", len(d.Status().Cases), d.Status().Note)
 	}
 
-	// A new invalid prefix that sorts first pushes the last case past the
-	// cut; it stays open and no cleared event is sent.
+	// A new invalid prefix that sorts first (IPv4 before IPv6) pushes the
+	// last case past the cut; it stays open and no cleared event is sent.
 	first := netip.MustParsePrefix("192.0.2.0/24")
 	r.add(first.String(), "transit-a", t0.Add(-time.Hour), 64496, 64503)
 	v.vrps.Apply([]rpki.Change{{Prefix: first, MaxLen: 24, ASN: 64499}})
@@ -333,7 +333,7 @@ func TestCutShortScanKeepsUninspectedCases(t *testing.T) {
 
 	// Once the route is inspected again and is valid, it clears.
 	delete(r.paths, first)
-	v.vrps.Apply([]rpki.Change{{Prefix: last, MaxLen: 24, ASN: 64502}})
+	v.vrps.Apply([]rpki.Change{{Prefix: last, MaxLen: 48, ASN: 64502}})
 	before = len(ev.kinds())
 	d.Scan(t.Context())
 	if _, ok := d.Case(last); ok {

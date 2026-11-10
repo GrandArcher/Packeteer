@@ -102,8 +102,8 @@ func TestOnlyInvalidFixtures(t *testing.T) {
 	now := time.Date(2026, 11, 9, 12, 0, 0, 0, time.UTC)
 	path := filepath.Join(t.TempDir(), "slurm.json")
 	onlyInvalidAt(e, now, path, fixedAudit{})
-	// The page reads the path only as text; the recorded one is the
-	// default under the container's data directory.
+	// The page reads the path only as text; the recorded one is the path
+	// config.example.yaml uses.
 	const shown = "/var/lib/packeteer/slurm/slurm.json"
 	for _, f := range []struct {
 		file, method, target, body string

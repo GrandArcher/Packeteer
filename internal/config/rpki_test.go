@@ -90,7 +90,7 @@ func TestOnlyInvalidParses(t *testing.T) {
 		t.Fatal(err)
 	}
 	o := cfg.RPKI.OnlyInvalid
-	if !cfg.OnlyInvalidOn() || o.StableAfter != 720*time.Hour || o.HijackFeeds[0].Type != "file" || o.SLURM.ReviewAfter != 720*time.Hour {
+	if !cfg.OnlyInvalidOn() || o.StableAfter != 720*time.Hour || o.HijackFeeds[0].Type != "file" || *o.SLURM.ReviewAfter != 720*time.Hour {
 		t.Fatalf("only_invalid = %+v", o)
 	}
 	if got := o.SLURM.SLURMPrefixes(); len(got) != 2 || got[0] != netip.MustParsePrefix("198.51.100.0/24") || got[1] != netip.MustParsePrefix("2001:db8::/32") {
@@ -100,8 +100,15 @@ func TestOnlyInvalidParses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := cfg.RPKI.OnlyInvalid.SLURM.ReviewAfter; got != onlyinvalid.DefaultReviewAfter {
+	if got := *cfg.RPKI.OnlyInvalid.SLURM.ReviewAfter; got != onlyinvalid.DefaultReviewAfter {
 		t.Fatalf("review_after default = %s", got)
+	}
+	cfg, err = Parse([]byte(strings.Replace(y, "review_after: 720h", "review_after: 0s", 1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := *cfg.RPKI.OnlyInvalid.SLURM.ReviewAfter; got != 0 {
+		t.Fatalf("review_after 0s = %s, want off", got)
 	}
 }
 
@@ -119,7 +126,7 @@ func TestOnlyInvalidValidation(t *testing.T) {
 		{"no prefixes", slurm, "rpki.only_invalid.slurm.prefixes: at least one prefix is required"},
 		{"host bits", slurm + "      prefixes: [198.51.100.1/24]\n", "rpki.only_invalid.slurm.prefixes[0]: 198.51.100.1/24 has host bits set"},
 		{"default route", slurm + "      prefixes: [0.0.0.0/0]\n", "rpki.only_invalid.slurm.prefixes[0]: a default route"},
-		{"short review_after", slurm + "      prefixes: [198.51.100.0/24]\n      review_after: 1h\n", "rpki.only_invalid.slurm.review_after 1h0m0s must be between 24h0m0s and 8760h0m0s"},
+		{"short review_after", slurm + "      prefixes: [198.51.100.0/24]\n      review_after: 1h\n", "rpki.only_invalid.slurm.review_after 1h0m0s must be 0s (no reminder) or between 24h0m0s and 8760h0m0s"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

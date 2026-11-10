@@ -46,7 +46,7 @@ With `rpki.only_invalid.slurm`, Packeteer can propose a SLURM (RFC 8416) local e
 
 1. An operator proposes one for an open case: `POST /api/rpki/only-invalid/propose` with `{"prefix":"198.51.100.0/24"}`, or **Propose exception** on the Registry page. Only a case classed `stale_roa` and inside `slurm.prefixes` qualifies. The answer has the exact SLURM JSON to be added, the evidence, the validity before and after (computed from the covering ROAs), and a digest. Nothing is written.
 2. An admin reviews the JSON and the evidence and approves: `POST /api/rpki/exceptions` with `{"id":"<proposal id>","digest":"<digest>"}`, or **Approve and write**. The case must still be open and classed `stale_roa`, and the entries built from the current ROAs must still match the digest; if the ROAs changed, approval is refused and the operator proposes again. A proposal can be approved for 1 hour.
-3. Packeteer adds the entries to `slurm.path`, replacing the file atomically, mode 0644. Entries already in the file, including ones written by hand, are kept. A file that is not valid RFC 8416 is never overwritten: proposals and approvals are refused until it is fixed.
+3. Packeteer adds the entries to `slurm.path`, replacing the file atomically (a rename, so mount the directory, not the file), mode 0644. Entries already in the file, including ones written by hand, are kept. A file that is not valid RFC 8416 is never overwritten: proposals and approvals are refused until it is fixed.
 4. `DELETE /api/rpki/exceptions/<id>` (admin) removes one entry.
 
 The entry is a `prefixAssertion` for exactly the prefix and the observed origin (`maxPrefixLength` is the prefix length), which keeps every other origin invalid. When every ROA covering the prefix is AS0 (RFC 7607), the stale data is those payloads, and the entry is a `prefixFilter` for each AS0 ROA's prefix with `asn` 0, which makes the route `notfound`. A filter drops every payload under the ROA's prefix, so a case whose AS0 ROA is wider than `slurm.prefixes` is refused. `slurm` is refused with an `ixp` block: IXP mode may not change member routing.
@@ -55,7 +55,7 @@ Each entry's `comment` is `packeteer audit=<id> date=<time>: ...`, where `<id>` 
 
 The RTR cache reads the file from a shared volume: Routinator with `--exceptions <path>`, StayRTR with `-slurm <path>`, FORT with `--slurm <path>`. `GET /api/rpki/slurm` returns the file (or an empty RFC 8416 document) for an operator who installs it by hand. Once the cache serves the exception, the route turns valid (not found for an AS0 filter) and the case clears.
 
-Each Packeteer exception older than `slurm.review_after` (default 720h) raises `rpki.slurm_review` once per run, counted from the date in its comment, and the exception shows `review_due`. Once a case clears, Packeteer does not look at its prefix again, so a later hijack feed incident or IRR change raises nothing; the reminder is the check.
+Each Packeteer exception older than `slurm.review_after` (default 720h; `0s` turns it off) raises `rpki.slurm_review` once per run, counted from the date in its comment, and the exception shows `review_due`. Once a case clears, Packeteer does not look at its prefix again, so a later hijack feed incident or IRR change raises nothing; the reminder is the check.
 
 ## Config
 
