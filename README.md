@@ -65,17 +65,17 @@ The image is `ghcr.io/grandarcher/packeteer`, linux/amd64 and linux/arm64. It ru
 
 | Tag | What it is |
 |---|---|
-| `1.0.1` | The last release. Pin this one. |
+| `1.1.0` | The last release. Pin this one. |
 | `latest` | The same release, updated when a release tag is published. |
 | `edge` | The build from `main`. |
 
 **Step by step: [docs/quickstart.md](docs/quickstart.md).** It goes from an empty directory to a running instance in observe, with a first run on loopback, `docker run` and Compose, and the stop. CI runs every command on that page against the image built from the same commit.
 
-The short version, pinned to 1.0.1, the last release. Take the example config from the same tag as the image: the file on `main` can carry keys a release does not know yet, and unknown keys refuse startup. For `:edge`, use `main` in both places.
+The short version, pinned to 1.1.0, the last release. Take the example config from the same tag as the image: the file on `main` can carry keys a release does not know yet, and unknown keys refuse startup. For `:edge`, use `main` in both places.
 
 ```sh
-IMAGE=ghcr.io/grandarcher/packeteer:1.0.1
-curl -fsSLo config.yaml https://raw.githubusercontent.com/GrandArcher/Packeteer/v1.0.1/config.example.yaml
+IMAGE=ghcr.io/grandarcher/packeteer:1.1.0
+curl -fsSLo config.yaml https://raw.githubusercontent.com/GrandArcher/Packeteer/v1.1.0/config.example.yaml
 # Edit providers and source IPs. Leave mode: observe.
 mkdir -p plugins
 
@@ -96,7 +96,7 @@ docker run -d --name packeteer --network host \
 
 ```sh
 docker run --rm -e PACKETEER_CONFIG=/etc/packeteer/config.example.yaml \
-  ghcr.io/grandarcher/packeteer:1.0.1 -check
+  ghcr.io/grandarcher/packeteer:1.1.0 -check
 ```
 
 The default config path inside the container is `/etc/packeteer/config.yaml` (`PACKETEER_CONFIG`, or `-config`).
@@ -107,7 +107,7 @@ Without `NET_RAW`, or where ICMP is filtered, the probe falls back to TCP port 4
 
 The `packeteer-data` volume keeps report history (`storage: {type: sqlite}`, file `/var/lib/packeteer/packeteer.db`) across container restarts and upgrades, and the open billing period of SNMP 95th-percentile samples when telemetry is configured. Without the volume, reports and that window start empty after the container is recreated. Leave out `storage` to turn history off; the probe and decision loop does not depend on it, and the 95th window then lives in memory only. Sign-in on by default (no `auth.enabled`, no `PACKETEER_HTTP_USER`) adds `sqlite` when `storage` is left out.
 
-[docker-compose.yml](docker-compose.yml) runs the same container with Compose: host networking, the two capabilities, the mounts, and `restart: unless-stopped` ([quickstart, step 5](docs/quickstart.md#5-or-run-it-with-compose)). Its `image` line pins `ghcr.io/grandarcher/packeteer:1.0.1`; use `:edge` for the build from `main`. There is no `ports:` map: with host networking, `http.listen` is already an address on the host. Stop with `docker compose stop -t 30` (see [Rollback](#rollback)).
+[docker-compose.yml](docker-compose.yml) runs the same container with Compose: host networking, the two capabilities, the mounts, and `restart: unless-stopped` ([quickstart, step 5](docs/quickstart.md#5-or-run-it-with-compose)). Its `image` line pins `ghcr.io/grandarcher/packeteer:1.1.0`; use `:edge` for the build from `main`. There is no `ports:` map: with host networking, `http.listen` is already an address on the host. Stop with `docker compose stop -t 30` (see [Rollback](#rollback)).
 
 ## Minimum config
 
@@ -182,6 +182,7 @@ Leave graceful restart off on the session. Guides:
 - [docs/roi.md](docs/roi.md) - worksheet to estimate the return: transit cost, commit relief, and measured gain
 - [docs/walkthrough.md](docs/walkthrough.md) - observe, suggest, inject, and roll back on a simulated FRR edge, then the same steps on a real one. CI runs every command
 - [docs/nonbgp.md](docs/nonbgp.md) - flow-driven static routes for a dual-ISP site whose router has no BGP (opt-in, read the warning first)
+- [docs/only-invalid.md](docs/only-invalid.md) - RPKI-invalid routes that are the only path to a destination, classed likely stale ROA or likely hijack with evidence, and opt-in admin-approved SLURM exceptions
 - [docs/mikrotik.md](docs/mikrotik.md) - RouterOS 7 iBGP, filters, Traffic Flow, port mirroring, and SNMP
 - [docs/frr.md](docs/frr.md) - FRR; the walkthrough lab runs this configuration in CI
 - [docs/junos.md](docs/junos.md) - Juniper Junos
@@ -249,7 +250,7 @@ docker compose stop -t 30
 
 `http.listen` defaults to `127.0.0.1:8080`. Set it to `""`, or set `PACKETEER_HTTP_LISTEN=off`, to disable it. Any other value of `PACKETEER_HTTP_LISTEN` replaces `http.listen`. The image exposes port 8080 as documentation; with host networking you do not publish it.
 
-The server is read-only (GET and HEAD), except on-demand maintenance windows (`POST` and `DELETE` on `/api/maintenance`), which need basic auth or an operator and can only exclude providers, threat mitigation rules (`POST` and `DELETE` on `/api/mitigations`), which need basic auth or an operator and announce only when `mitigation.mode` is `inject`, the troubleshooting tools (`POST` on `/api/troubleshoot/probe`, `traceroute`, and `whois`), which measure or look up and change nothing, and `/api/troubleshoot/optimize`, which only queues a learned prefix for measuring, with `upgrade.enabled`, an admin's confirmed upgrade or rollback of the Packeteer binary (`POST` on `/api/upgrade/check`, `apply`, and `rollback`; the controller withdraws every route first, [docs/ui.md](docs/ui.md#upgrade-from-the-ui)), and, with `auth`, users and API tokens. Every change is written to the audit log and sent to the notifiers. The dashboard loads no remote assets and refreshes every 5 seconds.
+The server is read-only (GET and HEAD), except on-demand maintenance windows (`POST` and `DELETE` on `/api/maintenance`), which need basic auth or an operator and can only exclude providers, threat mitigation rules (`POST` and `DELETE` on `/api/mitigations`), which need basic auth or an operator and announce only when `mitigation.mode` is `inject`, the troubleshooting tools (`POST` on `/api/troubleshoot/probe`, `traceroute`, and `whois`), which measure or look up and change nothing, and `/api/troubleshoot/optimize`, which only queues a learned prefix for measuring, `POST /mcp` with `mcp.enabled` (read tools; the maintenance write tools need `mcp.write_tools` and an `mcp:write` token, [docs/mcp.md](docs/mcp.md)), with `rpki.only_invalid.slurm`, an operator's proposal and an admin's approval or removal of a SLURM exception (`POST /api/rpki/only-invalid/propose` and `/api/rpki/exceptions`, `DELETE /api/rpki/exceptions/<id>`; they change the file the RTR cache reads, not the learned RIB, [docs/only-invalid.md](docs/only-invalid.md)), with `upgrade.enabled`, an admin's confirmed upgrade or rollback of the Packeteer binary (`POST` on `/api/upgrade/check`, `apply`, and `rollback`; the controller withdraws every route first, [docs/ui.md](docs/ui.md#upgrade-from-the-ui)), and, with `auth`, users and API tokens. Every change is written to the audit log and sent to the notifiers. The dashboard loads no remote assets and refreshes every 5 seconds.
 
 Every endpoint, with its body and the role it needs, is in [docs/API.md](docs/API.md).
 Sign-in (`auth`) is on unless `auth.enabled: false` is written or both `PACKETEER_HTTP_USER` and `PACKETEER_HTTP_PASSWORD` are set; those two keep the single basic-auth account. Setting only one of them refuses to start. The password is not read from the config file and is not written to the log.
@@ -324,7 +325,7 @@ Symptoms, log lines, and fixes: [docs/troubleshooting.md](docs/troubleshooting.m
 
 ## Features
 
-Status on main after the 1.0.1 release, capability rows per milestone and how many are done, from the summary in [docs/FEATURES.md](docs/FEATURES.md#summary):
+Status on main after the 1.1.0 release, capability rows per milestone and how many are done, from the summary in [docs/FEATURES.md](docs/FEATURES.md#summary):
 
 | Milestone | Rows | Done |
 |---|---|---|
@@ -348,13 +349,20 @@ v0.9 is about evidence, explanations, and plugins: the Why? panel and confidence
 
 v1.0 adds no capability rows. It is the pre-release audit and review pass over v0.9: fixes to the allowlist and announce path, mitigation, the BMP, flow, and policy-feed inputs, sign-in and SSO, the probe agents, HA step-down, the signed upgrade, and probe and RIB cost at 100k targets, with fuzz targets for the decoders in CI ([CHANGELOG](CHANGELOG.md#100---2026-11-04), audit #486-#494 and #501-#510, review #215). The feature counts above are unchanged. Nothing is field-proven (#54). The shipped config stays `mode: observe`, sign-in stays on by default, and injection stays off by default.
 
-v1.0.1 (this release) is a patch with no new capability rows and no new config keys: hardening of the sign-in lockout and password hashing, the external policy feed, the herd hub endpoint checks, webhook and `otlp` tokens over https, HA step-down and reload, PBR rollback, flow exporter CIDRs, and the Dockerfile builder pin ([CHANGELOG](CHANGELOG.md#101---2026-11-09), #527-#536). The feature counts above are unchanged. The shipped config stays `mode: observe`.
+v1.0.1 was a patch with no new capability rows and no new config keys: hardening of the sign-in lockout and password hashing, the external policy feed, the herd hub endpoint checks, webhook and `otlp` tokens over https, HA step-down and reload, PBR rollback, flow exporter CIDRs, and the Dockerfile builder pin ([CHANGELOG](CHANGELOG.md#101---2026-11-09), #527-#536). The feature counts above are unchanged. The shipped config stays `mode: observe`.
+
+v1.1.0 (this release) adds three capability rows, all opt-in and all partial: an MCP server for AI assistants ([docs/mcp.md](docs/mcp.md), #302), RPKI-invalid only paths with evidence and admin-approved SLURM exceptions ([docs/only-invalid.md](docs/only-invalid.md), #401, with an opt-in Qrator Radar link-out, #402), and a non-BGP mode that installs flow-driven static routes on a router with no BGP session ([docs/nonbgp.md](docs/nonbgp.md), #300). The non-BGP routes are not from a learned RIB view: an owner-approved exception for that mode only, off by default, lab-proven with the `linux` steerer only. The counts above include the three rows ([CHANGELOG](CHANGELOG.md#110---2026-11-10)). Nothing is field-proven (#54). The shipped config stays `mode: observe`, and injection stays off by default.
 
 ## Upgrades
 
 Pulling a newer image and recreating the container is the plain upgrade. Your config and the `packeteer-data` volume carry over.
 
 The Settings page can also upgrade in place (#196). It is off by default. It needs `upgrade.enabled: true`, the release public key in `upgrade.public_key` ([CONFIG.md](docs/CONFIG.md#upgrade)), an admin login (auth or basic auth), and the `packeteer-data` volume to keep the new version across restarts. The public key is printed in the [v0.6.0 release notes](https://github.com/GrandArcher/Packeteer/releases/tag/v0.6.0). Every route is withdrawn before the switch, and a release whose signature or checksum does not match is refused. Details: [docs/ui.md](docs/ui.md#upgrade-from-the-ui).
+
+### From 1.0.1 to 1.1.0
+
+- No config key changed and no existing config behaves differently. The `mcp`, `nonbgp`, and `rpki.only_invalid` blocks are off until you set them; the image now also carries the `packeteer-mcp` stdio bridge.
+- Before going back to 1.0.1, revoke `mcp` and `mcp:write` tokens: 1.0.1 ignores the token scope and treats such a token as a full API token at its role ([docs/mcp.md](docs/mcp.md#rollback)).
 
 ### From 1.0.0 to 1.0.1
 
