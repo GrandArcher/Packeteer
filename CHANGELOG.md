@@ -4,6 +4,10 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ## [Unreleased]
 
+### Added
+
+- Prefix pins (`/api/pins`, refused unless learned and allowlisted), optimization pause and resume, and alert acknowledgement over REST and as MCP write tools behind `mcp.write_tools` (#558).
+
 ## [1.1.0] - 2026-11-10
 
 The v1.1 release adds three capability rows, non-BGP mode, the MCP server, and RPKI-invalid only paths, all opt-in and off by default, with no change to an existing config; the shipped config stays `mode: observe` and injection stays off by default.

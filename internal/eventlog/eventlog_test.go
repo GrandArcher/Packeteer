@@ -208,3 +208,94 @@ func TestOnWriteSeesStoreFailureAndRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func provider(kind string, sev plugin.Severity, i int, name string) plugin.Event {
+	e := ev(kind, sev, i)
+	e.Fields = map[string]string{"provider": name}
+	return e
+}
+
+// An acknowledgement covers the open incident's problem events, not an
+// earlier incident of the same alert, and ends when the alert resolves.
+func TestAcknowledgeOpenAlertUntilResolved(t *testing.T) {
+	ctx := context.Background()
+	l := New(nil, nil, nil)
+	first := provider(plugin.EventProviderDown, plugin.SeverityCritical, 0, "transit-a")
+	key := first.DedupKey()
+	l.Record(first)
+	l.Record(provider(plugin.EventProviderUp, plugin.SeverityInfo, 1, "transit-a"))
+	if _, err := l.Acknowledge(ctx, key, "noc1", "", t0.Add(2*time.Second)); !errors.Is(err, ErrResolved) {
+		t.Fatalf("ack of a resolved alert: %v", err)
+	}
+	again := provider(plugin.EventProviderDown, plugin.SeverityCritical, 3, "transit-a")
+	l.Record(again)
+	l.Record(provider(plugin.EventProviderDown, plugin.SeverityCritical, 4, "transit-b"))
+
+	a, err := l.Acknowledge(ctx, key, "noc1", "ticket 7", t0.Add(5*time.Second))
+	if err != nil || a.By != "noc1" || a.Note != "ticket 7" || a.Key != key || !a.At.Equal(t0.Add(5*time.Second)) {
+		t.Fatalf("ack %+v %v", a, err)
+	}
+	if got, ok := l.AckOf(again); !ok || got.By != "noc1" {
+		t.Errorf("open incident not covered: %+v %v", got, ok)
+	}
+	if _, ok := l.AckOf(first); ok {
+		t.Error("an earlier incident of the alert is covered")
+	}
+	if _, ok := l.AckOf(provider(plugin.EventProviderDown, plugin.SeverityCritical, 4, "transit-b")); ok {
+		t.Error("another provider's alert is covered")
+	}
+	repeat := provider(plugin.EventProviderDown, plugin.SeverityCritical, 6, "transit-a")
+	l.Record(repeat)
+	if _, ok := l.AckOf(repeat); !ok {
+		t.Error("a repeat of the open alert is not covered")
+	}
+
+	l.Record(provider(plugin.EventProviderUp, plugin.SeverityInfo, 7, "transit-a"))
+	if _, ok := l.AckOf(repeat); ok {
+		t.Error("acknowledgement kept after the alert resolved")
+	}
+}
+
+func TestAcknowledgeNeedsAWarningOrCriticalAlert(t *testing.T) {
+	ctx := context.Background()
+	l := New(nil, nil, nil)
+	info := ev(plugin.EventImprovementAdded, plugin.SeverityInfo, 0)
+	info.Fields = map[string]string{"prefix": "198.51.100.0/24"}
+	l.Record(info)
+	for _, key := range []string{info.DedupKey(), "packeteer/provider/provider=transit-z"} {
+		if _, err := l.Acknowledge(ctx, key, "noc1", "", t0); !errors.Is(err, ErrNoAlert) {
+			t.Errorf("%s: %v", key, err)
+		}
+	}
+	if _, ok := l.AckOf(info); ok {
+		t.Error("a refused key was recorded")
+	}
+}
+
+func TestAcknowledgementsAreBounded(t *testing.T) {
+	ctx := context.Background()
+	l := New(nil, nil, nil)
+	for i := range MemoryCap + 1 {
+		l.Record(provider(plugin.EventProviderDown, plugin.SeverityCritical, i, fmt.Sprint("p", i)))
+	}
+	// p0 fell out of the ring. Ack p1..pN, then one more alert: the
+	// oldest acknowledgement (p1) is dropped.
+	for i := 1; i <= MemoryCap; i++ {
+		key := provider(plugin.EventProviderDown, plugin.SeverityCritical, i, fmt.Sprint("p", i)).DedupKey()
+		if _, err := l.Acknowledge(ctx, key, "noc1", "", t0.Add(time.Duration(i)*time.Second)); err != nil {
+			t.Fatalf("ack %d: %v", i, err)
+		}
+	}
+	extra := provider(plugin.EventProviderDown, plugin.SeverityCritical, MemoryCap+1, "extra")
+	l.Record(extra)
+	if _, err := l.Acknowledge(ctx, extra.DedupKey(), "noc1", "", t0.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	l.mu.Lock()
+	n := len(l.acks)
+	_, oldest := l.acks[provider(plugin.EventProviderDown, plugin.SeverityCritical, 1, "p1").DedupKey()]
+	l.mu.Unlock()
+	if n != MemoryCap || oldest {
+		t.Errorf("acks = %d, oldest kept %v", n, oldest)
+	}
+}

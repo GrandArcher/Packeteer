@@ -25,6 +25,7 @@ type Engine struct {
 	// explanation matches the decision it explains after a reload.
 	lastCfg Config
 	at      time.Time
+	paused  bool
 }
 
 // NewEngine returns an engine with empty state.
@@ -36,8 +37,12 @@ func NewEngine(cfg Config, scorer plugin.Scorer) *Engine {
 func (e *Engine) Evaluate(in Input, now time.Time) []Change {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	st, out := Decide(e.state, in, e.cfg, e.scorer, now)
-	e.state, e.last, e.lastCfg, e.at = st, out, e.cfg, now
+	cfg := e.cfg
+	if e.paused {
+		cfg.MaxImprovements, cfg.paused = 0, true
+	}
+	st, out := Decide(e.state, in, cfg, e.scorer, now)
+	e.state, e.last, e.lastCfg, e.at = st, out, cfg, now
 	e.lastIn, e.hasIn = in, true
 	return out.Changes
 }
@@ -166,6 +171,17 @@ func (e *Engine) Reset() {
 	defer e.mu.Unlock()
 	e.state, e.last, e.at = NewState(), Output{}, time.Time{}
 	e.lastIn, e.hasIn = Input{}, false
+}
+
+// SetPaused pauses or resumes optimization (#558). While paused, each
+// evaluation runs with a cap of zero: every improvement retires at once,
+// inside hold_time and with no cooldown, and none is made, so the
+// announcer withdraws every route on the next sync. Resuming lets the
+// next evaluation decide as usual. Reset leaves it as it is.
+func (e *Engine) SetPaused(on bool) {
+	e.mu.Lock()
+	e.paused = on
+	e.mu.Unlock()
 }
 
 // SetConfig replaces the config the next Evaluate uses. The caller passes

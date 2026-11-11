@@ -1052,8 +1052,8 @@ Model Context Protocol endpoint for AI assistants (#302, [mcp.md](mcp.md)). Off 
 
 | Key | Default | Meaning |
 |---|---|---|
-| `enabled` | `false` | Serves `POST /mcp` on `http.listen` with the 17 read tools. |
-| `write_tools` | `false` | Also lists the write tools (`maintenance_open`, `maintenance_close`) to a token with the `mcp:write` scope and a role that may call the matching REST route. Needs `enabled`, and `auth` for the scoped token. |
+| `enabled` | `false` | Serves `POST /mcp` on `http.listen` with the 19 read tools. |
+| `write_tools` | `false` | Also lists the write tools (`maintenance_open`, `maintenance_close`, `pin_prefix`, `unpin_prefix`, `optimization_pause`, `optimization_resume`, `alert_acknowledge`) to a token with the `mcp:write` scope and a role that may call the matching REST route. Needs `enabled`, and `auth` for the scoped token. |
 | `rate_per_minute` | `120` | Requests per user per minute, 1 to 6000. Past it `POST /mcp` answers `429`. |
 
 ```yaml

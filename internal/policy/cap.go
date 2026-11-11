@@ -37,7 +37,7 @@ func trimToCap(st State, decIdx map[netip.Prefix]*Decision, byPrefix map[netip.P
 		}
 		return netpfx.Less(items[j].p, items[i].p)
 	})
-	reason := fmt.Sprintf("max_improvements (%d) reached", cfg.MaxImprovements)
+	reason := cfg.capReason()
 	for _, it := range items {
 		if len(st.Improvements) <= cfg.MaxImprovements {
 			break
@@ -48,6 +48,14 @@ func trimToCap(st State, decIdx map[netip.Prefix]*Decision, byPrefix map[netip.P
 			d.Action, d.Reason, d.Current = ActionRetire, reason, imp.Native
 		}
 	}
+}
+
+// capReason is why a move did not fit under the cap.
+func (c Config) capReason() string {
+	if c.paused {
+		return "optimization paused"
+	}
+	return fmt.Sprintf("max_improvements (%d) reached", c.MaxImprovements)
 }
 
 // rankOf is the admission lane of an improvement already in the table.

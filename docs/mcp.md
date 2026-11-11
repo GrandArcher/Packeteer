@@ -1,13 +1,13 @@
 # MCP server for AI assistants
 
-Packeteer can serve the [Model Context Protocol](https://modelcontextprotocol.io) so an AI assistant (Claude, Cursor, and others that speak MCP) can read its state. It is a thin layer over the REST API ([API.md](API.md)): each tool is one fixed REST call made as the signed-in caller, so roles, validation, and the audit log are the API's. It never announces anything. Off by default (#302).
+Packeteer can serve the [Model Context Protocol](https://modelcontextprotocol.io) so an AI assistant (Claude, Cursor, and others that speak MCP) can read its state. It is a thin layer over the REST API ([API.md](API.md)): each tool is one fixed REST call made as the signed-in caller, so roles, validation, and the audit log are the API's. It announces nothing itself: the one write tool that can lead to an announcement, `pin_prefix`, goes through the same rails as a static rule. Off by default (#302).
 
 ## Turn it on
 
 ```yaml
 mcp:
   enabled: true
-  # write_tools: false      # maintenance windows; see "Write tools"
+  # write_tools: false      # see "Write tools"
   # rate_per_minute: 120    # per user
 ```
 
@@ -44,6 +44,8 @@ All are GET calls. A tool with an argument rejects unknown, missing, or mistyped
 | `quarantine` | `/api/quarantine` |
 | `leaks` | `/api/leaks` |
 | `maintenance_windows` | `/api/maintenance` |
+| `pins` | `/api/pins`: prefixes pinned through the API |
+| `optimization_status` | `/api/optimization`: whether optimization is paused |
 | `herd_overview` | `/api/herd/overview` |
 | `herd_events` | `/api/herd/events` (`loss`, `window`) |
 | `herd_outside` | `/api/herd/outside` (`prefix`, `origin_asn`) |
@@ -56,16 +58,27 @@ Off by default. A write tool is listed and callable only when all of these hold:
 
 - `mcp.write_tools: true`.
 - `auth` is on and the token has the `mcp:write` scope (`"scope":"mcp:write"` when you create it). A session, the basic-auth account, an unscoped token, or an `mcp` token never gets write tools.
-- The token's role is the one the REST call needs (`operator` for maintenance), checked by the route itself.
+- The token's role is the one the REST call needs (`operator` for all of them), checked by the route itself.
 
 | Tool | REST call |
 |---|---|
 | `maintenance_open` | `POST /api/maintenance` (`providers`, `duration`, `reason`) |
 | `maintenance_close` | `DELETE /api/maintenance/<id>` |
+| `pin_prefix` | `POST /api/pins` (`prefix`, `provider`, `max_loss_pct`, `max_rtt_ms`, `duration`, `reason`) |
+| `unpin_prefix` | `DELETE /api/pins/<id>` |
+| `optimization_pause` | `POST /api/optimization/pause` (`reason`) |
+| `optimization_resume` | `DELETE /api/optimization/pause` |
+| `alert_acknowledge` | `POST /api/alerts/ack` (`key`, `note`) |
 
-A maintenance window only excludes providers from improvements; it cannot add a route. It needs a `maintenance` policy that takes on-demand windows ([CONFIG.md](CONFIG.md#policy-maintenance)). Each write is audited as its REST call (`POST /api/maintenance`, actor the token's user, method `token`, detail starting `via mcp`). A write tool asked for without access is refused and audited as `MCP tools/call <tool>` with result `denied`. Reads are not audited.
+A maintenance window only excludes providers from improvements; it cannot add a route. It needs a `maintenance` policy that takes on-demand windows ([CONFIG.md](CONFIG.md#policy-maintenance)). The other tools are described under [Steering through the API](#steering-through-the-api). Each write is audited as its REST call (for example `POST /api/pins`, actor the token's user, method `token`, detail starting `via mcp`). A write tool asked for without access is refused and audited as `MCP tools/call <tool>` with result `denied`. Reads are not audited.
 
-Pin/unpin a prefix to a link, pause/resume optimization, and alert acknowledgement are not built: the REST API has no such call, and this layer adds none.
+## Steering through the API
+
+These REST calls (#558) need an operator (or the basic-auth account) like any change, are audited, and are refused with `403` when no one can sign in. Their state is in memory: a restart clears pins, the pause, and acknowledgements. In IXP mode `/api/pins` and `/api/optimization` answer `404`.
+
+- **Pin** (`POST /api/pins`) is a static rule set on demand: Decide steers the prefix to `provider` while that path is usable, at or under `max_loss_pct` (required, 0-100) and `max_rtt_ms` (optional), and not lossier than native by `thresholds.min_loss_delta_pct`. It is refused unless the exact prefix is in the learned RIB view and inside `allowlist.prefixes` (in every mode), and the provider is configured. `duration` is 1m to 168h; at most 100 pins, one per prefix. A pin takes precedence over the policy chain for its prefix and otherwise has a static rule's rails: `mode: inject` and the allowlist on every round, `hold_time`, flap quarantine, and `max_improvements` (static pins are kept first). In observe and suggest it is a recommendation. An announced pin carries the packeteer community and NO_EXPORT like every improvement. It applies only while a source lists the prefix: a pin does not add a probe target. `DELETE /api/pins/<id>` ends it, and the next round retires the improvement.
+- **Pause** (`POST /api/optimization/pause`, `reason` required) runs every decision round with a cap of zero: each improvement retires at once (inside `hold_time`, no cooldown) and is withdrawn, and none is made. Inbound steering and mitigation are not paused. `DELETE /api/optimization/pause` resumes; a restart resumes too. `GET /api/optimization` shows who paused, when, and why.
+- **Acknowledge** (`POST /api/alerts/ack`, `key` is an event's `dedup_key` from `GET /api/events`, optional `note`) marks an open warning or critical alert as seen. The newest event with that key, among the newest 1000, must not be a resolving event. Event rows of the open incident then carry `ack` (`by`, `at`, `note`) until an event resolves the alert. Notifications and routing are unchanged.
 
 ## Rate limit
 
@@ -98,4 +111,4 @@ A client that speaks HTTP can post to `/mcp` directly with `Authorization: Beare
 
 ## Rollback
 
-Set `mcp.enabled: false` (or remove the block) and restart: `POST /mcp` is gone. Revoke `mcp` and `mcp:write` tokens first when going back to a version before #302: that version ignores the scope and treats such a token as a full API token at its role. The `scope` column the upgrade adds to the token table is harmless to an older version.
+Set `mcp.enabled: false` (or remove the block) and restart: `POST /mcp` is gone. A restart also clears pins and a pause. Revoke `mcp` and `mcp:write` tokens first when going back to a version before #302: that version ignores the scope and treats such a token as a full API token at its role. The `scope` column the upgrade adds to the token table is harmless to an older version.

@@ -7,9 +7,11 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/auth"
 	"github.com/GrandArcher/Packeteer/internal/auth/authtest"
+	"github.com/GrandArcher/Packeteer/internal/eventlog"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -19,23 +21,27 @@ type mcpEnv struct {
 	h      http.Handler
 	store  *authtest.Store
 	maint  *fakeMaint
+	pins   storePins
+	opt    *fakeOpt
+	events *eventlog.Log
 	tokens map[string]string
 }
 
 func newMCPEnv(t *testing.T, opt *MCPOptions) *mcpEnv {
 	t.Helper()
-	e := &mcpEnv{store: authtest.New(), maint: &fakeMaint{canOpen: true}, tokens: map[string]string{}}
+	e := &mcpEnv{store: authtest.New(), maint: &fakeMaint{canOpen: true}, pins: newStorePins(), opt: &fakeOpt{}, events: eventlog.New(nil, nil, nil), tokens: map[string]string{}}
 	svc, err := auth.New(auth.Options{Users: e.store})
 	if err != nil {
 		t.Fatal(err)
 	}
 	srv, err := New(Options{
-		Auth: svc, Audit: auth.NewAuditor(e.store, func(plugin.Event) {}, nil), Maintenance: e.maint, MCP: opt,
+		Auth: svc, Audit: auth.NewAuditor(e.store, func(plugin.Event) {}, nil), Maintenance: e.maint, MCP: opt, Events: e.events,
 		Snapshot: func() Snapshot { return Assemble(sampleInput()) },
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	srv.SetSteering(e.pins, e.opt)
 	e.h = srv.Handler()
 	ctx := context.Background()
 	for _, r := range []plugin.Role{plugin.RoleViewer, plugin.RoleOperator} {
@@ -223,6 +229,67 @@ func TestMCPWriteToolAuditedAndRoleChecked(t *testing.T) {
 	text, isErr = mcpText(t, e.post(e.tokens["viewer/mcp:write"], mcpCall("maintenance_open", args)))
 	if !isErr || !strings.Contains(text, "HTTP 403") || !strings.Contains(text, "needs role operator") || len(e.maint.opened) != 0 {
 		t.Errorf("viewer write: %q %v opened %v", text, isErr, e.maint.opened)
+	}
+}
+
+// Pin, pause, and acknowledge run as their REST calls: audited with the
+// token's user, refused for a viewer, and checked by the same rails.
+func TestMCPSteeringWriteTools(t *testing.T) {
+	e := newMCPEnv(t, &MCPOptions{RatePerMinute: 60, WriteTools: true})
+	op, viewer := e.tokens["operator/mcp:write"], e.tokens["viewer/mcp:write"]
+	pinArgs := `{"prefix":"198.51.100.0/24","provider":"transit-b","max_loss_pct":2,"duration":"1h","reason":"lab"}`
+
+	if text, isErr := mcpText(t, e.post(viewer, mcpCall("pin_prefix", pinArgs))); !isErr || !strings.Contains(text, "needs role operator") {
+		t.Fatalf("viewer pin: %q %v", text, isErr)
+	}
+	if text, isErr := mcpText(t, e.post(op, mcpCall("pin_prefix", strings.Replace(pinArgs, "198.51.100.0/24", "203.0.113.0/24", 1)))); !isErr || !strings.Contains(text, "allowlist") {
+		t.Fatalf("pin outside the allowlist: %q %v", text, isErr)
+	}
+	text, isErr := mcpText(t, e.post(op, mcpCall("pin_prefix", pinArgs)))
+	if isErr || !strings.Contains(text, `"id":"pin-1"`) || !strings.Contains(text, `"by":"operator-user"`) {
+		t.Fatalf("pin: %q %v", text, isErr)
+	}
+	if text, isErr := mcpText(t, e.post(op, mcpCall("pins", `{}`))); isErr || !strings.Contains(text, `"pin-1"`) {
+		t.Fatalf("pins: %q %v", text, isErr)
+	}
+	if text, isErr := mcpText(t, e.post(op, mcpCall("unpin_prefix", `{"id":"pin-1"}`))); isErr || !strings.Contains(text, "204") {
+		t.Fatalf("unpin: %q %v", text, isErr)
+	}
+
+	if text, isErr := mcpText(t, e.post(op, mcpCall("optimization_pause", `{"reason":"incident"}`))); isErr || !e.opt.st.Paused || e.opt.st.By != "operator-user" {
+		t.Fatalf("pause: %q %v %+v", text, isErr, e.opt.st)
+	}
+	if text, isErr := mcpText(t, e.post(op, mcpCall("optimization_status", `{}`))); isErr || !strings.Contains(text, `"paused":true`) {
+		t.Fatalf("status: %q %v", text, isErr)
+	}
+	if _, isErr := mcpText(t, e.post(op, mcpCall("optimization_resume", `{}`))); isErr || e.opt.st.Paused {
+		t.Fatalf("resume: %v %+v", isErr, e.opt.st)
+	}
+
+	down := plugin.Event{Time: time.Now(), Kind: plugin.EventProviderDown, Severity: plugin.SeverityCritical, Fields: map[string]string{"provider": "transit-a"}}
+	e.events.Record(down)
+	if text, isErr := mcpText(t, e.post(op, mcpCall("alert_acknowledge", `{"key":"`+down.DedupKey()+`","note":"ticket 7"}`))); isErr || !strings.Contains(text, `"by":"operator-user"`) {
+		t.Fatalf("ack: %q %v", text, isErr)
+	}
+
+	want := []string{"POST /api/pins", "POST /api/pins", "POST /api/pins", "DELETE /api/pins/{id}", "POST /api/optimization/pause", "DELETE /api/optimization/pause", "POST /api/alerts/ack"}
+	recs := e.store.Records()
+	if len(recs) != len(want) {
+		t.Fatalf("%d audit records, want %d: %+v", len(recs), len(want), recs)
+	}
+	for i, r := range recs {
+		if r.Action != want[i] || !strings.HasPrefix(r.Detail, "via mcp") {
+			t.Errorf("audit %d: %+v, want %s via mcp", i, r, want[i])
+		}
+	}
+	if recs[0].Result != auth.ResultDenied || recs[1].Result != auth.ResultFailed || recs[2].Result != auth.ResultOK || recs[2].Target != "pin-1" ||
+		!strings.Contains(recs[2].Detail, "prefix=198.51.100.0/24 provider=transit-b") || recs[6].Target != down.DedupKey() {
+		t.Errorf("audit results %+v", recs)
+	}
+	off := newMCPEnv(t, &MCPOptions{RatePerMinute: 60})
+	offNames := off.toolNames(t, off.tokens["operator/mcp:write"])
+	if !e.toolNames(t, op)["pin_prefix"] || offNames["pin_prefix"] || !offNames["pins"] {
+		t.Error("pin_prefix must be listed only with mcp.write_tools")
 	}
 }
 

@@ -93,6 +93,10 @@ type Config struct {
 	// the margin records the MED it overrides.
 	MEDTieBreak bool
 	MEDMargin   float64
+	// paused is set by Engine while optimization is paused (#558). That
+	// evaluation runs with MaxImprovements 0; paused only changes the
+	// reason text.
+	paused bool
 }
 
 // ProviderPolicy is the commit-control and cost configuration of one

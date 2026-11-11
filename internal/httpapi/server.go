@@ -3,8 +3,9 @@
 // (looking glass, on-demand probe, traceroute, whois), and an embedded
 // dashboard. It does not announce routes itself. The writes are opening
 // or closing an on-demand maintenance window, which can only exclude
-// providers, and adding or removing a threat mitigation rule (#28), which
-// the mitigation controller checks and announces only in inject, plus
+// providers, adding or removing a threat mitigation rule (#28), which
+// the mitigation controller checks and announces only in inject, pinning
+// a prefix, pausing optimization, and acknowledging alerts (#558), plus
 // users and API tokens when auth is on (#32). Every change needs a
 // signed-in operator (or the basic-auth account) and is audited; see
 // access.go.
@@ -241,6 +242,10 @@ type Server struct {
 	// quarantine releases a flap-quarantined prefix (#228). Nil until
 	// SetQuarantine.
 	quarantine atomic.Value
+	// pins and optimization are the operator steering controls (#558).
+	// Nil until SetSteering.
+	pins         atomic.Value
+	optimization atomic.Value
 	// candidates is the Protection form's prefix picker (#131).
 	candidates atomic.Value
 	// rpkiStatus is the health of the rpki.sources (#200). Nil until
@@ -356,6 +361,16 @@ func (s *Server) SetQuarantine(c QuarantineControl) {
 		return
 	}
 	s.quarantine.Store(c)
+}
+
+// SetSteering installs the prefix pins and the optimization pause (#558),
+// once the decision engine exists.
+func (s *Server) SetSteering(pins PinControl, opt OptimizationControl) {
+	if s == nil {
+		return
+	}
+	s.pins.Store(pins)
+	s.optimization.Store(opt)
 }
 
 // writeTimeout outlasts the slowest handler, an on-demand tool bounded by

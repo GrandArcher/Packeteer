@@ -121,8 +121,10 @@ func TestListHidesWriteToolsUnlessAllowed(t *testing.T) {
 	if read["maintenance_open"] || read["maintenance_close"] {
 		t.Error("write tool listed without Write")
 	}
-	if !full["maintenance_open"] || !full["maintenance_close"] {
-		t.Error("write tool missing with Write")
+	for _, name := range []string{"maintenance_open", "maintenance_close", "pin_prefix", "unpin_prefix", "optimization_pause", "optimization_resume", "alert_acknowledge"} {
+		if read[name] || !full[name] {
+			t.Errorf("%s: listed without Write %v, with Write %v", name, read[name], full[name])
+		}
 	}
 	for _, name := range []string{"system_health", "link_health", "decision_explain", "search", "events", "herd_outside", "maintenance_windows"} {
 		if !read[name] {
@@ -199,6 +201,24 @@ func TestToolCallBuildsRESTCall(t *testing.T) {
 	if c := fb.calls[3]; c.Method != "DELETE" || c.Path != "/api/maintenance/api-1" || c.Body != nil {
 		t.Errorf("maintenance_close call %+v", c)
 	}
+
+	toolText(t, rpc(t, s, Access{Write: true}, call("pin_prefix", `{"prefix":"198.51.100.0/24","provider":"transit-b","max_loss_pct":2,"max_rtt_ms":80,"duration":"1h"}`)))
+	c = fb.calls[4]
+	body = nil
+	if err := json.Unmarshal(c.Body, &body); err != nil || c.Method != "POST" || c.Path != "/api/pins" ||
+		body["prefix"] != "198.51.100.0/24" || body["provider"] != "transit-b" || body["max_loss_pct"] != 2.0 || body["max_rtt_ms"] != 80.0 || body["duration"] != "1h" || len(body) != 5 {
+		t.Errorf("pin_prefix call %+v %s", c, c.Body)
+	}
+	toolText(t, rpc(t, s, Access{Write: true}, call("unpin_prefix", `{"id":"pin-1"}`)))
+	toolText(t, rpc(t, s, Access{Write: true}, call("optimization_pause", `{"reason":"incident"}`)))
+	toolText(t, rpc(t, s, Access{Write: true}, call("optimization_resume", `{}`)))
+	toolText(t, rpc(t, s, Access{Write: true}, call("alert_acknowledge", `{"key":"packeteer/provider/provider=transit-a","note":"ticket 7"}`)))
+	for i, want := range []string{"DELETE /api/pins/pin-1 ", `POST /api/optimization/pause {"reason":"incident"}`, "DELETE /api/optimization/pause ",
+		`POST /api/alerts/ack {"key":"packeteer/provider/provider=transit-a","note":"ticket 7"}`} {
+		if c := fb.calls[5+i]; c.Method+" "+c.Path+" "+string(c.Body) != want {
+			t.Errorf("call %d: %s %s %s, want %s", 5+i, c.Method, c.Path, c.Body, want)
+		}
+	}
 }
 
 func TestToolArgumentsAreValidated(t *testing.T) {
@@ -216,6 +236,9 @@ func TestToolArgumentsAreValidated(t *testing.T) {
 		"long":         {"search", `{"q":"` + strings.Repeat("a", 300) + `"}`, "at most"},
 		"bad id":       {"maintenance_close", `{"id":"../x"}`, "want an id"},
 		"empty list":   {"maintenance_open", `{"providers":[],"duration":"1h"}`, "1 to 32"},
+		"pin no loss":  {"pin_prefix", `{"prefix":"198.51.100.0/24","provider":"transit-b","duration":"1h"}`, `missing argument "max_loss_pct"`},
+		"pin bad pfx":  {"pin_prefix", `{"prefix":"198.51.100.0","provider":"transit-b","max_loss_pct":1,"duration":"1h"}`, "CIDR"},
+		"pause bare":   {"optimization_pause", `{}`, `missing argument "reason"`},
 	} {
 		text, isErr := toolText(t, rpc(t, s, Access{Write: true}, call(tc.tool, tc.args)))
 		if !isErr || !strings.Contains(text, tc.want) {
