@@ -149,6 +149,8 @@ func (s *Server) handleOptimization(w http.ResponseWriter, _ *http.Request) {
 	}{meta: s.snapshot().meta(), Writable: s.writesEnabled(), Pause: c.State()})
 }
 
+const maxPauseReason = 200
+
 func (s *Server) handleOptimizationPause(w http.ResponseWriter, r *http.Request) {
 	c := s.optimizationControl()
 	if !s.steerWritable(w, "pausing optimization") {
@@ -164,8 +166,8 @@ func (s *Server) handleOptimizationPause(w http.ResponseWriter, r *http.Request)
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	if req.Reason == "" || len(req.Reason) > pin.MaxReason {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "reason is required, at most " + strconv.Itoa(pin.MaxReason) + " bytes"})
+	if req.Reason == "" || len(req.Reason) > maxPauseReason {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "reason is required, at most " + strconv.Itoa(maxPauseReason) + " bytes"})
 		return
 	}
 	st, ok := c.Pause(principalFrom(r.Context()).User, req.Reason, time.Now())
@@ -182,7 +184,11 @@ func (s *Server) handleOptimizationResume(w http.ResponseWriter, _ *http.Request
 	if !s.steerWritable(w, "resuming optimization") {
 		return
 	}
-	if c == nil || !c.Resume() {
+	if c == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "optimization control is not available"})
+		return
+	}
+	if !c.Resume() {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "optimization is not paused"})
 		return
 	}

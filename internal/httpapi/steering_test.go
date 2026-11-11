@@ -156,6 +156,10 @@ func TestOptimizationPauseAndResume(t *testing.T) {
 	if rec := mdo(h, http.MethodDelete, "/api/optimization/pause", "", "", true); rec.Code != http.StatusConflict {
 		t.Fatalf("resume twice: %d", rec.Code)
 	}
+	none := steerServer(t, "ops", nil, nil, nil)
+	if rec := mdo(none, http.MethodDelete, "/api/optimization/pause", "", "", true); rec.Code != http.StatusNotFound {
+		t.Fatalf("resume with no control: %d", rec.Code)
+	}
 }
 
 func TestAlertAcknowledge(t *testing.T) {
