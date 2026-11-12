@@ -4,6 +4,7 @@ import (
 	"errors"
 	"math"
 	"net/netip"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -82,8 +83,8 @@ func TestAddListRemoveAndVerdicts(t *testing.T) {
 	}
 	v := s.Verdicts(t0)[learned]
 	want := plugin.PolicyVerdict{Action: plugin.PolicyStatic, Providers: []string{"transit-b"}, Rule: "api pin-1", Match: "prefix 198.51.100.0/24", MaxLossPct: 2, MaxRTT: 80 * time.Millisecond}
-	if v.Action != want.Action || len(v.Providers) != 1 || v.Providers[0] != "transit-b" || v.Rule != want.Rule || v.Match != want.Match || v.MaxLossPct != 2 || v.MaxRTT != want.MaxRTT {
-		t.Fatalf("verdict %+v", v)
+	if !reflect.DeepEqual(v, want) {
+		t.Fatalf("verdict %+v, want %+v", v, want)
 	}
 	if _, ok := s.Remove("pin-9"); ok {
 		t.Fatal("removed an unknown id")
