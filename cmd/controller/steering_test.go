@@ -149,23 +149,33 @@ func TestApplyPinsFeedsTheStaticRails(t *testing.T) {
 }
 
 // A pin to a provider that a config deny rule forbids wins for its prefix
-// (docs/mcp.md: a pin takes precedence over the policy chain). The deny
-// rule still holds for every unpinned prefix, and the pin keeps the
-// static rails: the allowlist is read on every
-// round, the cap binds, and a pin whose path leaves its loss ceiling is
-// not announced.
+// (docs/mcp.md: a pin takes precedence over the policy chain) and keeps
+// the static rails: the allowlist is read on every round, the learned RIB
+// view is needed, the cap binds, and a pin whose path leaves its loss
+// ceiling is not announced. TestPinOutranksConfigDenyOnTheEdge covers the
+// deny rule for an unpinned prefix and the inject-only rail.
 func TestPinOutranksConfigDenyAndKeepsTheRails(t *testing.T) {
 	p := netip.MustParsePrefix("203.0.113.0/24")
 	now := time.Now()
 	deny := plugin.PolicyVerdict{Action: plugin.PolicyDeny, Providers: []string{"transit-b"}, Rule: "config deny"}
-	// Native loses 20% and transit-b is clean, so only the deny rule
-	// keeps the prefix on its native path.
+	// Native loses 20% and transit-b is clean: only the deny rule stops
+	// the move to transit-b.
 	native, clean := pinStats(10*time.Millisecond, 20), pinStats(20*time.Millisecond, 0)
 	in, store := pinRound(t, now, native, clean, map[netip.Prefix]plugin.PolicyVerdict{p: deny})
 	base := policy.Config{Mode: "inject", MaxImprovements: 50, MaxResultAge: time.Minute, Allowlist: []netip.Prefix{p}}
 
-	if d := decideOne(t, in, base, now); d.Action == policy.ActionImprove {
+	d := decideOne(t, in, base, now)
+	if d.Action == policy.ActionImprove || d.Recommended != "transit-a" {
 		t.Fatalf("deny did not hold without a pin: %+v", d)
+	}
+	var b policy.Candidate
+	for _, c := range d.Candidates {
+		if c.Provider == "transit-b" {
+			b = c
+		}
+	}
+	if b.Usable || !strings.Contains(b.Why, "policy deny") {
+		t.Fatalf("transit-b under deny: %+v", b)
 	}
 
 	applyPins(&in, store, now)
@@ -186,10 +196,63 @@ func TestPinOutranksConfigDenyAndKeepsTheRails(t *testing.T) {
 	if d := decideOne(t, in, narrowed, now); d.Action == policy.ActionImprove || !strings.Contains(d.Reason, "not allowlisted") {
 		t.Fatalf("allowlist: %+v", d)
 	}
+	noRIB := in
+	noRIB.Native = map[netip.Prefix]string{}
+	if d := decideOne(t, noRIB, base, now); d.Action != policy.ActionNone || d.Reason != "prefix not in RIB" {
+		t.Fatalf("prefix missing from the RIB view: %+v", d)
+	}
 
+	// A different round for the same prefix: only the transit-b stats
+	// differ, and the pin store is the one from above.
 	lossy, _ := pinRound(t, now, native, pinStats(20*time.Millisecond, 10), map[netip.Prefix]plugin.PolicyVerdict{p: deny})
 	applyPins(&lossy, store, now)
-	if d := decideOne(t, lossy, base, now); d.Action == policy.ActionImprove {
+	if d := decideOne(t, lossy, base, now); d.Action == policy.ActionImprove || !strings.Contains(d.Reason, "max_loss_pct") {
 		t.Fatalf("pin over its loss ceiling was announced: %+v", d)
+	}
+}
+
+// On a simulated edge a config deny rule keeps both slow-native prefixes
+// off the better provider. Pinning one of them announces it through the
+// denied provider in inject, with the community and NO_EXPORT, while the
+// unpinned prefix stays native. In observe the same pin announces nothing.
+func TestPinOutranksConfigDenyOnTheEdge(t *testing.T) {
+	const body = `thresholds: {min_loss_delta_pct: 1, min_rtt_delta_ms: 15}
+allowlist: {prefixes: ["203.0.113.0/24", "198.51.100.0/24"]}
+sources:
+  - type: static
+    config: {targets: [{prefix: 203.0.113.0/24}, {prefix: 198.51.100.0/24}]}
+probers:
+  - type: fixed
+    config: {paths: [{provider: transit-a, rtt_ms: 100}, {provider: transit-b, rtt_ms: 20}]}
+policies:
+  - type: rules
+    config: {rules: [{name: no-b, action: deny, providers: [transit-b], prefixes: [203.0.113.0/24, 198.51.100.0/24]}]}
+`
+	pinBody := `{"prefix":"203.0.113.0/24","provider":"transit-b","max_loss_pct":5,"duration":"10m","reason":"lab"}`
+	empty := func(w map[string]ixRoute) bool { return len(w) == 0 }
+	for _, mode := range []string{"inject", "observe"} {
+		t.Run(mode, func(t *testing.T) {
+			edge := newMSEdge(t)
+			edge.advertise("203.0.113.0/24")
+			edge.advertise("198.51.100.0/24")
+			d := startIXMode(t, edge, mode, body)
+			d.holdWire("the deny rule holds before the pin", 3*time.Second, empty)
+			if code, m := d.call(http.MethodPost, "/api/pins", pinBody); code != http.StatusCreated {
+				d.fatalf("pin: %d %v", code, m)
+			}
+			if mode == "observe" {
+				d.holdWire("observe announces nothing for a pin", 4*time.Second, empty)
+				d.stop()
+				return
+			}
+			pinned := routeVia("203.0.113.0/24", ixSteered, ixCommunity, ixNoExport)
+			d.waitWire("the pinned route", pinned)
+			d.holdWire("only the pinned prefix is announced", 3*time.Second, func(w map[string]ixRoute) bool { return len(w) == 1 && pinned(w) })
+			if code, _ := d.call(http.MethodDelete, "/api/pins/pin-1", ""); code != http.StatusNoContent {
+				d.fatalf("unpin: %d", code)
+			}
+			d.waitWire("the route withdrawn after unpin", empty)
+			d.stop()
+		})
 	}
 }
