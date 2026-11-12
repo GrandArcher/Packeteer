@@ -93,7 +93,7 @@ var Catalog = []Tool{
 	{Name: "search", Desc: "Search by prefix, address, AS number, or AS name across measured prefixes, the learned RIB, recommendations, and improvements." + untrusted, Method: http.MethodGet, Path: "/api/search", Params: []Param{
 		{Name: "q", Desc: "A prefix, address, AS number, or AS name.", In: inQuery, Kind: kindString, Required: true},
 	}},
-	{Name: "events", Desc: "Recent events and alerts, newest first." + untrusted, Method: http.MethodGet, Path: "/api/events", Params: []Param{
+	{Name: "events", Desc: "Recent events and alerts, newest first. Each carries the dedup_key alert_acknowledge takes, and ack when someone acknowledged it." + untrusted, Method: http.MethodGet, Path: "/api/events", Params: []Param{
 		{Name: "severity", Desc: "Lowest severity to return.", In: inQuery, Kind: kindString, Enum: []string{"info", "warning", "critical"}},
 		{Name: "q", Desc: "Text to match.", In: inQuery, Kind: kindString},
 		{Name: "from", Desc: "Start time, RFC 3339.", In: inQuery, Kind: kindString},
@@ -104,6 +104,8 @@ var Catalog = []Tool{
 	{Name: "quarantine", Desc: "Prefixes parked on their native path by flap quarantine.", Method: http.MethodGet, Path: "/api/quarantine"},
 	{Name: "leaks", Desc: "Leak watch: source health and prefixes held out because a route was seen outside the AS.", Method: http.MethodGet, Path: "/api/leaks"},
 	{Name: "maintenance_windows", Desc: "Open, upcoming, and finished maintenance windows.", Method: http.MethodGet, Path: "/api/maintenance"},
+	{Name: "pins", Desc: "Prefixes an operator pinned to a provider through the API, with their loss ceiling and expiry." + untrusted, Method: http.MethodGet, Path: "/api/pins"},
+	{Name: "optimization_status", Desc: "Whether optimization is paused, by whom, since when, and why." + untrusted, Method: http.MethodGet, Path: "/api/optimization"},
 	{Name: "herd_overview", Desc: "Herd page header: this node's sharing settings and the member list." + untrusted, Method: http.MethodGet, Path: "/api/herd/overview"},
 	{Name: "herd_events", Desc: "Herd world view: targets where members see loss." + untrusted, Method: http.MethodGet, Path: "/api/herd/events", Params: []Param{
 		{Name: "loss", Desc: "Loss percent floor (default 5).", In: inQuery, Kind: kindNumber},
@@ -120,6 +122,25 @@ var Catalog = []Tool{
 	}},
 	{Name: "maintenance_close", Desc: "WRITE. Close an open on-demand maintenance window by id. Confirm with the user before calling.", Method: http.MethodDelete, Path: "/api/maintenance/{id}", Write: true, Params: []Param{
 		{Name: "id", Desc: "Window id from maintenance_windows.", In: inPath, Kind: kindID, Required: true},
+	}},
+	{Name: "pin_prefix", Desc: "WRITE. Pin a prefix to a provider for a while, as a static rule would. In inject mode this announces the prefix toward that provider, tagged with the configured community and NO_EXPORT, while the path stays inside the loss ceiling; in observe or suggest it is a recommendation. Refused unless the prefix is in the allowlist and the learned RIB. Confirm with the user before calling.", Method: http.MethodPost, Path: "/api/pins", Write: true, Params: []Param{
+		{Name: "prefix", Desc: "Exact prefix in CIDR form, as learned from BGP.", In: inBody, Kind: kindPrefix, Required: true},
+		{Name: "provider", Desc: "Provider name to pin it to.", In: inBody, Kind: kindString, Required: true},
+		{Name: "max_loss_pct", Desc: "Loss ceiling in percent (0-100); the pin is withdrawn while the path is lossier.", In: inBody, Kind: kindNumber, Required: true},
+		{Name: "max_rtt_ms", Desc: "Optional latency ceiling in milliseconds.", In: inBody, Kind: kindNumber},
+		{Name: "duration", Desc: "How long from now, such as 30m or 2h (1m to 168h).", In: inBody, Kind: kindString, Required: true},
+		{Name: "reason", Desc: "Why, for the audit log.", In: inBody, Kind: kindString},
+	}},
+	{Name: "unpin_prefix", Desc: "WRITE. Remove a pin by id; the prefix goes back to normal decisions. Confirm with the user before calling.", Method: http.MethodDelete, Path: "/api/pins/{id}", Write: true, Params: []Param{
+		{Name: "id", Desc: "Pin id from pins.", In: inPath, Kind: kindID, Required: true},
+	}},
+	{Name: "optimization_pause", Desc: "WRITE. Pause optimization: every improvement is withdrawn now and none is made until resumed or the controller restarts. Confirm with the user before calling.", Method: http.MethodPost, Path: "/api/optimization/pause", Write: true, Params: []Param{
+		{Name: "reason", Desc: "Why, for the audit log.", In: inBody, Kind: kindString, Required: true},
+	}},
+	{Name: "optimization_resume", Desc: "WRITE. Resume a paused optimization; the next decision round may improve again. Confirm with the user before calling.", Method: http.MethodDelete, Path: "/api/optimization/pause", Write: true},
+	{Name: "alert_acknowledge", Desc: "WRITE. Acknowledge an open warning or critical alert by its dedup_key from events. It is a note on the alert; routing and notifications are unchanged. Confirm with the user before calling.", Method: http.MethodPost, Path: "/api/alerts/ack", Write: true, Params: []Param{
+		{Name: "key", Desc: "The alert's dedup_key.", In: inBody, Kind: kindString, Required: true},
+		{Name: "note", Desc: "Optional note, such as a ticket number.", In: inBody, Kind: kindString},
 	}},
 }
 

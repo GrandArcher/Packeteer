@@ -35,6 +35,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/nonbgp"
 	"github.com/GrandArcher/Packeteer/internal/notify"
 	"github.com/GrandArcher/Packeteer/internal/pbr"
+	"github.com/GrandArcher/Packeteer/internal/pin"
 	"github.com/GrandArcher/Packeteer/internal/pluginhost"
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/all"
 	"github.com/GrandArcher/Packeteer/internal/probe"
@@ -969,9 +970,15 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	preview := blastSource{live: live, decider: decider, ctl: ctl, view: view, plugins: plugins,
 		check: candidateChecker(getenv, httpUser), held: lw.Held,
 		reserved: func(p netip.Prefix) bool { return inb.Reserved(p) || mit.Holds(p) }}
+	pins := pin.NewStore()
 	if httpSrv != nil && cfg.IXP == nil {
 		httpSrv.SetPreflight(newPreflight(live, view, lw, plugins, pktLimiter, log))
 		httpSrv.SetBlast(preview)
+		pc := pinControl{store: pins, cfg: live.snapshot, log: log, poke: poke}
+		if view != nil {
+			pc.learned = func(p netip.Prefix) bool { _, ok := view.Exact(p); return ok }
+		}
+		httpSrv.SetSteering(pc, &optimizationControl{decider: decider, log: log, poke: poke})
 		if rs, ok := roundStoreOf(plugins); ok {
 			httpSrv.SetWhatIf(&whatIfSource{live: live, store: rs, check: preview.check, log: log, getenv: getenv})
 		}
@@ -1051,6 +1058,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			leading = true
 			nb.Refresh()
 			in, rpkiRounds := decisionInput(loopCtx, now, engine, view, plugins, fed, rpkiSet, irrChecker)
+			applyPins(&in, pins, now)
 			nb.Fill(&in)
 			in.Held = lw.Held
 			in.Synthesize = ctl.Synthesizable(in.Results)

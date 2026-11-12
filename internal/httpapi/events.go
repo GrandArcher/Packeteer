@@ -1,11 +1,13 @@
 package httpapi
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/eventlog"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -77,11 +79,14 @@ func helpURL(kind string) string {
 }
 
 // eventRow is one event as the Events page shows it. HelpURL is the
-// "What to do" link.
+// "What to do" link. DedupKey names the alert, for POST /api/alerts/ack;
+// Ack is set on a problem event of an acknowledged alert (#558).
 type eventRow struct {
 	plugin.Event
-	Source  string `json:"source"`
-	HelpURL string `json:"help_url,omitempty"`
+	Source   string        `json:"source"`
+	HelpURL  string        `json:"help_url,omitempty"`
+	DedupKey string        `json:"dedup_key"`
+	Ack      *eventlog.Ack `json:"ack,omitempty"`
 }
 
 // handleEvents lists recent controller events (#173), newest first. It
@@ -116,11 +121,58 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	rows := make([]eventRow, len(evs))
 	for i, e := range evs {
-		rows[i] = eventRow{Event: e, Source: e.Source(), HelpURL: helpURL(e.Kind)}
+		rows[i] = eventRow{Event: e, Source: e.Source(), HelpURL: helpURL(e.Kind), DedupKey: e.DedupKey()}
+		if a, ok := s.events.AckOf(e); ok {
+			rows[i].Ack = &a
+		}
 	}
 	body := map[string]any{"events": rows, "stored": s.events.Stored(), "now": time.Now().UTC(), "doc_base": DocBase}
 	if !s.events.Stored() {
 		body["since"] = s.events.Started().UTC()
 	}
 	writeJSON(w, http.StatusOK, body)
+}
+
+// Bounds for POST /api/alerts/ack.
+const (
+	maxAckKey  = 256
+	maxAckNote = 200
+)
+
+// handleAlertAck acknowledges an open alert by its dedup key (#558). It
+// is a note on the alert: notifications and routing are unchanged.
+func (s *Server) handleAlertAck(w http.ResponseWriter, r *http.Request) {
+	if !s.steerWritable(w, "acknowledging an alert") {
+		return
+	}
+	if s.events == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "the event log is off"})
+		return
+	}
+	var req struct {
+		Key  string `json:"key"`
+		Note string `json:"note"`
+	}
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if req.Key == "" || len(req.Key) > maxAckKey || len(req.Note) > maxAckNote {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "key is required (an event's dedup_key, at most " + strconv.Itoa(maxAckKey) + " bytes); note is at most " + strconv.Itoa(maxAckNote) + " bytes"})
+		return
+	}
+	a, err := s.events.Acknowledge(r.Context(), req.Key, principalFrom(r.Context()).User, req.Note, time.Now())
+	switch {
+	case errors.Is(err, eventlog.ErrNoAlert):
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	case errors.Is(err, eventlog.ErrResolved):
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	case err != nil:
+		s.log.Error("event read", "err", err)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "event store unavailable"})
+		return
+	}
+	noteAudit(r, req.Key, "note="+req.Note)
+	writeJSON(w, http.StatusOK, a)
 }

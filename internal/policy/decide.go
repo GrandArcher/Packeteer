@@ -624,7 +624,7 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 		}
 		for len(st.Improvements) >= cfg.MaxImprovements {
 			if w.commit || cfg.MaxImprovements <= 0 || !displaceCommit(st, decIdx, in.VolumeMbps, retire) {
-				w.d.Action, w.d.Reason, w.d.Recommended = ActionCapped, fmt.Sprintf("max_improvements (%d) reached", cfg.MaxImprovements), w.imp.Provider
+				w.d.Action, w.d.Reason, w.d.Recommended = ActionCapped, cfg.capReason(), w.imp.Provider
 				break
 			}
 		}

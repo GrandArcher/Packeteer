@@ -868,8 +868,10 @@ plugin_dir: /etc/packeteer/plugins
 # MCP server for AI assistants (#302, docs/mcp.md): POST /mcp with read tools
 # over the REST API, as the signed-in caller. Off unless enabled. A token for
 # it is created with scope "mcp" (POST /api/tokens). Write tools (maintenance
-# windows only) stay off unless write_tools is true and the token has scope
-# "mcp:write". Never announces. Rollback: enabled: false.
+# windows, prefix pins, pause and resume, alert acknowledgement) stay off
+# unless write_tools is true and the token has scope "mcp:write". A pin is
+# announced only in inject, under a static rule's rails. Rollback:
+# enabled: false.
 # mcp:
 #   enabled: true
 #   # write_tools: false

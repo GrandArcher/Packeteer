@@ -627,6 +627,9 @@ func holdGate(d Decision, f explainFacts, cfg Config) Gate {
 
 func capGate(d Decision, f explainFacts, cfg Config, capUsed int) Gate {
 	g := Gate{Name: GateCap, Limit: "max_improvements " + strconv.Itoa(cfg.MaxImprovements)}
+	if cfg.paused {
+		g.Limit = "optimization paused"
+	}
 	if f.active {
 		g.Status, g.Value = GatePass, "replaces its own slot"
 		return g
@@ -835,6 +838,9 @@ func counterfactual(blocked string, d Decision, f explainFacts, cfg Config, cur,
 	case GateAllowlist:
 		return "would move to " + to + " if allowlist.prefixes covered " + d.Prefix.String()
 	case GateCap:
+		if cfg.paused {
+			return "would move to " + to + " when optimization resumes"
+		}
 		return fmt.Sprintf("would move to %s when an improvement ends or max_improvements is above %d (%d in use)", to, cfg.MaxImprovements, capUsed)
 	case GateThresholds:
 		if !haveCur || !haveCh {

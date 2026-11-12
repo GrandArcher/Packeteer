@@ -70,7 +70,7 @@ Passwords are 12 to 256 characters and stored as PBKDF2-HMAC-SHA256 hashes (600,
 | Role | May |
 |---|---|
 | `viewer` | Read the dashboard, every `GET /api/*`, `/metrics`, reports, and the looking glass (and, with `mcp.enabled`, the MCP read tools). Create, list, and revoke its own API tokens. |
-| `operator` | Everything a viewer may, plus open and close maintenance windows, add and remove mitigation rules, and run the on-demand probe, traceroute, and whois. |
+| `operator` | Everything a viewer may, plus open and close maintenance windows, add and remove mitigation rules, pin and unpin prefixes, pause and resume optimization, acknowledge alerts (#558), and run the on-demand probe, traceroute, and whois. |
 | `admin` | Everything, plus manage users (`/api/users`), read the audit log (`/api/audit`), and, with `upgrade.enabled`, check, upgrade, and roll back the Packeteer version (`/api/upgrade*`, #196). |
 
 `/healthz`, `/readyz`, `/auth/login`, `/auth/callback`, `/auth/signin`, `/auth/logout`, and the sign-in page with the files it loads (`/signin.html`, `/signin.js`, `/shell.js`, `/app.css`, `/logo.png`) are public. `/logo.png` is the nav logo and the favicon, so it loads before a session. Anything else without credentials is `401`; with a role that is too low it is `403` (`forbidden: needs role operator`). The full route-to-role table is `routeTable` in `internal/httpapi/access.go`, and a test walks every route with every role.
