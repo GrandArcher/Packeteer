@@ -342,7 +342,11 @@ for _ in $(seq 1 20); do
 		paused=1
 		break
 	fi
-	sample || true
+	if sample && [ -n "$a" ]; then
+		echo "FAIL: pk-a announced before it restored the pause: [$a]" >&2
+		dump
+		exit 1
+	fi
 	sleep 0.5
 done
 if [ "$paused" != 1 ]; then

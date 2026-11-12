@@ -80,8 +80,10 @@ probers:
 }
 
 // A restart on the same storage keeps the pin and the pause (#565): the
-// restarted controller announces nothing while paused, and after resume
-// the restored pin goes to the edge with the community and NO_EXPORT.
+// restarted controller announces nothing while paused. The edge stopped
+// advertising the prefix while the controller was down, so after resume
+// the restored pin stays off the wire until the prefix is learned again,
+// then goes to the edge with the community and NO_EXPORT.
 func TestPinAndPauseSurviveRestart(t *testing.T) {
 	edge := newMSEdge(t)
 	edge.advertise("203.0.113.0/24")
@@ -111,6 +113,7 @@ probers:
 	}
 	d.waitWire("every route withdrawn while paused", empty)
 	d.stop()
+	edge.withdraw("203.0.113.0/24")
 
 	d = startIX(t, edge, body)
 	d.waitLog("steering state restored")
@@ -126,7 +129,12 @@ probers:
 	if code, _ := d.call(http.MethodDelete, "/api/optimization/pause", ""); code != http.StatusNoContent {
 		d.fatalf("resume: %d", code)
 	}
-	d.waitWire("the restored pin after resume", pinned)
+	d.holdWire("a restored pin outside the learned RIB is not announced", 4*time.Second, empty)
+	if _, m := d.call(http.MethodGet, "/api/pins", ""); len(m["pins"].([]any)) != 1 {
+		d.fatalf("pin dropped while its prefix is not learned: %v", m)
+	}
+	edge.advertise("203.0.113.0/24")
+	d.waitWire("the restored pin once the prefix is learned", pinned)
 	d.holdWire("only the learned prefix is announced", 2*time.Second, func(w map[string]ixRoute) bool { return len(w) == 1 && pinned(w) })
 	d.stop()
 }

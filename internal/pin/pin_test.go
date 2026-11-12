@@ -136,9 +136,10 @@ func TestRestoreDropsExpiredAndOffRailsPins(t *testing.T) {
 	}
 	saved := src.List(t0)
 	saved = append(saved,
-		Pin{ID: "pin-7", Prefix: netip.MustParsePrefix("198.51.102.0/24"), Provider: "transit-z", Expires: t0.Add(time.Hour)},
-		Pin{ID: "pin-8", Prefix: netip.MustParsePrefix("203.0.113.0/24"), Provider: "transit-a", Expires: t0.Add(time.Hour)},
-		Pin{ID: "pin-9", Prefix: kept.Prefix, Provider: "transit-a", Expires: t0.Add(time.Hour)})
+		Pin{ID: "pin-7", Prefix: netip.MustParsePrefix("198.51.102.0/24"), Provider: "transit-z", Created: t0, Expires: t0.Add(time.Hour)},
+		Pin{ID: "pin-8", Prefix: netip.MustParsePrefix("203.0.113.0/24"), Provider: "transit-a", Created: t0, Expires: t0.Add(time.Hour)},
+		Pin{ID: "pin-9", Prefix: kept.Prefix, Provider: "transit-a", Created: t0, Expires: t0.Add(time.Hour)},
+		Pin{ID: "pin-6", Prefix: netip.MustParsePrefix("198.51.103.0/24"), Provider: "transit-a", Created: t0, Expires: t0.Add(MaxDuration + time.Hour)})
 
 	// A restart two minutes later: the one-minute pin has expired.
 	now := t0.Add(2 * time.Minute)
@@ -149,7 +150,7 @@ func TestRestoreDropsExpiredAndOffRailsPins(t *testing.T) {
 		t.Fatalf("restored %+v, want only %+v", got, kept)
 	}
 	want := []string{"pin-2 198.51.101.0/24: expired", `pin-7 198.51.102.0/24: provider "transit-z" is not configured`,
-		"pin-8 203.0.113.0/24: outside allowlist.prefixes", "pin-9 198.51.100.0/24: prefix pinned twice"}
+		"pin-8 203.0.113.0/24: outside allowlist.prefixes", "pin-9 198.51.100.0/24: prefix pinned twice", "pin-6 198.51.103.0/24: longer than 168h0m0s"}
 	if strings.Join(dropped, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("dropped %q, want %q", dropped, want)
 	}

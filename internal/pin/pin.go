@@ -129,8 +129,9 @@ func (r Request) check(rails Rails) error {
 }
 
 // Restore replaces the pins with saved ones (#565). A saved pin is
-// dropped when it has expired, its provider is no longer configured, its
-// prefix is outside the allowlist, or MaxPins are already kept. The
+// dropped when it has expired, it lasts longer than MaxDuration, its
+// provider is no longer configured, its prefix is outside the allowlist,
+// or MaxPins are already kept. The
 // learned RIB view is not read: it is empty at start, and Decide and the
 // announcer check it on every round. Restore returns why each was dropped.
 func (s *Store) Restore(saved []Pin, rails Rails, now time.Time) []string {
@@ -151,6 +152,8 @@ func (s *Store) Restore(saved []Pin, rails Rails, now time.Time) []string {
 			why = "invalid prefix"
 		case !now.Before(p.Expires):
 			why = "expired"
+		case p.Expires.After(p.Created.Add(MaxDuration)):
+			why = "longer than " + MaxDuration.String()
 		case !slices.Contains(rails.Providers, p.Provider):
 			why = "provider " + strconv.Quote(p.Provider) + " is not configured"
 		case !netpfx.CoveredBy(rails.Allowlist, p.Prefix):

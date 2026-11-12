@@ -83,12 +83,12 @@ docker run --rm -v packeteer-data:/var/lib/packeteer -v "$PWD:/backup" \
   ghcr.io/grandarcher/packeteer -restore /backup/backup-2026-09-30.tgz -restore-config /backup/config.yaml
 ```
 
-The archive holds the config file as loaded and, with `storage: sqlite`, a copy of the report history. Environment variables (SNMP communities, passwords, tokens) are not in it. `-backup` never overwrites; `-restore` replaces existing history or a config file only with `-force`. The lease file is not backed up: it is recreated. Details: [CONFIG.md](CONFIG.md#backup-and-restore).
+The archive holds the config file as loaded and, with `storage: sqlite`, a copy of the report history. Environment variables (SNMP communities, passwords, tokens) are not in it. `-backup` never overwrites; `-restore` replaces existing history or a config file only with `-force`. The lease file is not backed up: it is recreated. With `ha` the saved steering state (`path` + `.steering`) is not in the archive either, so a restore starts with no pins and no pause. Details: [CONFIG.md](CONFIG.md#backup-and-restore).
 
 ## Limits
 
 - One elector type (`lease`). A VRRP-style elector over the LAN would be another plugin behind the same interface.
 - A frozen active instance (process stopped, host hung) keeps its routes until each router's hold timer runs out; the standby waits that long. If the frozen process resumes, its elector reports standby at once and it withdraws within `renew`/2, but a BGP session it re-establishes in that window can briefly carry its old routes. Stop a frozen instance rather than resuming it.
 - Mitigation rules and on-demand maintenance windows are not replicated.
-- A standby's `/api/pins` and `/api/optimization` show the steering state as it was when the standby started; read them on the active instance.
+- A standby's `/api/pins` and `/api/optimization` show the steering state as this instance last held it (loaded at start, or held when it stepped down); read them on the active instance.
 - The `external_policy` feed is per instance and the standby serves an empty set, so a consumer must follow the active instance ([external-policy.md](external-policy.md#with-a-pair-of-instances)).

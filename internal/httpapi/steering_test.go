@@ -245,4 +245,13 @@ func TestSteeringChangesRefusedOnStandby(t *testing.T) {
 			t.Errorf("active %s %s: %d %s", c.method, c.path, rec.Code, rec.Body)
 		}
 	}
+	standby = true
+	for _, path := range []string{"/api/pins/pin-1", "/api/optimization/pause"} {
+		if rec := mdo(h, http.MethodDelete, path, "", "", true); rec.Code != http.StatusConflict {
+			t.Errorf("standby DELETE %s: %d %s", path, rec.Code, rec.Body)
+		}
+	}
+	if len(pins.List(time.Now())) != 1 || !opt.st.Paused {
+		t.Fatal("a standby removed a pin or resumed")
+	}
 }
