@@ -1039,7 +1039,8 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			if snap == nil {
 				snap = cfg
 			}
-			if !ha.active() {
+			// A round that may not decide withdraws like a standby's.
+			if !steer.mayDecide(loopCtx, now, ha.active()) {
 				if leading {
 					// Stepped down: no intent survives into a later
 					// takeover. Drop the retained probe targets with it.
@@ -1064,9 +1065,6 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 				watch.announce(now, err)
 				exportFlowTags.set("", nil, nil)
 				return
-			}
-			if ha != nil && !steer.restored.Load() {
-				steer.takeover(loopCtx, now)
 			}
 			leading = true
 			nb.Refresh()

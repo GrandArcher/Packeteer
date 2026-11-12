@@ -42,10 +42,26 @@ func (l *Lease) SteeringState(context.Context) ([]byte, error) {
 }
 
 // PutSteeringState replaces the saved document. Only the active instance
-// writes it: a standby's copy is older than the pair's.
-func (l *Lease) PutSteeringState(_ context.Context, doc []byte) error {
+// writes it: a standby's copy is older than the pair's. The lease lock is
+// held and the record must still name this instance, so an instance that
+// was frozen and lost the lease cannot overwrite what the new active saved:
+// a takeover needs the same lock.
+func (l *Lease) PutSteeringState(ctx context.Context, doc []byte) error {
 	if !l.Active() {
-		return errors.New("this instance is standby: the steering state is saved by the active instance")
+		return errNotActive
 	}
-	return writeAtomic(l.steeringPath(), doc, !l.noSync)
+	l.opMu.Lock()
+	defer l.opMu.Unlock()
+	return withLock(ctx, l.path+".lock", func() error {
+		rec, _, err := l.read()
+		if err != nil {
+			return err
+		}
+		if rec == nil || rec.Holder != l.token || rec.Released {
+			return errNotActive
+		}
+		return writeAtomic(l.steeringPath(), doc, !l.noSync)
+	})
 }
+
+var errNotActive = errors.New("this instance is standby: the steering state is saved by the active instance")

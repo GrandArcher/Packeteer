@@ -366,12 +366,19 @@ func TestSteeringStateFollowsTheHAPair(t *testing.T) {
 		t.Fatal("b takes changes before it restored the pair's state")
 	}
 	shared.readFail = true
-	b.takeover(ctx, now)
+	if b.mayDecide(ctx, now, true) {
+		t.Fatal("b decides with the pair's pause and pins unread: it would announce stale intent")
+	}
 	if !b.refuse() {
 		t.Fatal("b takes changes after a failed restore")
 	}
+	if a.mayDecide(ctx, now, false) || b.mayDecide(ctx, now, false) {
+		t.Fatal("a standby may decide")
+	}
 	shared.readFail = false
-	b.takeover(ctx, now)
+	if !b.mayDecide(ctx, now, true) {
+		t.Fatal("b still held after the shared state is readable")
+	}
 	if p := b.opt.State(); !p.Paused || p.By != "noc1" {
 		t.Fatalf("pause after takeover %+v", p)
 	}
@@ -384,5 +391,37 @@ func TestSteeringStateFollowsTheHAPair(t *testing.T) {
 	b.stepDown()
 	if !b.refuse() {
 		t.Fatal("changes taken after step-down")
+	}
+}
+
+// Without ha, a store that cannot be read at start leaves the controller
+// holding: no decision, changes refused, and the saved pause is not
+// replaced. The next readable round restores it (#565).
+func TestSteeringStateHoldsWhenTheStoreIsUnreadableAtStart(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now()
+	shared := &memSteering{}
+	first := newTestSteering(shared, eventlog.New(nil, nil, nil), nil)
+	first.start(ctx, now)
+	if _, ok := first.opt.Pause("noc1", "upstream incident", now); !ok {
+		t.Fatal("pause refused")
+	}
+	saved := string(shared.doc)
+
+	shared.readFail = true
+	s := newTestSteering(shared, eventlog.New(nil, nil, nil), nil)
+	s.start(ctx, now)
+	if !s.refuse() || s.mayDecide(ctx, now, true) {
+		t.Fatalf("unreadable store: refuse %v, may decide %v", s.refuse(), s.mayDecide(ctx, now, true))
+	}
+	if string(shared.doc) != saved {
+		t.Fatalf("saved document replaced: %s", shared.doc)
+	}
+	shared.readFail = false
+	if !s.mayDecide(ctx, now, true) || s.refuse() {
+		t.Fatal("still held after the store is readable")
+	}
+	if p := s.opt.State(); !p.Paused || p.By != "noc1" {
+		t.Fatalf("pause after the retry %+v", p)
 	}
 }

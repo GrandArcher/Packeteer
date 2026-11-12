@@ -2,6 +2,7 @@ package lease
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -35,5 +36,33 @@ func TestSteeringStateReachesTheStandby(t *testing.T) {
 	}
 	if string(doc) != `{"pause":{"paused":true}}` {
 		t.Fatalf("after takeover: %q", doc)
+	}
+}
+
+// An instance that still thinks it is active but no longer holds the lease
+// record must not overwrite the steering file the new holder saved.
+func TestSteeringStateNotWrittenAfterLosingTheLease(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "lease.json")
+	a := newNode(t, path, "pk-a")
+	a.start(t)
+	waitFor(t, "a active", 5*time.Second, a.Active)
+	_ = a.Stop(ctx)
+	// a's flag is still set, as in a process that froze across the takeover.
+	a.mu.Lock()
+	a.active, a.lastOK = true, time.Now().Add(time.Hour)
+	a.mu.Unlock()
+	if err := os.WriteFile(path, []byte(`{"holder":"pk-b#1","id":"pk-b","seq":9}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path+".steering", []byte(`newer`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.PutSteeringState(ctx, []byte(`older`)); err == nil {
+		t.Fatal("an instance that lost the lease saved the steering state")
+	}
+	doc, err := a.SteeringState(ctx)
+	if err != nil || string(doc) != "newer" {
+		t.Fatalf("steering file = %q, %v", doc, err)
 	}
 }

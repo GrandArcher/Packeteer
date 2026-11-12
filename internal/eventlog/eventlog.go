@@ -97,13 +97,25 @@ func (l *Log) Record(e plugin.Event) {
 	if e.Kind == plugin.EventAudit {
 		return
 	}
+	if fn := l.keep(e); fn != nil {
+		fn()
+	}
+}
+
+// keep stores e. When e resolves an alert that was acknowledged, it drops
+// the ack and returns onAck, to run without the lock: the saved state must
+// not keep an ack for a resolved alert.
+func (l *Log) keep(e plugin.Event) (saveAcks func()) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.closed {
-		return
+		return nil
 	}
 	if e.Resolves() {
-		delete(l.acks, e.DedupKey())
+		if _, ok := l.acks[e.DedupKey()]; ok {
+			delete(l.acks, e.DedupKey())
+			saveAcks = l.onAck
+		}
 	}
 	if l.store == nil {
 		if len(l.ring) == MemoryCap {
@@ -111,13 +123,14 @@ func (l *Log) Record(e plugin.Event) {
 			l.ring = l.ring[:MemoryCap-1]
 		}
 		l.ring = append(l.ring, e)
-		return
+		return saveAcks
 	}
 	select {
 	case l.q <- e:
 	default:
 		l.log.Warn("event log queue full; event not stored", "kind", e.Kind)
 	}
+	return saveAcks
 }
 
 func (l *Log) write() {

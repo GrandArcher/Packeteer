@@ -345,3 +345,25 @@ func TestRestoreAcksAfterRestart(t *testing.T) {
 		t.Error("an alert resolved before the restart is still acknowledged")
 	}
 }
+
+// An alert that resolves drops its ack and the ack is saved again, so the
+// saved state does not keep acks for resolved alerts (#565).
+func TestResolveSavesTheDroppedAck(t *testing.T) {
+	ctx := context.Background()
+	l := New(nil, nil, nil)
+	var saved [][]SavedAck
+	l.OnAck(func() { saved = append(saved, l.SavedAcks()) })
+	down := provider(plugin.EventProviderDown, plugin.SeverityCritical, 0, "transit-a")
+	l.Record(down)
+	if _, err := l.Acknowledge(ctx, down.DedupKey(), "noc1", "ticket 7", t0.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	l.Record(provider(plugin.EventProviderUp, plugin.SeverityInfo, 2, "transit-a"))
+	if len(saved) != 2 || len(saved[0]) != 1 || len(saved[1]) != 0 {
+		t.Fatalf("saved acks per change = %+v, want one then none", saved)
+	}
+	l.Record(provider(plugin.EventProviderUp, plugin.SeverityInfo, 3, "transit-a"))
+	if len(saved) != 2 {
+		t.Fatalf("a resolve with no ack saved again: %d saves", len(saved))
+	}
+}

@@ -219,22 +219,37 @@ func (s *steeringState) refuse() bool {
 }
 
 // start restores the saved state. With ha it only fills the read views:
-// changes wait for takeover.
+// changes wait for takeover. Without ha, a store that cannot be read leaves
+// the state unrestored and the decision loop retries.
 func (s *steeringState) start(ctx context.Context, now time.Time) {
-	s.load(ctx, now)
-	if s.ha == nil {
+	if s.load(ctx, now) && s.ha == nil {
 		s.restored.Store(true)
 	}
 }
 
 // takeover restores what the active instance saved, before this
-// instance's first decision as the active one. When the store cannot be
-// read, changes stay refused and the next round tries again: a save now
-// would replace the pair's newer state with this instance's older one.
+// instance's first decision as the active one; without ha it is the retry
+// after a failed read at start. While the store cannot be read, changes
+// are refused and the decision loop makes no decision: a save would
+// replace the saved state with an older one, and a decision would use a
+// pause or pins the operator has since changed.
 func (s *steeringState) takeover(ctx context.Context, now time.Time) {
 	if s.load(ctx, now) {
 		s.restored.Store(true)
 	}
+}
+
+// mayDecide reports whether this round may decide: this instance is
+// active and the saved state is in memory. The state is read first when it
+// is not, so a pause or pin the operator changed is never missed.
+func (s *steeringState) mayDecide(ctx context.Context, now time.Time, active bool) bool {
+	if !active {
+		return false
+	}
+	if !s.restored.Load() {
+		s.takeover(ctx, now)
+	}
+	return s.restored.Load()
 }
 
 // stepDown refuses changes until the next takeover.
