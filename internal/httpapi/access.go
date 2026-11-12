@@ -160,6 +160,7 @@ func (s *Server) routeTable() []route {
 		{"GET /api/blast", operator, s.handleBlast},
 		{"POST /api/whatif", admin, s.handleWhatIf},
 		{"GET /api/snippets", admin, s.handleSnippets},
+		{"POST /api/snippets", admin, s.handleSnippetsCandidate},
 		{"GET /api/upgrade", admin, s.handleUpgrade},
 		{"POST /api/upgrade/check", admin, s.handleUpgradeCheck},
 		{"POST /api/upgrade/apply", admin, s.handleUpgradeApply},

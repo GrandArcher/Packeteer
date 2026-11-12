@@ -50,3 +50,30 @@ router bgp {{.ASN}}
 ! add-path send toward {{.Packeteer}} ("additional-paths send" in each
 ! address family, with an "additional-paths selection" policy).
 {{- end}}
+{{- if .FlowPort}}
+!
+! Flow records to Packeteer's flow source at {{.FlowHost}}, UDP {{.FlowPort}}: NetFlow v9
+! with 1-in-1000 sampling. Replace Loopback0 with the interface whose address
+! is {{.Router}}, then add the last line to each interface that faces an upstream
+! (replace TenGigE0/0/0/0). Check it against your release first.
+flow exporter-map packeteer
+ version v9
+  options interface-table timeout 60
+  template data timeout 60
+ !
+ transport udp {{.FlowPort}}
+ source Loopback0
+ destination {{.FlowHost}}
+!
+flow monitor-map packeteer-ipv4
+ record ipv4
+ exporter packeteer
+ cache timeout active 60
+ cache timeout inactive 15
+!
+sampler-map packeteer
+ random 1 out-of 1000
+!
+! interface TenGigE0/0/0/0
+!  flow ipv4 monitor packeteer-ipv4 sampler packeteer ingress
+{{- end}}

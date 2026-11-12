@@ -42,8 +42,9 @@ function text(n) {
 }
 
 var els = {};
-["pf-list", "pf-when", "pf-inject", "pf-run", "pf-vendor", "pf-allow", "pf-allow-err", "pf-cap", "pf-inject-status", "pf-explain", "ed-yaml", "editor-section", "pf-snippet", "pf-snippet-status"].forEach(function (id) { els[id] = node("x"); });
+["pf-list", "pf-when", "pf-inject", "pf-run", "pf-vendor", "pf-allow", "pf-allow-err", "pf-cap", "pf-inject-status", "pf-explain", "ed-yaml", "editor-section", "pf-snippet", "pf-snippet-status", "pf-snippet-missing", "wz-body", "wz-asn", "wz-router", "wz-edge"].forEach(function (id) { els[id] = node("x"); });
 els["pf-inject"].hidden = true;
+var flowListen = "";
 var calls = [];
 var reply = null;
 var loaded = [];
@@ -58,6 +59,9 @@ var context = {
   checkConfig: function () { checked++; },
   previewCandidate: function (confirm) { previews.push(confirm); },
   Number: Number,
+  Object: Object,
+  Math: Math,
+  wizardFlowListen: function () { return flowListen; },
   encodeURIComponent: encodeURIComponent,
   Promise: Promise,
   api: function (method, url, body) {
@@ -72,7 +76,8 @@ var settings = fs.readFileSync(path.join(__dirname, "web", "settings.js"), "utf8
 ["el", "clear"].forEach(function (n) { vm.runInContext(fn(ui, n), context); });
 vm.runInContext(settings.slice(settings.indexOf("var pfLabels"), settings.indexOf("var pfBadge")), context);
 vm.runInContext(settings.slice(settings.indexOf("var pfBadge"), settings.indexOf("function pfSummary")), context);
-["pfSummary", "pfItem", "renderPreflight", "loadPreflight", "runPreflight", "confirmCheck", "showSnippet", "planInject"].forEach(function (n) {
+vm.runInContext("var snippetShown = false; var snippetSeq = 0;", context);
+["pfSummary", "pfItem", "renderPreflight", "loadPreflight", "runPreflight", "confirmCheck", "snippetCandidate", "showSnippet", "refreshSnippet", "planInject"].forEach(function (n) {
   vm.runInContext(fn(settings, n), context);
 });
 
@@ -152,13 +157,75 @@ reply.then(function () {
 }).then(function () {
   assert(els["pf-when"].textContent === "The checks have not run yet." && els["pf-vendor"].children.length === 2, "never run: " + els["pf-when"].textContent);
 
-  // The router config is requested for the chosen vendor.
+  // An empty page reads the router config of the running file.
   els["pf-vendor"].value = "bird";
+  els["ed-yaml"].value = "";
   reply = Promise.resolve({vendor: "bird", text: "filter packeteer_in {}\n"});
   calls.length = 0;
   return context.showSnippet();
 }).then(function () {
-  assert(calls[0].url === "/api/snippets?vendor=bird" && els["pf-snippet"].textContent === "filter packeteer_in {}\n" && els["pf-snippet"].hidden === false, "snippet call: " + JSON.stringify(calls));
+  assert(calls.length === 1 && calls[0].method === "GET" && calls[0].url === "/api/snippets?vendor=bird" && els["pf-snippet"].textContent === "filter packeteer_in {}\n" && els["pf-snippet"].hidden === false, "running snippet call: " + JSON.stringify(calls));
+  assert(els["pf-snippet-status"].textContent.indexOf("running config") >= 0, "status names the source: " + els["pf-snippet-status"].textContent);
+
+  // Wizard answers and the editor text that are not saved go to the server.
+  els["wz-asn"].value = " 64496 ";
+  els["wz-router"].value = "192.0.2.10";
+  els["wz-edge"].value = "192.0.2.254";
+  flowListen = ":2055";
+  els["ed-yaml"].value = "mode: observe\n";
+  calls.length = 0;
+  return context.showSnippet();
+}).then(function () {
+  var c = calls[0];
+  assert(calls.length === 1 && c.method === "POST" && c.url === "/api/snippets", "candidate call: " + JSON.stringify(calls));
+  assert(c.body.vendor === "bird" && c.body.yaml === "mode: observe\n" && JSON.stringify(c.body.answers) === JSON.stringify({asn: 64496, router_id: "192.0.2.10", edge: "192.0.2.254", flow_listen: ":2055", wizard: true}), "candidate body: " + JSON.stringify(c.body));
+  assert(els["pf-snippet-status"].textContent.indexOf("on this page") >= 0, "status names the source: " + els["pf-snippet-status"].textContent);
+
+  // A wizard that is collapsed (a box with a config) is not sent.
+  els["wz-body"].hidden = true;
+  calls.length = 0;
+  return context.showSnippet();
+}).then(function () {
+  assert(JSON.stringify(calls[0].body.answers) === "{}", "a collapsed wizard sends no answers and no wizard flag: " + JSON.stringify(calls[0].body));
+  els["wz-body"].hidden = false;
+
+  // Missing answers are listed in plain words, not as one raw error.
+  var err = new Error("The router config needs more answers.");
+  err.status = 422;
+  err.data = {error: err.message, missing: ["Router address: enter the Edge address in setup step 1 (Edge).", "Packeteer's address: enter the Router ID in setup step 1 (Edge)."]};
+  reply = Promise.reject(err);
+  return context.showSnippet();
+}).then(function () {
+  var list = els["pf-snippet-missing"];
+  assert(els["pf-snippet"].hidden === true && list.hidden === false && list.children.length === 2 && list.children[0].textContent.indexOf("Edge address in setup step 1") >= 0, "missing list: " + JSON.stringify(list.children.map(text)));
+  assert(els["pf-snippet-status"].textContent === "The router config needs more answers:", "missing status: " + els["pf-snippet-status"].textContent);
+
+  // Changing an answer redraws the config that was asked for, and clears the list.
+  reply = Promise.resolve({vendor: "bird", text: "second\n"});
+  calls.length = 0;
+  return context.refreshSnippet();
+}).then(function () {
+  assert(calls.length === 1 && els["pf-snippet"].textContent === "second\n" && els["pf-snippet-missing"].hidden === true && els["pf-snippet-missing"].children.length === 0, "refresh: " + JSON.stringify(calls));
+
+  // A slower earlier reply does not replace the answer to the latest change.
+  var slow;
+  var first = new Promise(function (res) { slow = res; });
+  reply = first;
+  var older = context.showSnippet();
+  reply = Promise.resolve({vendor: "bird", text: "newer\n"});
+  var newer = context.showSnippet();
+  return newer.then(function () {
+    slow({vendor: "bird", text: "older\n"});
+    return older;
+  });
+}).then(function () {
+  assert(els["pf-snippet"].textContent === "newer\n", "an older reply overwrote a newer one: " + els["pf-snippet"].textContent);
+
+  // Any other failure is explained as before.
+  reply = Promise.reject(new Error("boom"));
+  return context.showSnippet();
+}).then(function () {
+  assert(els["pf-snippet-status"].textContent === "explained: boom" && els["pf-snippet-missing"].hidden === true, "plain error: " + els["pf-snippet-status"].textContent);
   console.log("ok");
 }).catch(function (e) {
   console.error("FAIL: " + (e && e.stack || e));

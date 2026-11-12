@@ -1,0 +1,65 @@
+! Packeteer on Cisco IOS-XR. Generated for review: nothing is applied. Load it
+! with "load" in configuration mode, then "commit confirmed".
+! This router: AS 64512, 192.0.2.254. Packeteer: 192.0.2.10.
+community-set packeteer
+  64512:666
+end-set
+!
+! From Packeteer: only routes that carry the Packeteer community.
+route-policy packeteer-in
+  if community matches-any packeteer then
+    pass
+  else
+    drop
+  endif
+end-policy
+!
+! Toward every eBGP neighbor, customers and peers included: never a route
+! with the Packeteer community. Put the first "if" at the top of the
+! outbound route-policy each eBGP neighbor already uses (rename ebgp-out to
+! it); your existing terms replace the final pass.
+route-policy ebgp-out
+  if community matches-any packeteer then
+    drop
+  endif
+  pass
+end-policy
+!
+router bgp 64512
+ neighbor 192.0.2.10
+  remote-as 64512
+  description packeteer
+  ! Keepalive 10s, hold time 30s: a crashed Packeteer's routes go within 30s.
+  timers 10 30
+  ! Packeteer never offers graceful restart. Leave "graceful-restart" off
+  ! for this neighbor.
+  address-family ipv4 unicast
+   route-policy packeteer-in in
+  !
+ !
+!
+!
+! Flow records to Packeteer's flow source at 192.0.2.10, UDP 2055: NetFlow v9
+! with 1-in-1000 sampling. Replace Loopback0 with the interface whose address
+! is 192.0.2.254, then add the last line to each interface that faces an upstream
+! (replace TenGigE0/0/0/0). Check it against your release first.
+flow exporter-map packeteer
+ version v9
+  options interface-table timeout 60
+  template data timeout 60
+ !
+ transport udp 2055
+ source Loopback0
+ destination 192.0.2.10
+!
+flow monitor-map packeteer-ipv4
+ record ipv4
+ exporter packeteer
+ cache timeout active 60
+ cache timeout inactive 15
+!
+sampler-map packeteer
+ random 1 out-of 1000
+!
+! interface TenGigE0/0/0/0
+!  flow ipv4 monitor packeteer-ipv4 sampler packeteer ingress

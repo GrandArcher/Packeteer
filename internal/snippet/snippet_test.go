@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/GrandArcher/Packeteer/internal/config"
+	"gopkg.in/yaml.v3"
 )
 
 var update = flag.Bool("update", false, "rewrite the golden files")
@@ -26,6 +27,12 @@ func large() Params {
 func full() Params {
 	p := std()
 	p.AddPath, p.IPv6 = true, true
+	return p
+}
+
+func flow() Params {
+	p := std()
+	p.FlowHost, p.FlowPort = "192.0.2.10", 2055
 	return p
 }
 
@@ -49,7 +56,7 @@ func golden(t *testing.T, name, got string) {
 
 func TestGolden(t *testing.T) {
 	for _, vendor := range Vendors {
-		cases := map[string]Params{vendor: std(), vendor + "-addpath-v6": full()}
+		cases := map[string]Params{vendor: std(), vendor + "-addpath-v6": full(), vendor + "-flow": flow()}
 		if vendor != Arista {
 			cases[vendor+"-large"] = large()
 		}
@@ -196,17 +203,91 @@ func TestForConfigSetsIPv6FromProviders(t *testing.T) {
 
 func TestForConfigRefusals(t *testing.T) {
 	cases := map[string]func(*config.Config){
-		"no bgp.neighbors":       func(c *config.Config) { c.BGP.Neighbors = nil },
-		"packeteer_community":    func(c *config.Config) { c.PacketeerCommunity = "" },
-		"packeteer_community: ":  func(c *config.Config) { c.PacketeerCommunity = "65536:1" },
-		"needs Packeteer's addr": func(c *config.Config) { c.RouterID = "" },
-		"bgp.neighbors address":  func(c *config.Config) { c.BGP.Neighbors[0].Address = "edge" },
+		"setup step 1 (Edge), or set bgp.neighbors":                             func(c *config.Config) { c.BGP.Neighbors = nil },
+		"press Generate in the UI setup (step 4, Flow) to fill it as 64512:666": func(c *config.Config) { c.PacketeerCommunity = "" },
+		"packeteer_community: ":                                                 func(c *config.Config) { c.PacketeerCommunity = "65536:1" },
+		"enter the Router ID in setup step 1":                                   func(c *config.Config) { c.RouterID = "" },
+		"bgp.neighbors address":                                                 func(c *config.Config) { c.BGP.Neighbors[0].Address = "edge" },
 	}
 	for want, mut := range cases {
 		cfg := loadConfig(t, "")
 		mut(cfg)
 		if _, err := ForConfig(cfg); err == nil || !strings.Contains(err.Error(), strings.TrimSuffix(want, ": ")) {
 			t.Errorf("%s: err = %v", want, err)
+		}
+	}
+}
+
+// With a flow source every vendor says where the router sends records. The
+// vendors that can express it (Junos, IOS-XR, Arista, RouterOS) print the
+// export config; FRR and BIRD cannot, and say so. Without one, nothing about
+// flows appears.
+func TestFlowExportLines(t *testing.T) {
+	want := map[string][]string{
+		FRR:      {"FRR does not export flows", "192.0.2.10, UDP 2055"},
+		BIRD:     {"BIRD does not export flows", "192.0.2.10, UDP 2055"},
+		Junos:    {"flow-server 192.0.2.10 {", "port 2055;", "source-address 192.0.2.254;", "version-ipfix"},
+		IOSXR:    {"transport udp 2055", "destination 192.0.2.10", "flow exporter-map packeteer"},
+		Arista:   {"sflow destination 192.0.2.10 2055", "sflow source 192.0.2.254", "sflow run"},
+		MikroTik: {"/ip traffic-flow target add dst-address=192.0.2.10 port=2055 version=9", "src-address=192.0.2.254"},
+	}
+	for _, vendor := range Vendors {
+		got, err := Generate(vendor, flow())
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, line := range want[vendor] {
+			if !strings.Contains(got, line) {
+				t.Errorf("%s: %q missing from\n%s", vendor, line, got)
+			}
+		}
+		plain, err := Generate(vendor, std())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(strings.ToLower(plain), "flow") {
+			t.Errorf("%s: flow text without a flow source:\n%s", vendor, plain)
+		}
+	}
+}
+
+func TestForConfigFlowCollector(t *testing.T) {
+	flowSource := func(listen string) config.PluginSpec {
+		var n yaml.Node
+		if err := n.Encode(map[string]any{"listen": listen}); err != nil {
+			t.Fatal(err)
+		}
+		return config.PluginSpec{Type: "flow", Config: n}
+	}
+	cases := []struct {
+		name    string
+		sources func() []config.PluginSpec
+		host    string
+		port    int
+	}{
+		{"no flow source", func() []config.PluginSpec { return nil }, "", 0},
+		{"listen on every address uses Packeteer's address", func() []config.PluginSpec { return []config.PluginSpec{flowSource("0.0.0.0:2055")} }, "192.0.2.10", 2055},
+		{"empty host", func() []config.PluginSpec { return []config.PluginSpec{flowSource(":4739")} }, "192.0.2.10", 4739},
+		{"a given address", func() []config.PluginSpec { return []config.PluginSpec{flowSource("192.0.2.77:2055")} }, "192.0.2.77", 2055},
+		{"ipv6 address", func() []config.PluginSpec { return []config.PluginSpec{flowSource("[2001:db8::10]:2055")} }, "2001:db8::10", 2055},
+		{"another source type is ignored", func() []config.PluginSpec {
+			s := flowSource("192.0.2.77:2055")
+			s.Type = "static"
+			return []config.PluginSpec{s}
+		}, "", 0},
+		{"a flow source with no listen (ebpf only)", func() []config.PluginSpec {
+			return []config.PluginSpec{{Type: "flow"}}
+		}, "", 0},
+	}
+	for _, c := range cases {
+		cfg := loadConfig(t, "")
+		cfg.Sources = c.sources()
+		ps, err := ForConfig(cfg)
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if ps[0].FlowHost != c.host || ps[0].FlowPort != c.port {
+			t.Errorf("%s: collector = %s:%d, want %s:%d", c.name, ps[0].FlowHost, ps[0].FlowPort, c.host, c.port)
 		}
 	}
 }

@@ -27,3 +27,12 @@
 # add_path is set for this neighbor in Packeteer's config: also make the
 # router send every path if your RouterOS release can.
 {{- end}}
+{{- if .FlowPort}}
+
+# Flow records to Packeteer's flow source at {{.FlowHost}}, UDP {{.FlowPort}}: NetFlow v9
+# (docs/mikrotik.md, Traffic Flow).
+/ip traffic-flow set enabled=yes interfaces=all cache-entries=16k \
+    active-flow-timeout=1m inactive-flow-timeout=15s
+/ip traffic-flow target add dst-address={{.FlowHost}} port={{.FlowPort}} version=9 \
+    src-address={{.Router}} v9-template-timeout=5m
+{{- end}}
