@@ -102,8 +102,14 @@ type ixDaemon struct {
 // community, hold_time 1s, one-second rounds) followed by body.
 func startIX(t *testing.T, edge *msEdge, body string) *ixDaemon {
 	t.Helper()
+	return startIXMode(t, edge, "inject", body)
+}
+
+// startIXMode is startIX with the given mode.
+func startIXMode(t *testing.T, edge *msEdge, mode, body string) *ixDaemon {
+	t.Helper()
 	httpPort := freePort(t)
-	return runIX(t, edge, httpPort, fmt.Sprintf(`mode: inject
+	return runIX(t, edge, httpPort, fmt.Sprintf(`mode: %s
 asn: 64512
 router_id: 192.0.2.10
 packeteer_community: "64512:666"
@@ -118,7 +124,7 @@ bgp:
   neighbors:
     - {address: 127.0.0.1, port: %d, local_address: 127.0.0.2}
 announcer: {type: gobgp}
-`, httpPort, edge.port)+body)
+`, mode, httpPort, edge.port)+body)
 }
 
 // runIX runs the controller on cfg, whose API listens on httpPort.
