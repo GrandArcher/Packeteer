@@ -83,7 +83,7 @@ docker run --rm -v packeteer-data:/var/lib/packeteer -v "$PWD:/backup" \
   ghcr.io/grandarcher/packeteer -restore /backup/backup-2026-09-30.tgz -restore-config /backup/config.yaml
 ```
 
-The archive holds the config file as loaded and, with `storage: sqlite`, a copy of the report history. Environment variables (SNMP communities, passwords, tokens) are not in it. `-backup` never overwrites; `-restore` replaces existing history or a config file only with `-force`. The lease file is not backed up: it is recreated. With `ha` the saved steering state (`path` + `.steering`) is not in the archive either, so a restore starts with no pins and no pause. Details: [CONFIG.md](CONFIG.md#backup-and-restore).
+The archive holds the config file as loaded and, with `storage: sqlite`, a copy of the report history. Environment variables (SNMP communities, passwords, tokens) are not in it. `-backup` never overwrites; `-restore` replaces existing history or a config file only with `-force`. The lease file is not backed up: it is recreated. With `ha` the saved steering state (`path` + `.steering`) is not in the archive either: a restore onto a new volume starts with no pins and no pause, and a `.steering` file already on the volume is kept and restored at the next takeover. Details: [CONFIG.md](CONFIG.md#backup-and-restore).
 
 ## Limits
 

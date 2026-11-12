@@ -228,18 +228,24 @@ func (s *steeringState) start(ctx context.Context, now time.Time) {
 }
 
 // takeover restores what the active instance saved, before this
-// instance's first decision as the active one.
+// instance's first decision as the active one. When the store cannot be
+// read, changes stay refused and the next round tries again: a save now
+// would replace the pair's newer state with this instance's older one.
 func (s *steeringState) takeover(ctx context.Context, now time.Time) {
-	s.load(ctx, now)
-	s.restored.Store(true)
+	if s.load(ctx, now) {
+		s.restored.Store(true)
+	}
 }
 
 // stepDown refuses changes until the next takeover.
 func (s *steeringState) stepDown() { s.restored.Store(false) }
 
-func (s *steeringState) load(ctx context.Context, now time.Time) {
+// load restores the saved state. It reports false only when the store
+// could not be read; an unreadable document is logged and replaced by the
+// next save.
+func (s *steeringState) load(ctx context.Context, now time.Time) bool {
 	if s.store == nil {
-		return
+		return true
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -248,13 +254,13 @@ func (s *steeringState) load(ctx context.Context, now time.Time) {
 	raw, err := s.store.SteeringState(ctx)
 	if err != nil {
 		s.log.Error("steering state not restored; pins, pause, and acknowledgements are unchanged", "err", err)
-		return
+		return false
 	}
 	doc := steeringDoc{Version: steeringDocVersion}
 	if raw != nil {
 		if err := json.Unmarshal(raw, &doc); err != nil || doc.Version != steeringDocVersion {
 			s.log.Error("steering state not restored: unreadable document; pins, pause, and acknowledgements are unchanged", "err", err, "version", doc.Version)
-			return
+			return true
 		}
 	}
 	for _, why := range s.pins.Restore(doc.Pins, pinRails(s.cfg()), now) {
@@ -268,6 +274,7 @@ func (s *steeringState) load(ctx context.Context, now time.Time) {
 		s.log.Warn("optimization is paused (restored); every improvement stays withdrawn until resumed", "by", doc.Pause.By, "reason", doc.Pause.Reason, "since", doc.Pause.Since)
 	}
 	s.log.Info("steering state restored", "pins", len(s.pins.List(now)), "paused", doc.Pause.Paused, "acks", len(doc.Acks))
+	return true
 }
 
 // save writes the current state. A failed write is logged: the change

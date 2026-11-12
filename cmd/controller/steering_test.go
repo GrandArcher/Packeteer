@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -130,7 +131,8 @@ probers:
 		d.fatalf("resume: %d", code)
 	}
 	d.holdWire("a restored pin outside the learned RIB is not announced", 4*time.Second, empty)
-	if _, m := d.call(http.MethodGet, "/api/pins", ""); len(m["pins"].([]any)) != 1 {
+	_, m = d.call(http.MethodGet, "/api/pins", "")
+	if pins, _ := m["pins"].([]any); len(pins) != 1 {
 		d.fatalf("pin dropped while its prefix is not learned: %v", m)
 	}
 	edge.advertise("203.0.113.0/24")
@@ -303,13 +305,17 @@ func TestSteeringStateSurvivesRestart(t *testing.T) {
 
 // memSteering is a SteeringStore both instances of a pair share.
 type memSteering struct {
-	mu  sync.Mutex
-	doc []byte
+	mu       sync.Mutex
+	doc      []byte
+	readFail bool
 }
 
 func (m *memSteering) SteeringState(context.Context) ([]byte, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.readFail {
+		return nil, errors.New("shared volume unreadable")
+	}
 	return m.doc, nil
 }
 
@@ -352,12 +358,19 @@ func TestSteeringStateFollowsTheHAPair(t *testing.T) {
 		t.Fatal("the standby's state changed before takeover")
 	}
 
-	// Failover: a stops, b becomes active.
+	// Failover: a stops, b becomes active. While the shared store cannot be
+	// read, b keeps refusing changes, so no save replaces the pair's state.
 	elA.active, elB.active = false, true
 	a.stepDown()
 	if !b.refuse() {
 		t.Fatal("b takes changes before it restored the pair's state")
 	}
+	shared.readFail = true
+	b.takeover(ctx, now)
+	if !b.refuse() {
+		t.Fatal("b takes changes after a failed restore")
+	}
+	shared.readFail = false
 	b.takeover(ctx, now)
 	if p := b.opt.State(); !p.Paused || p.By != "noc1" {
 		t.Fatalf("pause after takeover %+v", p)

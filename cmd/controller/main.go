@@ -1065,7 +1065,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 				exportFlowTags.set("", nil, nil)
 				return
 			}
-			if !leading && ha != nil {
+			if ha != nil && !steer.restored.Load() {
 				steer.takeover(loopCtx, now)
 			}
 			leading = true
