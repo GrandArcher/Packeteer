@@ -3115,7 +3115,7 @@ jobs:
           done
           test "$ok" = 1
           bash lab/ui-smoke.sh http://127.0.0.1:18568/settings.html 'mode-observe' \
-            'Every other check passed. No announcer is configured: the step below adds one.' \
+            'summary: Every other check passed. No announcer is configured: the step below adds one.' \
             'inject step hidden: false' 'announcer types: gobgp' \
             'plan announcer: gobgp' 'plan answer: 412 preflight_required' \
             'A check no longer passes. Injection stays off:' 'inject step hidden after refusal: true' \

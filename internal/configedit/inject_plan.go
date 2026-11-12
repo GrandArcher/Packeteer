@@ -123,6 +123,9 @@ func addAnnouncer(root *yaml.Node, raw Values, was *config.Config) (string, erro
 	}
 	b, _ := blockByID("inject")
 	i := slices.IndexFunc(b.Fields, func(f Field) bool { return f.Key == "announcer" })
+	if i < 0 {
+		return "", errors.New("announcer: the settings schema has no announcer fields")
+	}
 	f := b.Fields[i]
 	v, err := normalizeField(f.Key, f, raw)
 	if err == nil {

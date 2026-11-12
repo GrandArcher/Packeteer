@@ -327,8 +327,8 @@ func TestGateCountsTheCandidateAnnouncer(t *testing.T) {
 	if err := r.Gate(context.Background(), Candidate{Fingerprint: f.Fingerprint, Announcer: true}); err != nil {
 		t.Fatalf("candidate adds the announcer: %v", err)
 	}
-	if rep, _ := r.Latest(); rep.AnnouncerMissing {
-		t.Fatal("the kept report still misses the announcer")
+	if rep, _ := r.Latest(); !rep.AnnouncerMissing || rep.Ready {
+		t.Fatalf("the kept report describes the candidate, not the running process: %+v", rep)
 	}
 	f.Learned = 0
 	if err := r.Gate(context.Background(), Candidate{Fingerprint: f.Fingerprint, Announcer: true}); !errors.As(err, &nr) || strings.Join(nr.Report.Blocking(), ",") != CheckSession {

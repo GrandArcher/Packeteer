@@ -530,7 +530,7 @@ func TestSnippetWizardDriverMatchesPage(t *testing.T) {
 }
 
 // TestAnnouncerStepFixturesMatchAPI decodes the canned preflight report of
-// the announcer step smoke (#568) with the API's own type: only the missing
+// the announcer step smoke (#568) with the API's own types: only the missing
 // announcer blocks. The plan call is not stubbed, so the real server's
 // checks decide it, and the driver never saves. A renamed id fails here
 // instead of as a timeout in CI.
@@ -539,19 +539,27 @@ func TestAnnouncerStepFixturesMatchAPI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var rep preflight.Report
-	for _, s := range f.Stubs {
-		if s.Path == "/api/config/inject" {
-			t.Fatal("the plan call is stubbed")
-		}
-		if s.Path == "/api/preflight/run" {
-			dec := json.NewDecoder(bytes.NewReader(s.body))
-			dec.DisallowUnknownFields()
-			if err := dec.Decode(&rep); err != nil {
-				t.Fatal(err)
-			}
-		}
+	if len(f.Stubs) != 1 || f.Stubs[0].Method != "GET" || f.Stubs[0].Path != "/api/preflight" {
+		t.Fatalf("stubs = %+v, want only the preflight report", f.Stubs)
 	}
+	var body struct {
+		Version     string            `json:"version"`
+		Mode        string            `json:"mode"`
+		Ready       bool              `json:"ready"`
+		GeneratedAt string            `json:"generated_at"`
+		Available   bool              `json:"available"`
+		Report      *preflight.Report `json:"report"`
+		Vendors     []string          `json:"vendors"`
+	}
+	dec := json.NewDecoder(bytes.NewReader(f.Stubs[0].body))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if !body.Available || body.Report == nil || len(body.Vendors) == 0 || body.Mode != "observe" {
+		t.Fatalf("preflight answer = %+v", body)
+	}
+	rep := *body.Report
 	if !rep.AnnouncerMissing || rep.Ready || strings.Join(rep.Blocking(), ",") != preflight.CheckWithdrawal {
 		t.Fatalf("report = %+v, want only the announcer missing", rep)
 	}

@@ -1,7 +1,0 @@
-{"ran_at": "2026-11-12T10:00:00Z", "ready": false, "announcer_missing": true, "results": [
-  {"id": "bgp_session", "title": "BGP session and learned routes", "status": "pass", "detail": "Established: 192.0.2.254. 900 prefixes learned."},
-  {"id": "import_filter", "title": "Router filters keep Packeteer routes inside your AS", "status": "pass", "detail": "Confirmed by lab."},
-  {"id": "probe_egress", "title": "Probes leave through the intended provider", "status": "warn", "detail": "lab-a: the source_ip is a loopback address.", "fix": "Use the provider's own source address."},
-  {"id": "timers", "title": "Hold time and graceful restart", "status": "pass", "detail": "192.0.2.254: hold time 1m30s, graceful restart off."},
-  {"id": "withdrawal", "title": "Routes are withdrawn when Packeteer stops", "status": "fail", "detail": "No announcer is configured.", "fix": "Once the other checks pass, the Turn on injection step adds one."}
-]}

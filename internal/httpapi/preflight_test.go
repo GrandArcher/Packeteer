@@ -367,6 +367,11 @@ func TestInjectStepAddsTheAnnouncer(t *testing.T) {
 	if disk, _ := os.ReadFile(e.path); string(disk) != editorYAML {
 		t.Fatal("the plan changed the file")
 	}
+	// The kept report is still the running process's, so a reload of the
+	// page offers the form again.
+	if _, pf := e.do(t, "GET", "/api/preflight", plugin.RoleAdmin, nil); pf["report"].(map[string]any)["announcer_missing"] != true {
+		t.Fatalf("kept report after the plan = %v", pf["report"])
+	}
 
 	_, cur := e.do(t, "GET", "/api/config", plugin.RoleAdmin, nil)
 	save := map[string]any{"yaml": plan, "base": cur["sha256"], "confirm_inject": true}

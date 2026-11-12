@@ -1,7 +1,7 @@
 "use strict";
 // Page driver for the UI smoke test (#568). The running file is a fresh
 // observe config with no announcer. uiproxy adds this script to
-// /settings.html and answers the preflight report from report.json: every
+// /settings.html and answers the preflight report from preflight.json: every
 // check passes except the missing announcer. The driver reads the announcer
 // form the inject step draws from the config schema, asks for a plan with
 // it, and writes what happens into the page for lab/ui-smoke.sh to match.
@@ -46,6 +46,7 @@ var steps = [
   function () {
     savedYaml = byId("ed-yaml").value;
     var types = Array.prototype.map.call(document.querySelectorAll("#pf-announcer select option"), function (o) { return o.value; });
+    note("fixture-summary", "summary: " + byId("pf-when").textContent);
     note("fixture-step", "inject step hidden: " + byId("pf-inject").hidden);
     note("fixture-types", "announcer types: " + types.join(","));
     byId("pf-allow").value = "198.51.100.0/24";

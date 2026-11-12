@@ -53,9 +53,13 @@ func (r *Runner) run(ctx context.Context, addsAnnouncer bool) (Report, string) {
 		f.Confirmed = r.store.Active(f.Fingerprint)
 	}
 	rep := Run(f, r.now())
-	r.mu.Lock()
-	r.last = &rep
-	r.mu.Unlock()
+	// A report that counts an announcer the running process lacks describes
+	// a config not saved yet; the health page and metrics keep the running one.
+	if !f.AnnouncerAdded {
+		r.mu.Lock()
+		r.last = &rep
+		r.mu.Unlock()
+	}
 	return rep, f.Fingerprint
 }
 
