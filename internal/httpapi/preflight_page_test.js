@@ -270,6 +270,14 @@ reply.then(function () {
 }).then(function () {
   assert(calls.length === 1 && calls[0].body.announcer && calls[0].body.announcer.type === "gobgp" && calls[0].body.max_improvements === undefined, "plan body carries the announcer: " + JSON.stringify(calls[0].body));
 
+  // An announcer that is saved but not running yet is in the text: none is sent.
+  els["ed-yaml"].value = "mode: observe\nannouncer:\n  type: gobgp\n";
+  calls.length = 0;
+  return context.planInject();
+}).then(function () {
+  assert(!("announcer" in calls[0].body), "a second announcer was sent: " + JSON.stringify(calls[0].body));
+  els["ed-yaml"].value = "mode: observe\n";
+
   // Another check that blocks keeps the step hidden.
   var twoBlock = JSON.parse(JSON.stringify(blocked));
   twoBlock.announcer_missing = true;

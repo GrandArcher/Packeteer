@@ -2670,7 +2670,8 @@ function planInject() {
   var body = {current: byId("ed-yaml").value, allowlist: prefixes};
   var cap = byId("pf-cap").value.trim();
   if (cap) body.max_improvements = Number(cap);
-  if (pfAnnouncer) body.announcer = pfAnnouncer;
+  // An announcer saved but not yet running is in the editor text already.
+  if (pfAnnouncer && !/^announcer:/m.test(body.current)) body.announcer = pfAnnouncer;
   var status = byId("pf-inject-status");
   var list = byId("pf-explain");
   clear(list);
