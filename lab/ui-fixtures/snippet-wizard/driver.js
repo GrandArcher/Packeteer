@@ -12,8 +12,10 @@ var realFetch = window.fetch;
 window.fetch = function (url, opts) {
   var method = (opts && opts.method) || "GET";
   var u = String(url);
-  // POST /api/snippets only renders text from the page; it writes nothing.
-  if (method !== "GET" && u.indexOf("/api/snippets") < 0) writes++;
+  // POST /api/config/form without apply only previews the form, and
+  // POST /api/snippets only renders text from the page; neither writes.
+  var preview = u.indexOf("/api/config/form") >= 0 && !/"apply"\s*:\s*true/.test(String((opts && opts.body) || ""));
+  if (method !== "GET" && u.indexOf("/api/snippets") < 0 && !preview) writes++;
   return realFetch.apply(window, arguments);
 };
 
