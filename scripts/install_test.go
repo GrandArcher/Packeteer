@@ -111,9 +111,9 @@ func TestInstallBringsUpObserveAndPointsAtTheWizard(t *testing.T) {
 		t.Fatalf("the config must pass -check before the container starts:\n%s", calls)
 	}
 	for _, want := range []string{
-		"curl -fsSLo " + e.dir + "/config.yaml https://raw.githubusercontent.com/GrandArcher/Packeteer/v1.1.0/config.example.yaml",
+		"curl -fsSLo " + e.dir + "/config.yaml https://raw.githubusercontent.com/GrandArcher/Packeteer/v1.2.0/config.example.yaml",
 		"-v " + e.dir + "/config.yaml:/etc/packeteer/config.yaml -v ", // writable: the wizard saves
-		"-v packeteer-data:/var/lib/packeteer ghcr.io/grandarcher/packeteer:1.1.0",
+		"-v packeteer-data:/var/lib/packeteer ghcr.io/grandarcher/packeteer:1.2.0",
 		"docker logs packeteer",
 		"docker exec packeteer cat /var/lib/packeteer/first-run-admin-password",
 	} {
@@ -182,8 +182,8 @@ func TestReleasePinsAgree(t *testing.T) {
 			t.Errorf("%s pins no release", file)
 		}
 		for _, v := range m {
-			if v[1] != "1.1.0" {
-				t.Errorf("%s pins %s, want 1.1.0", file, v[1])
+			if v[1] != "1.2.0" {
+				t.Errorf("%s pins %s, want 1.2.0", file, v[1])
 			}
 		}
 	}
