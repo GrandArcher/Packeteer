@@ -59,7 +59,7 @@ func (s *Server) steerWritable(w http.ResponseWriter, what string) bool {
 		return false
 	}
 	if refuse, _ := s.steerGate.Load().(func() bool); refuse != nil && refuse() {
-		writeJSON(w, http.StatusConflict, map[string]string{"error": what + " is refused: this instance is an HA standby (call the active instance) or is still restoring its saved steering state"})
+		writeJSON(w, http.StatusConflict, map[string]string{"error": what + " is refused: this instance is an HA standby (call the active instance) or cannot restore its saved steering state yet (see the log)"})
 		return false
 	}
 	return true
