@@ -128,8 +128,9 @@ func (s *Server) handleSnippets(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleSnippetsCandidate renders the router config from text that is not
-// saved: the YAML in the editor or a wizard result, with the unsaved wizard
-// answers laid over it. It reads no file, writes nothing, and sends nothing
+// saved: the YAML in the editor or a wizard result. With answers.wizard set
+// the wizard's answers replace the keys Generate would (see
+// snippet.ForCandidate). It reads no file, writes nothing, and sends nothing
 // to a router, so it works before any config is saved. A missing answer
 // comes back as plain hints in "missing".
 func (s *Server) handleSnippetsCandidate(w http.ResponseWriter, r *http.Request) {

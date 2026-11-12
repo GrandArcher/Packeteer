@@ -13,7 +13,8 @@ import (
 // not yet saved. Wizard is true while the wizard is open: Generate then
 // replaces asn, router_id, packeteer_community, bgp.neighbors and sources,
 // so those come from the answers and not from the text. Without Wizard the
-// text is used as it is and the other fields are ignored.
+// text is used as it is and the other fields are ignored. Generate also
+// replaces providers; the IPv6 family still comes from the text's providers.
 type Answers struct {
 	Wizard   bool   `json:"wizard"`
 	ASN      uint32 `json:"asn"`

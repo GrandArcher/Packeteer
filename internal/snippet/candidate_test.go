@@ -79,6 +79,17 @@ func TestForCandidateTextAlone(t *testing.T) {
 	}
 }
 
+// Answers sent without the wizard flag are not read.
+func TestForCandidateIgnoresAnswersWithoutWizard(t *testing.T) {
+	ps, err := ForCandidate([]byte(exampleText), Answers{ASN: 64999, RouterID: "192.0.2.99", Edge: "192.0.2.98", FlowListen: "192.0.2.20:2055"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ps) != 2 || ps[0].ASN != 64496 || ps[0].Router != "192.0.2.253" || ps[0].Community != "64512:666" || ps[0].FlowPort != 6343 {
+		t.Fatalf("answers leaked into the text: %+v", ps)
+	}
+}
+
 // While the wizard is open Generate replaces asn, router_id, the community,
 // the neighbors, and the sources, so the snippet must show those and not the
 // text: a router filter on 64512:666 would reject routes saved as 64496:666.
