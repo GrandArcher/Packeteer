@@ -65,17 +65,17 @@ The image is `ghcr.io/grandarcher/packeteer`, linux/amd64 and linux/arm64. It ru
 
 | Tag | What it is |
 |---|---|
-| `1.1.0` | The last release. Pin this one. |
+| `1.2.0` | The last release. Pin this one. |
 | `latest` | The same release, updated when a release tag is published. |
 | `edge` | The build from `main`. |
 
 **Step by step: [docs/quickstart.md](docs/quickstart.md).** It goes from an empty directory to a running instance in observe, with a first run on loopback, `docker run` and Compose, and the stop. CI runs every command on that page against the image built from the same commit.
 
-The short version, pinned to 1.1.0, the last release. Take the example config from the same tag as the image: the file on `main` can carry keys a release does not know yet, and unknown keys refuse startup. For `:edge`, use `main` in both places.
+The short version, pinned to 1.2.0, the last release. Take the example config from the same tag as the image: the file on `main` can carry keys a release does not know yet, and unknown keys refuse startup. For `:edge`, use `main` in both places.
 
 ```sh
-IMAGE=ghcr.io/grandarcher/packeteer:1.1.0
-curl -fsSLo config.yaml https://raw.githubusercontent.com/GrandArcher/Packeteer/v1.1.0/config.example.yaml
+IMAGE=ghcr.io/grandarcher/packeteer:1.2.0
+curl -fsSLo config.yaml https://raw.githubusercontent.com/GrandArcher/Packeteer/v1.2.0/config.example.yaml
 # Edit providers and source IPs. Leave mode: observe.
 mkdir -p plugins
 
@@ -96,7 +96,7 @@ docker run -d --name packeteer --network host \
 
 ```sh
 docker run --rm -e PACKETEER_CONFIG=/etc/packeteer/config.example.yaml \
-  ghcr.io/grandarcher/packeteer:1.1.0 -check
+  ghcr.io/grandarcher/packeteer:1.2.0 -check
 ```
 
 The default config path inside the container is `/etc/packeteer/config.yaml` (`PACKETEER_CONFIG`, or `-config`).
@@ -107,7 +107,7 @@ Without `NET_RAW`, or where ICMP is filtered, the probe falls back to TCP port 4
 
 The `packeteer-data` volume keeps report history (`storage: {type: sqlite}`, file `/var/lib/packeteer/packeteer.db`) across container restarts and upgrades, and the open billing period of SNMP 95th-percentile samples when telemetry is configured. Without the volume, reports and that window start empty after the container is recreated. Leave out `storage` to turn history off; the probe and decision loop does not depend on it, and the 95th window then lives in memory only. Sign-in on by default (no `auth.enabled`, no `PACKETEER_HTTP_USER`) adds `sqlite` when `storage` is left out.
 
-[docker-compose.yml](docker-compose.yml) runs the same container with Compose: host networking, the two capabilities, the mounts, and `restart: unless-stopped` ([quickstart, step 5](docs/quickstart.md#5-or-run-it-with-compose)). Its `image` line pins `ghcr.io/grandarcher/packeteer:1.1.0`; use `:edge` for the build from `main`. There is no `ports:` map: with host networking, `http.listen` is already an address on the host. Stop with `docker compose stop -t 30` (see [Rollback](#rollback)).
+[docker-compose.yml](docker-compose.yml) runs the same container with Compose: host networking, the two capabilities, the mounts, and `restart: unless-stopped` ([quickstart, step 5](docs/quickstart.md#5-or-run-it-with-compose)). Its `image` line pins `ghcr.io/grandarcher/packeteer:1.2.0`; use `:edge` for the build from `main`. There is no `ports:` map: with host networking, `http.listen` is already an address on the host. Stop with `docker compose stop -t 30` (see [Rollback](#rollback)).
 
 ## Minimum config
 
@@ -192,7 +192,7 @@ Leave graceful restart off on the session. Guides:
 - [docs/multi-pop.md](docs/multi-pop.md) - several POPs (routing domains) federated over mutual TLS: inter-DC RTT in the path cost, global commit across POPs, and the central view. Lab-proven only
 - [docs/external-policy.md](docs/external-policy.md) - publish the routes inject would announce for your own BGP daemon (BIRD, OpenBGPD, ExaBGP) instead of peering Packeteer as an announcer; TLS, token, TTL. Lab-proven with BIRD
 - [docs/agents.md](docs/agents.md) - probe agents you run inside your own network (other POPs, sites), controlled by one controller over mutual TLS with per-agent identity and revocation. Probing only. Tested in process and in a Docker lab with two agents
-- [docs/mcp.md](docs/mcp.md) - an MCP server so AI assistants can read Packeteer through its REST API: read tools by default, write tools off, a token scope for each, stdio and HTTP
+- [docs/mcp.md](docs/mcp.md) - an MCP server so AI assistants can read Packeteer through its REST API: read tools by default, write tools (maintenance, pins, pause, alert acknowledgement) off, a token scope for each, stdio and HTTP
 - [docs/leak-watch.md](docs/leak-watch.md) - how Packeteer keeps its routes inside your AS: the rails, and `leak_watch`, which withdraws and holds out a route seen outside the AS. Lab-proven only
 - [docs/precedence.md](docs/precedence.md) - which surface owns a prefix when mitigation, inbound, outbound, a leak hold, flap quarantine, and HA all want it, how the shared cap is spent, and which test proves each pair
 - [docs/policy-routing.md](docs/policy-routing.md) - probe sources behind the router
@@ -325,7 +325,7 @@ Symptoms, log lines, and fixes: [docs/troubleshooting.md](docs/troubleshooting.m
 
 ## Features
 
-Status on main after the 1.1.0 release, capability rows per milestone and how many are done, from the summary in [docs/FEATURES.md](docs/FEATURES.md#summary):
+Status on main after the 1.2.0 release, capability rows per milestone and how many are done, from the summary in [docs/FEATURES.md](docs/FEATURES.md#summary):
 
 | Milestone | Rows | Done |
 |---|---|---|
@@ -351,13 +351,19 @@ v1.0 adds no capability rows. It is the pre-release audit and review pass over v
 
 v1.0.1 was a patch with no new capability rows and no new config keys: hardening of the sign-in lockout and password hashing, the external policy feed, the herd hub endpoint checks, webhook and `otlp` tokens over https, HA step-down and reload, PBR rollback, flow exporter CIDRs, and the Dockerfile builder pin ([CHANGELOG](CHANGELOG.md#101---2026-11-09), #527-#536). The feature counts above are unchanged. The shipped config stays `mode: observe`.
 
-v1.1.0 (this release) adds three capability rows, all opt-in and all partial: an MCP server for AI assistants ([docs/mcp.md](docs/mcp.md), #302), RPKI-invalid only paths with evidence and admin-approved SLURM exceptions ([docs/only-invalid.md](docs/only-invalid.md), #401, with an opt-in Qrator Radar link-out, #402), and a non-BGP mode that installs flow-driven static routes on a router with no BGP session ([docs/nonbgp.md](docs/nonbgp.md), #300). The non-BGP routes are not from a learned RIB view: an owner-approved exception for that mode only, off by default, lab-proven with the `linux` steerer only. The counts above include the three rows ([CHANGELOG](CHANGELOG.md#110---2026-11-10)). Nothing is field-proven (#54). The shipped config stays `mode: observe`, and injection stays off by default.
+v1.1.0 added three capability rows, all opt-in and all partial at that release: an MCP server for AI assistants ([docs/mcp.md](docs/mcp.md), #302), RPKI-invalid only paths with evidence and admin-approved SLURM exceptions ([docs/only-invalid.md](docs/only-invalid.md), #401, with an opt-in Qrator Radar link-out, #402), and a non-BGP mode that installs flow-driven static routes on a router with no BGP session ([docs/nonbgp.md](docs/nonbgp.md), #300). The non-BGP routes are not from a learned RIB view: an owner-approved exception for that mode only, off by default, lab-proven with the `linux` steerer only. The counts above include the three rows ([CHANGELOG](CHANGELOG.md#110---2026-11-10)). Nothing is field-proven (#54). The shipped config stays `mode: observe`, and injection stays off by default.
+
+v1.2.0 (this release) adds no new capability rows and no config keys. It adds steering calls for an operator: pin a prefix to a provider (`/api/pins`), pause and resume optimization (`/api/optimization/pause`), and acknowledge an alert (`/api/alerts/ack`). The same calls, plus two read tools (`pins`, `optimization_status`), are MCP tools; the write ones stay off unless `mcp.write_tools` is set and the token has the `mcp:write` scope ([docs/mcp.md](docs/mcp.md#steering-through-the-api), #558). A pin is refused unless its prefix is in the learned RIB view and `allowlist.prefixes`, and is announced only in `mode: inject`, under a static rule's rails. This completes the MCP row: the counts above are 131 done, up from 130 at 1.1.0 ([CHANGELOG](CHANGELOG.md#120---2026-11-11)). Nothing is field-proven (#54). The shipped config stays `mode: observe`, and injection stays off by default.
 
 ## Upgrades
 
 Pulling a newer image and recreating the container is the plain upgrade. Your config and the `packeteer-data` volume carry over.
 
 The Settings page can also upgrade in place (#196). It is off by default. It needs `upgrade.enabled: true`, the release public key in `upgrade.public_key` ([CONFIG.md](docs/CONFIG.md#upgrade)), an admin login (auth or basic auth), and the `packeteer-data` volume to keep the new version across restarts. The public key is printed in the [v0.6.0 release notes](https://github.com/GrandArcher/Packeteer/releases/tag/v0.6.0). Every route is withdrawn before the switch, and a release whose signature or checksum does not match is refused. Details: [docs/ui.md](docs/ui.md#upgrade-from-the-ui).
+
+### From 1.1.0 to 1.2.0
+
+- No config key changed and no existing config behaves differently. Pins, a pause, and alert acknowledgements are in memory: a restart clears them. A downgrade to 1.1.0 loses the new calls and needs no config change ([docs/mcp.md](docs/mcp.md#steering-through-the-api)).
 
 ### From 1.0.1 to 1.1.0
 
