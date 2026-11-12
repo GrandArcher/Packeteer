@@ -293,9 +293,11 @@ func (s *steeringState) load(ctx context.Context, now time.Time) bool {
 }
 
 // save writes the current state. A failed write is logged: the change
-// holds in memory and is lost on a restart or takeover.
+// holds in memory and is lost on a restart or takeover. Nothing is written
+// while changes are refused: memory may be older than the store, and not
+// every caller is behind the API gate (an alert that resolves drops its ack).
 func (s *steeringState) save() {
-	if s.store == nil {
+	if s.store == nil || s.refuse() {
 		return
 	}
 	s.mu.Lock()

@@ -375,6 +375,13 @@ func TestSteeringStateFollowsTheHAPair(t *testing.T) {
 	if a.mayDecide(ctx, now, false) || b.mayDecide(ctx, now, false) {
 		t.Fatal("a standby may decide")
 	}
+	// An acked alert resolving is not an API change: its save must not
+	// replace the pair's newer document with b's older state.
+	before := string(shared.doc)
+	b.save()
+	if string(shared.doc) != before {
+		t.Fatalf("a save while the state is unread replaced the pair's document: %s", shared.doc)
+	}
 	shared.readFail = false
 	if !b.mayDecide(ctx, now, true) {
 		t.Fatal("b still held after the shared state is readable")
