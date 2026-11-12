@@ -47,3 +47,8 @@ protocol bgp packeteer {
 	};
 {{- end}}
 }
+{{- if .FlowPort}}
+
+# Flow records: BIRD does not export flows. Send NetFlow, IPFIX, or sFlow from
+# this router's host to Packeteer's flow source at {{.FlowHost}}, UDP {{.FlowPort}}.
+{{- end}}

@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"net/http"
+	"net/http/httptest"
 	"net/netip"
 	"os"
 	"os/exec"
@@ -334,5 +335,71 @@ func TestPreflightPage(t *testing.T) {
 	out, err := exec.Command(node, "preflight_page_test.js").CombinedOutput()
 	if err != nil || !strings.Contains(string(out), "ok") {
 		t.Fatalf("preflight page: %v\n%s", err, out)
+	}
+}
+
+// missingSnippet is a runner whose running config has no router yet.
+type missingSnippet struct{ fakePreflight }
+
+func (missingSnippet) Snippet(string) (string, error) {
+	return "", &snippet.MissingError{Hints: []string{"Router address: enter the Edge address in setup step 1 (Edge)."}}
+}
+
+func TestSnippetsRunningConfigMissingAnswers(t *testing.T) {
+	f := goodFacts()
+	e := newPreflightUI(t, &f)
+	e.srv.SetPreflight(missingSnippet{fakePreflight{preflight.NewRunner(func(context.Context) preflight.Facts { return f }, nil, nil)}})
+	rec, got := e.do(t, "GET", "/api/snippets?vendor=frr", plugin.RoleAdmin, nil)
+	missing, _ := got["missing"].([]any)
+	if rec.Code != http.StatusUnprocessableEntity || len(missing) != 1 || !strings.Contains(missing[0].(string), "setup step 1") {
+		t.Fatalf("missing: %d %s", rec.Code, rec.Body)
+	}
+}
+
+// The panel renders from what is on the page before anything is saved: the
+// wizard answers over the editor text. No runner is needed, and the file on
+// disk is not touched.
+func TestSnippetsFromUnsavedCandidate(t *testing.T) {
+	e := newUI(t)
+	before, err := os.ReadFile(e.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	post := func(body any) (*httptest.ResponseRecorder, map[string]any) {
+		return e.do(t, "POST", "/api/snippets", plugin.RoleAdmin, body)
+	}
+
+	rec, got := post(map[string]any{"vendor": "frr", "answers": map[string]any{"asn": 64496, "router_id": "192.0.2.10", "edge": "192.0.2.254"}})
+	text, _ := got["text"].(string)
+	if rec.Code != http.StatusOK || !strings.Contains(text, "router bgp 64496") || !strings.Contains(text, "permit 64496:666") || !strings.Contains(text, "neighbor 192.0.2.10 remote-as 64496") {
+		t.Fatalf("wizard answers: %d %s", rec.Code, rec.Body)
+	}
+
+	rec, got = post(map[string]any{"vendor": "mikrotik", "answers": map[string]any{"asn": 64496, "router_id": "192.0.2.10", "edge": "192.0.2.254", "flow_listen": ":2055"}})
+	text, _ = got["text"].(string)
+	if rec.Code != http.StatusOK || !strings.Contains(text, "/ip traffic-flow target add dst-address=192.0.2.10 port=2055") {
+		t.Fatalf("flow answers: %d %s", rec.Code, rec.Body)
+	}
+
+	yaml := "asn: 64497\nrouter_id: 192.0.2.10\npacketeer_community: \"64497:700\"\nbgp:\n  neighbors:\n    - address: 192.0.2.253\n"
+	rec, got = post(map[string]any{"vendor": "bird", "yaml": yaml})
+	text, _ = got["text"].(string)
+	if rec.Code != http.StatusOK || !strings.Contains(text, "(64497, 700) ~ bgp_community") || !strings.Contains(text, "neighbor 192.0.2.10 as 64497") {
+		t.Fatalf("editor text: %d %s", rec.Code, rec.Body)
+	}
+
+	rec, got = post(map[string]any{"vendor": "frr", "answers": map[string]any{"asn": 64496}})
+	missing, _ := got["missing"].([]any)
+	if rec.Code != http.StatusUnprocessableEntity || len(missing) != 2 || !strings.Contains(missing[0].(string), "Edge address in setup step 1") || !strings.Contains(missing[1].(string), "Router ID in setup step 1") {
+		t.Fatalf("missing answers: %d %s", rec.Code, rec.Body)
+	}
+	if rec, got = post(map[string]any{"vendor": "cumulus", "answers": map[string]any{"asn": 64496, "router_id": "192.0.2.10", "edge": "192.0.2.254"}}); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(got["error"].(string), "unknown vendor") {
+		t.Fatalf("unknown vendor: %d %s", rec.Code, rec.Body)
+	}
+	if rec, _ = e.do(t, "POST", "/api/snippets", plugin.RoleOperator, map[string]any{"vendor": "frr"}); rec.Code != http.StatusForbidden {
+		t.Fatalf("operator = %d", rec.Code)
+	}
+	if after, _ := os.ReadFile(e.path); string(after) != string(before) {
+		t.Fatalf("the config file changed:\n%s", after)
 	}
 }

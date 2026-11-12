@@ -121,10 +121,47 @@ func (s *Server) handleSnippets(w http.ResponseWriter, r *http.Request) {
 	vendor := r.URL.Query().Get("vendor")
 	text, err := p.Snippet(vendor)
 	if err != nil {
-		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
+		snippetError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"vendor": vendor, "text": text})
+}
+
+// handleSnippetsCandidate renders the router config from text that is not
+// saved: the YAML in the editor or a wizard result, with the unsaved wizard
+// answers laid over it. It reads no file, writes nothing, and sends nothing
+// to a router, so it works before any config is saved. A missing answer
+// comes back as plain hints in "missing".
+func (s *Server) handleSnippetsCandidate(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Vendor  string          `json:"vendor"`
+		YAML    string          `json:"yaml"`
+		Answers snippet.Answers `json:"answers"`
+	}
+	if !decodeLarge(w, r, &req, configBodyLimit) {
+		return
+	}
+	params, err := snippet.ForCandidate([]byte(req.YAML), req.Answers)
+	var text string
+	if err == nil {
+		text, err = snippet.Join(req.Vendor, params)
+	}
+	if err != nil {
+		snippetError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"vendor": req.Vendor, "text": text})
+}
+
+// snippetError answers 422 with the plain hints when answers are missing, so
+// the page can list what to fill in and where, and with the error otherwise.
+func snippetError(w http.ResponseWriter, err error) {
+	var miss *snippet.MissingError
+	if errors.As(err, &miss) {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": "The router config needs more answers.", "missing": miss.Hints})
+		return
+	}
+	writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
 }
 
 // handleInjectPlan renders the inject config for a small allowlist, once the

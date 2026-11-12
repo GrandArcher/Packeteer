@@ -149,7 +149,7 @@
     </div>
     <ul id="pf-list" class="pf-list"></ul>
     <h3>Router config</h3>
-    <p class="tag">The session to Packeteer and the two filters, written from your answers above for the router you pick. It is text to review: Packeteer never connects to your router or applies it. Check it against your software release first.</p>
+    <p class="tag">The session to Packeteer and the two filters, plus flow export when a flow collector is set, written for the router you pick from the answers on this page: the setup wizard fields and the YAML editor, saved or not. It is text to review: Packeteer never connects to your router or applies it, and nothing here is saved. Check it against your software release first.</p>
     <div class="form">
       <label class="field"><span class="field-label">Router</span><select id="pf-vendor"></select><span class="field-help">FRR, BIRD, Junos, IOS-XR, Arista EOS, or RouterOS 7.</span></label>
     </div>
@@ -158,6 +158,7 @@
       <button type="button" id="pf-snippet-copy">Copy</button>
       <span id="pf-snippet-status" class="tag" role="status"></span>
     </div>
+    <ul id="pf-snippet-missing" class="errors" hidden></ul>
     <pre id="pf-snippet" class="mono" aria-label="Router config" hidden></pre>
     <div id="pf-inject" hidden>
       <h3>Turn on injection</h3>

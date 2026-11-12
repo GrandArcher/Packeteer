@@ -2403,17 +2403,61 @@ function confirmCheck(id, btn) {
   });
 }
 
+// snippetCandidate is what is on the page now: the wizard's step 1 and flow
+// answers while the wizard is open, over the text in the editor, saved or
+// not. used is false on an empty page, which reads the running config.
+function snippetCandidate() {
+  var answers = {};
+  if (!byId("wz-body").hidden) {
+    var asn = Number(byId("wz-asn").value.trim());
+    if (asn >= 1 && asn <= 4294967295 && Math.floor(asn) === asn) answers.asn = asn;
+    var router = byId("wz-router").value.trim();
+    if (router) answers.router_id = router;
+    var edge = byId("wz-edge").value.trim();
+    if (edge) answers.edge = edge;
+    var flow = wizardFlowListen();
+    if (flow) answers.flow_listen = flow;
+  }
+  var yaml = byId("ed-yaml").value;
+  return {yaml: yaml, answers: answers, used: yaml.trim() !== "" || Object.keys(answers).length > 0};
+}
+
+var snippetShown = false;
+
 function showSnippet() {
+  snippetShown = true;
   var vendor = byId("pf-vendor").value;
-  byId("pf-snippet-status").textContent = "";
-  return api("GET", "/api/snippets?vendor=" + encodeURIComponent(vendor)).then(function (out) {
+  var status = byId("pf-snippet-status");
+  var missing = byId("pf-snippet-missing");
+  status.textContent = "";
+  clear(missing);
+  missing.hidden = true;
+  var cand = snippetCandidate();
+  var call = cand.used
+    ? api("POST", "/api/snippets", {vendor: vendor, yaml: cand.yaml, answers: cand.answers})
+    : api("GET", "/api/snippets?vendor=" + encodeURIComponent(vendor));
+  return call.then(function (out) {
     var pre = byId("pf-snippet");
     pre.textContent = out.text;
     pre.hidden = false;
+    status.textContent = cand.used ? "Written from the answers and YAML on this page. Nothing is saved or sent." : "Written from the running config. Nothing is sent.";
   }, function (err) {
     byId("pf-snippet").hidden = true;
-    byId("pf-snippet-status").textContent = explain(err);
+    var list = err.data && err.data.missing;
+    if (!list || !list.length) {
+      status.textContent = explain(err);
+      return;
+    }
+    status.textContent = "The router config needs more answers:";
+    list.forEach(function (h) { missing.appendChild(el("li", "", h)); });
+    missing.hidden = false;
   });
+}
+
+// refreshSnippet redraws a router config already asked for when an answer
+// it was written from changes.
+function refreshSnippet() {
+  if (snippetShown) return showSnippet();
 }
 
 function copySnippet() {
@@ -2761,6 +2805,9 @@ byId("bar-preview").addEventListener("click", previewConfig);
 byId("pf-run").addEventListener("click", runPreflight);
 byId("pf-snippet-show").addEventListener("click", showSnippet);
 byId("pf-snippet-copy").addEventListener("click", copySnippet);
+["pf-vendor", "wz-asn", "wz-router", "wz-edge", "wz-flow", "wz-flow-addr", "wz-flow-port", "ed-yaml"].forEach(function (id) {
+  byId(id).addEventListener("change", refreshSnippet);
+});
 byId("pf-inject-plan").addEventListener("click", planInject);
 byId("bl-run").addEventListener("click", loadBlast);
 byId("wi-run").addEventListener("click", runWhatIf);

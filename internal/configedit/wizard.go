@@ -185,6 +185,15 @@ func wizardFlowNote(listen string) string {
 		"# It only measures which prefixes carry traffic; it never announces.\n"
 }
 
+// WizardCommunity is the packeteer_community the wizard writes for an AS
+// number: asn:666 while the AS number fits a standard community, else empty.
+func WizardCommunity(asn uint32) string {
+	if asn == 0 || asn > 0xffff {
+		return ""
+	}
+	return strconv.FormatUint(uint64(asn), 10) + ":666"
+}
+
 // Wizard renders an observe-mode config from the three steps and checks
 // it with config.Parse, the loader the controller uses. The allowlist is
 // empty and there is no announcer: nothing may be injected until an
@@ -267,9 +276,7 @@ func Wizard(in WizardInput) ([]byte, error) {
 	if flowListen != "" {
 		out.Sources = append(out.Sources, wizPlugin{Type: "flow", Config: map[string]any{"listen": flowListen}})
 	}
-	if in.ASN > 0 && in.ASN <= 0xffff {
-		out.PacketeerCommunity = strconv.FormatUint(uint64(in.ASN), 10) + ":666"
-	}
+	out.PacketeerCommunity = WizardCommunity(in.ASN)
 	if in.Storage {
 		out.Storage = &wizPlugin{Type: "sqlite", Config: map[string]string{"path": "/var/lib/packeteer/packeteer.db"}}
 	}

@@ -497,6 +497,37 @@ func TestGuidedDriverMatchesPage(t *testing.T) {
 	}
 }
 
+// TestSnippetWizardDriverMatchesPage keeps the router config driver (#569) on
+// the settings page it drives. It stubs nothing, so the panel talks to the
+// real API, and it never writes the config. A renamed id fails here instead
+// of as a timeout in CI.
+func TestSnippetWizardDriverMatchesPage(t *testing.T) {
+	f, err := loadFixtures("../ui-fixtures/snippet-wizard")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Stubs) != 0 || f.Inject.Page != "/settings.html" || len(f.driver) == 0 {
+		t.Fatalf("fixtures = %+v", f)
+	}
+	page, err := os.ReadFile("../../internal/httpapi/web/settings.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	driver := string(f.driver)
+	if strings.Contains(driver, "confirm_inject") || strings.Contains(driver, `"PUT"`) || !strings.Contains(driver, "/api/snippets") {
+		t.Fatal("driver must exempt only /api/snippets from the write count and never save")
+	}
+	ids := regexp.MustCompile(`(?:byId|type)\("([^"]+)"`).FindAllStringSubmatch(driver, -1)
+	if len(ids) == 0 {
+		t.Fatal("the driver uses no element")
+	}
+	for _, m := range ids {
+		if !strings.Contains(string(page), `id="`+m[1]+`"`) {
+			t.Errorf("driver uses #%s, which settings.html lacks", m[1])
+		}
+	}
+}
+
 // TestObserveWordingFixturesMatchAPI decodes the canned observe-mode
 // answers with the API's own types (#346): a pending recommendation whose
 // current exit is the learned path, and the event worded as a recommendation.

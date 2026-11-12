@@ -42,3 +42,8 @@ router bgp {{.ASN}}
  exit-address-family
 {{- end}}
 !
+{{- if .FlowPort}}
+! Flow records: FRR does not export flows. Send NetFlow, IPFIX, or sFlow from
+! this router's host to Packeteer's flow source at {{.FlowHost}}, UDP {{.FlowPort}}.
+!
+{{- end}}

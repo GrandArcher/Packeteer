@@ -50,6 +50,26 @@ func TestRunSnippetPrintsTheRouterConfig(t *testing.T) {
 	}
 }
 
+// A first-run file has no router and no community yet. The CLI says which
+// setup answer fills each one, not a raw key error.
+func TestRunSnippetNamesTheMissingAnswers(t *testing.T) {
+	path := writeOnboardConfig(t, `mode: observe
+asn: 64512
+router_id: 192.0.2.10
+providers:
+  - {name: transit-a, source_ip: 192.0.2.11, next_hop: 192.0.2.1}
+`)
+	var out, errOut bytes.Buffer
+	if code := run(context.Background(), []string{"-config", path, "-snippet", "frr"}, noEnv, &out, &errOut); code != 1 || out.Len() != 0 {
+		t.Fatalf("code %d, stdout %q", code, out.String())
+	}
+	for _, want := range []string{"enter the Edge address in setup step 1", "setup step 4 (Generate) fills it as 64512:666"} {
+		if !strings.Contains(errOut.String(), want) {
+			t.Errorf("stderr lacks %q:\n%s", want, errOut.String())
+		}
+	}
+}
+
 // scriptedIP answers ip commands for one provider. changes records the
 // commands that modify the host.
 type scriptedIP struct {

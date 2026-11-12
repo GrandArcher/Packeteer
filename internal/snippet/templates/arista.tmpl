@@ -34,3 +34,14 @@ router bgp {{.ASN}}
    ! add-path send toward {{.Packeteer}} in each address family.
 {{- end}}
 !
+{{- if .FlowPort}}
+!
+! Flow records to Packeteer's flow source at {{.FlowHost}}, UDP {{.FlowPort}}: sFlow with
+! 1-in-4096 sampling. EOS exports sFlow, not NetFlow. Check which interfaces
+! are sampled on your release.
+sflow sample 4096
+sflow source {{.Router}}
+sflow destination {{.FlowHost}} {{.FlowPort}}
+sflow run
+!
+{{- end}}
