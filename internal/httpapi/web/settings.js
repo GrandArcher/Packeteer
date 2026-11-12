@@ -2330,9 +2330,19 @@ function useWizardYaml(out) {
 var pfLabels = {pass: "Passed", warn: "Warning", fail: "Failed", unverified: "Needs confirmation"};
 var pfBadge = {pass: "sys-ok", warn: "sys-degraded", fail: "sys-down", unverified: "sys-idle"};
 
+function pfBlocks(r) { return r.status === "fail" || r.status === "unverified"; }
+
+// pfOffered reports whether the inject step shows: every check passed, or
+// the only one that blocks is the missing announcer, which the step adds.
+// The server runs the checks again on what the step would save.
+function pfOffered(rep) {
+  return rep.ready || !!rep.announcer_missing && rep.results.every(function (r) { return r.id === "withdrawal" || !pfBlocks(r); });
+}
+
 function pfSummary(rep) {
-  var blocking = rep.results.filter(function (r) { return r.status === "fail" || r.status === "unverified"; }).length;
+  var blocking = rep.results.filter(pfBlocks).length;
   if (!blocking) return "Every check passed. Injection can be turned on below.";
+  if (pfOffered(rep)) return "Every other check passed. No announcer is configured: the step below adds one.";
   return "Injection stays off: " + blocking + (blocking === 1 ? " check needs" : " checks need") + " attention.";
 }
 
@@ -2365,7 +2375,42 @@ function renderPreflight(rep) {
   clear(list);
   rep.results.forEach(function (r) { list.appendChild(pfItem(r)); });
   byId("pf-when").textContent = pfSummary(rep) + " Last run " + rep.ran_at + ".";
-  byId("pf-inject").hidden = !rep.ready;
+  byId("pf-inject").hidden = !pfOffered(rep);
+  pfReport = rep;
+  renderPfAnnouncer();
+}
+
+var pfReport = null;
+// pfAnnouncer holds the announcer form values while the running config has
+// no announcer; planInject sends them.
+var pfAnnouncer = null;
+
+// renderPfAnnouncer draws the announcer fields of the inject settings block
+// from GET /api/config/schema (blocks.js loads it), so the step offers what
+// the loader accepts. blocks.js calls it again when the schema arrives.
+function renderPfAnnouncer() {
+  var box = byId("pf-announcer");
+  clear(box);
+  box.hidden = !(pfReport && pfReport.announcer_missing);
+  if (box.hidden) {
+    pfAnnouncer = null;
+    return;
+  }
+  var inject = schema && schema.blocks.filter(function (b) { return b.id === "inject"; })[0];
+  var f = inject && inject.fields.filter(function (x) { return x.key === "announcer"; })[0];
+  if (!f) {
+    box.appendChild(el("p", "empty", schemaFailed ? "The announcer form could not be loaded. Add announcer: {type: gobgp} in the YAML editor." : "Loading the announcer form..."));
+    return;
+  }
+  if (!pfAnnouncer) {
+    pfAnnouncer = blankValues(f.fields);
+    f.fields.forEach(function (g) {
+      if (g.kind === "enum" && g.required && !pfAnnouncer[g.key]) pfAnnouncer[g.key] = g.options[0];
+    });
+  }
+  box.appendChild(el("h4", "", f.label));
+  box.appendChild(el("p", "field-help", f.help + " No announcer is configured, so the step adds this one. It starts when Packeteer restarts after the save."));
+  renderFields(box, f.fields, pfAnnouncer, "announcer", renderPfAnnouncer);
 }
 
 function loadPreflight() {
@@ -2625,6 +2670,8 @@ function planInject() {
   var body = {current: byId("ed-yaml").value, allowlist: prefixes};
   var cap = byId("pf-cap").value.trim();
   if (cap) body.max_improvements = Number(cap);
+  // An announcer saved but not yet running is in the editor text already.
+  if (pfAnnouncer && !/^announcer:/m.test(body.current)) body.announcer = pfAnnouncer;
   var status = byId("pf-inject-status");
   var list = byId("pf-explain");
   clear(list);

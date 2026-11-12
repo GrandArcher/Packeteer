@@ -6,6 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Changed
 
+- The guided inject step adds the gobgp announcer from a schema-built form when none is configured; the checks count it on the plan and the save, and it applies on restart (#568).
 - Router config panel and `POST /api/snippets` follow unsaved wizard answers and editor text, name the wizard step for a missing answer, and add flow export lines (#569).
 
 ## [1.2.0] - 2026-11-11

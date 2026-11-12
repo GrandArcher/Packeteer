@@ -40,20 +40,26 @@ func NewRunner(source Source, store *Store, now func() time.Time) *Runner {
 
 // Run gathers the facts, evaluates every check, and keeps the report.
 func (r *Runner) Run(ctx context.Context) Report {
-	rep, _ := r.run(ctx)
+	rep, _ := r.run(ctx, false)
 	return rep
 }
 
 // run is Run that also returns the fingerprint of the running setup.
-func (r *Runner) run(ctx context.Context) (Report, string) {
+// addsAnnouncer is true when the config about to be saved has an announcer.
+func (r *Runner) run(ctx context.Context, addsAnnouncer bool) (Report, string) {
 	f := r.source(ctx)
+	f.AnnouncerAdded = addsAnnouncer && !f.Announcer
 	if r.store != nil {
 		f.Confirmed = r.store.Active(f.Fingerprint)
 	}
 	rep := Run(f, r.now())
-	r.mu.Lock()
-	r.last = &rep
-	r.mu.Unlock()
+	// A report that counts an announcer the running process lacks describes
+	// a config not saved yet; the health page and metrics keep the running one.
+	if !f.AnnouncerAdded {
+		r.mu.Lock()
+		r.last = &rep
+		r.mu.Unlock()
+	}
 	return rep, f.Fingerprint
 }
 
@@ -107,14 +113,24 @@ func (e *NotReadyError) Error() string {
 // describe the running setup, not the candidate.
 var ErrSetupChanged = errors.New("this save changes the AS number, the community, or the BGP neighbors and turns inject on in the same step; save that change first, apply it, run the preflight checks again, then turn inject on")
 
+// Candidate is the config about to be saved, as the gate reads it.
+type Candidate struct {
+	// Fingerprint identifies its AS, community, and neighbors.
+	Fingerprint string
+	// Announcer is true when it configures an announcer.
+	Announcer bool
+}
+
 // Gate runs the checks and returns a *NotReadyError unless every one is
-// ready. candidate is the fingerprint of the config about to be saved; when
-// it differs from the running setup's, Gate returns ErrSetupChanged. The
-// editor calls it before it saves a config that turns inject on.
-func (r *Runner) Gate(ctx context.Context, candidate string) error {
-	rep, running := r.run(ctx)
+// ready. When the candidate's fingerprint differs from the running setup's,
+// Gate returns ErrSetupChanged. A candidate announcer satisfies the
+// withdrawal check's announcer test; that check still reads the running
+// sessions' timers. The editor calls it before it saves a config that turns
+// inject on.
+func (r *Runner) Gate(ctx context.Context, candidate Candidate) error {
+	rep, running := r.run(ctx, candidate.Announcer)
 	switch {
-	case candidate != running:
+	case candidate.Fingerprint != running:
 		return ErrSetupChanged
 	case !rep.Ready:
 		return &NotReadyError{Report: rep}

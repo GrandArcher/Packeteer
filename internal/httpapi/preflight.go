@@ -165,9 +165,10 @@ func snippetError(w http.ResponseWriter, err error) {
 	writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
 }
 
-// handleInjectPlan renders the inject config for a small allowlist, once the
-// preflight checks pass. It writes nothing: the result goes to the editor,
-// and Save asks for the inject confirmation and runs the checks again.
+// handleInjectPlan renders the inject config for a small allowlist, and the
+// announcer when the config has none, once the preflight checks pass for
+// that config. It writes nothing: the result goes to the editor, and Save
+// asks for the inject confirmation and runs the checks again.
 func (s *Server) handleInjectPlan(w http.ResponseWriter, r *http.Request) {
 	if !s.editorOn(w) {
 		return
@@ -183,12 +184,12 @@ func (s *Server) handleInjectPlan(w http.ResponseWriter, r *http.Request) {
 	if !decodeLarge(w, r, &req, configBodyLimit) {
 		return
 	}
-	if !s.preflightGate(w, r, true, []byte(req.Current)) {
-		return
-	}
 	plan, err := configedit.EnableInject(req.InjectInput, []byte(req.Current))
 	if err != nil {
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
+		return
+	}
+	if !s.preflightGate(w, r, true, []byte(plan.YAML)) {
 		return
 	}
 	body := map[string]any{"yaml": plan.YAML, "diff": plan.Diff, "explain": plan.Explain}

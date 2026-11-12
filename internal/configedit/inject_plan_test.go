@@ -80,6 +80,45 @@ func TestEnableInjectKeepsWhatIsSet(t *testing.T) {
 	}
 }
 
+// A fresh observe config with no announcer gets one from the step, with the
+// field checks of the settings form and the inject checklist of the loader.
+func TestEnableInjectAddsTheAnnouncer(t *testing.T) {
+	in := InjectInput{Allowlist: []string{"198.51.100.0/24"}, Announcer: Values{"type": "gobgp"}}
+	plan, err := EnableInject(in, []byte(observeWizardYAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Parse([]byte(plan.YAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Mode != config.ModeInject || cfg.Announcer == nil || cfg.Announcer.Type != "gobgp" {
+		t.Fatalf("mode %s announcer %+v", cfg.Mode, cfg.Announcer)
+	}
+	if !strings.Contains(plan.Diff, "+ announcer:") || !strings.Contains(plan.Diff, "+   type: gobgp") {
+		t.Errorf("diff:\n%s", plan.Diff)
+	}
+	text := strings.Join(plan.Explain, "\n")
+	if !strings.Contains(text, "announcer gobgp is added") || !strings.Contains(text, "takes effect when Packeteer restarts") {
+		t.Errorf("explanation:\n%s", text)
+	}
+	for name, c := range map[string]struct {
+		announcer Values
+		current   string
+		want      string
+	}{
+		"unknown type":  {Values{"type": "exec"}, observeWizardYAML, `announcer.type: "exec" is invalid (want gobgp)`},
+		"no type":       {Values{}, observeWizardYAML, "announcer.type: is required"},
+		"wrong type":    {Values{"type": 1.5}, observeWizardYAML, `announcer.type: "1.5" is invalid`},
+		"already there": {Values{"type": "gobgp"}, observeWizardYAML + "announcer:\n  type: gobgp\n", "already has one"},
+	} {
+		in.Announcer = c.announcer
+		if _, err := EnableInject(in, []byte(c.current)); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: err = %v, want %q", name, err, c.want)
+		}
+	}
+}
+
 func TestEnableInjectRefusals(t *testing.T) {
 	cases := []struct {
 		name    string

@@ -63,6 +63,9 @@ type Report struct {
 	RanAt   time.Time `json:"ran_at"`
 	Ready   bool      `json:"ready"`
 	Results []Result  `json:"results"`
+	// AnnouncerMissing is true when no announcer is running and the config
+	// being checked adds none. The guided inject step then offers one.
+	AnnouncerMissing bool `json:"announcer_missing,omitempty"`
 }
 
 // Blocking lists the ids of the checks that keep injection off.
@@ -135,6 +138,10 @@ type Facts struct {
 	Community string
 	// Announcer is true when an announcer plugin is configured.
 	Announcer bool
+	// AnnouncerAdded is true when no announcer runs and the config about to
+	// be saved adds one. It starts with the next restart, on the same iBGP
+	// sessions whose timers the checks read.
+	AnnouncerAdded bool
 	// Leaks is the number of prefixes the leak watch holds out because a
 	// Packeteer route was seen outside the AS.
 	Leaks int
@@ -151,6 +158,7 @@ func Run(f Facts, now time.Time) Report {
 		session(f), filters(f), egress(f), timers(f), withdrawal(f),
 	}}
 	rep.Ready = len(rep.Blocking()) == 0
+	rep.AnnouncerMissing = !f.Announcer && !f.AnnouncerAdded
 	return rep
 }
 
@@ -303,10 +311,10 @@ func timers(f Facts) Result {
 
 func withdrawal(f Facts) Result {
 	r := Result{ID: CheckWithdrawal, Title: "Routes are withdrawn when Packeteer stops"}
-	if !f.Announcer {
+	if !f.Announcer && !f.AnnouncerAdded {
 		r.Status = Fail
 		r.Detail = "No announcer is configured."
-		r.Fix = "Add `announcer: {type: gobgp}` to the config. It publishes on the same iBGP session and withdraws everything on shutdown."
+		r.Fix = "Once the other checks pass, the Turn on injection step adds one; or add `announcer: {type: gobgp}` to the config. It publishes on the same iBGP session and withdraws everything on shutdown."
 		return r
 	}
 	for _, t := range f.Timers {
@@ -327,7 +335,11 @@ func withdrawal(f Facts) Result {
 	for _, t := range f.Timers {
 		longest = max(longest, t.Hold)
 	}
+	what := "An announcer is configured"
+	if !f.Announcer {
+		what = "The config being saved adds an announcer, which starts with the next restart,"
+	}
 	r.Status = Pass
-	r.Detail = fmt.Sprintf("An announcer is configured and graceful restart is off. A stopped Packeteer withdraws at once; a crash drops its routes within %s, the longest negotiated hold time. Checked here: configuration and negotiated timers. Not checked: a live test route, which would announce in observe mode.", longest)
+	r.Detail = fmt.Sprintf("%s and graceful restart is off. A stopped Packeteer withdraws at once; a crash drops its routes within %s, the longest negotiated hold time. Checked here: configuration and negotiated timers. Not checked: a live test route, which would announce in observe mode.", what, longest)
 	return r
 }

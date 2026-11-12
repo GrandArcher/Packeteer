@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/netip"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 
 	"github.com/GrandArcher/Packeteer/internal/config"
+	"github.com/GrandArcher/Packeteer/internal/configedit"
 	checks "github.com/GrandArcher/Packeteer/internal/preflight"
 	"github.com/GrandArcher/Packeteer/internal/rib"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
@@ -150,8 +152,11 @@ func TestPreflightGateComparesTheCandidateWithTheRunningSetup(t *testing.T) {
 	api := preflightAPI{Runner: checks.NewRunner(src, nil, nil), live: live}
 
 	var notReady *checks.NotReadyError
-	if err := api.Gate(context.Background(), []byte(gateCandidate)); !errors.As(err, &notReady) {
-		t.Fatalf("same setup: %v, want the checks to decide", err)
+	if err := api.Gate(context.Background(), []byte(gateCandidate)); !errors.As(err, &notReady) || !notReady.Report.AnnouncerMissing {
+		t.Fatalf("same setup: %v, want the checks to decide with no announcer", err)
+	}
+	if err := api.Gate(context.Background(), []byte(gateCandidate+"announcer:\n  type: gobgp\n")); !errors.As(err, &notReady) || notReady.Report.AnnouncerMissing {
+		t.Fatalf("candidate with an announcer: %v, want the checks to count it", err)
 	}
 	for name, change := range map[string]func(string) string{
 		"asn":       func(y string) string { return strings.Replace(y, "asn: 64512", "asn: 64513", 1) },
@@ -164,6 +169,21 @@ func TestPreflightGateComparesTheCandidateWithTheRunningSetup(t *testing.T) {
 	}
 	if err := api.Gate(context.Background(), []byte("mode: [")); err == nil || errors.Is(err, checks.ErrSetupChanged) {
 		t.Errorf("unparsable candidate: %v", err)
+	}
+}
+
+// The announcer the guided inject step adds is a restart-only key, so the
+// reload refuses the saved plan whole: the running observe process keeps
+// announcing nothing until Packeteer restarts with the announcer.
+func TestInjectStepAnnouncerWaitsForRestart(t *testing.T) {
+	fresh := gateCandidate + "hold_time: 15m\nthresholds: {min_loss_delta_pct: 1, min_rtt_delta_ms: 15}\n"
+	plan, err := configedit.EnableInject(configedit.InjectInput{Allowlist: []string{"198.51.100.0/24"}, Announcer: configedit.Values{"type": "gobgp"}}, []byte(fresh))
+	if err != nil {
+		t.Fatal(err)
+	}
+	restart, _ := classify(mustParse(t, fresh), mustParse(t, plan.YAML))
+	if !slices.Contains(restart, "announcer") {
+		t.Fatalf("restart keys %v, want announcer", restart)
 	}
 }
 
