@@ -76,7 +76,7 @@ var settings = fs.readFileSync(path.join(__dirname, "web", "settings.js"), "utf8
 ["el", "clear"].forEach(function (n) { vm.runInContext(fn(ui, n), context); });
 vm.runInContext(settings.slice(settings.indexOf("var pfLabels"), settings.indexOf("var pfBadge")), context);
 vm.runInContext(settings.slice(settings.indexOf("var pfBadge"), settings.indexOf("function pfSummary")), context);
-vm.runInContext("var snippetShown = false;", context);
+vm.runInContext("var snippetShown = false; var snippetSeq = 0;", context);
 ["pfSummary", "pfItem", "renderPreflight", "loadPreflight", "runPreflight", "confirmCheck", "snippetCandidate", "showSnippet", "refreshSnippet", "planInject"].forEach(function (n) {
   vm.runInContext(fn(settings, n), context);
 });
@@ -206,6 +206,20 @@ reply.then(function () {
   return context.refreshSnippet();
 }).then(function () {
   assert(calls.length === 1 && els["pf-snippet"].textContent === "second\n" && els["pf-snippet-missing"].hidden === true && els["pf-snippet-missing"].children.length === 0, "refresh: " + JSON.stringify(calls));
+
+  // A slower earlier reply does not replace the answer to the latest change.
+  var slow;
+  var first = new Promise(function (res) { slow = res; });
+  reply = first;
+  var older = context.showSnippet();
+  reply = Promise.resolve({vendor: "bird", text: "newer\n"});
+  var newer = context.showSnippet();
+  return newer.then(function () {
+    slow({vendor: "bird", text: "older\n"});
+    return older;
+  });
+}).then(function () {
+  assert(els["pf-snippet"].textContent === "newer\n", "an older reply overwrote a newer one: " + els["pf-snippet"].textContent);
 
   // Any other failure is explained as before.
   reply = Promise.reject(new Error("boom"));

@@ -2423,9 +2423,12 @@ function snippetCandidate() {
 }
 
 var snippetShown = false;
+var snippetSeq = 0;
 
 function showSnippet() {
   snippetShown = true;
+  // A slower earlier reply must not replace the answer to the latest change.
+  var mine = ++snippetSeq;
   var vendor = byId("pf-vendor").value;
   var status = byId("pf-snippet-status");
   var missing = byId("pf-snippet-missing");
@@ -2437,11 +2440,13 @@ function showSnippet() {
     ? api("POST", "/api/snippets", {vendor: vendor, yaml: cand.yaml, answers: cand.answers})
     : api("GET", "/api/snippets?vendor=" + encodeURIComponent(vendor));
   return call.then(function (out) {
+    if (mine !== snippetSeq) return;
     var pre = byId("pf-snippet");
     pre.textContent = out.text;
     pre.hidden = false;
     status.textContent = cand.used ? "Written from the answers and YAML on this page. Nothing is saved or sent." : "Written from the running config. Nothing is sent.";
   }, function (err) {
+    if (mine !== snippetSeq) return;
     byId("pf-snippet").hidden = true;
     var list = err.data && err.data.missing;
     if (!list || !list.length) {

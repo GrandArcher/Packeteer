@@ -88,7 +88,7 @@ const (
 	hintASN    = "AS number: enter it as ASN in setup step 1 (Edge), or set asn in the file."
 	hintEdge   = "Router address: enter the Edge address in setup step 1 (Edge), or set bgp.neighbors in the file. The snippet is for that router."
 	hintSelf   = "Packeteer's address: enter the Router ID in setup step 1 (Edge), or set router_id or the neighbor's local_address in the file. The router needs it to peer with Packeteer."
-	hintNoComm = "Packeteer community: the router filters match it, and setup step 4 (Generate) fills it as %d:666. Press Generate, or set packeteer_community in the file."
+	hintNoComm = "Packeteer community: the router filters match it. Press Generate in setup step 4 (Flow) to fill it as %d:666, or set packeteer_community in the file."
 	hintBigASN = "Packeteer community: setup leaves it empty for an AS number above 65535, because the standard community has 16 bits. Set packeteer_community in the settings form or the file as a large community, for example 65536:666:1."
 )
 

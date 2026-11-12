@@ -203,11 +203,11 @@ func TestForConfigSetsIPv6FromProviders(t *testing.T) {
 
 func TestForConfigRefusals(t *testing.T) {
 	cases := map[string]func(*config.Config){
-		"setup step 1 (Edge), or set bgp.neighbors":     func(c *config.Config) { c.BGP.Neighbors = nil },
-		"setup step 4 (Generate) fills it as 64512:666": func(c *config.Config) { c.PacketeerCommunity = "" },
-		"packeteer_community: ":                         func(c *config.Config) { c.PacketeerCommunity = "65536:1" },
-		"enter the Router ID in setup step 1":           func(c *config.Config) { c.RouterID = "" },
-		"bgp.neighbors address":                         func(c *config.Config) { c.BGP.Neighbors[0].Address = "edge" },
+		"setup step 1 (Edge), or set bgp.neighbors":               func(c *config.Config) { c.BGP.Neighbors = nil },
+		"Generate in setup step 4 (Flow) to fill it as 64512:666": func(c *config.Config) { c.PacketeerCommunity = "" },
+		"packeteer_community: ":                                   func(c *config.Config) { c.PacketeerCommunity = "65536:1" },
+		"enter the Router ID in setup step 1":                     func(c *config.Config) { c.RouterID = "" },
+		"bgp.neighbors address":                                   func(c *config.Config) { c.BGP.Neighbors[0].Address = "edge" },
 	}
 	for want, mut := range cases {
 		cfg := loadConfig(t, "")
@@ -245,11 +245,8 @@ func TestFlowExportLines(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if strings.Contains(strings.ToLower(plain), "flow") && vendor != Junos {
+		if strings.Contains(strings.ToLower(plain), "flow") {
 			t.Errorf("%s: flow text without a flow source:\n%s", vendor, plain)
-		}
-		if vendor == Junos && strings.Contains(plain, "flow-server") {
-			t.Errorf("junos: flow-server without a flow source")
 		}
 	}
 }
