@@ -65,11 +65,13 @@ jq -e '.results[] | select(.id == "timers") | .status == "fail" and (.fix | test
 jq -e '.results[] | select(.id == "withdrawal") | .status == "fail"' "$work/report.json"
 api "$base/metrics" | grep -qF 'packeteer_preflight_check{check="bgp_session",status="fail"} 1'
 api "$base/metrics" | grep -qF 'packeteer_preflight_ready 0'
-# The wizard refuses to turn injection on, and says which check holds it back.
-jq -n --rawfile y "$work/pk/config.yaml" '{current: $y, allowlist: ["198.51.100.0/24"]}' >"$work/inject.json"
-test "$(code -u "admin:$pw" -H 'Content-Type: application/json' -d @"$work/inject.json" "$base/api/config/inject")" = 412
+# The wizard refuses to turn injection on, and says what holds it back. The
+# fresh config has no BGP neighbor, so the plan cannot build; the 412 from the
+# preflight gate needs a config that parses as inject (httpapi tests).
+jq -n --rawfile y "$work/pk/config.yaml" '{current: $y, allowlist: ["198.51.100.0/24"], announcer: {type: "gobgp"}}' >"$work/inject.json"
+test "$(code -u "admin:$pw" -H 'Content-Type: application/json' -d @"$work/inject.json" "$base/api/config/inject")" = 422
 curl -s -u "admin:$pw" -H 'Content-Type: application/json' -d @"$work/inject.json" "$base/api/config/inject" |
-	jq -e '.code == "preflight_required" and (.preflight.ready == false)'
+	jq -e '.error | test("bgp.neighbors")'
 docker exec packeteer test -e /var/lib/packeteer/first-run-setup-pending
 
 echo "== 3. FRR and BIRD accept the router config"
