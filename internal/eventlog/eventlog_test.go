@@ -299,3 +299,49 @@ func TestAcknowledgementsAreBounded(t *testing.T) {
 		t.Errorf("acks = %d, oldest kept %v", n, oldest)
 	}
 }
+
+// A restart restores acknowledgements, except one whose alert resolved
+// before the restart (#565).
+func TestRestoreAcksAfterRestart(t *testing.T) {
+	ctx := context.Background()
+	store := &fakeStore{}
+	l := New(store, nil, nil)
+	saves := 0
+	l.OnAck(func() { saves++; _ = l.SavedAcks() })
+	l.Record(provider(plugin.EventProviderDown, plugin.SeverityCritical, 0, "transit-a"))
+	l.Record(provider(plugin.EventProviderUp, plugin.SeverityInfo, 1, "transit-a"))
+	open := provider(plugin.EventProviderDown, plugin.SeverityCritical, 2, "transit-a")
+	other := provider(plugin.EventProviderDown, plugin.SeverityCritical, 3, "transit-b")
+	l.Record(open)
+	l.Record(other)
+	_ = l.Close(ctx)
+	for _, e := range []plugin.Event{open, other} {
+		if _, err := l.Acknowledge(ctx, e.DedupKey(), "noc1", "ticket 7", t0.Add(4*time.Second)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if saves != 2 {
+		t.Fatalf("OnAck ran %d times, want 2", saves)
+	}
+	saved := l.SavedAcks()
+	if len(saved) != 2 || !saved[0].Since.Equal(t0.Add(time.Second)) {
+		t.Fatalf("saved %+v", saved)
+	}
+
+	// transit-b resolved after its ack was saved; the next start finds it.
+	store.rows = append(store.rows, provider(plugin.EventProviderUp, plugin.SeverityInfo, 5, "transit-b"))
+	r := New(store, nil, nil)
+	defer r.Close(ctx)
+	if err := r.RestoreAcks(ctx, saved); err != nil {
+		t.Fatal(err)
+	}
+	if a, ok := r.AckOf(open); !ok || a.Note != "ticket 7" {
+		t.Errorf("open alert not acknowledged after restart: %+v %v", a, ok)
+	}
+	if _, ok := r.AckOf(provider(plugin.EventProviderDown, plugin.SeverityCritical, 0, "transit-a")); ok {
+		t.Error("the earlier incident is covered after restart")
+	}
+	if _, ok := r.AckOf(other); ok {
+		t.Error("an alert resolved before the restart is still acknowledged")
+	}
+}

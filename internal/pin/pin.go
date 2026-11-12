@@ -4,8 +4,9 @@
 // (usable path, loss and latency ceiling, allowlist in inject, hold_time,
 // the cap, flap quarantine), and the announcer adds the community and
 // NO_EXPORT. A pin is refused unless the prefix is inside the allowlist and
-// in the learned RIB view when it is set. Pins live in memory only and end
-// at their expiry or on restart. The package announces nothing.
+// in the learned RIB view when it is set. Pins end at their expiry; with a
+// store that keeps them (#565) a restart restores the ones not expired.
+// The package announces nothing.
 package pin
 
 import (
@@ -15,6 +16,7 @@ import (
 	"net/netip"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -124,6 +126,47 @@ func (r Request) check(rails Rails) error {
 		return fmt.Errorf("%s is not in the learned RIB view", p)
 	}
 	return nil
+}
+
+// Restore replaces the pins with saved ones (#565). A saved pin is
+// dropped when it has expired, its provider is no longer configured, its
+// prefix is outside the allowlist, or MaxPins are already kept. The
+// learned RIB view is not read: it is empty at start, and Decide and the
+// announcer check it on every round. Restore returns why each was dropped.
+func (s *Store) Restore(saved []Pin, rails Rails, now time.Time) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pins = map[netip.Prefix]Pin{}
+	var dropped []string
+	for _, p := range saved {
+		// A dropped pin's id is not given out again: history and the
+		// audit log name it.
+		if n, err := strconv.Atoi(strings.TrimPrefix(p.ID, "pin-")); err == nil && n > s.next {
+			s.next = n
+		}
+		_, dup := s.pins[p.Prefix]
+		why := ""
+		switch {
+		case !p.Prefix.IsValid() || p.Prefix != p.Prefix.Masked() || p.Prefix.Bits() == 0:
+			why = "invalid prefix"
+		case !now.Before(p.Expires):
+			why = "expired"
+		case !slices.Contains(rails.Providers, p.Provider):
+			why = "provider " + strconv.Quote(p.Provider) + " is not configured"
+		case !netpfx.CoveredBy(rails.Allowlist, p.Prefix):
+			why = "outside allowlist.prefixes"
+		case dup:
+			why = "prefix pinned twice"
+		case len(s.pins) >= MaxPins:
+			why = "more than " + strconv.Itoa(MaxPins) + " pins"
+		}
+		if why != "" {
+			dropped = append(dropped, p.ID+" "+p.Prefix.String()+": "+why)
+			continue
+		}
+		s.pins[p.Prefix] = p
+	}
+	return dropped
 }
 
 // Remove deletes the pin with that id.

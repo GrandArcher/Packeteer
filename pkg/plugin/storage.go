@@ -290,3 +290,17 @@ type RoundStore interface {
 type CountryLookup interface {
 	Country(addr netip.Addr) string
 }
+
+// SteeringStore is optional on a storage plugin and on an elector (#565).
+// It keeps the operator steering state (prefix pins, the optimization
+// pause, alert acknowledgements) as one document the core encodes, so a
+// restart restores it. An elector's store is on storage both instances of
+// an HA pair mount, so a takeover restores the active instance's state.
+// The store must not interpret the document. It does not announce; a
+// restored pin acts only under the rails of a new one.
+type SteeringStore interface {
+	// SteeringState returns the saved document, or nil when none is saved.
+	SteeringState(ctx context.Context) ([]byte, error)
+	// PutSteeringState replaces the saved document.
+	PutSteeringState(ctx context.Context, doc []byte) error
+}

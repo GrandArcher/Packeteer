@@ -32,7 +32,7 @@ The standby's wait for a lease that is still held by another instance is the lon
 
 Safety does not depend on clocks: the active instance measures its deadline on its own monotonic clock, and the standby measures record changes on its own.
 
-On taking over, an instance starts with empty decision state: no improvement, cooldown, or intent carries over from a previous term, and nothing is copied from the other instance. The first decision after takeover announces whatever the fresh measurements justify, under the same allowlist, exact learned-RIB check, `packeteer_community` + NO_EXPORT, `max_improvements`, thresholds, and hold time. Threat mitigation rules are in memory on the instance that received them; they are not replicated, so re-add them after a failover.
+On taking over, an instance starts with empty decision state: no improvement, cooldown, or intent carries over from a previous term. The one exception is the operator steering state (#565): the active instance saves its pins, the optimization pause, and alert acknowledgements in `path` + `.steering` beside the lease after each change, and an instance restores that file when it takes over, before its first decision. A standby refuses those changes with `409`. A restored pin that has expired is dropped, and a restored pin acts only under the rails below. The first decision after takeover announces whatever the fresh measurements justify, under the same allowlist, exact learned-RIB check, `packeteer_community` + NO_EXPORT, `max_improvements`, thresholds, and hold time. Threat mitigation rules are in memory on the instance that received them; they are not replicated, so re-add them after a failover.
 
 ## Deploy
 
@@ -90,4 +90,5 @@ The archive holds the config file as loaded and, with `storage: sqlite`, a copy 
 - One elector type (`lease`). A VRRP-style elector over the LAN would be another plugin behind the same interface.
 - A frozen active instance (process stopped, host hung) keeps its routes until each router's hold timer runs out; the standby waits that long. If the frozen process resumes, its elector reports standby at once and it withdraws within `renew`/2, but a BGP session it re-establishes in that window can briefly carry its old routes. Stop a frozen instance rather than resuming it.
 - Mitigation rules and on-demand maintenance windows are not replicated.
+- A standby's `/api/pins` and `/api/optimization` show the steering state as it was when the standby started; read them on the active instance.
 - The `external_policy` feed is per instance and the standby serves an empty set, so a consumer must follow the active instance ([external-policy.md](external-policy.md#with-a-pair-of-instances)).

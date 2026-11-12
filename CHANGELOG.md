@@ -4,6 +4,10 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ## [Unreleased]
 
+### Changed
+
+- Pins, the optimization pause, and alert acknowledgements are saved in sqlite storage, or with `ha` beside the lease, and restored on restart and HA takeover; expired pins are dropped (#565).
+
 ## [1.2.0] - 2026-11-11
 
 The v1.2 release adds steering calls to the REST API and, behind `mcp.write_tools`, to the MCP server, with no new config key and no change to an existing config; the shipped config stays `mode: observe` and injection stays off by default.

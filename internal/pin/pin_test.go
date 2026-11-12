@@ -122,3 +122,47 @@ func TestPinsExpireAndAreCapped(t *testing.T) {
 		t.Fatalf("pin past the cap: %v", err)
 	}
 }
+
+func TestRestoreDropsExpiredAndOffRailsPins(t *testing.T) {
+	src := NewStore()
+	kept, err := src.Add(req("198.51.100.0/24"), rails, t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	short := req("198.51.101.0/24")
+	short.Duration = MinDuration
+	if _, err := src.Add(short, rails, t0); err != nil {
+		t.Fatal(err)
+	}
+	saved := src.List(t0)
+	saved = append(saved,
+		Pin{ID: "pin-7", Prefix: netip.MustParsePrefix("198.51.102.0/24"), Provider: "transit-z", Expires: t0.Add(time.Hour)},
+		Pin{ID: "pin-8", Prefix: netip.MustParsePrefix("203.0.113.0/24"), Provider: "transit-a", Expires: t0.Add(time.Hour)},
+		Pin{ID: "pin-9", Prefix: kept.Prefix, Provider: "transit-a", Expires: t0.Add(time.Hour)})
+
+	// A restart two minutes later: the one-minute pin has expired.
+	now := t0.Add(2 * time.Minute)
+	s := NewStore()
+	dropped := s.Restore(saved, Rails{Providers: rails.Providers, Allowlist: rails.Allowlist}, now)
+	got := s.List(now)
+	if len(got) != 1 || got[0] != kept {
+		t.Fatalf("restored %+v, want only %+v", got, kept)
+	}
+	want := []string{"pin-2 198.51.101.0/24: expired", `pin-7 198.51.102.0/24: provider "transit-z" is not configured`,
+		"pin-8 203.0.113.0/24: outside allowlist.prefixes", "pin-9 198.51.100.0/24: prefix pinned twice"}
+	if strings.Join(dropped, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("dropped %q, want %q", dropped, want)
+	}
+	// New ids continue after the highest restored one.
+	p, err := s.Add(req("198.51.101.0/24"), rails, now)
+	if err != nil || p.ID != "pin-10" {
+		t.Fatalf("next pin %+v, %v; want pin-10", p, err)
+	}
+	if v := s.Verdicts(now); v[kept.Prefix].Providers[0] != "transit-b" {
+		t.Fatalf("restored pin is not a verdict: %+v", v)
+	}
+	// Restoring again replaces what is kept.
+	if s.Restore(nil, rails, now); len(s.List(now)) != 0 {
+		t.Fatal("restore of nothing kept pins")
+	}
+}

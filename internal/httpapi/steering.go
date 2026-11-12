@@ -51,10 +51,15 @@ func (s *Server) optimizationControl() OptimizationControl {
 }
 
 // steerWritable refuses a change while no one can sign in, so every
-// change has a named, audited actor.
+// change has a named, audited actor, and while the steering gate is
+// closed, so a restore of the saved state never discards a change.
 func (s *Server) steerWritable(w http.ResponseWriter, what string) bool {
 	if !s.writesEnabled() {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": what + " requires auth (auth.enabled) or PACKETEER_HTTP_USER and PACKETEER_HTTP_PASSWORD"})
+		return false
+	}
+	if refuse, _ := s.steerGate.Load().(func() bool); refuse != nil && refuse() {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": what + " is refused: this instance is an HA standby (call the active instance) or is still restoring its saved steering state"})
 		return false
 	}
 	return true
