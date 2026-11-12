@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/auth"
+	"github.com/GrandArcher/Packeteer/internal/config"
 	"github.com/GrandArcher/Packeteer/internal/configedit"
 	"github.com/GrandArcher/Packeteer/internal/preflight"
 	"github.com/GrandArcher/Packeteer/internal/snippet"
@@ -22,14 +24,19 @@ type fakePreflight struct {
 	*preflight.Runner
 }
 
-// Gate stands in for the controller's fingerprint of the candidate: a
-// candidate with another AS number is a different setup.
+// Gate stands in for the controller's reading of the candidate: a
+// candidate with another AS number is a different setup, and its announcer
+// counts for the withdrawal check.
 func (f fakePreflight) Gate(ctx context.Context, candidate []byte) error {
+	next, err := config.Parse(candidate)
+	if err != nil {
+		return err
+	}
 	fp := "fp"
-	if strings.Contains(string(candidate), "asn: 64999") {
+	if next.ASN == 64999 {
 		fp = "other"
 	}
-	return f.Runner.Gate(ctx, fp)
+	return f.Runner.Gate(ctx, preflight.Candidate{Fingerprint: fp, Announcer: next.Announcer != nil})
 }
 
 func (fakePreflight) Snippet(vendor string) (string, error) {
@@ -310,6 +317,77 @@ func TestInjectPlanWaitsForPreflightAndWarnsAboutUnlearnedPrefixes(t *testing.T)
 	}
 	if rec, _ := e.do(t, "POST", "/api/config/inject", plugin.RoleOperator, body); rec.Code != http.StatusForbidden {
 		t.Fatalf("operator = %d", rec.Code)
+	}
+}
+
+// On a fresh observe config with no announcer, the step adds the announcer
+// from its form. The plan and the save are refused while a check blocks,
+// the plan writes nothing, and the save waits for a restart, so the running
+// observe process announces nothing.
+func TestInjectStepAddsTheAnnouncer(t *testing.T) {
+	f := goodFacts()
+	f.Announcer = false
+	e := newPreflightUI(t, &f)
+	fresh := strings.Replace(observeInjectReady, "announcer:\n  type: gobgp\n", "", 1)
+	body := map[string]any{"current": fresh, "allowlist": []string{"198.51.100.0/24"}, "announcer": map[string]any{"type": "gobgp"}}
+
+	rec, got := e.do(t, "POST", "/api/config/inject", plugin.RoleAdmin, body)
+	if rec.Code != http.StatusPreconditionFailed || got["code"] != "preflight_required" || !strings.Contains(got["error"].(string), "import_filter") || strings.Contains(got["error"].(string), "withdrawal") {
+		t.Fatalf("while the filters are unconfirmed: %d %s", rec.Code, rec.Body)
+	}
+	if rec, _ := e.do(t, "POST", "/api/preflight/confirm", plugin.RoleAdmin, map[string]string{"id": "import_filter"}); rec.Code != http.StatusOK {
+		t.Fatalf("confirm = %d", rec.Code)
+	}
+	// The running report misses only the announcer, which the page reads
+	// to offer the step.
+	if _, got := e.do(t, "POST", "/api/preflight/run", plugin.RoleOperator, ""); got["ready"] != false || got["announcer_missing"] != true {
+		t.Fatalf("report = %v", got)
+	}
+	noAnnouncer := map[string]any{"current": fresh, "allowlist": []string{"198.51.100.0/24"}}
+	if rec, got := e.do(t, "POST", "/api/config/inject", plugin.RoleAdmin, noAnnouncer); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(got["error"].(string), "requires an announcer") {
+		t.Fatalf("without the announcer form: %d %s", rec.Code, rec.Body)
+	}
+	bad := map[string]any{"current": fresh, "allowlist": []string{"198.51.100.0/24"}, "announcer": map[string]any{"type": "exec"}}
+	if rec, got := e.do(t, "POST", "/api/config/inject", plugin.RoleAdmin, bad); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(got["error"].(string), "announcer.type") {
+		t.Fatalf("unknown announcer type: %d %s", rec.Code, rec.Body)
+	}
+
+	rec, got = e.do(t, "POST", "/api/config/inject", plugin.RoleAdmin, body)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("plan: %d %s", rec.Code, rec.Body)
+	}
+	plan := got["yaml"].(string)
+	cfg, err := config.Parse([]byte(plan))
+	if err != nil || cfg.Mode != config.ModeInject || cfg.Announcer == nil || cfg.Announcer.Type != "gobgp" {
+		t.Fatalf("plan config %+v, %v", cfg, err)
+	}
+	if !strings.Contains(got["diff"].(string), "+   type: gobgp") || !strings.Contains(fmt.Sprint(got["explain"]), "announcer gobgp is added") {
+		t.Fatalf("diff or explanation lacks the announcer: %s", rec.Body)
+	}
+	if disk, _ := os.ReadFile(e.path); string(disk) != editorYAML {
+		t.Fatal("the plan changed the file")
+	}
+
+	_, cur := e.do(t, "GET", "/api/config", plugin.RoleAdmin, nil)
+	save := map[string]any{"yaml": plan, "base": cur["sha256"], "confirm_inject": true}
+	f.Learned = 0
+	if rec, got := e.do(t, "PUT", "/api/config", plugin.RoleAdmin, save); rec.Code != http.StatusPreconditionFailed || got["code"] != "preflight_required" {
+		t.Fatalf("save while the session check fails: %d %s", rec.Code, rec.Body)
+	}
+	if disk, _ := os.ReadFile(e.path); string(disk) != editorYAML {
+		t.Fatal("the file changed although the save was refused")
+	}
+	f.Learned = 900000
+	rec, got = e.do(t, "PUT", "/api/config", plugin.RoleAdmin, save)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("save: %d %s", rec.Code, rec.Body)
+	}
+	res := got["result"].(map[string]any)
+	if res["mode"] != "inject" || res["restart_required"] != true || res["reload_online"] != false {
+		t.Fatalf("result = %v, want inject on restart only", res)
+	}
+	if disk, _ := os.ReadFile(e.path); string(disk) != plan {
+		t.Fatal("the saved file is not the plan")
 	}
 }
 

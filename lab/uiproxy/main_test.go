@@ -17,6 +17,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/federation"
 	"github.com/GrandArcher/Packeteer/internal/history"
 	"github.com/GrandArcher/Packeteer/internal/httpapi"
+	"github.com/GrandArcher/Packeteer/internal/preflight"
 	"github.com/GrandArcher/Packeteer/internal/ringlg"
 	"github.com/GrandArcher/Packeteer/internal/troubleshoot"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
@@ -518,6 +519,51 @@ func TestSnippetWizardDriverMatchesPage(t *testing.T) {
 		t.Fatal("driver must exempt only /api/snippets from the write count and never save")
 	}
 	ids := regexp.MustCompile(`(?:byId|type)\("([^"]+)"`).FindAllStringSubmatch(driver, -1)
+	if len(ids) == 0 {
+		t.Fatal("the driver uses no element")
+	}
+	for _, m := range ids {
+		if !strings.Contains(string(page), `id="`+m[1]+`"`) {
+			t.Errorf("driver uses #%s, which settings.html lacks", m[1])
+		}
+	}
+}
+
+// TestAnnouncerStepFixturesMatchAPI decodes the canned preflight report of
+// the announcer step smoke (#568) with the API's own type: only the missing
+// announcer blocks. The plan call is not stubbed, so the real server's
+// checks decide it, and the driver never saves. A renamed id fails here
+// instead of as a timeout in CI.
+func TestAnnouncerStepFixturesMatchAPI(t *testing.T) {
+	f, err := loadFixtures("../ui-fixtures/announcer-step")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rep preflight.Report
+	for _, s := range f.Stubs {
+		if s.Path == "/api/config/inject" {
+			t.Fatal("the plan call is stubbed")
+		}
+		if s.Path == "/api/preflight/run" {
+			dec := json.NewDecoder(bytes.NewReader(s.body))
+			dec.DisallowUnknownFields()
+			if err := dec.Decode(&rep); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if !rep.AnnouncerMissing || rep.Ready || strings.Join(rep.Blocking(), ",") != preflight.CheckWithdrawal {
+		t.Fatalf("report = %+v, want only the announcer missing", rep)
+	}
+	driver := string(f.driver)
+	if strings.Contains(driver, "confirm_inject") || strings.Contains(driver, `"PUT"`) || !strings.Contains(driver, "/api/config/inject") {
+		t.Fatal("driver must exempt only the plan from the write count and never save")
+	}
+	page, err := os.ReadFile("../../internal/httpapi/web/settings.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := regexp.MustCompile(`(?:byId\("|querySelector(?:All)?\("#)([a-z-]+)`).FindAllStringSubmatch(driver, -1)
 	if len(ids) == 0 {
 		t.Fatal("the driver uses no element")
 	}

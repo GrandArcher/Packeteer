@@ -2,8 +2,10 @@
 // Runs the preflight section of the settings page script (#221) against a
 // small DOM stand-in: each check shows its status, what was found, and the
 // fix; an unverified check offers Confirm; the inject step appears only
-// when every check passed and posts the editor text and the prefixes. The
-// functions are cut out of the real settings.js. Run by TestPreflightPage.
+// when every check passed, or when only the announcer is missing (it then
+// shows the announcer fields of the config schema), and posts the editor
+// text, the prefixes, and the announcer. The functions are cut out of the
+// real settings.js and blocks.js. Run by TestPreflightPage.
 
 var fs = require("fs");
 var path = require("path");
@@ -42,7 +44,7 @@ function text(n) {
 }
 
 var els = {};
-["pf-list", "pf-when", "pf-inject", "pf-run", "pf-vendor", "pf-allow", "pf-allow-err", "pf-cap", "pf-inject-status", "pf-explain", "ed-yaml", "editor-section", "pf-snippet", "pf-snippet-status", "pf-snippet-missing", "wz-body", "wz-asn", "wz-router", "wz-edge"].forEach(function (id) { els[id] = node("x"); });
+["pf-list", "pf-when", "pf-inject", "pf-run", "pf-vendor", "pf-allow", "pf-allow-err", "pf-cap", "pf-inject-status", "pf-explain", "ed-yaml", "editor-section", "pf-snippet", "pf-snippet-status", "pf-snippet-missing", "wz-body", "wz-asn", "wz-router", "wz-edge", "pf-announcer"].forEach(function (id) { els[id] = node("x"); });
 els["pf-inject"].hidden = true;
 var flowListen = "";
 var calls = [];
@@ -50,7 +52,11 @@ var reply = null;
 var loaded = [];
 var checked = 0;
 var previews = [];
+var drawn = [];
 var context = {
+  schema: null,
+  schemaFailed: false,
+  renderFields: function (parent, fields, obj, path) { drawn.push({fields: fields, obj: obj, path: path}); },
   document: {createElement: node, createTextNode: function (t) { var n = node("#text"); n.textContent = t; return n; }},
   byId: function (id) { return els[id]; },
   explain: function (err) { return "explained: " + err.message; },
@@ -73,11 +79,14 @@ vm.createContext(context);
 
 var ui = fs.readFileSync(path.join(__dirname, "web", "ui.js"), "utf8");
 var settings = fs.readFileSync(path.join(__dirname, "web", "settings.js"), "utf8");
+var blocks = fs.readFileSync(path.join(__dirname, "web", "blocks.js"), "utf8");
 ["el", "clear"].forEach(function (n) { vm.runInContext(fn(ui, n), context); });
+vm.runInContext(fn(blocks, "blankValues"), context);
+vm.runInContext("var pfReport = null; var pfAnnouncer = null;", context);
 vm.runInContext(settings.slice(settings.indexOf("var pfLabels"), settings.indexOf("var pfBadge")), context);
 vm.runInContext(settings.slice(settings.indexOf("var pfBadge"), settings.indexOf("function pfSummary")), context);
 vm.runInContext("var snippetShown = false; var snippetSeq = 0;", context);
-["pfSummary", "pfItem", "renderPreflight", "loadPreflight", "runPreflight", "confirmCheck", "snippetCandidate", "showSnippet", "refreshSnippet", "planInject"].forEach(function (n) {
+["pfBlocks", "pfOffered", "renderPfAnnouncer", "pfSummary", "pfItem", "renderPreflight", "loadPreflight", "runPreflight", "confirmCheck", "snippetCandidate", "showSnippet", "refreshSnippet", "planInject"].forEach(function (n) {
   vm.runInContext(fn(settings, n), context);
 });
 
@@ -226,6 +235,62 @@ reply.then(function () {
   return context.showSnippet();
 }).then(function () {
   assert(els["pf-snippet-status"].textContent === "explained: boom" && els["pf-snippet-missing"].hidden === true, "plain error: " + els["pf-snippet-status"].textContent);
+
+  // Only the announcer is missing: the step shows the announcer fields of
+  // the inject settings block once the schema is there, and sends them.
+  var noAnnouncer = JSON.parse(JSON.stringify(ready));
+  noAnnouncer.ready = false;
+  noAnnouncer.announcer_missing = true;
+  noAnnouncer.results.push({id: "withdrawal", title: "Routes are withdrawn when Packeteer stops", status: "fail", detail: "No announcer is configured.", fix: "Add one."});
+  context.renderPreflight(noAnnouncer);
+  assert(els["pf-inject"].hidden === false && els["pf-announcer"].hidden === false, "the step shows when only the announcer is missing");
+  assert(els["pf-when"].textContent.indexOf("Every other check passed. No announcer is configured: the step below adds one.") === 0, "summary: " + els["pf-when"].textContent);
+  assert(text(els["pf-announcer"]) === "Loading the announcer form..." && drawn.length === 0, "before the schema: " + text(els["pf-announcer"]));
+
+  var typeField = {key: "type", label: "Type", kind: "enum", options: ["gobgp"], required: true};
+  context.schema = {blocks: [{id: "scorer", fields: []}, {id: "inject", fields: [
+    {key: "packeteer_community", label: "Route community", kind: "string"},
+    {key: "announcer", label: "Announcer", help: "The in-process BGP announcer.", kind: "group", fields: [typeField]}
+  ]}]};
+  context.renderPfAnnouncer();
+  assert(drawn.length === 1 && drawn[0].fields[0] === typeField && drawn[0].path === "announcer" && drawn[0].obj.type === "gobgp", "the schema's announcer fields are drawn with the one type chosen: " + JSON.stringify(drawn));
+  assert(text(els["pf-announcer"]).indexOf("Announcer") === 0 && text(els["pf-announcer"]).indexOf("starts when Packeteer restarts") > 0, "form text: " + text(els["pf-announcer"]));
+
+  // A redraw keeps what was chosen.
+  drawn[0].obj.type = "picked";
+  context.renderPfAnnouncer();
+  assert(drawn[1].obj.type === "picked", "a redraw reset the form");
+  drawn[1].obj.type = "gobgp";
+
+  els["pf-allow"].value = "198.51.100.0/24";
+  els["pf-cap"].value = "";
+  calls.length = 0;
+  reply = Promise.resolve({yaml: "mode: inject\nannouncer:\n  type: gobgp\n", explain: ["announcer gobgp is added."]});
+  return context.planInject();
+}).then(function () {
+  assert(calls.length === 1 && calls[0].body.announcer && calls[0].body.announcer.type === "gobgp" && calls[0].body.max_improvements === undefined, "plan body carries the announcer: " + JSON.stringify(calls[0].body));
+
+  // Another check that blocks keeps the step hidden.
+  var twoBlock = JSON.parse(JSON.stringify(blocked));
+  twoBlock.announcer_missing = true;
+  twoBlock.results.push({id: "withdrawal", title: "w", status: "fail", detail: "No announcer is configured."});
+  context.renderPreflight(twoBlock);
+  assert(els["pf-inject"].hidden === true, "the step shows although another check blocks");
+
+  // The schema failed: the form says where to add it by hand.
+  context.schema = null;
+  context.schemaFailed = true;
+  context.renderPfAnnouncer();
+  assert(text(els["pf-announcer"]).indexOf("could not be loaded") >= 0, "schema failure text: " + text(els["pf-announcer"]));
+
+  // With an announcer running, the step sends none.
+  context.renderPreflight(ready);
+  assert(els["pf-announcer"].hidden === true, "the announcer form shows with an announcer configured");
+  calls.length = 0;
+  reply = Promise.resolve({yaml: "mode: inject\n", explain: []});
+  return context.planInject();
+}).then(function () {
+  assert(!("announcer" in calls[0].body), "a config with an announcer was sent another: " + JSON.stringify(calls[0].body));
   console.log("ok");
 }).catch(function (e) {
   console.error("FAIL: " + (e && e.stack || e));

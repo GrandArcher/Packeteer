@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -27,6 +28,9 @@ const (
 type InjectInput struct {
 	Allowlist       []string `json:"allowlist"`
 	MaxImprovements int      `json:"max_improvements,omitempty"`
+	// Announcer holds the announcer fields of the inject settings block
+	// (GET /api/config/schema). Set only when the config has no announcer.
+	Announcer Values `json:"announcer,omitempty"`
 }
 
 // InjectPlan is what the step would put in the editor. Nothing is written:
@@ -41,10 +45,9 @@ type InjectPlan struct {
 
 // EnableInject turns an observe or suggest config into an inject config for
 // a small allowlist. It changes mode, allowlist.prefixes, and
-// max_improvements, adds local_pref when it is missing, and keeps every
-// other key. The config must already name an announcer: the withdrawal
-// preflight check refuses without one. The result must pass config.Parse, which holds
-// the inject checklist.
+// max_improvements, adds local_pref when it is missing, adds the announcer
+// from in.Announcer when the config has none, and keeps every other key.
+// The result must pass config.Parse, which holds the inject checklist.
 func EnableInject(in InjectInput, current []byte) (InjectPlan, error) {
 	prefixes, err := injectPrefixes(in.Allowlist)
 	if err != nil {
@@ -78,6 +81,13 @@ func EnableInject(in InjectInput, current []byte) (InjectPlan, error) {
 	}
 	allow.Content = append(allow.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "prefixes"}, list)
 	var added []string
+	if in.Announcer != nil {
+		typ, err := addAnnouncer(root, in.Announcer, was)
+		if err != nil {
+			return InjectPlan{}, err
+		}
+		added = append(added, fmt.Sprintf("announcer %s is added. It announces on the iBGP session Packeteer already has with your router and withdraws its routes when Packeteer stops. It is a restart-only key: the saved config, inject included, takes effect when Packeteer restarts, and nothing is announced before.", typ))
+	}
 	if scalar(root, "local_pref") == "" {
 		setOrDelete(root, "local_pref", strconv.Itoa(DefaultInjectLocalPref), "!!int")
 		added = append(added, fmt.Sprintf("local_pref %d is added. Routes Packeteer announces win over your transits' own routes only if this is higher than their local preference (often 100); change it if yours differs.", DefaultInjectLocalPref))
@@ -103,6 +113,28 @@ func EnableInject(in InjectInput, current []byte) (InjectPlan, error) {
 		"Routes are withdrawn when Packeteer stops, when the session drops, and when the data goes stale.",
 	}
 	return InjectPlan{YAML: buf.String(), Diff: lineDiff(string(current), buf.String()), Explain: append(explain, added...)}, nil
+}
+
+// addAnnouncer writes the announcer group of the inject settings block,
+// checked like the settings form checks it. It returns the announcer type.
+func addAnnouncer(root *yaml.Node, raw Values, was *config.Config) (string, error) {
+	if was.Announcer != nil {
+		return "", errors.New("announcer: the config already has one; leave the announcer fields out")
+	}
+	b, _ := blockByID("inject")
+	i := slices.IndexFunc(b.Fields, func(f Field) bool { return f.Key == "announcer" })
+	f := b.Fields[i]
+	v, err := normalizeField(f.Key, f, raw)
+	if err == nil {
+		err = validateField(f.Key, f, v)
+	}
+	if err != nil {
+		return "", err
+	}
+	if err := writeField(root, f, v); err != nil {
+		return "", err
+	}
+	return v.(Values)["type"].(string), nil
 }
 
 func injectPrefixes(in []string) ([]string, error) {

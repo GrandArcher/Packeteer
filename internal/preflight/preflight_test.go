@@ -192,8 +192,27 @@ func TestWithdrawalNeedsAnnouncerAndBoundedHold(t *testing.T) {
 		t.Fatalf("no session = %+v", r)
 	}
 	r := result(t, good(), CheckWithdrawal)
-	if r.Status != Pass || !strings.Contains(r.Detail, "within 1m30s") || !strings.Contains(r.Detail, "Not checked: a live test route") {
+	if r.Status != Pass || !strings.HasPrefix(r.Detail, "An announcer is configured") || !strings.Contains(r.Detail, "within 1m30s") || !strings.Contains(r.Detail, "Not checked: a live test route") {
 		t.Fatalf("pass = %+v", r)
+	}
+	if rep := Run(good(), t0); rep.AnnouncerMissing {
+		t.Fatal("announcer_missing with an announcer")
+	}
+	f = good()
+	f.Announcer = false
+	if rep := Run(f, t0); !rep.AnnouncerMissing || rep.Ready {
+		t.Fatalf("no announcer: missing=%v ready=%v", rep.AnnouncerMissing, rep.Ready)
+	}
+	// An announcer the saved config adds passes on the running timers,
+	// and fails on them like a running one.
+	f.AnnouncerAdded = true
+	rep := Run(f, t0)
+	if r := result(t, f, CheckWithdrawal); r.Status != Pass || !strings.Contains(r.Detail, "adds an announcer, which starts with the next restart") || !rep.Ready || rep.AnnouncerMissing {
+		t.Fatalf("added announcer = %+v, report %+v", r, rep)
+	}
+	f.Timers[0].LocalGR = true
+	if r := result(t, f, CheckWithdrawal); r.Status != Fail {
+		t.Fatalf("added announcer with graceful restart = %+v", r)
 	}
 }
 
@@ -273,7 +292,7 @@ func TestGateRefusesUntilReady(t *testing.T) {
 	f := good()
 	f.Learned = 0
 	r := NewRunner(source(&f), mustStore(t, ""), func() time.Time { return t0 })
-	err := r.Gate(context.Background(), f.Fingerprint)
+	err := r.Gate(context.Background(), Candidate{Fingerprint: f.Fingerprint})
 	var nr *NotReadyError
 	if !errors.As(err, &nr) || !strings.Contains(err.Error(), CheckSession) || nr.Report.Ready {
 		t.Fatalf("gate = %v", err)
@@ -281,14 +300,43 @@ func TestGateRefusesUntilReady(t *testing.T) {
 	f.Learned = 900000
 	f.Confirmed = nil
 	// The store, not the facts, supplies confirmations: confirm first.
-	if err := r.Gate(context.Background(), f.Fingerprint); err == nil || !strings.Contains(err.Error(), CheckFilters) {
+	if err := r.Gate(context.Background(), Candidate{Fingerprint: f.Fingerprint}); err == nil || !strings.Contains(err.Error(), CheckFilters) {
 		t.Fatalf("gate before confirm = %v", err)
 	}
 	if _, err := r.Confirm(context.Background(), CheckFilters, "admin"); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.Gate(context.Background(), f.Fingerprint); err != nil {
+	if err := r.Gate(context.Background(), Candidate{Fingerprint: f.Fingerprint}); err != nil {
 		t.Fatalf("gate after confirm = %v", err)
+	}
+}
+
+// A candidate that adds an announcer passes the gate only while nothing
+// else blocks, and the report the gate keeps says the announcer is new.
+func TestGateCountsTheCandidateAnnouncer(t *testing.T) {
+	f := good()
+	f.Announcer = false
+	r := NewRunner(source(&f), mustStore(t, ""), func() time.Time { return t0 })
+	if _, err := r.Confirm(context.Background(), CheckFilters, "admin"); err != nil {
+		t.Fatal(err)
+	}
+	var nr *NotReadyError
+	if err := r.Gate(context.Background(), Candidate{Fingerprint: f.Fingerprint}); !errors.As(err, &nr) || !nr.Report.AnnouncerMissing || !strings.Contains(err.Error(), CheckWithdrawal) {
+		t.Fatalf("no announcer anywhere: %v", err)
+	}
+	if err := r.Gate(context.Background(), Candidate{Fingerprint: f.Fingerprint, Announcer: true}); err != nil {
+		t.Fatalf("candidate adds the announcer: %v", err)
+	}
+	if rep, _ := r.Latest(); rep.AnnouncerMissing {
+		t.Fatal("the kept report still misses the announcer")
+	}
+	f.Learned = 0
+	if err := r.Gate(context.Background(), Candidate{Fingerprint: f.Fingerprint, Announcer: true}); !errors.As(err, &nr) || strings.Join(nr.Report.Blocking(), ",") != CheckSession {
+		t.Fatalf("candidate announcer while the session check fails: %v", err)
+	}
+	// A plain run reads only the running process.
+	if rep := r.Run(context.Background()); !rep.AnnouncerMissing {
+		t.Fatal("a run without a candidate counted an announcer")
 	}
 }
 
@@ -299,10 +347,10 @@ func TestGateRefusesACandidateThatChangesTheSetup(t *testing.T) {
 	if _, err := r.Confirm(context.Background(), CheckFilters, "admin"); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.Gate(context.Background(), "running"); err != nil {
+	if err := r.Gate(context.Background(), Candidate{Fingerprint: "running"}); err != nil {
 		t.Fatalf("same setup: %v", err)
 	}
-	if err := r.Gate(context.Background(), "other"); !errors.Is(err, ErrSetupChanged) {
+	if err := r.Gate(context.Background(), Candidate{Fingerprint: "other"}); !errors.Is(err, ErrSetupChanged) {
 		t.Fatalf("changed setup: %v", err)
 	}
 }

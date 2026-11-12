@@ -1,0 +1,7 @@
+{
+  "inject": {"page": "/settings.html", "script": "driver.js"},
+  "stubs": [
+    {"method": "GET", "path": "/api/preflight", "file": "preflight.json"},
+    {"method": "POST", "path": "/api/preflight/run", "file": "report.json"}
+  ]
+}
