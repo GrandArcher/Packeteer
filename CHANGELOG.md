@@ -6,7 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ## [1.2.0] - 2026-11-11
 
-The v1.2 release adds steering calls to the REST API and, behind `mcp.write_tools`, to the MCP server. No config key is new and no existing config behaves differently; the shipped config stays `mode: observe` and injection stays off by default.
+The v1.2 release adds steering calls to the REST API and, behind `mcp.write_tools`, to the MCP server, with no new config key and no change to an existing config; the shipped config stays `mode: observe` and injection stays off by default.
 
 ### Added
 

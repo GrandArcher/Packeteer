@@ -353,7 +353,7 @@ v1.0.1 was a patch with no new capability rows and no new config keys: hardening
 
 v1.1.0 added three capability rows, all opt-in and all partial at that release: an MCP server for AI assistants ([docs/mcp.md](docs/mcp.md), #302), RPKI-invalid only paths with evidence and admin-approved SLURM exceptions ([docs/only-invalid.md](docs/only-invalid.md), #401, with an opt-in Qrator Radar link-out, #402), and a non-BGP mode that installs flow-driven static routes on a router with no BGP session ([docs/nonbgp.md](docs/nonbgp.md), #300). The non-BGP routes are not from a learned RIB view: an owner-approved exception for that mode only, off by default, lab-proven with the `linux` steerer only. The counts above include the three rows ([CHANGELOG](CHANGELOG.md#110---2026-11-10)). Nothing is field-proven (#54). The shipped config stays `mode: observe`, and injection stays off by default.
 
-v1.2.0 (this release) adds no capability rows and no config keys. It adds steering calls for an operator: pin a prefix to a provider (`/api/pins`), pause and resume optimization (`/api/optimization/pause`), and acknowledge an alert (`/api/alerts/ack`). The same calls, plus two read tools (`pins`, `optimization_status`), are MCP tools; the write ones stay off unless `mcp.write_tools` is set and the token has the `mcp:write` scope ([docs/mcp.md](docs/mcp.md#steering-through-the-api), #558). A pin is refused unless its prefix is in the learned RIB view and `allowlist.prefixes`, and is announced only in `mode: inject`, under a static rule's rails. This completes the MCP row, now done in the counts above ([CHANGELOG](CHANGELOG.md#120---2026-11-11)). Nothing is field-proven (#54). The shipped config stays `mode: observe`, and injection stays off by default.
+v1.2.0 (this release) adds no new capability rows and no config keys. It adds steering calls for an operator: pin a prefix to a provider (`/api/pins`), pause and resume optimization (`/api/optimization/pause`), and acknowledge an alert (`/api/alerts/ack`). The same calls, plus two read tools (`pins`, `optimization_status`), are MCP tools; the write ones stay off unless `mcp.write_tools` is set and the token has the `mcp:write` scope ([docs/mcp.md](docs/mcp.md#steering-through-the-api), #558). A pin is refused unless its prefix is in the learned RIB view and `allowlist.prefixes`, and is announced only in `mode: inject`, under a static rule's rails. This completes the MCP row: the counts above are 131 done, up from 130 at 1.1.0 ([CHANGELOG](CHANGELOG.md#120---2026-11-11)). Nothing is field-proven (#54). The shipped config stays `mode: observe`, and injection stays off by default.
 
 ## Upgrades
 
@@ -363,7 +363,7 @@ The Settings page can also upgrade in place (#196). It is off by default. It nee
 
 ### From 1.1.0 to 1.2.0
 
-- No config key changed and no existing config behaves differently. Pins, a pause, and acknowledgements are in memory: a restart clears them. A downgrade to 1.1.0 loses the new calls and needs no config change ([docs/mcp.md](docs/mcp.md#rollback)).
+- No config key changed and no existing config behaves differently. Pins, a pause, and alert acknowledgements are in memory: a restart clears them. A downgrade to 1.1.0 loses the new calls and needs no config change ([docs/mcp.md](docs/mcp.md#steering-through-the-api)).
 
 ### From 1.0.1 to 1.1.0
 
