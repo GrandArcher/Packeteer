@@ -369,13 +369,13 @@ func TestSnippetsFromUnsavedCandidate(t *testing.T) {
 		return e.do(t, "POST", "/api/snippets", plugin.RoleAdmin, body)
 	}
 
-	rec, got := post(map[string]any{"vendor": "frr", "answers": map[string]any{"asn": 64496, "router_id": "192.0.2.10", "edge": "192.0.2.254"}})
+	rec, got := post(map[string]any{"vendor": "frr", "answers": map[string]any{"wizard": true, "asn": 64496, "router_id": "192.0.2.10", "edge": "192.0.2.254"}})
 	text, _ := got["text"].(string)
 	if rec.Code != http.StatusOK || !strings.Contains(text, "router bgp 64496") || !strings.Contains(text, "permit 64496:666") || !strings.Contains(text, "neighbor 192.0.2.10 remote-as 64496") {
 		t.Fatalf("wizard answers: %d %s", rec.Code, rec.Body)
 	}
 
-	rec, got = post(map[string]any{"vendor": "mikrotik", "answers": map[string]any{"asn": 64496, "router_id": "192.0.2.10", "edge": "192.0.2.254", "flow_listen": ":2055"}})
+	rec, got = post(map[string]any{"vendor": "mikrotik", "answers": map[string]any{"wizard": true, "asn": 64496, "router_id": "192.0.2.10", "edge": "192.0.2.254", "flow_listen": ":2055"}})
 	text, _ = got["text"].(string)
 	if rec.Code != http.StatusOK || !strings.Contains(text, "/ip traffic-flow target add dst-address=192.0.2.10 port=2055") {
 		t.Fatalf("flow answers: %d %s", rec.Code, rec.Body)
@@ -388,12 +388,12 @@ func TestSnippetsFromUnsavedCandidate(t *testing.T) {
 		t.Fatalf("editor text: %d %s", rec.Code, rec.Body)
 	}
 
-	rec, got = post(map[string]any{"vendor": "frr", "answers": map[string]any{"asn": 64496}})
+	rec, got = post(map[string]any{"vendor": "frr", "answers": map[string]any{"wizard": true, "asn": 64496}})
 	missing, _ := got["missing"].([]any)
 	if rec.Code != http.StatusUnprocessableEntity || len(missing) != 2 || !strings.Contains(missing[0].(string), "Edge address in setup step 1") || !strings.Contains(missing[1].(string), "Router ID in setup step 1") {
 		t.Fatalf("missing answers: %d %s", rec.Code, rec.Body)
 	}
-	if rec, got = post(map[string]any{"vendor": "cumulus", "answers": map[string]any{"asn": 64496, "router_id": "192.0.2.10", "edge": "192.0.2.254"}}); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(got["error"].(string), "unknown vendor") {
+	if rec, got = post(map[string]any{"vendor": "cumulus", "answers": map[string]any{"wizard": true, "asn": 64496, "router_id": "192.0.2.10", "edge": "192.0.2.254"}}); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(got["error"].(string), "unknown vendor") {
 		t.Fatalf("unknown vendor: %d %s", rec.Code, rec.Body)
 	}
 	if rec, _ = e.do(t, "POST", "/api/snippets", plugin.RoleOperator, map[string]any{"vendor": "frr"}); rec.Code != http.StatusForbidden {

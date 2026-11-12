@@ -204,7 +204,7 @@ func TestForConfigSetsIPv6FromProviders(t *testing.T) {
 func TestForConfigRefusals(t *testing.T) {
 	cases := map[string]func(*config.Config){
 		"setup step 1 (Edge), or set bgp.neighbors":               func(c *config.Config) { c.BGP.Neighbors = nil },
-		"Generate in setup step 4 (Flow) to fill it as 64512:666": func(c *config.Config) { c.PacketeerCommunity = "" },
+		"press Generate in the UI setup (step 4, Flow) to fill it as 64512:666": func(c *config.Config) { c.PacketeerCommunity = "" },
 		"packeteer_community: ":                                   func(c *config.Config) { c.PacketeerCommunity = "65536:1" },
 		"enter the Router ID in setup step 1":                     func(c *config.Config) { c.RouterID = "" },
 		"bgp.neighbors address":                                   func(c *config.Config) { c.BGP.Neighbors[0].Address = "edge" },

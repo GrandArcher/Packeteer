@@ -10,9 +10,12 @@ import (
 )
 
 // Answers are the setup-wizard fields the router side reads, as typed and
-// not yet saved. A zero field was not answered and leaves the config text as
-// it is.
+// not yet saved. Wizard is true while the wizard is open: Generate then
+// replaces asn, router_id, packeteer_community, bgp.neighbors and sources,
+// so those come from the answers and not from the text. Without Wizard the
+// text is used as it is and the other fields are ignored.
 type Answers struct {
+	Wizard   bool   `json:"wizard"`
 	ASN      uint32 `json:"asn"`
 	RouterID string `json:"router_id"`
 	// Edge is the router's address (bgp.neighbors[0].address).
@@ -22,8 +25,10 @@ type Answers struct {
 }
 
 // ForCandidate returns the Params for config text that is not saved (the
-// editor, or a wizard result) with the unsaved wizard answers laid over it.
-// The text is read leniently, because it is part-way through setup: only the
+// editor, or a wizard result). While the wizard is open the keys it owns
+// are what Generate would write: the community is the wizard's rule for the
+// AS number, one neighbor, and the flow source only when it is ticked. The
+// text is read leniently, because it is part-way through setup: only the
 // keys a snippet reads matter, and a missing one comes back as a
 // *MissingError instead of a config validation error. Nothing is written.
 func ForCandidate(text []byte, a Answers) ([]Params, error) {
@@ -33,29 +38,22 @@ func ForCandidate(text []byte, a Answers) ([]Params, error) {
 			return nil, fmt.Errorf("the YAML does not parse: %w", err)
 		}
 	}
-	if a.ASN != 0 {
+	if a.Wizard {
 		cfg.ASN = a.ASN
-	}
-	if a.RouterID != "" {
 		cfg.RouterID = a.RouterID
-	}
-	// A community already in the text is what the router must match. Only
-	// when it is empty does the wizard's own rule apply, as Generate would.
-	if cfg.PacketeerCommunity == "" {
-		cfg.PacketeerCommunity = configedit.WizardCommunity(cfg.ASN)
-	}
-	if a.Edge != "" {
-		if len(cfg.BGP.Neighbors) == 0 {
-			cfg.BGP.Neighbors = []config.BGPNeighbor{{}}
+		cfg.PacketeerCommunity = configedit.WizardCommunity(a.ASN)
+		cfg.BGP.Neighbors = nil
+		if a.Edge != "" {
+			cfg.BGP.Neighbors = []config.BGPNeighbor{{Address: a.Edge}}
 		}
-		cfg.BGP.Neighbors[0].Address = a.Edge
-	}
-	if a.FlowListen != "" {
-		var n yaml.Node
-		if err := n.Encode(map[string]string{"listen": a.FlowListen}); err != nil {
-			return nil, err
+		cfg.Sources = nil
+		if a.FlowListen != "" {
+			var n yaml.Node
+			if err := n.Encode(map[string]string{"listen": a.FlowListen}); err != nil {
+				return nil, err
+			}
+			cfg.Sources = []config.PluginSpec{{Type: "flow", Config: n}}
 		}
-		cfg.Sources = append([]config.PluginSpec{{Type: "flow", Config: n}}, cfg.Sources...)
 	}
 	return ForConfig(&cfg)
 }

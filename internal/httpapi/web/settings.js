@@ -2321,6 +2321,7 @@ function useWizardYaml(out) {
   if (!base) api("GET", "/api/config").then(function (f) { base = f.sha256; }, function () {});
   loadForm(out.yaml);
   checkConfig();
+  refreshSnippet();
   document.getElementById("editor-section").scrollIntoView();
 }
 
@@ -2408,7 +2409,8 @@ function confirmCheck(id, btn) {
 // not. used is false on an empty page, which reads the running config.
 function snippetCandidate() {
   var answers = {};
-  if (!byId("wz-body").hidden) {
+  var open = !byId("wz-body").hidden;
+  if (open) {
     var asn = Number(byId("wz-asn").value.trim());
     if (asn >= 1 && asn <= 4294967295 && Math.floor(asn) === asn) answers.asn = asn;
     var router = byId("wz-router").value.trim();
@@ -2419,7 +2421,9 @@ function snippetCandidate() {
     if (flow) answers.flow_listen = flow;
   }
   var yaml = byId("ed-yaml").value;
-  return {yaml: yaml, answers: answers, used: yaml.trim() !== "" || Object.keys(answers).length > 0};
+  var used = yaml.trim() !== "" || Object.keys(answers).length > 0;
+  if (open) answers.wizard = true;
+  return {yaml: yaml, answers: answers, used: used};
 }
 
 var snippetShown = false;

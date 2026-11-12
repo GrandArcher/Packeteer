@@ -63,7 +63,7 @@ providers:
 	if code := run(context.Background(), []string{"-config", path, "-snippet", "frr"}, noEnv, &out, &errOut); code != 1 || out.Len() != 0 {
 		t.Fatalf("code %d, stdout %q", code, out.String())
 	}
-	for _, want := range []string{"enter the Edge address in setup step 1", "Generate in setup step 4 (Flow) to fill it as 64512:666"} {
+	for _, want := range []string{"enter the Edge address in setup step 1", "set packeteer_community in the file, or press Generate in the UI setup (step 4, Flow) to fill it as 64512:666"} {
 		if !strings.Contains(errOut.String(), want) {
 			t.Errorf("stderr lacks %q:\n%s", want, errOut.String())
 		}

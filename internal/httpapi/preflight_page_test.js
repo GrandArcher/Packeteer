@@ -178,7 +178,7 @@ reply.then(function () {
 }).then(function () {
   var c = calls[0];
   assert(calls.length === 1 && c.method === "POST" && c.url === "/api/snippets", "candidate call: " + JSON.stringify(calls));
-  assert(c.body.vendor === "bird" && c.body.yaml === "mode: observe\n" && JSON.stringify(c.body.answers) === JSON.stringify({asn: 64496, router_id: "192.0.2.10", edge: "192.0.2.254", flow_listen: ":2055"}), "candidate body: " + JSON.stringify(c.body));
+  assert(c.body.vendor === "bird" && c.body.yaml === "mode: observe\n" && JSON.stringify(c.body.answers) === JSON.stringify({asn: 64496, router_id: "192.0.2.10", edge: "192.0.2.254", flow_listen: ":2055", wizard: true}), "candidate body: " + JSON.stringify(c.body));
   assert(els["pf-snippet-status"].textContent.indexOf("on this page") >= 0, "status names the source: " + els["pf-snippet-status"].textContent);
 
   // A wizard that is collapsed (a box with a config) is not sent.
@@ -186,7 +186,7 @@ reply.then(function () {
   calls.length = 0;
   return context.showSnippet();
 }).then(function () {
-  assert(JSON.stringify(calls[0].body.answers) === "{}", "a collapsed wizard sends no answers: " + JSON.stringify(calls[0].body));
+  assert(JSON.stringify(calls[0].body.answers) === "{}", "a collapsed wizard sends no answers and no wizard flag: " + JSON.stringify(calls[0].body));
   els["wz-body"].hidden = false;
 
   // Missing answers are listed in plain words, not as one raw error.

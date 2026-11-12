@@ -7,7 +7,7 @@ import (
 )
 
 func wizardAnswers() Answers {
-	return Answers{ASN: 64496, RouterID: "192.0.2.10", Edge: "192.0.2.254"}
+	return Answers{Wizard: true, ASN: 64496, RouterID: "192.0.2.10", Edge: "192.0.2.254"}
 }
 
 // A first run: nothing is saved, and the answers typed in setup step 1 are
@@ -43,17 +43,14 @@ func TestForCandidateFlowStep(t *testing.T) {
 	}
 }
 
-// The editor text carries what the wizard does not ask for. A community that
-// is already in it is what the router must match, so the wizard's rule does
-// not replace it, and an answer the operator changed wins over the text.
-func TestForCandidateTextAndAnswers(t *testing.T) {
-	text := `asn: 64496
+const exampleText = `asn: 64496
 router_id: 192.0.2.10
-packeteer_community: "64496:777"
+packeteer_community: "64512:666"
 bgp:
   neighbors:
     - address: 192.0.2.253
       add_path: true
+    - address: 192.0.2.252
 sources:
   - type: flow
     config:
@@ -63,21 +60,44 @@ providers:
     source_ip: 2001:db8::11
     next_hop: 2001:db8::1
 `
-	ps, err := ForCandidate([]byte(text), Answers{})
+
+// With the wizard closed the text is what will run, so it is used as it is.
+func TestForCandidateTextAlone(t *testing.T) {
+	ps, err := ForCandidate([]byte(exampleText), Answers{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := Params{ASN: 64496, Router: "192.0.2.253", Packeteer: "192.0.2.10", Community: "64496:777", AddPath: true, IPv6: true, FlowHost: "192.0.2.10", FlowPort: 6343}
+	if len(ps) != 2 {
+		t.Fatalf("%d params, want one per neighbor", len(ps))
+	}
+	want := Params{ASN: 64496, Router: "192.0.2.253", Packeteer: "192.0.2.10", Community: "64512:666", AddPath: true, IPv6: true, FlowHost: "192.0.2.10", FlowPort: 6343}
+	if ps[0] != want {
+		t.Fatalf("params = %+v, want %+v", ps[0], want)
+	}
+	if ps[1].Router != "192.0.2.252" || ps[1].AddPath {
+		t.Fatalf("second neighbor = %+v", ps[1])
+	}
+}
+
+// While the wizard is open Generate replaces asn, router_id, the community,
+// the neighbors, and the sources, so the snippet must show those and not the
+// text: a router filter on 64512:666 would reject routes saved as 64496:666.
+func TestForCandidateWizardOwnsItsKeys(t *testing.T) {
+	ps, err := ForCandidate([]byte(exampleText), Answers{Wizard: true, ASN: 64496, RouterID: "192.0.2.10", Edge: "192.0.2.254"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := Params{ASN: 64496, Router: "192.0.2.254", Packeteer: "192.0.2.10", Community: "64496:666", IPv6: true}
 	if len(ps) != 1 || ps[0] != want {
 		t.Fatalf("params = %+v, want %+v", ps, want)
 	}
-	ps, err = ForCandidate([]byte(text), Answers{Edge: "192.0.2.254", FlowListen: "192.0.2.20:2055"})
+	ps, err = ForCandidate([]byte(exampleText), Answers{Wizard: true, ASN: 64496, RouterID: "192.0.2.10", Edge: "192.0.2.254", FlowListen: "192.0.2.20:2055"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want.Router, want.FlowHost, want.FlowPort = "192.0.2.254", "192.0.2.20", 2055
-	if ps[0] != want {
-		t.Fatalf("with answers: %+v, want %+v", ps[0], want)
+	want.FlowHost, want.FlowPort = "192.0.2.20", 2055
+	if len(ps) != 1 || ps[0] != want {
+		t.Fatalf("with flow: %+v, want %+v", ps, want)
 	}
 }
 
@@ -88,10 +108,10 @@ func TestForCandidateMissingAnswers(t *testing.T) {
 		a    Answers
 		want []string
 	}{
-		{"nothing yet", "", Answers{}, []string{"AS number: enter it as ASN in setup step 1", "Router address: enter the Edge address in setup step 1", "Packeteer community:", "Packeteer's address: enter the Router ID in setup step 1"}},
-		{"only the AS number", "", Answers{ASN: 64496}, []string{"Router address: enter the Edge address in setup step 1", "Packeteer's address: enter the Router ID in setup step 1"}},
-		{"no router id", "", Answers{ASN: 64496, Edge: "192.0.2.254"}, []string{"Packeteer's address: enter the Router ID in setup step 1"}},
-		{"32-bit AS number", "", Answers{ASN: 65536, RouterID: "192.0.2.10", Edge: "192.0.2.254"}, []string{"above 65535"}},
+		{"nothing yet", "", Answers{Wizard: true}, []string{"AS number: enter it as ASN in setup step 1", "Router address: enter the Edge address in setup step 1", "Packeteer community:", "Packeteer's address: enter the Router ID in setup step 1"}},
+		{"only the AS number", "", Answers{Wizard: true, ASN: 64496}, []string{"Router address: enter the Edge address in setup step 1", "Packeteer's address: enter the Router ID in setup step 1"}},
+		{"no router id", "", Answers{Wizard: true, ASN: 64496, Edge: "192.0.2.254"}, []string{"Packeteer's address: enter the Router ID in setup step 1"}},
+		{"32-bit AS number", "", Answers{Wizard: true, ASN: 65536, RouterID: "192.0.2.10", Edge: "192.0.2.254"}, []string{"above 65535"}},
 	}
 	for _, c := range cases {
 		_, err := ForCandidate([]byte(c.text), c.a)

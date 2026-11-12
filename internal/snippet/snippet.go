@@ -85,11 +85,12 @@ type MissingError struct{ Hints []string }
 func (e *MissingError) Error() string { return strings.Join(e.Hints, "\n") }
 
 const (
-	hintASN    = "AS number: enter it as ASN in setup step 1 (Edge), or set asn in the file."
-	hintEdge   = "Router address: enter the Edge address in setup step 1 (Edge), or set bgp.neighbors in the file. The snippet is for that router."
-	hintSelf   = "Packeteer's address: enter the Router ID in setup step 1 (Edge), or set router_id or the neighbor's local_address in the file. The router needs it to peer with Packeteer."
-	hintNoComm = "Packeteer community: the router filters match it. Press Generate in setup step 4 (Flow) to fill it as %d:666, or set packeteer_community in the file."
-	hintBigASN = "Packeteer community: setup leaves it empty for an AS number above 65535, because the standard community has 16 bits. Set packeteer_community in the settings form or the file as a large community, for example 65536:666:1."
+	hintASN       = "AS number: enter it as ASN in setup step 1 (Edge), or set asn in the file."
+	hintEdge      = "Router address: enter the Edge address in setup step 1 (Edge), or set bgp.neighbors in the file. The snippet is for that router."
+	hintSelf      = "Packeteer's address: enter the Router ID in setup step 1 (Edge), or set router_id or the neighbor's local_address in the file. The router needs it to peer with Packeteer."
+	hintNoComm    = "Packeteer community: the router filters match it. Set packeteer_community in the file, or press Generate in the UI setup (step 4, Flow) to fill it as %d:666."
+	hintNoASNComm = "Packeteer community: set packeteer_community in the file, or enter the ASN in setup step 1 (Edge) so setup can fill it."
+	hintBigASN    = "Packeteer community: setup leaves it empty for an AS number above 65535, because the standard community has 16 bits. Set packeteer_community in the settings form or the file as a large community, for example 65536:666:1."
 )
 
 func communityHint(asn uint32) string {
@@ -97,7 +98,7 @@ func communityHint(asn uint32) string {
 		return hintBigASN
 	}
 	if asn == 0 {
-		return "Packeteer community: set packeteer_community in the file, or enter the ASN in setup step 1 (Edge) so setup can fill it."
+		return hintNoASNComm
 	}
 	return fmt.Sprintf(hintNoComm, asn)
 }
@@ -157,8 +158,8 @@ func ForConfig(cfg *config.Config) ([]Params, error) {
 	return out, nil
 }
 
-// allHaveLocalAddress is false when a neighbor has no local_address, or
-// there is none, so router_id is Packeteer's address.
+// allHaveLocalAddress reports whether every neighbor sets local_address; with
+// no neighbors it is false.
 func allHaveLocalAddress(ns []config.BGPNeighbor) bool {
 	for _, n := range ns {
 		if n.LocalAddress == "" {
