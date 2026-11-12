@@ -36,3 +36,6 @@ func (s *Store) PutSteeringState(ctx context.Context, doc []byte) error {
 	_, err = db.ExecContext(ctx, `INSERT OR REPLACE INTO steering_state (id, doc) VALUES (1, ?)`, doc)
 	return err
 }
+
+// SteeringLocation names the database file and the table.
+func (s *Store) SteeringLocation() string { return s.path + " (table steering_state)" }

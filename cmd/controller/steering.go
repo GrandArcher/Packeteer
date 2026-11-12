@@ -158,7 +158,7 @@ func (c *optimizationControl) restore(st httpapi.Pause) {
 }
 
 // steeringDocVersion is the saved document's format. A document of
-// another version is not restored.
+// another version holds the controller like an unreadable store.
 const steeringDocVersion = 1
 
 // steeringDoc is the saved operator steering state (#565).
@@ -195,6 +195,10 @@ type steeringState struct {
 	// ha at this term's takeover. Until then changes are refused, so a
 	// restore never discards one.
 	restored atomic.Bool
+	// held is the reason last logged for not restoring, and heldLogged
+	// when; under mu.
+	held       string
+	heldLogged time.Time
 }
 
 // steeringStoreOf picks where the steering state is saved, or nil.
@@ -229,8 +233,8 @@ func (s *steeringState) start(ctx context.Context, now time.Time) {
 
 // takeover restores what the active instance saved, before this
 // instance's first decision as the active one; without ha it is the retry
-// after a failed read at start. While the store cannot be read, changes
-// are refused and the decision loop makes no decision: a save would
+// after a failed read at start. While the saved state cannot be used,
+// changes are refused and the decision loop makes no decision: a save would
 // replace the saved state with an older one, and a decision would use a
 // pause or pins the operator has since changed.
 func (s *steeringState) takeover(ctx context.Context, now time.Time) {
@@ -252,12 +256,39 @@ func (s *steeringState) mayDecide(ctx context.Context, now time.Time, active boo
 	return s.restored.Load()
 }
 
-// stepDown refuses changes until the next takeover.
-func (s *steeringState) stepDown() { s.restored.Store(false) }
+// stepDown refuses changes until the next takeover and drops the pins,
+// the pause, and the acknowledgements, so a takeover acts only on what it
+// reads from the store. A lease that moves to the other instance and back
+// within one decision round is not seen as a step-down: this instance
+// keeps its memory and its next save replaces what the other one saved,
+// the same gap decider.Reset has.
+func (s *steeringState) stepDown() {
+	s.restored.Store(false)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pins.Restore(nil, pin.Rails{}, time.Now())
+	s.opt.restore(httpapi.Pause{})
+	_ = s.events.RestoreAcks(context.Background(), nil)
+}
 
-// load restores the saved state. It reports false only when the store
-// could not be read; an unreadable document is logged and replaced by the
-// next save.
+// holdLogEvery bounds how often an unchanged reason for holding is logged.
+const holdLogEvery = time.Minute
+
+// hold logs why the saved state is not restored: when the reason changes,
+// and at most once a minute while it stays, since load runs every round.
+// s.mu is held.
+func (s *steeringState) hold(now time.Time, reason string, args ...any) {
+	if reason == s.held && now.Sub(s.heldLogged) < holdLogEvery {
+		return
+	}
+	s.held, s.heldLogged = reason, now
+	s.log.Error(reason, append([]any{"store", s.store.SteeringLocation()}, args...)...)
+}
+
+// load restores the saved state. It reports false, and changes nothing in
+// memory, when the store cannot be read or the document cannot be used: it
+// does not parse, or another version wrote it. Running on without it would
+// act on pins or a pause the operator has since changed.
 func (s *steeringState) load(ctx context.Context, now time.Time) bool {
 	if s.store == nil {
 		return true
@@ -268,16 +299,29 @@ func (s *steeringState) load(ctx context.Context, now time.Time) bool {
 	defer cancel()
 	raw, err := s.store.SteeringState(ctx)
 	if err != nil {
-		s.log.Error("steering state not restored; pins, pause, and acknowledgements are unchanged", "err", err)
+		s.hold(now, "steering state cannot be read; no decision is made and steering changes are refused until it can", "err", err)
 		return false
 	}
-	doc := steeringDoc{Version: steeringDocVersion}
+	const unparsed = "steering state document cannot be parsed; no decision is made and steering changes are refused until it is fixed or removed"
+	var doc steeringDoc
 	if raw != nil {
-		if err := json.Unmarshal(raw, &doc); err != nil || doc.Version != steeringDocVersion {
-			s.log.Error("steering state not restored: unreadable document; pins, pause, and acknowledgements are unchanged", "err", err, "version", doc.Version)
-			return true
+		var head struct {
+			Version int `json:"version"`
+		}
+		if err := json.Unmarshal(raw, &head); err != nil {
+			s.hold(now, unparsed, "err", err)
+			return false
+		}
+		if head.Version != steeringDocVersion {
+			s.hold(now, "steering state document is of another version, from another Packeteer release; no decision is made and steering changes are refused until that release runs again or the document is removed", "version", head.Version, "want", steeringDocVersion)
+			return false
+		}
+		if err := json.Unmarshal(raw, &doc); err != nil {
+			s.hold(now, unparsed, "version", head.Version, "err", err)
+			return false
 		}
 	}
+	s.held = ""
 	for _, why := range s.pins.Restore(doc.Pins, pinRails(s.cfg()), now) {
 		s.log.Info("saved pin not restored", "pin", why)
 	}

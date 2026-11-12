@@ -16,6 +16,9 @@ func TestSteeringStateSurvivesRestart(t *testing.T) {
 	if doc, err := s.SteeringState(ctx); err != nil || doc != nil {
 		t.Fatalf("empty store: %q, %v", doc, err)
 	}
+	if loc := s.SteeringLocation(); loc != path+" (table steering_state)" {
+		t.Fatalf("location %q", loc)
+	}
 	for _, doc := range []string{`{"version":1}`, `{"version":1,"pause":{"paused":true}}`} {
 		if err := s.PutSteeringState(ctx, []byte(doc)); err != nil {
 			t.Fatal(err)

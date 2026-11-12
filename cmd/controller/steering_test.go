@@ -449,6 +449,8 @@ func (m *memSteering) PutSteeringState(_ context.Context, doc []byte) error {
 	return nil
 }
 
+func (m *memSteering) SteeringLocation() string { return "/var/lib/packeteer/ha/lease.json.steering" }
+
 // With ha, a standby refuses changes; at takeover it restores what the
 // active instance saved after the standby started, then takes changes
 // until it steps down (#565).
@@ -553,5 +555,139 @@ func TestSteeringStateHoldsWhenTheStoreIsUnreadableAtStart(t *testing.T) {
 	}
 	if p := s.opt.State(); !p.Paused || p.By != "noc1" {
 		t.Fatalf("pause after the retry %+v", p)
+	}
+}
+
+// syncBuffer is a log sink the test reads while the code under test writes.
+type syncBuffer struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (w *syncBuffer) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.b.Write(p)
+}
+
+func (w *syncBuffer) String() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.b.String()
+}
+
+// A saved document that does not parse, or that another version wrote,
+// holds the controller like an unreadable store (#565): with and without
+// ha it is not restored, makes no decision, refuses changes, and keeps the
+// document. The reason is logged with the file and the version seen, once
+// per minute while it holds.
+func TestSteeringStateHoldsOnAnUnusableDocument(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct{ name, doc, logged string }{
+		{"unparseable", `{"version":1,"pins":`, "cannot be parsed"},
+		{"body of another shape", `{"version":1,"pins":"all"}`, "cannot be parsed"},
+		{"other version", `{"version":2,"pause":{"paused":false}}`, "version=2 want=1"},
+	} {
+		for _, withHA := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s ha=%v", tc.name, withHA), func(t *testing.T) {
+				now := time.Now()
+				shared := &memSteering{doc: []byte(tc.doc)}
+				var ha *haControl
+				if withHA {
+					ha = &haControl{el: &haTestElector{active: true}, log: slog.New(slog.NewTextHandler(io.Discard, nil)), poke: func() {}}
+				}
+				var logs syncBuffer
+				s := newTestSteering(shared, eventlog.New(nil, nil, nil), ha)
+				s.log = slog.New(slog.NewTextHandler(&logs, nil))
+				s.start(ctx, now)
+				for i := range 3 {
+					if s.mayDecide(ctx, now.Add(time.Duration(i)*time.Second), true) {
+						t.Fatal("decides on an unusable document")
+					}
+				}
+				if s.restored.Load() || !s.refuse() {
+					t.Fatalf("restored %v, refuse %v", s.restored.Load(), s.refuse())
+				}
+				s.save()
+				if string(shared.doc) != tc.doc {
+					t.Fatalf("document replaced: %s", shared.doc)
+				}
+				out := logs.String()
+				if n := strings.Count(out, "level=ERROR"); n != 1 {
+					t.Fatalf("%d error lines in a minute, want 1:\n%s", n, out)
+				}
+				if !strings.Contains(out, tc.logged) || !strings.Contains(out, "store=/var/lib/packeteer/ha/lease.json.steering") {
+					t.Fatalf("log does not name the reason and the file:\n%s", out)
+				}
+				if s.mayDecide(ctx, now.Add(holdLogEvery), true) {
+					t.Fatal("decides a minute later")
+				}
+				if n := strings.Count(logs.String(), "level=ERROR"); n != 2 {
+					t.Fatalf("%d error lines after a minute, want 2", n)
+				}
+				shared.doc = nil
+				if !s.mayDecide(ctx, now.Add(holdLogEvery), true) || s.refuse() {
+					t.Fatal("still held once the document is removed")
+				}
+			})
+		}
+	}
+}
+
+// Step-down drops the pins, the pause, and the acknowledgements: a later
+// takeover that cannot use the saved document holds with nothing from the
+// earlier term, and one that can acts only on what it read (#565).
+func TestSteeringStateStepDownKeepsNothingForTheNextTerm(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now()
+	shared := &memSteering{}
+	el := &haTestElector{active: true}
+	ha := &haControl{el: el, log: slog.New(slog.NewTextHandler(io.Discard, nil)), poke: func() {}}
+	s := newTestSteering(shared, eventlog.New(nil, nil, nil), ha)
+	s.start(ctx, now)
+	if !s.mayDecide(ctx, now, true) {
+		t.Fatal("no decision after takeover")
+	}
+	down := plugin.Event{Time: now.Add(-time.Minute), Kind: plugin.EventProviderDown, Severity: plugin.SeverityCritical, Message: "down",
+		Fields: map[string]string{"provider": "transit-a"}}
+	s.events.Record(down)
+	if _, err := s.events.Acknowledge(ctx, down.DedupKey(), "noc1", "ticket 7", now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.testPins().Add(pin.Request{Prefix: netip.MustParsePrefix("198.51.100.0/24"), Provider: "transit-b", MaxLossPct: 2, Duration: time.Hour}, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s.opt.Pause("noc1", "upstream incident", now); !ok {
+		t.Fatal("pause refused")
+	}
+
+	el.active = false
+	s.stepDown()
+	if got := s.pins.List(now); len(got) != 0 {
+		t.Fatalf("pins kept after step-down: %+v", got)
+	}
+	if s.opt.State().Paused {
+		t.Fatal("pause kept after step-down")
+	}
+	if _, ok := s.events.AckOf(down); ok {
+		t.Fatal("ack kept after step-down")
+	}
+
+	// The other instance resumed and unpinned, then saved a document this
+	// release cannot use.
+	shared.doc = []byte(`{"version":2}`)
+	el.active = true
+	if s.mayDecide(ctx, now, true) {
+		t.Fatal("decides on the earlier term's memory")
+	}
+	if len(s.pins.List(now)) != 0 || s.opt.State().Paused {
+		t.Fatalf("held takeover has pins %+v, pause %+v", s.pins.List(now), s.opt.State())
+	}
+	shared.doc = []byte(`{"version":1}`)
+	if !s.mayDecide(ctx, now, true) {
+		t.Fatal("no decision on a usable document")
+	}
+	if len(s.pins.List(now)) != 0 || s.opt.State().Paused {
+		t.Fatalf("takeover has pins %+v, pause %+v, want what it read", s.pins.List(now), s.opt.State())
 	}
 }

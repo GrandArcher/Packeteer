@@ -252,8 +252,16 @@ func (l *Log) SavedAcks() []SavedAck {
 
 // RestoreAcks replaces the acknowledgements with saved ones. One whose
 // alert has resolved since, by an event among the newest MemoryCap, is
-// dropped, as Record would have dropped it.
+// dropped, as Record would have dropped it. With none saved it only
+// clears, so a step-down never keeps an acknowledgement when the events
+// cannot be read.
 func (l *Log) RestoreAcks(ctx context.Context, saved []SavedAck) error {
+	if len(saved) == 0 {
+		l.mu.Lock()
+		l.acks = map[string]Ack{}
+		l.mu.Unlock()
+		return nil
+	}
 	evs, err := l.Query(ctx, plugin.EventQuery{Limit: MemoryCap})
 	if err != nil {
 		return err

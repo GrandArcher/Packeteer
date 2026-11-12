@@ -23,6 +23,11 @@ func TestSteeringStateReachesTheStandby(t *testing.T) {
 	if err := a.PutSteeringState(ctx, []byte(`{"pause":{"paused":true}}`)); err != nil {
 		t.Fatal(err)
 	}
+	if loc := b.SteeringLocation(); loc != path+".steering" {
+		t.Fatalf("location %q", loc)
+	} else if _, err := os.Stat(loc); err != nil {
+		t.Fatalf("nothing saved at the named location: %v", err)
+	}
 	if err := b.PutSteeringState(ctx, []byte(`{}`)); err == nil {
 		t.Fatal("the standby saved the steering state")
 	}

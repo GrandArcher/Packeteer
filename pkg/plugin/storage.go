@@ -303,4 +303,7 @@ type SteeringStore interface {
 	SteeringState(ctx context.Context) ([]byte, error)
 	// PutSteeringState replaces the saved document.
 	PutSteeringState(ctx context.Context, doc []byte) error
+	// SteeringLocation names where the document is kept (a file path),
+	// for the log when it cannot be read or used.
+	SteeringLocation() string
 }

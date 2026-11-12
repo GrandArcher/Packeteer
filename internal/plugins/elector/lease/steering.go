@@ -65,3 +65,6 @@ func (l *Lease) PutSteeringState(ctx context.Context, doc []byte) error {
 }
 
 var errNotActive = errors.New("this instance is standby: the steering state is saved by the active instance")
+
+// SteeringLocation is the steering file's path.
+func (l *Lease) SteeringLocation() string { return l.steeringPath() }
