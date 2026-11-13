@@ -76,12 +76,16 @@ providers:
 	if p.Inject > 0 {
 		b.WriteString("announcer:\n  type: gobgp\n")
 	}
+	// The provider source_ip addresses are documentation addresses that are
+	// not on the soak host, so the path check would mark every provider
+	// down (#581) and inject mode would announce nothing.
 	fmt.Fprintf(&b, `probe:
   interval: %s
   timeout: 1s
   packets: 4
   workers: 8
   rate_limit_pps: %d
+  path_check: {enabled: false}
 `, probeInterval, rateLimit(p))
 	targets := staticTargets(p, tbl)
 	if p.Simulate {

@@ -572,6 +572,9 @@ func TestMultiProfilesGenerateInjectConfig(t *testing.T) {
 		if cfg.Mode != config.ModeInject || cfg.MaxImprovements == nil || *cfg.MaxImprovements != p.Inject || len(cfg.BGP.Neighbors) != tc.sessions {
 			t.Fatalf("%s: mode %s, cap %v, %d neighbors", tc.name, cfg.Mode, cfg.MaxImprovements, len(cfg.BGP.Neighbors))
 		}
+		if cfg.Probe.PathCheck.On() {
+			t.Fatalf("%s: the path check must be off, or every provider is down and nothing is injected", tc.name)
+		}
 		seen := map[string]bool{}
 		for _, n := range cfg.BGP.Neighbors {
 			if seen[n.Address] {
