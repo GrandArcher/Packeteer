@@ -192,8 +192,8 @@ type steeringState struct {
 	// storeType is the plugin type that keeps the state, empty when it
 	// is in memory only.
 	storeType string
-	// api is set when the API can set pins and the pause; without it
-	// nothing an operator set can be lost.
+	// api is set when someone can sign in to the API and set pins and the
+	// pause; without it nothing an operator set can be lost.
 	api  bool
 	emit func(plugin.Event)
 
@@ -222,8 +222,10 @@ func steeringStoreOf(plugins *pluginhost.Set) (plugin.SteeringStore, string) {
 		return nil, ""
 	}
 	if plugins.Elector != nil {
-		s, _ := plugins.Elector.Plugin.(plugin.SteeringStore)
-		return s, plugins.Elector.Type
+		if s, ok := plugins.Elector.Plugin.(plugin.SteeringStore); ok {
+			return s, plugins.Elector.Type
+		}
+		return nil, ""
 	}
 	if plugins.Storage != nil {
 		if s, ok := plugins.Storage.Plugin.(plugin.SteeringStore); ok {
@@ -285,8 +287,12 @@ func (s *steeringState) inUse(ctx context.Context, now time.Time, dropped []stri
 	// is refused until the state is in use.
 	s.restored.Store(true)
 	if lost != nil {
+		where := s.storeType
+		if where == "" {
+			where = "memory"
+		}
 		s.emit(*lost)
-		s.log.Warn(lost.Message, "store", s.storeType)
+		s.log.Warn(lost.Message, "store", where)
 		return
 	}
 	if s.lostOpen(ctx) {

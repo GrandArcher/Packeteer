@@ -976,7 +976,10 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		reserved: func(p netip.Prefix) bool { return inb.Reserved(p) || mit.Holds(p) }}
 	pins := pin.NewStore()
 	steerStore, steerType := steeringStoreOf(plugins)
-	steer := &steeringState{store: steerStore, storeType: steerType, api: httpSrv != nil && cfg.IXP == nil, emit: dispatch.Emit,
+	// Without sign-in the API refuses steering changes with 403, so
+	// nothing set can be lost.
+	steerAPI := httpSrv != nil && cfg.IXP == nil && (httpUser != "" || authSvc != nil)
+	steer := &steeringState{store: steerStore, storeType: steerType, api: steerAPI, emit: dispatch.Emit,
 		pins: pins, events: evlog, cfg: live.snapshot, ha: ha, log: log}
 	steer.opt = &optimizationControl{decider: decider, log: log, poke: poke, save: steer.save}
 	evlog.OnAck(steer.save)

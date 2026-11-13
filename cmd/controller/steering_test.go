@@ -129,7 +129,7 @@ probers:
 
 	d = startIX(t, edge, body)
 	d.waitLog("steering state restored")
-	// The row follows the restore log line by one call.
+	// The restore log line comes before the row is updated, so poll.
 	for deadline := time.Now().Add(5 * time.Second); ; {
 		_, m := d.call(http.MethodGet, "/api/system", "")
 		if strings.Contains(fmt.Sprint(m["components"]), "detail:restored from the saved state kind:steering") {
@@ -729,8 +729,8 @@ func steeringEvents(t *testing.T, l *eventlog.Log) []plugin.Event {
 
 // With memory storage every restart drops what an operator set, so each
 // start warns once, in the log, as a steering.lost event, and on the
-// System row until the alert is acknowledged (#566). Without the API
-// nothing can be set and nothing is reported.
+// System row until the alert is acknowledged (#566). When no one can sign
+// in to set pins or the pause, nothing is reported.
 func TestSteeringLostOnRestartWithMemoryStorage(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now()
@@ -749,7 +749,7 @@ func TestSteeringLostOnRestartWithMemoryStorage(t *testing.T) {
 	if !strings.Contains(evs[0].Message, "gone, so optimization runs unpaused with no pins") {
 		t.Fatalf("message %q", evs[0].Message)
 	}
-	if out := logs.String(); strings.Count(out, "level=WARN") != 1 || !strings.Contains(out, "kept in memory only") {
+	if out := logs.String(); strings.Count(out, "level=WARN") != 1 || !strings.Contains(out, "kept in memory only") || !strings.Contains(out, "store=memory") {
 		t.Fatalf("log:\n%s", out)
 	}
 	if f := s.fact(); !f.Restored || f.Store != "" || f.Lost != evs[0].Message || f.AckedBy != "" || !f.At.Equal(now) {

@@ -292,7 +292,7 @@ func steeringRow(f SteeringFact) Component {
 		c.State, c.Detail = StateIdle, "standby: restored when this instance takes over"
 	case f.Lost != "" && f.AckedBy == "":
 		c.State, c.Error = StateDegraded, f.Lost
-		c.Detail = "acknowledge the steering.lost alert on the Events page once handled"
+		c.Detail = "once handled, acknowledge the steering.lost alert (POST /api/alerts/ack or the MCP alert_acknowledge tool)"
 	case f.Lost != "":
 		c.State, c.Detail = StateOK, "acknowledged by "+f.AckedBy+": "+f.Lost
 	default:
