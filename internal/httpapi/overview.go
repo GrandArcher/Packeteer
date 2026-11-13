@@ -405,12 +405,15 @@ func setupHints(o Overview) []Hint {
 	}
 	for _, p := range o.Providers {
 		if p.Up && p.OK == 0 && p.Failed > 0 {
-			detail := "Every probe through this provider failed."
+			title, detail := "No answer through "+p.Name, "Every probe through this provider failed."
+			if p.silent > 0 {
+				title, detail = "100% loss through "+p.Name, "Every probe through this provider got no reply."
+			}
 			if p.LastError != "" {
 				detail += " Last error: " + p.LastError + "."
 			}
 			detail += " Check its source_ip and that traffic from it leaves through this provider (policy routing)."
-			add("provider-"+p.Name, HintWarn, "No answer through "+p.Name, detail, "docs/policy-routing.md", FixProviders)
+			add("provider-"+p.Name, HintWarn, title, detail, "docs/policy-routing.md", FixProviders)
 		}
 	}
 	switch {

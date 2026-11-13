@@ -1689,8 +1689,8 @@ jobs:
           test "$ok" = 1
           # The page asks for one prefix. uiproxy answers the decision and the
           # stored history from lab/ui-fixtures/why (documentation prefix):
-          # a decision held back by the thresholds and an earlier move with its
-          # stored checks. The gate list itself is checked against the real
+          # a decision held back by the thresholds, a silent path (100% loss),
+          # and an earlier move with its stored checks. The gate list itself is checked against the real
           # engine in the Go tests (TestDecisionExplainAPI). 192.0.2.0/24 has
           # no fixture, so the image answers it with a 404.
           go build -o /tmp/uiproxy ./lab/uiproxy
@@ -1709,7 +1709,8 @@ jobs:
             'Measurement evidence' 'lab-a: icmp, 10/10 replies; lab-b: tcp, 10/10 replies' \
             'title="icmp, 10/10 replies">medium</span>' 'title="tcp, 10/10 replies">high</span>' \
             'Checks at the time: Learned RIB passed (native lab-a); Thresholds passed (lab-b vs lab-a' \
-            --absent 'Cannot reach' 'mode-inject' 'Packeteer has no decision for this prefix'
+            'no reply: 100% loss' \
+            --absent 'Cannot reach' 'mode-inject' 'Packeteer has no decision for this prefix' '<td>0.0 ms</td>'
           bash lab/ui-smoke.sh "$base/prefix/192.0.2.0%2F24" 'id="why-panel"' \
             'Packeteer has no decision for this prefix now' --absent 'Cannot reach' 'Held it back'
       - name: UI observe wording smoke (#346; a pending recommendation in observe, Traffic now vs Packeteer recommends)
@@ -2189,10 +2190,13 @@ jobs:
           curl -fsS "$base/api/overview" | jq -e '.mode == "observe" and .counts.providers_healthy == 1 and (.problems | map(.provider + ":" + .detail)) == ["lab-b:100% loss", "lab-c:no answer"]'
           bash lab/ui-smoke.sh "$base/" '2 problems: </strong><a href="/providers.html#provider-lab-b">lab-b</a> 100% loss, <a href="/providers.html#provider-lab-c">lab-c</a> no answer' \
             'headline headline-down' '<div class="tile bad"><span class="k">Providers</span><span class="tile-v">1 of 3 healthy</span>' \
-            '2 warnings' 'mode-observe' --absent 'all ok' 'Providers up' 'Cannot reach'
+            '2 warnings' 'mode-observe' '100% loss through lab-b' 'No answer through lab-c' \
+            'Down now, so no line: lab-b (100% loss), lab-c (no answer)' \
+            --absent 'all ok' 'Providers up' 'Cannot reach' 'No answer through lab-b'
           bash lab/ui-smoke.sh "$base/providers.html" '<span class="dot up">up</span>' \
             '<span class="dot down">down</span><span class="muted"> 100% loss</span>' '<span class="dot down">down</span><span class="muted"> no answer</span>' \
-            '0 ok, 2 failed' --absent '2 ok, 0' 'Cannot reach'
+            '0 ok, 2 failed' '<span class="stat-v">100.0% now</span>' '<span class="stat-v">no reply now</span>' \
+            --absent '2 ok, 0' 'Cannot reach'
           bash lab/ui-smoke.sh "$base/prefix/198.51.100.0%2F24" \
             '<td>lab-b <span class="dot down">down</span></td><td class="num bad">100.0%</td><td class="bad">no reply</td>' \
             '<td>lab-c <span class="dot down">down</span></td>' '<td class="num">12.0 ms</td>' --absent 'Cannot reach'

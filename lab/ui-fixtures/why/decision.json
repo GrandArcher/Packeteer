@@ -31,7 +31,8 @@
   ],
   "samples": [
    {"provider": "lab-a", "role": "current", "loss_pct": 0, "rtt_ms": 50, "jitter_ms": 1, "score": 50, "usable": true, "confidence": "medium", "evidence": "icmp, 10/10 replies"},
-   {"provider": "lab-b", "role": "challenger", "loss_pct": 0, "rtt_ms": 40, "jitter_ms": 1, "score": 40, "usable": true, "confidence": "high", "evidence": "tcp, 10/10 replies"}
+   {"provider": "lab-b", "role": "challenger", "loss_pct": 0, "rtt_ms": 40, "jitter_ms": 1, "score": 40, "usable": true, "confidence": "high", "evidence": "tcp, 10/10 replies"},
+   {"provider": "lab-c", "role": "", "loss_pct": 100, "rtt_ms": 0, "jitter_ms": 0, "score": 9999, "usable": true, "confidence": "none", "evidence": "0/10 replies"}
   ],
   "counterfactual": "would move to lab-b if its RTT delta reached >= 15 ms (now 10 ms) with loss no higher than 0%, or its loss were >= 1 pt lower (now 0 pt)"
  }

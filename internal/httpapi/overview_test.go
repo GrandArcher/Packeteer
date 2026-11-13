@@ -272,6 +272,18 @@ func TestOverviewProviderHealthFromMeasurement(t *testing.T) {
 	if !hasHint(o.Setup, "provider-transit-b") || o.Counts.Warnings != 2 {
 		t.Errorf("warnings = %d, hints %v", o.Counts.Warnings, hintIDs(o.Setup))
 	}
+	// The checklist names a 100% loss path as loss, as the headline does,
+	// and keeps "No answer" for a provider whose probes all errored (#577).
+	title := map[string]string{}
+	for _, h := range o.Setup {
+		title[h.ID] = h.Title
+	}
+	if title["provider-transit-b"] != "100% loss through transit-b" {
+		t.Errorf("100%% loss checklist title = %q", title["provider-transit-b"])
+	}
+	if title["provider-transit-c"] != "No answer through transit-c" {
+		t.Errorf("errored-probe checklist title = %q", title["provider-transit-c"])
+	}
 }
 
 func TestOverviewProviderHealthThresholds(t *testing.T) {
