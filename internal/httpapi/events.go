@@ -124,15 +124,12 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "open must be 0 or 1"})
 		return
 	}
-	query := q
+	var evs []plugin.Event
+	var err error
 	if open {
-		// Resolving events are info and may not match q or the floor, so
-		// read the whole window and filter once each alert's last state is known.
-		query = plugin.EventQuery{From: q.From, To: q.To, Limit: maxEventRows}
-	}
-	evs, err := s.events.Query(r.Context(), query)
-	if err == nil && open {
-		evs = openAlerts(evs, q)
+		evs, err = s.events.Open(r.Context(), q)
+	} else {
+		evs, err = s.events.Query(r.Context(), q)
 	}
 	if err != nil {
 		s.log.Error("event read", "err", err)
@@ -151,28 +148,6 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		body["since"] = s.events.Started().UTC()
 	}
 	writeJSON(w, http.StatusOK, body)
-}
-
-// openAlerts keeps, from evs (newest first), the events of q whose alert is
-// still open: the newest event of its dedup key is not a resolving one. An
-// alert that recovered drops out of the badge but stays in the plain list.
-func openAlerts(evs []plugin.Event, q plugin.EventQuery) []plugin.Event {
-	latest := map[string]bool{}
-	var out []plugin.Event
-	for _, e := range evs {
-		k := e.DedupKey()
-		if latest[k] {
-			continue
-		}
-		latest[k] = true
-		if e.Resolves() || !q.Match(e) {
-			continue
-		}
-		if out = append(out, e); q.Limit > 0 && len(out) == q.Limit {
-			break
-		}
-	}
-	return out
 }
 
 // Bounds for POST /api/alerts/ack.
