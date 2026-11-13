@@ -43,6 +43,17 @@ probers:
   - type: fixed
     config: {paths: [{provider: transit-a, rtt_ms: 10}, {provider: transit-b, rtt_ms: 80}]}
 `)
+	// Memory storage: the start warns that nothing set earlier was kept
+	// (#566), as an event and on the System page.
+	d.waitLog("kept in memory only")
+	if code, m := d.call(http.MethodGet, "/api/events?q=steering.", ""); code != http.StatusOK || !strings.Contains(fmt.Sprint(m["events"]), "steering.lost") {
+		d.fatalf("events: %d %v", code, m)
+	}
+	code, m := d.call(http.MethodGet, "/api/system", "")
+	if code != http.StatusOK || !strings.Contains(fmt.Sprint(m["components"]), "kind:steering name:pins and pause since:") ||
+		!strings.Contains(fmt.Sprint(m["components"]), "state:degraded type:memory") {
+		d.fatalf("system: %d %v", code, m)
+	}
 	empty := func(w map[string]ixRoute) bool { return len(w) == 0 }
 	d.holdWire("no steer before the pin", 3*time.Second, empty)
 
@@ -118,6 +129,20 @@ probers:
 
 	d = startIX(t, edge, body)
 	d.waitLog("steering state restored")
+	// The restore log line comes before the row is updated, so poll.
+	for deadline := time.Now().Add(5 * time.Second); ; {
+		_, m := d.call(http.MethodGet, "/api/system", "")
+		if strings.Contains(fmt.Sprint(m["components"]), "detail:restored from the saved state kind:steering") {
+			break
+		}
+		if time.Now().After(deadline) {
+			d.fatalf("steering row after a clean restart: %v", m)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if strings.Contains(d.logs.String(), "not restored and no longer steer") {
+		d.fatalf("a restart that restored everything reports a loss")
+	}
 	if code, m := d.call(http.MethodGet, "/api/optimization", ""); code != http.StatusOK || m["paused"] != true || m["by"] != "lab" {
 		d.fatalf("pause after restart: %d %v", code, m)
 	}
@@ -338,7 +363,7 @@ func steeringConfig() *config.Config {
 // newTestSteering is one instance's steering state over store and events.
 func newTestSteering(store plugin.SteeringStore, events *eventlog.Log, ha *haControl) *steeringState {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	s := &steeringState{store: store, pins: pin.NewStore(), events: events, cfg: steeringConfig, ha: ha, log: log}
+	s := &steeringState{store: store, storeType: "sqlite", api: true, emit: events.Record, pins: pin.NewStore(), events: events, cfg: steeringConfig, ha: ha, log: log}
 	s.opt = &optimizationControl{decider: policy.NewEngine(policy.Config{}, nil), log: log, poke: func() {}, save: s.save}
 	events.OnAck(s.save)
 	return s
@@ -689,5 +714,159 @@ func TestSteeringStateStepDownKeepsNothingForTheNextTerm(t *testing.T) {
 	}
 	if len(s.pins.List(now)) != 0 || s.opt.State().Paused {
 		t.Fatalf("takeover has pins %+v, pause %+v, want what it read", s.pins.List(now), s.opt.State())
+	}
+}
+
+// steeringEvents returns the steering events in the log, newest first.
+func steeringEvents(t *testing.T, l *eventlog.Log) []plugin.Event {
+	t.Helper()
+	evs, err := l.Query(context.Background(), plugin.EventQuery{Text: "steering."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return evs
+}
+
+// With memory storage every restart drops what an operator set, so each
+// start warns once, in the log, as a steering.lost event, and on the
+// System row until the alert is acknowledged (#566). When no one can sign
+// in to set pins or the pause, nothing is reported.
+func TestSteeringLostOnRestartWithMemoryStorage(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now()
+	var logs syncBuffer
+	s := newTestSteering(nil, eventlog.New(nil, nil, nil), nil)
+	s.storeType = ""
+	s.log = slog.New(slog.NewTextHandler(&logs, nil))
+	s.start(ctx, now)
+	if s.refuse() {
+		t.Fatal("changes refused after a start with memory storage")
+	}
+	evs := steeringEvents(t, s.events)
+	if len(evs) != 1 || evs[0].Kind != plugin.EventSteeringLost || evs[0].Severity != plugin.SeverityWarning || evs[0].Fields["reason"] != "not_saved" {
+		t.Fatalf("events %+v, want one steering.lost not_saved warning", evs)
+	}
+	if !strings.Contains(evs[0].Message, "gone, so optimization runs unpaused with no pins") {
+		t.Fatalf("message %q", evs[0].Message)
+	}
+	if out := logs.String(); strings.Count(out, "level=WARN") != 1 || !strings.Contains(out, "kept in memory only") || !strings.Contains(out, "store=memory") {
+		t.Fatalf("log:\n%s", out)
+	}
+	if f := s.fact(); !f.Restored || f.Store != "" || f.Lost != evs[0].Message || f.AckedBy != "" || !f.At.Equal(now) {
+		t.Fatalf("fact before the ack %+v", f)
+	}
+	if _, err := s.events.Acknowledge(ctx, evs[0].DedupKey(), "noc1", "", now); err != nil {
+		t.Fatal(err)
+	}
+	if f := s.fact(); f.AckedBy != "noc1" || f.Lost != evs[0].Message {
+		t.Fatalf("fact after the ack %+v", f)
+	}
+
+	off := newTestSteering(nil, eventlog.New(nil, nil, nil), nil)
+	off.api = false
+	off.start(ctx, now)
+	if evs := steeringEvents(t, off.events); len(evs) != 0 || off.fact() != nil {
+		t.Fatalf("without the API: events %+v, fact %+v", evs, off.fact())
+	}
+}
+
+// A takeover by an instance whose config lacks the pinned provider drops
+// that pin: the new active instance warns and names it, the pause still
+// holds. A later takeover that loses nothing resolves the alert and drops
+// its acknowledgement. An expired pin is not reported (#566).
+func TestSteeringLostOnLeaderChange(t *testing.T) {
+	ctx := context.Background()
+	now := time.Now()
+	shared := &memSteering{}
+	elA, elB := &haTestElector{active: true}, &haTestElector{}
+	haOf := func(el plugin.Elector) *haControl {
+		return &haControl{el: el, log: slog.New(slog.NewTextHandler(io.Discard, nil)), poke: func() {}}
+	}
+	a := newTestSteering(shared, eventlog.New(nil, nil, nil), haOf(elA))
+	b := newTestSteering(shared, eventlog.New(nil, nil, nil), haOf(elB))
+	var logs syncBuffer
+	b.log = slog.New(slog.NewTextHandler(&logs, nil))
+	b.storeType = "lease"
+	onlyA := func() *config.Config {
+		c := steeringConfig()
+		c.Providers = c.Providers[:1]
+		return c
+	}
+	b.cfg = onlyA
+	a.start(ctx, now)
+	b.start(ctx, now)
+	if !a.mayDecide(ctx, now, true) {
+		t.Fatal("a does not decide after takeover")
+	}
+	if evs := steeringEvents(t, a.events); len(evs) != 0 {
+		t.Fatalf("a takeover with nothing saved reported %+v", evs)
+	}
+	if _, err := a.testPins().Add(pin.Request{Prefix: netip.MustParsePrefix("198.51.100.0/24"), Provider: "transit-b", MaxLossPct: 2, Duration: time.Hour}, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.testPins().Add(pin.Request{Prefix: netip.MustParsePrefix("198.51.100.64/26"), Provider: "transit-a", MaxLossPct: 2, Duration: pin.MinDuration}, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := a.opt.Pause("noc1", "upstream incident", now); !ok {
+		t.Fatal("pause refused")
+	}
+	if evs := steeringEvents(t, b.events); len(evs) != 0 {
+		t.Fatalf("a standby start reported %+v", evs)
+	}
+	if f := b.fact(); f.Restored || f.Lost != "" {
+		t.Fatalf("standby fact %+v", f)
+	}
+
+	// Failover two minutes later: the one-minute pin has expired, and b
+	// has no transit-b.
+	later := now.Add(2 * time.Minute)
+	elA.active, elB.active = false, true
+	a.stepDown()
+	if !b.mayDecide(ctx, later, true) {
+		t.Fatal("b does not decide after takeover")
+	}
+	if !b.opt.State().Paused || len(b.pins.List(later)) != 0 {
+		t.Fatalf("b pause %+v pins %+v", b.opt.State(), b.pins.List(later))
+	}
+	evs := steeringEvents(t, b.events)
+	if len(evs) != 1 || evs[0].Kind != plugin.EventSteeringLost || evs[0].Fields["reason"] != "pins_dropped" || evs[0].Fields["dropped"] != "1" ||
+		evs[0].Fields["pins"] != `pin-1 198.51.100.0/24: provider "transit-b" is not configured` {
+		t.Fatalf("events after takeover %+v", evs)
+	}
+	if out := logs.String(); !strings.Contains(out, "level=WARN") || !strings.Contains(out, "saved pins were not restored and no longer steer (1): pin-1") || !strings.Contains(out, "store=lease") {
+		t.Fatalf("log:\n%s", out)
+	}
+	if f := b.fact(); !f.Restored || f.Lost != evs[0].Message || f.Store != "lease" || !f.At.Equal(later) {
+		t.Fatalf("fact after takeover %+v", f)
+	}
+	if _, err := b.events.Acknowledge(ctx, evs[0].DedupKey(), "noc1", "", later); err != nil {
+		t.Fatal(err)
+	}
+
+	// The ack saved b's state, without the dropped pin: the next takeover
+	// restores everything that is saved.
+	elB.active = false
+	b.stepDown()
+	elB.active = true
+	if !b.mayDecide(ctx, later, true) {
+		t.Fatal("b does not decide after the second takeover")
+	}
+	evs = steeringEvents(t, b.events)
+	if len(evs) != 2 || evs[0].Kind != plugin.EventSteeringRestored || !evs[0].Resolves() || evs[0].DedupKey() != evs[1].DedupKey() {
+		t.Fatalf("events after a clean takeover %+v", evs)
+	}
+	if _, ok := b.events.AckOf(evs[1]); ok {
+		t.Fatal("ack kept after the alert resolved")
+	}
+	if f := b.fact(); f.Lost != "" || len(b.pins.List(later)) != 0 || !b.opt.State().Paused {
+		t.Fatalf("fact %+v pins %+v after a clean takeover", f, b.pins.List(later))
+	}
+	// Another clean takeover has no open alert to resolve.
+	elB.active = false
+	b.stepDown()
+	elB.active = true
+	b.mayDecide(ctx, later, true)
+	if n := len(steeringEvents(t, b.events)); n != 2 {
+		t.Fatalf("%d steering events after a third takeover, want 2", n)
 	}
 }

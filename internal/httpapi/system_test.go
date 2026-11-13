@@ -285,3 +285,43 @@ func TestSystemAPIIsViewerReadableAndCarriesNoSecrets(t *testing.T) {
 		t.Errorf("overview system summary = %v", ov["system"])
 	}
 }
+
+// The steering row (#566) is down while the saved state cannot be used,
+// idle on a standby, degraded while a steering.lost alert is open and not
+// acknowledged, and ok otherwise. Without the fact there is no row.
+func TestSteeringRow(t *testing.T) {
+	lost := "pins and the optimization pause are kept in memory only: any set before this start or takeover are gone"
+	for _, tc := range []struct {
+		name  string
+		f     SteeringFact
+		state string
+		typ   string
+		text  string
+	}{
+		{"held", SteeringFact{Store: "sqlite", Held: "steering state cannot be read"}, StateDown, "sqlite", "steering state cannot be read"},
+		{"standby", SteeringFact{Store: "lease"}, StateIdle, "lease", "standby: restored when this instance takes over"},
+		{"lost", SteeringFact{Restored: true, At: sysT0, Lost: lost}, StateDegraded, "memory", lost},
+		{"acknowledged", SteeringFact{Restored: true, At: sysT0, Lost: lost, AckedBy: "noc1"}, StateOK, "memory", "acknowledged by noc1: " + lost},
+		{"restored", SteeringFact{Store: "sqlite", Restored: true, At: sysT0}, StateOK, "sqlite", "restored from the saved state"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := tc.f
+			got := BuildSystem(healthySnap("observe"), SystemFacts{Steering: &f}, nil, nil)
+			c := find(t, got, KindSteering, "pins and pause")
+			if c.State != tc.state || c.Type != tc.typ || (c.Error != tc.text && c.Detail != tc.text) {
+				t.Fatalf("row %+v, want %s %s %q", c, tc.state, tc.typ, tc.text)
+			}
+			if (c.Since != nil) != !f.At.IsZero() {
+				t.Fatalf("since %v for at %v", c.Since, f.At)
+			}
+		})
+	}
+	if system := mustWeb(t, "web/system.js"); !strings.Contains(system, `["steering", "Pins and pause"]`) {
+		t.Error("system.js missing the steering kind title")
+	}
+	for _, c := range BuildSystem(healthySnap("observe"), SystemFacts{}, nil, nil).Components {
+		if c.Kind == KindSteering {
+			t.Fatalf("steering row without the fact: %+v", c)
+		}
+	}
+}
