@@ -493,8 +493,9 @@ func TestInteractionOwnedPrefixStillTakesTheDecisionSlot(t *testing.T) {
 	usage := filepath.Join(dir, "usage.yaml")
 	writeFile(t, usage, ixUnderCommit)
 	// 198.51.100.0/24 gains only once the owned prefix holds the slot: the
-	// view is ready at the first update, so a round can run before
-	// 192.0.2.0/24 is learned and would give the slot to 198.51.100.0/24.
+	// view is ready once the session is established, before End-of-RIB, so
+	// a round can run before 192.0.2.0/24 is learned and would give the
+	// slot to 198.51.100.0/24.
 	paths := filepath.Join(dir, "paths.yaml")
 	owned := `paths:
   - {provider: transit-a, target: 192.0.2.10, rtt_ms: 200}
