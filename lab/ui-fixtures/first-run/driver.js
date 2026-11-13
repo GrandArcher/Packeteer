@@ -10,7 +10,8 @@
 var writes = 0;
 var realFetch = window.fetch;
 window.fetch = function (url, opts) {
-  if (((opts && opts.method) || "GET") !== "GET") writes++;
+  // POST /api/config/form only parses YAML into the form; it never writes the file.
+  if (((opts && opts.method) || "GET") !== "GET" && String(url).indexOf("/api/config/form") < 0) writes++;
   return realFetch.apply(window, arguments);
 };
 
