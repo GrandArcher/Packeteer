@@ -252,7 +252,7 @@ func shifts(rep Report, p Params) []Shift {
 }
 
 func warnings(rep Report, p Params, refused []string) []Warning {
-	var out []Warning
+	out := []Warning{}
 	var synth []string
 	for _, list := range [][]Route{rep.Add, rep.Move} {
 		for _, r := range list {
