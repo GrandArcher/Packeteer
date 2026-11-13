@@ -377,6 +377,9 @@ var live = process.env.PACKETEER_URL;
 var realFetch = global.fetch;
 
 global.document = document;
+var hashListeners = [];
+global.window = {addEventListener: function (type, fn) { if (type === "hashchange") hashListeners.push(fn); }};
+global.location = {hash: "#commit-setup"};
 global.Event = Event;
 global.fetch = function (url, opts) {
   var method = (opts && opts.method) || "GET";
@@ -440,6 +443,27 @@ function reply(body) {
 vm.runInThisContext(fs.readFileSync(path.join(dir, "web/ui.js"), "utf8"), {filename: "ui.js"});
 vm.runInThisContext(fs.readFileSync(path.join(dir, "web/countries.js"), "utf8"), {filename: "countries.js"});
 vm.runInThisContext(fs.readFileSync(path.join(dir, "web/settings.js"), "utf8"), {filename: "settings.js"});
+
+// The long sections start closed (#580), and a link such as
+// /settings.html#commit-setup opens the one it points at, on load and on a
+// later hash change.
+function foldOf(id) {
+  var d = document.getElementById(id);
+  assert(d && d.tagName === "DETAILS", id + " is a details element");
+  return d;
+}
+["wizard", "preflight", "router-snippet", "blast", "whatif"].forEach(function (id) {
+  assert(foldOf(id) && !foldOf(id).open, id + " starts closed");
+});
+assert(!document.getElementById("raw-yaml").open, "raw YAML starts closed");
+assert(foldOf("commit-setup").open === true, "#commit-setup opens its section on load");
+assert(hashListeners.length === 1, "one hashchange listener");
+global.location.hash = "#wizard";
+hashListeners[0]();
+assert(foldOf("wizard").open === true, "#wizard opens its section on a hash change");
+global.location.hash = "#no-such-id";
+hashListeners[0]();
+assert(!foldOf("preflight").open, "an unknown hash opens nothing");
 
 function flush() {
   return new Promise(function (resolve) { setTimeout(resolve, 0); });

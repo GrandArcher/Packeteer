@@ -44,6 +44,9 @@ var els = {};
 ["bl-body", "bl-status", "blast", "ed-yaml", "ed-inject", "ed-sha", "review", "rv-title", "rv-body", "rv-confirm"].forEach(function (id) { els[id] = node("x"); });
 els["review"].hidden = true;
 els["rv-confirm"].focus = function () { els["rv-confirm"].focused = true; };
+// The panel sits in a closed fold on the real page (#580).
+var fold = {tagName: "DETAILS", open: false, parentNode: null};
+els["blast"].parentNode = fold;
 els["ed-yaml"].value = "mode: inject\n";
 var calls = [];
 var replies = [];
@@ -69,7 +72,7 @@ var ui = fs.readFileSync(path.join(__dirname, "web", "ui.js"), "utf8");
 var settings = fs.readFileSync(path.join(__dirname, "web", "settings.js"), "utf8");
 ["el", "clear"].forEach(function (n) { vm.runInContext(fn(ui, n), context); });
 vm.runInContext("var blastToken = ''; var maxListedChanges = 8;", context);
-["blastRoute", "blastShift", "renderBlast", "loadBlast", "previewCandidate", "putConfig", "changeValue", "changeList", "closeReview", "reviewCandidate"].forEach(function (n) {
+["showTarget", "blastRoute", "blastShift", "renderBlast", "loadBlast", "previewCandidate", "putConfig", "changeValue", "changeList", "closeReview", "reviewCandidate"].forEach(function (n) {
   vm.runInContext(fn(settings, n), context);
 });
 
@@ -205,11 +208,14 @@ context.loadBlast().then(function () {
   return context.previewCandidate();
 }).then(function () {
   assert(els["review"].hidden === true && context.blastToken === "tok2", "the panel keeps the token and opens no dialog");
+  assert(fold.open === true, "a preview opens the closed Blast radius section");
   var bad = new Error("the preview failed");
+  fold.open = false;
   replies.push(Promise.reject(bad));
   return context.previewCandidate();
 }).then(function () {
   assert(context.blastToken === "" && els["bl-status"].textContent === "explained: the preview failed", "a failed preview: " + els["bl-status"].textContent);
+  assert(fold.open === true, "a failed preview opens the closed section too, so its message is seen");
   console.log("ok");
 }).catch(function (e) {
   console.error("FAIL: " + (e && e.stack || e));

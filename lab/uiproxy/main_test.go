@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/federation"
 	"github.com/GrandArcher/Packeteer/internal/history"
 	"github.com/GrandArcher/Packeteer/internal/httpapi"
+	"github.com/GrandArcher/Packeteer/internal/linkout"
 	"github.com/GrandArcher/Packeteer/internal/preflight"
 	"github.com/GrandArcher/Packeteer/internal/ringlg"
 	"github.com/GrandArcher/Packeteer/internal/troubleshoot"
@@ -786,6 +788,121 @@ func TestMobileDriverMatchesPage(t *testing.T) {
 	for _, h := range regexp.MustCompile(`data-label="([^"]+)"`).FindAllStringSubmatch(driver, -1) {
 		if !strings.Contains(app, `"`+h[1]+`"`) {
 			t.Errorf("driver reads the %q column, which app.js does not draw", h[1])
+		}
+	}
+	if !strings.Contains(driver, "window.top !== window") {
+		t.Error("the driver must skip the frames it opens, or each frame would open more")
+	}
+}
+
+// TestDesktopFixturesMatchAPI decodes the canned answers behind the 1440 px
+// smoke test (#580) with the API's own types, and checks the cases it is
+// about: five provider rows, each with an origin or peer AS that has five
+// link-outs, and improvements with the "performance" cause, an AS number, and
+// a long AS name that used to wrap into fragments.
+func TestDesktopFixturesMatchAPI(t *testing.T) {
+	f, err := loadFixtures("../ui-fixtures/desktop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !f.Frames || f.Inject.Page != "/providers.html" || len(f.Stubs) != 3 {
+		t.Fatalf("fixtures = %+v", f)
+	}
+	decode := func(path string, v any) {
+		t.Helper()
+		for _, s := range f.Stubs {
+			if s.Path == path {
+				dec := json.NewDecoder(bytes.NewReader(s.body))
+				dec.DisallowUnknownFields()
+				if err := dec.Decode(v); err != nil {
+					t.Errorf("%s: %v", path, err)
+				}
+				return
+			}
+		}
+		t.Errorf("no stub for %s", path)
+	}
+	var provs struct {
+		Version     string             `json:"version"`
+		Mode        string             `json:"mode"`
+		Ready       bool               `json:"ready"`
+		GeneratedAt time.Time          `json:"generated_at"`
+		Providers   []httpapi.Provider `json:"providers"`
+		BGP         struct {
+			Configured, Ready bool
+			Peers             []struct{}
+		} `json:"bgp"`
+	}
+	decode("/api/providers", &provs)
+	var links struct {
+		Prefix map[string][]linkout.Link `json:"prefix"`
+		ASN    map[string][]linkout.Link `json:"asn"`
+	}
+	decode("/api/linkouts", &links)
+	if len(provs.Providers) != 5 {
+		t.Fatalf("providers = %+v", provs.Providers)
+	}
+	for _, p := range provs.Providers {
+		as := p.ASN
+		if p.PeerASN != 0 {
+			as = p.PeerASN
+		}
+		if as < 64496 || as > 64511 {
+			t.Errorf("provider %s uses AS%d, not a documentation ASN", p.Name, as)
+		}
+		if got := len(links.ASN[strconv.FormatUint(uint64(as), 10)]); got != 5 {
+			t.Errorf("provider %s: %d link-outs for AS%d, want 5", p.Name, got, as)
+		}
+	}
+	var imps struct {
+		Version      string                `json:"version"`
+		Mode         string                `json:"mode"`
+		Ready        bool                  `json:"ready"`
+		GeneratedAt  time.Time             `json:"generated_at"`
+		Improvements []httpapi.Improvement `json:"improvements"`
+	}
+	decode("/api/improvements", &imps)
+	if len(imps.Improvements) != 3 || imps.Improvements[0].Cause != "performance" || imps.Improvements[0].ASN != 64500 ||
+		len(imps.Improvements[0].ASName) < 30 || imps.Improvements[0].VolumeMbps == 0 {
+		t.Errorf("improvements = %+v", imps.Improvements)
+	}
+}
+
+// TestDesktopDriverMatchesPage keeps the 1440 px driver on the markup it
+// reads. A renamed id, header, or class fails here instead of as a timeout
+// in CI.
+func TestDesktopDriverMatchesPage(t *testing.T) {
+	f, err := loadFixtures("../ui-fixtures/desktop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	web := "../../internal/httpapi/web/"
+	read := func(name string) string {
+		t.Helper()
+		b, err := os.ReadFile(web + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	settings, app, css := read("settings.html"), read("app.js"), read("app.css")
+	driver := string(f.driver)
+	for _, id := range []string{"wizard", "preflight", "router-snippet", "blast", "raw-yaml", "commit-setup", "fm-hold"} {
+		if !strings.Contains(driver, `"`+id+`"`) && !strings.Contains(driver, "#"+id) {
+			t.Errorf("the driver never reads #%s", id)
+		}
+		if !strings.Contains(settings, `id="`+id+`"`) {
+			t.Errorf("the driver reads #%s, which settings.html lacks", id)
+		}
+	}
+	for _, h := range regexp.MustCompile(`data-label="([^"]+)"`).FindAllStringSubmatch(driver, -1) {
+		if !strings.Contains(app, `"`+h[1]+`"`) {
+			t.Errorf("driver reads the %q column, which app.js does not draw", h[1])
+		}
+	}
+	for _, class := range []string{"linkout-menu", "linkout-list", "nw"} {
+		if !strings.Contains(app, `"`+class+`"`) || !strings.Contains(css, class) {
+			t.Errorf("the driver reads .%s, which app.js or app.css lacks", class)
 		}
 	}
 	if !strings.Contains(driver, "window.top !== window") {

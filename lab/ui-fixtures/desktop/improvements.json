@@ -1,0 +1,50 @@
+{
+ "version": "fixture",
+ "mode": "observe",
+ "ready": true,
+ "generated_at": "2026-11-12T12:00:00Z",
+ "improvements": [
+  {
+   "prefix": "198.51.100.0/24",
+   "provider": "lab-transit-b",
+   "native": "lab-transit-a",
+   "since": "2026-11-12T11:50:00Z",
+   "cause": "performance",
+   "volume_mbps": 412.5,
+   "asn": 64500,
+   "as_name": "Documentation Transit Provider Example Ltd",
+   "native_rtt_ms": 48.2,
+   "rtt_ms": 21.7,
+   "native_loss_pct": 3.4,
+   "loss_pct": 0,
+   "gain_ms": 26.5,
+   "gain_pct": 55,
+   "loss_gain_pct": 3.4,
+   "reason": "lab-transit-b beats lab-transit-a",
+   "explain": "lab-transit-b is 26.5 ms faster and loses 3.4 points less than lab-transit-a, past the configured thresholds."
+  },
+  {
+   "prefix": "203.0.113.0/24",
+   "provider": "lab-ix-peer",
+   "native": "lab-transit-a",
+   "since": "2026-11-12T11:55:00Z",
+   "cause": "cost",
+   "asn": 64501,
+   "native_rtt_ms": 30,
+   "rtt_ms": 29,
+   "reason": "lab-ix-peer is cheaper than lab-transit-a",
+   "explain": "lab-ix-peer costs less per Mbps than lab-transit-a and measures within the allowed latency."
+  },
+  {
+   "prefix": "2001:db8:1234::/48",
+   "provider": "lab-transit-a",
+   "native": "lab-transit-b",
+   "since": "2026-11-12T11:58:00Z",
+   "cause": "performance",
+   "volume_mbps": 12,
+   "asn": 64502,
+   "reason": "lab-transit-a beats lab-transit-b",
+   "explain": "lab-transit-a is faster than lab-transit-b."
+  }
+ ]
+}

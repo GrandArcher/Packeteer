@@ -64,7 +64,7 @@ function live() {
   var inView = r.width > 0 && r.height > 0 && r.top >= 0 && r.left >= 0 && r.bottom <= window.innerHeight && r.right <= window.innerWidth;
   note("a11y-skip", "skip link: " + yes(document.activeElement === skip) + " focused | " + yes(inView) + " visible | " + skip.textContent);
   var nav = ring(document.querySelector(".sidenav a"), getComputedStyle(document.querySelector(".sidenav")).backgroundColor);
-  var shown = Array.prototype.filter.call(document.querySelectorAll("main button"), function (b) { return b.offsetParent !== null; });
+  var shown = Array.prototype.filter.call(document.querySelectorAll("main button"), function (b) { return b.offsetParent !== null && !b.closest("details:not([open])"); });
   var content = ring(shown[0], getComputedStyle(document.body).backgroundColor);
   note("a11y-ring", "focus ring: nav " + yes(ringOK(nav)) + " | content " + yes(ringOK(content)) + " | " + nav.width + "px");
   var ed = document.getElementById("ed-yaml");

@@ -18,8 +18,8 @@ func TestLinkoutAssets(t *testing.T) {
 		`a.rel = "noopener noreferrer";`,
 		`/^https:/.test(l.url)`, // only https is placed
 		`head.appendChild(linkoutSpan("asn", node.asn))`,
-		`peer.appendChild(linkoutSpan("asn", p.peer_asn))`,
-		`peer.appendChild(linkoutSpan("asn", p.asn))`,
+		`peer.appendChild(linkoutSpan("asn", p.peer_asn, true))`,
+		`peer.appendChild(linkoutSpan("asn", p.asn, true))`,
 		`function originASN(row)`,
 	} {
 		if !strings.Contains(app, s) {
