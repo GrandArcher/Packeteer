@@ -169,6 +169,36 @@ func (l *Log) Query(ctx context.Context, q plugin.EventQuery) ([]plugin.Event, e
 	return out, nil
 }
 
+// Open returns the open alerts matching q, newest first: the newest event
+// of each alert key (Event.DedupKey) when it is a problem event, not one
+// that resolves its group. An alert whose newest event resolved it is
+// left out, however many problem events came before. Only the newest
+// MemoryCap events are read, so q.Limit applies to the alerts, not to the
+// events scanned. q.Text and the time range apply to that newest event.
+func (l *Log) Open(ctx context.Context, q plugin.EventQuery) ([]plugin.Event, error) {
+	evs, err := l.Query(ctx, plugin.EventQuery{Limit: MemoryCap})
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	var out []plugin.Event
+	for _, e := range evs {
+		key := e.DedupKey()
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		if e.Resolves() || !q.Match(e) {
+			continue
+		}
+		out = append(out, e)
+		if q.Limit > 0 && len(out) == q.Limit {
+			break
+		}
+	}
+	return out, nil
+}
+
 // Acknowledge records that by has seen the open alert key (an
 // Event.DedupKey). The newest event with that key among the newest
 // MemoryCap events must be a warning or critical event that does not

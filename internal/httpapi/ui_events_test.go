@@ -48,7 +48,7 @@ func TestEventsPageAssets(t *testing.T) {
 		t.Error("a page builds markup from event text")
 	}
 	for _, s := range []string{
-		`"/api/events?severity=warning&limit="`, `packeteer.events.seen`, `"&from=" + encodeURIComponent(seen)`,
+		`"/api/events?severity=warning&open=1&limit="`, `packeteer.events.seen`, `"&from=" + encodeURIComponent(seen)`,
 		`!== "events"`, `.events-count`,
 	} {
 		if !strings.Contains(shell, s) {

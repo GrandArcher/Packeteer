@@ -89,8 +89,10 @@ type eventRow struct {
 	Ack      *eventlog.Ack `json:"ack,omitempty"`
 }
 
-// handleEvents lists recent controller events (#173), newest first. It
-// reads the event log and nothing else.
+// handleEvents lists recent controller events (#173), newest first. With
+// open=1 it lists only the open alerts: the newest event of each alert,
+// when that event is a problem (#579). It reads the event log and nothing
+// else.
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	if s.events == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "the event log is off"})
@@ -113,7 +115,22 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "q must be at most " + strconv.Itoa(maxEventText) + " bytes"})
 		return
 	}
-	evs, err := s.events.Query(r.Context(), q)
+	open := false
+	switch v.Get("open") {
+	case "", "0":
+	case "1":
+		open = true
+	default:
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "open must be 0 or 1"})
+		return
+	}
+	var evs []plugin.Event
+	var err error
+	if open {
+		evs, err = s.events.Open(r.Context(), q)
+	} else {
+		evs, err = s.events.Query(r.Context(), q)
+	}
 	if err != nil {
 		s.log.Error("event read", "err", err)
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "event store unavailable"})

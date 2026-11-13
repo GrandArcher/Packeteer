@@ -300,6 +300,51 @@ func TestAcknowledgementsAreBounded(t *testing.T) {
 	}
 }
 
+func neighbor(kind string, sev plugin.Severity, i int, addr string) plugin.Event {
+	e := ev(kind, sev, i)
+	e.Fields = map[string]string{"neighbor": addr}
+	return e
+}
+
+// Open drops an alert whose newest event resolved it, however many
+// problem events came before, and keeps the history in Query.
+func TestOpenSkipsRecoveredAlerts(t *testing.T) {
+	ctx := context.Background()
+	l := New(nil, nil, nil)
+	l.Record(neighbor(plugin.EventBGPSessionStuck, plugin.SeverityCritical, 0, "192.0.2.1"))
+	l.Record(neighbor(plugin.EventBGPSessionStuck, plugin.SeverityCritical, 1, "192.0.2.1"))
+	l.Record(neighbor(plugin.EventBGPSessionUp, plugin.SeverityInfo, 2, "192.0.2.1"))
+	l.Record(neighbor(plugin.EventBGPSessionStuck, plugin.SeverityCritical, 3, "192.0.2.2"))
+	l.Record(provider(plugin.EventProviderDown, plugin.SeverityCritical, 4, "transit-a"))
+	l.Record(provider(plugin.EventProviderUp, plugin.SeverityInfo, 5, "transit-a"))
+	l.Record(provider(plugin.EventProviderDown, plugin.SeverityCritical, 6, "transit-a"))
+
+	warn := plugin.EventQuery{MinSeverity: plugin.SeverityWarning}
+	open, err := l.Open(ctx, warn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(open) != 2 || open[0].Kind != plugin.EventProviderDown || !open[0].Time.Equal(t0.Add(6*time.Second)) ||
+		open[1].Kind != plugin.EventBGPSessionStuck || open[1].Fields["neighbor"] != "192.0.2.2" {
+		t.Fatalf("open = %+v, want transit-a down (re-failed) and 192.0.2.2 not established", open)
+	}
+	all, _ := l.Query(ctx, warn)
+	if len(all) != 5 {
+		t.Errorf("history has %d warning events, want 5 (the recovered session's lines stay)", len(all))
+	}
+
+	l.Record(neighbor(plugin.EventBGPSessionUp, plugin.SeverityInfo, 7, "192.0.2.2"))
+	l.Record(neighbor(plugin.EventBGPSessionDown, plugin.SeverityCritical, 8, "192.0.2.1"))
+	open, _ = l.Open(ctx, plugin.EventQuery{MinSeverity: plugin.SeverityWarning, From: t0.Add(7 * time.Second)})
+	if len(open) != 1 || open[0].Kind != plugin.EventBGPSessionDown || open[0].Fields["neighbor"] != "192.0.2.1" {
+		t.Errorf("open since the last visit = %+v, want only the new drop of 192.0.2.1", open)
+	}
+	open, _ = l.Open(ctx, plugin.EventQuery{MinSeverity: plugin.SeverityWarning, Limit: 1})
+	if len(open) != 1 || open[0].Kind != plugin.EventBGPSessionDown {
+		t.Errorf("limit 1 = %+v, want the newest open alert", open)
+	}
+}
+
 // A restart restores acknowledgements, except one whose alert resolved
 // before the restart (#565).
 func TestRestoreAcksAfterRestart(t *testing.T) {
