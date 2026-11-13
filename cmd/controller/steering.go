@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/netip"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -187,6 +189,13 @@ type steeringState struct {
 	cfg    func() *config.Config
 	ha     *haControl
 	log    *slog.Logger
+	// storeType is the plugin type that keeps the state, empty when it
+	// is in memory only.
+	storeType string
+	// api is set when someone can sign in to the API and set pins and the
+	// pause; without it nothing an operator set can be lost.
+	api  bool
+	emit func(plugin.Event)
 
 	// mu orders saves and loads, so an older document never replaces a
 	// newer one.
@@ -199,22 +208,31 @@ type steeringState struct {
 	// when; under mu.
 	held       string
 	heldLogged time.Time
+	// restoredAt is when the saved state was last put in use, and lost the
+	// steering.lost event of that restore, nil when nothing was lost; under
+	// mu.
+	restoredAt time.Time
+	lost       *plugin.Event
 }
 
-// steeringStoreOf picks where the steering state is saved, or nil.
-func steeringStoreOf(plugins *pluginhost.Set) plugin.SteeringStore {
+// steeringStoreOf picks where the steering state is saved and that
+// plugin's type, or nil.
+func steeringStoreOf(plugins *pluginhost.Set) (plugin.SteeringStore, string) {
 	if plugins == nil {
-		return nil
+		return nil, ""
 	}
 	if plugins.Elector != nil {
-		s, _ := plugins.Elector.Plugin.(plugin.SteeringStore)
-		return s
+		if s, ok := plugins.Elector.Plugin.(plugin.SteeringStore); ok {
+			return s, plugins.Elector.Type
+		}
+		return nil, ""
 	}
 	if plugins.Storage != nil {
-		s, _ := plugins.Storage.Plugin.(plugin.SteeringStore)
-		return s
+		if s, ok := plugins.Storage.Plugin.(plugin.SteeringStore); ok {
+			return s, plugins.Storage.Type
+		}
 	}
-	return nil
+	return nil, ""
 }
 
 // refuse reports whether a steering change must be refused now.
@@ -226,8 +244,8 @@ func (s *steeringState) refuse() bool {
 // changes wait for takeover. Without ha, a store that cannot be read leaves
 // the state unrestored and the decision loop retries.
 func (s *steeringState) start(ctx context.Context, now time.Time) {
-	if s.load(ctx, now) && s.ha == nil {
-		s.restored.Store(true)
+	if dropped, ok := s.load(ctx, now); ok && s.ha == nil {
+		s.inUse(ctx, now, dropped)
 	}
 }
 
@@ -238,9 +256,85 @@ func (s *steeringState) start(ctx context.Context, now time.Time) {
 // replace the saved state with an older one, and a decision would use a
 // pause or pins the operator has since changed.
 func (s *steeringState) takeover(ctx context.Context, now time.Time) {
-	if s.load(ctx, now) {
-		s.restored.Store(true)
+	if dropped, ok := s.load(ctx, now); ok {
+		s.inUse(ctx, now, dropped)
 	}
+}
+
+// inUse lets the restored state take changes and tells the operator what
+// the restore lost (#566): everything, when the state is kept in memory
+// only, or the saved pins it dropped. A later restore that loses nothing
+// resolves the alert. Decisions are not changed.
+func (s *steeringState) inUse(ctx context.Context, now time.Time, dropped []string) {
+	var lost *plugin.Event
+	switch {
+	case s.store == nil && s.api:
+		e := plugin.NewEvent(plugin.EventSteeringLost, now,
+			"pins and the optimization pause are kept in memory only: any set before this start or takeover are gone, so optimization runs unpaused with no pins",
+			map[string]string{"reason": "not_saved"})
+		lost = &e
+	case len(dropped) > 0:
+		list := strings.Join(dropped, "; ")
+		e := plugin.NewEvent(plugin.EventSteeringLost, now,
+			"saved pins were not restored and no longer steer ("+strconv.Itoa(len(dropped))+"): "+list,
+			map[string]string{"reason": "pins_dropped", "pins": list, "dropped": strconv.Itoa(len(dropped))})
+		lost = &e
+	}
+	s.mu.Lock()
+	s.restoredAt, s.lost = now, lost
+	s.mu.Unlock()
+	// Before the events: a resolved alert drops its ack, and that save
+	// is refused until the state is in use.
+	s.restored.Store(true)
+	if lost != nil {
+		where := s.storeType
+		if where == "" {
+			where = "memory"
+		}
+		s.emit(*lost)
+		s.log.Warn(lost.Message, "store", where)
+		return
+	}
+	if s.lostOpen(ctx) {
+		s.emit(plugin.NewEvent(plugin.EventSteeringRestored, now, "the saved pins and pause were restored with nothing lost", nil))
+	}
+}
+
+// lostOpen reports whether the newest steering event in the event log is
+// steering.lost, so a restore that loses nothing has an alert to resolve.
+func (s *steeringState) lostOpen(ctx context.Context) bool {
+	evs, err := s.events.Query(ctx, plugin.EventQuery{Text: "steering.", Limit: eventlog.MemoryCap})
+	if err != nil {
+		s.log.Warn("event log not read; an earlier steering.lost alert stays open", "err", err)
+		return false
+	}
+	for _, e := range evs {
+		switch e.Kind {
+		case plugin.EventSteeringLost:
+			return true
+		case plugin.EventSteeringRestored:
+			return false
+		}
+	}
+	return false
+}
+
+// fact is the steering row of the System page, nil when the API cannot
+// set pins or the pause.
+func (s *steeringState) fact() *httpapi.SteeringFact {
+	if !s.api {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f := &httpapi.SteeringFact{Store: s.storeType, Restored: s.restored.Load(), At: s.restoredAt, Held: s.held}
+	if s.lost != nil {
+		f.Lost = s.lost.Message
+		if a, ok := s.events.AckOf(*s.lost); ok {
+			f.AckedBy = a.By
+		}
+	}
+	return f
 }
 
 // mayDecide reports whether this round may decide: this instance is
@@ -285,13 +379,14 @@ func (s *steeringState) hold(now time.Time, reason string, args ...any) {
 	s.log.Error(reason, append([]any{"store", s.store.SteeringLocation()}, args...)...)
 }
 
-// load restores the saved state. It reports false, and changes nothing in
+// load restores the saved state and returns the saved pins it dropped for
+// a reason other than expiry. It reports false, and changes nothing in
 // memory, when the store cannot be read or the document cannot be used: it
 // does not parse, or another version wrote it. Running on without it would
 // act on pins or a pause the operator has since changed.
-func (s *steeringState) load(ctx context.Context, now time.Time) bool {
+func (s *steeringState) load(ctx context.Context, now time.Time) ([]string, bool) {
 	if s.store == nil {
-		return true
+		return nil, true
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -300,7 +395,7 @@ func (s *steeringState) load(ctx context.Context, now time.Time) bool {
 	raw, err := s.store.SteeringState(ctx)
 	if err != nil {
 		s.hold(now, "steering state cannot be read; no decision is made and steering changes are refused until it can", "err", err)
-		return false
+		return nil, false
 	}
 	const unparsed = "steering state document cannot be parsed; no decision is made and steering changes are refused until it is fixed or removed"
 	var doc steeringDoc
@@ -310,19 +405,20 @@ func (s *steeringState) load(ctx context.Context, now time.Time) bool {
 		}
 		if err := json.Unmarshal(raw, &head); err != nil {
 			s.hold(now, unparsed, "err", err)
-			return false
+			return nil, false
 		}
 		if head.Version != steeringDocVersion {
 			s.hold(now, "steering state document is of another version, from another Packeteer release; no decision is made and steering changes are refused until that release runs again or the document is removed", "version", head.Version, "want", steeringDocVersion)
-			return false
+			return nil, false
 		}
 		if err := json.Unmarshal(raw, &doc); err != nil {
 			s.hold(now, unparsed, "version", head.Version, "err", err)
-			return false
+			return nil, false
 		}
 	}
 	s.held = ""
-	for _, why := range s.pins.Restore(doc.Pins, pinRails(s.cfg()), now) {
+	expired, dropped := s.pins.Restore(doc.Pins, pinRails(s.cfg()), now)
+	for _, why := range expired {
 		s.log.Info("saved pin not restored", "pin", why)
 	}
 	s.opt.restore(doc.Pause)
@@ -333,7 +429,7 @@ func (s *steeringState) load(ctx context.Context, now time.Time) bool {
 		s.log.Warn("optimization is paused (restored); every improvement stays withdrawn until resumed", "by", doc.Pause.By, "reason", doc.Pause.Reason, "since", doc.Pause.Since)
 	}
 	s.log.Info("steering state restored", "pins", len(s.pins.List(now)), "paused", doc.Pause.Paused, "acks", len(doc.Acks))
-	return true
+	return dropped, true
 }
 
 // save writes the current state. A failed write is logged: the change

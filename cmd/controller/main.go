@@ -706,7 +706,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			Federation: fed.status, FederationPush: fedPush, HA: haStatus, Export: exportStats(exp), SourceErrors: plugins.SourceReadErrors,
 			ConfigEditor: editorAPI, FirstRun: firstRunAPI, Dashboards: dashboardStore(plugins), Subscriptions: subsAPI,
 			Setup: setupInfo(cfg, plugins, geo), Upgrade: upgradeAPI, Linkouts: linkout.New(cfg.Linkouts), RingLG: ringlg.New(cfg.RingLG, version), Atlas: atl,
-			System: systemFacts(plugins, &sysEngine, health, irrChecker, atl), Usage: usageReader(plugins),
+			System: systemFacts(plugins, &sysEngine, health, irrChecker, atl, &steering), Usage: usageReader(plugins),
 		})
 		if err != nil {
 			log.Error("refusing to start", "err", err)
@@ -975,7 +975,12 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		check: candidateChecker(getenv, httpUser), held: lw.Held,
 		reserved: func(p netip.Prefix) bool { return inb.Reserved(p) || mit.Holds(p) }}
 	pins := pin.NewStore()
-	steer := &steeringState{store: steeringStoreOf(plugins), pins: pins, events: evlog, cfg: live.snapshot, ha: ha, log: log}
+	steerStore, steerType := steeringStoreOf(plugins)
+	// Without sign-in the API refuses steering changes with 403, so
+	// nothing set can be lost.
+	steerAPI := httpSrv != nil && cfg.IXP == nil && (httpUser != "" || authSvc != nil)
+	steer := &steeringState{store: steerStore, storeType: steerType, api: steerAPI, emit: dispatch.Emit,
+		pins: pins, events: evlog, cfg: live.snapshot, ha: ha, log: log}
 	steer.opt = &optimizationControl{decider: decider, log: log, poke: poke, save: steer.save}
 	evlog.OnAck(steer.save)
 	steer.start(ctx, time.Now())

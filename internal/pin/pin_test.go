@@ -147,12 +147,15 @@ func TestRestoreDropsExpiredAndOffRailsPins(t *testing.T) {
 	// A restart two minutes later: the one-minute pin has expired.
 	now := t0.Add(2 * time.Minute)
 	s := NewStore()
-	dropped := s.Restore(saved, Rails{Providers: rails.Providers, Allowlist: rails.Allowlist}, now)
+	expired, dropped := s.Restore(saved, Rails{Providers: rails.Providers, Allowlist: rails.Allowlist}, now)
 	got := s.List(now)
 	if len(got) != 1 || got[0] != kept {
 		t.Fatalf("restored %+v, want only %+v", got, kept)
 	}
-	want := []string{"pin-2 198.51.100.64/26: expired", `pin-7 198.51.100.128/26: provider "transit-z" is not configured`,
+	if want := []string{"pin-2 198.51.100.64/26: expired"}; strings.Join(expired, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("expired %q, want %q", expired, want)
+	}
+	want := []string{`pin-7 198.51.100.128/26: provider "transit-z" is not configured`,
 		"pin-8 203.0.113.0/24: outside allowlist.prefixes", "pin-9 198.51.100.0/24: prefix pinned twice", "pin-6 198.51.100.192/26: longer than 168h0m0s",
 		"pin-4 198.51.100.7/24: invalid prefix", "pin-5 0.0.0.0/0: invalid prefix"}
 	if strings.Join(dropped, "\n") != strings.Join(want, "\n") {

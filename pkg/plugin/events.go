@@ -125,6 +125,11 @@ const (
 	// EventRPKISLURMReview fires once per run when an approved SLURM
 	// exception is older than its review_after (#401).
 	EventRPKISLURMReview = "rpki.slurm_review"
+	// EventSteeringLost fires when a start or an HA takeover could not
+	// bring back the pins or the pause an operator set (#566).
+	EventSteeringLost = "steering.lost"
+	// EventSteeringRestored resolves EventSteeringLost.
+	EventSteeringRestored = "steering.restored"
 	// EventAudit is one audit log record (#32): a change or sign-in on
 	// the ops API, or a config reload.
 	EventAudit = "audit.recorded"
@@ -187,6 +192,10 @@ var eventCatalog = []EventSpec{
 		Summary: "This instance stopped being the active one of its HA pair and withdrew its routes (lease lost or not renewed, RIB not ready, or shutdown)."},
 	{Kind: EventHAActive, Severity: SeverityWarning, Group: "ha", TrapID: 25, Resolves: true,
 		Summary: "This instance became the active one of its HA pair and may announce."},
+	{Kind: EventSteeringLost, Severity: SeverityWarning, Group: "steering", TrapID: 76,
+		Summary: "A start or HA takeover did not bring back the pins or the optimization pause an operator set: they are kept in memory only, or saved pins no longer fit the providers or allowlist."},
+	{Kind: EventSteeringRestored, Severity: SeverityInfo, Group: "steering", TrapID: 77, Resolves: true,
+		Summary: "A later start or takeover restored the saved pins and pause with nothing lost. Resolves steering.lost."},
 	{Kind: EventAudit, Severity: SeverityInfo, Group: "audit", TrapID: 26,
 		Summary: "An audit log record: a change, denied change, or sign-in on the ops API, or a config reload."},
 	{Kind: EventAnomalyDetected, Severity: SeverityCritical, Group: "anomaly", Keys: []string{"anomaly"}, TrapID: 27,
