@@ -934,3 +934,39 @@ func TestRingLGFixturesMatchAPI(t *testing.T) {
 		}
 	}
 }
+
+// TestFirstRunDriverMatchesPage keeps the first-run driver (#575) on the
+// settings page it reads. It stubs nothing: the pending flag must come from
+// the controller. A renamed id fails here instead of as a timeout in CI.
+func TestFirstRunDriverMatchesPage(t *testing.T) {
+	f, err := loadFixtures("../ui-fixtures/first-run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Stubs) != 0 || f.Inject.Page != "/settings.html" || len(f.driver) == 0 {
+		t.Fatalf("fixtures = %+v", f)
+	}
+	page, err := os.ReadFile("../../internal/httpapi/web/settings.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	overview, err := os.ReadFile("../../internal/httpapi/web/index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(overview), `id="setup-pending"`) {
+		t.Error("index.html lacks the setup-pending notice the smoke step matches")
+	}
+	js, err := os.ReadFile("../../internal/httpapi/web/settings.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(js), "/api/config/form") || !strings.Contains(string(f.driver), `indexOf("/api/config/form") < 0`) {
+		t.Error("the wizard's form-parse POST must be excluded from the driver's write count")
+	}
+	for _, m := range regexp.MustCompile(`byId\("([^"]+)"`).FindAllStringSubmatch(string(f.driver), -1) {
+		if !strings.Contains(string(page), `id="`+m[1]+`"`) {
+			t.Errorf("driver uses #%s, which settings.html lacks", m[1])
+		}
+	}
+}

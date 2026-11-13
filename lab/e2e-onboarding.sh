@@ -43,7 +43,7 @@ echo "== 1. one command"
 PACKETEER_DIR="$work/pk" PACKETEER_IMAGE="$image" PACKETEER_RAW_BASE="file://$root" PACKETEER_ADMIN_PASSWORD="$pw" \
 	sh scripts/install.sh | tee "$work/install.txt"
 grep -qF 'observe mode. It announces nothing.' "$work/install.txt"
-grep -qF "$base/settings.html#wizard" "$work/install.txt"
+grep -qF "$base/settings.html" "$work/install.txt"
 test "$(docker inspect -f '{{.State.Running}}' packeteer)" = true
 grep -q '^mode: observe' "$work/pk/config.yaml"
 # install.sh already waits for bootstrap; one more /api/me check before overview.

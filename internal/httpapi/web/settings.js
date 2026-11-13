@@ -2248,7 +2248,7 @@ function runWizard() {
     return;
   }
   body.current = document.getElementById("ed-yaml").value;
-  if (wzConfigured && byId("wz-auth-off").checked) body.disable_auth = true;
+  if (wzConfigured && !wzSetupPending && byId("wz-auth-off").checked) body.disable_auth = true;
   status.textContent = "Generating…";
   api("POST", "/api/config/wizard", body).then(function (out) {
     if (!out.existing) {
@@ -2266,15 +2266,22 @@ function runWizard() {
 
 // setWizardConfigured collapses the wizard on a box that already has
 // providers or BGP neighbors (#345), so it is not run over a working config
-// by accident.
+// by accident. While the first-run setup is pending (#575) the example
+// providers are what to review, so the wizard stays open with them filled.
 var wzConfigured = false;
+var wzSetupPending = false;
 function setWizardConfigured(on) {
   wzConfigured = on;
-  byId("wz-again").hidden = !on;
-  byId("wz-body").hidden = on;
-  byId("wz-auth-row").hidden = !on;
-  byId("wz-run").textContent = on ? "Generate (replaces your config)" : "Generate observe config";
+  applyWizardCollapse();
   byId("wz-confirm").hidden = true;
+}
+
+function applyWizardCollapse() {
+  var collapsed = wzConfigured && !wzSetupPending;
+  byId("wz-again").hidden = !collapsed;
+  byId("wz-body").hidden = collapsed;
+  byId("wz-auth-row").hidden = !collapsed;
+  byId("wz-run").textContent = collapsed ? "Generate (replaces your config)" : "Generate observe config";
 }
 
 // skipSetup ends the first-run setup without saving a config (#416).
@@ -2283,6 +2290,8 @@ function skipSetup() {
   btn.disabled = true;
   return api("POST", "/api/setup/skip").then(function () {
     byId("setup-skip").hidden = true;
+    wzSetupPending = false;
+    applyWizardCollapse();
     byId("wz-status").textContent = "Setup skipped. The editor turns off at the next start unless http.config_editor is true.";
   }, function (err) {
     btn.disabled = false;
@@ -2293,7 +2302,9 @@ function skipSetup() {
 function loadSetupSkip() {
   byId("setup-skip-btn").addEventListener("click", skipSetup);
   api("GET", "/api/me").then(function (me) {
-    byId("setup-skip").hidden = !(me && me.setup_pending);
+    wzSetupPending = !!(me && me.setup_pending);
+    byId("setup-skip").hidden = !wzSetupPending;
+    applyWizardCollapse();
   }, function () {});
 }
 

@@ -91,7 +91,7 @@ if [ "$kept" = 1 ]; then
 else
 	echo "Packeteer is running in observe mode. It announces nothing."
 fi
-echo "Open:     $url/settings.html#wizard"
+echo "Open:     $url/settings.html"
 if [ -n "${PACKETEER_ADMIN_PASSWORD:-}" ]; then
 	echo "Sign in:  $admin, with the password you set in PACKETEER_ADMIN_PASSWORD."
 else
@@ -105,5 +105,5 @@ fi
 echo "Next:     the wizard asks for your AS number, router, and providers; the preflight checks"
 echo "          there decide when injection can be turned on. Stop with: docker stop -t 30 packeteer"
 if [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] && command -v xdg-open >/dev/null 2>&1; then
-	xdg-open "$url/settings.html#wizard" >/dev/null 2>&1 || true
+	xdg-open "$url/settings.html" >/dev/null 2>&1 || true
 fi

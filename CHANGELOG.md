@@ -10,6 +10,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 - A start or HA takeover that loses pins or the pause (memory storage, or saved pins off the providers or allowlist) sends `steering.lost`, logs a warning, and shows on the System page (#566).
 - Pins, the optimization pause, and alert acknowledgements are saved in sqlite storage, or with `ha` beside the lease, and restored on restart and HA takeover; expired pins are dropped (#565).
 - The guided inject step adds the gobgp announcer from a schema-built form when none is configured; the checks count it on the plan and the save, and it applies on restart (#568).
+- First-run example install opens the setup wizard with the running values filled; the Overview stays reachable with a setup notice; "Run setup again" only after setup ends (#575).
 - Router config panel and `POST /api/snippets` follow unsaved wizard answers and editor text, name the wizard step for a missing answer, and add flow export lines (#569).
 
 ## [1.2.0] - 2026-11-11

@@ -124,7 +124,7 @@ func TestInstallBringsUpObserveAndPointsAtTheWizard(t *testing.T) {
 	if strings.Contains(calls, "config.yaml:/etc/packeteer/config.yaml:ro -v") {
 		t.Errorf("the running container's config is read-only, so the wizard cannot save:\n%s", calls)
 	}
-	for _, want := range []string{"observe mode. It announces nothing.", "http://127.0.0.1:8080/settings.html#wizard", "fake-generated-password", "docker stop -t 30 packeteer"} {
+	for _, want := range []string{"observe mode. It announces nothing.", "http://127.0.0.1:8080/settings.html", "fake-generated-password", "docker stop -t 30 packeteer"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output lacks %q:\n%s", want, out)
 		}

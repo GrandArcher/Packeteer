@@ -1,9 +1,11 @@
 "use strict";
-// Runs the first-run pieces of the page scripts (#416) against a small
-// stand-in: the overview sends an admin to the wizard only while setup is
-// pending, other pages and other users stay put, and Skip setup posts to
-// /api/setup/skip and hides itself. The functions are cut out of the real
-// shell.js and settings.js. Run by TestFirstRunPage.
+// Runs the first-run pieces of the page scripts (#416, #575) against a small
+// stand-in: the overview shows its setup notice and stays open while setup is
+// pending, the sign-in landing goes to the wizard only then, the wizard is
+// collapsed behind "Run setup again" only for a configured box whose setup is
+// done, and Skip setup posts to /api/setup/skip and hides itself. The
+// functions are cut out of the real shell.js, signin.js, and settings.js. Run
+// by TestFirstRunPage.
 
 var fs = require("fs");
 var path = require("path");
@@ -27,15 +29,17 @@ function fn(src, name) {
   assert(false, "unbalanced " + name);
 }
 
-var page = "overview";
-var replaced = [];
 var els = {};
-["setup-skip", "setup-skip-btn", "wz-status"].forEach(function (id) { els[id] = {hidden: false, disabled: false, textContent: ""}; });
+["setup-skip", "setup-skip-btn", "wz-status", "setup-pending", "wz-again", "wz-body", "wz-auth-row", "wz-run", "wz-confirm"].forEach(function (id) { els[id] = {hidden: false, disabled: false, textContent: ""}; });
+var landed = [];
+var meBody = {};
+var meOK = true;
 var posts = [];
 var fail = null;
 var context = {
-  window: {location: {replace: function (u) { replaced.push(u); }}},
-  document: {body: {getAttribute: function () { return page; }}},
+  window: {location: {set href(u) { landed.push(u); }}},
+  document: {getElementById: function (id) { return els[id]; }},
+  fetch: function () { return meOK ? Promise.resolve({ok: true, json: function () { return Promise.resolve(meBody); }}) : Promise.reject(new Error("down")); },
   byId: function (id) { return els[id]; },
   explain: function (err) { return "explained: " + err.message; },
   api: function (method, url) {
@@ -47,24 +51,77 @@ vm.createContext(context);
 
 var shell = fs.readFileSync(path.join(__dirname, "web", "shell.js"), "utf8");
 var settings = fs.readFileSync(path.join(__dirname, "web", "settings.js"), "utf8");
-vm.runInContext(fn(shell, "shellSetupRedirect"), context);
+var signin = fs.readFileSync(path.join(__dirname, "web", "signin.js"), "utf8");
+vm.runInContext(fn(shell, "shellSetupNotice"), context);
+vm.runInContext(fn(signin, "signinLand"), context);
 vm.runInContext(fn(settings, "skipSetup"), context);
-// shellApplyMe must call the redirect, or the page never uses it.
-assert(fn(shell, "shellApplyMe").indexOf("shellSetupRedirect(me)") >= 0, "shellApplyMe does not redirect");
+vm.runInContext(fn(settings, "setWizardConfigured"), context);
+vm.runInContext(fn(settings, "applyWizardCollapse"), context);
+vm.runInContext("var wzConfigured = false; var wzSetupPending = false;", context);
+// The shell must call the notice, and both sign-in paths must use the landing.
+assert(fn(shell, "shellApplyMe").indexOf("shellSetupNotice(me)") >= 0, "shellApplyMe does not show the notice");
+assert(!/location\.replace|settings\.html#wizard/.test(shell), "the overview must not redirect to the wizard");
+assert((signin.match(/signinLand\(|then\(signinLand\)/g) || []).length >= 3, "sign-in and password change must both land through signinLand");
 
-var redirect = context.shellSetupRedirect;
-redirect({user: "admin", setup_pending: true});
-assert(replaced.length === 1 && replaced[0] === "/settings.html#wizard", "pending admin on the overview goes to the wizard: " + replaced);
-redirect({user: "admin"});
-redirect(null);
-assert(replaced.length === 1, "no redirect without setup_pending");
-page = "settings";
-redirect({user: "admin", setup_pending: true});
-assert(replaced.length === 1, "no redirect away from other pages");
+// The overview shows the notice and nothing else changes while setup is pending.
+var notice = context.shellSetupNotice;
+notice({user: "admin", setup_pending: true});
+assert(els["setup-pending"].hidden === false, "notice shown while pending");
+notice({user: "admin"});
+assert(els["setup-pending"].hidden === true, "notice hidden once setup is done");
+notice(null);
+assert(els["setup-pending"].hidden === true, "notice hidden without a session");
 
-context.skipSetup().then(function () {
+// The landing: the wizard (no #wizard hash) while pending, the dashboard otherwise.
+var chain = Promise.resolve();
+function lands(me, ok, want, msg) {
+  chain = chain.then(function () {
+    meBody = me;
+    meOK = ok;
+    landed = [];
+    return context.signinLand().then(function () {
+      assert(landed.join() === want, msg + ": " + landed);
+    });
+  });
+}
+lands({setup_pending: true}, true, "/settings.html", "pending admin lands on the wizard");
+lands({user: "admin"}, true, "/", "done setup lands on the dashboard");
+lands({}, false, "/", "an unreadable session still lands on the dashboard");
+// A session the sign-in already read is used as is, with no second /api/me.
+chain = chain.then(function () {
+  var calls = 0;
+  context.fetch = function () { calls++; return Promise.reject(new Error("unexpected fetch")); };
+  landed = [];
+  return context.signinLand({setup_pending: true}).then(function () {
+    assert(landed.join() === "/settings.html" && calls === 0, "a given pending session lands on the wizard without a fetch: " + landed + " calls " + calls);
+  });
+});
+
+// The wizard body is open for a pending example and collapsed for a finished setup.
+function collapse(configured, pending) {
+  context.wzSetupPending = pending;
+  context.setWizardConfigured(configured);
+  return {again: !els["wz-again"].hidden, body: !els["wz-body"].hidden, run: els["wz-run"].textContent};
+}
+var r = collapse(true, true);
+assert(!r.again && r.body && r.run === "Generate observe config", "pending example: wizard open, no Run setup again: " + JSON.stringify(r));
+r = collapse(true, false);
+assert(r.again && !r.body && r.run === "Generate (replaces your config)", "finished setup: wizard collapsed: " + JSON.stringify(r));
+r = collapse(false, false);
+assert(!r.again && r.body, "fresh file: wizard open: " + JSON.stringify(r));
+// The pending answer can arrive after the file; applying it reopens the wizard.
+collapse(true, false);
+context.wzSetupPending = true;
+context.applyWizardCollapse();
+assert(els["wz-again"].hidden && !els["wz-body"].hidden, "pending answer after the file reopens the wizard");
+
+chain.then(function () {
+  collapse(true, true);
+  return context.skipSetup();
+}).then(function () {
   assert(posts.join() === "POST /api/setup/skip", "skip request: " + posts);
   assert(els["setup-skip"].hidden === true, "skip box hidden after skip");
+  assert(!els["wz-again"].hidden && els["wz-body"].hidden, "skipping ends the pending state: the wizard collapses on a configured file");
   assert(/skipped/i.test(els["wz-status"].textContent), "status says skipped: " + els["wz-status"].textContent);
   els["setup-skip"].hidden = false;
   fail = "boom";
