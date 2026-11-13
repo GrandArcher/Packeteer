@@ -1,6 +1,3 @@
 {
-  "inject": {"page": "/settings.html", "script": "driver.js"},
-  "stubs": [
-    {"method": "GET", "path": "/api/me", "file": "me.json"}
-  ]
+  "inject": {"page": "/settings.html", "script": "driver.js"}
 }

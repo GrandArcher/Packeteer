@@ -3121,7 +3121,7 @@ jobs:
             'A check no longer passes. Injection stays off:' 'inject step hidden after refusal: true' \
             'file unchanged: true, announcer in file: false' 'writes: 0' \
             --absent 'mode-inject' 'Cannot reach'
-      - name: UI first-run smoke (#575; the example install opens the wizard with the running values filled, no Run setup again, the Overview stays reachable with its notice and checklist, no config write, observe)
+      - name: UI first-run smoke (#575; a first run with the example providers and no config_editor key opens the wizard with the running values filled, no Run setup again, the Overview stays reachable with its notice and checklist, no config write, observe)
         run: |
           cat > /tmp/ui575.yaml <<'YAML'
           mode: observe
@@ -3129,10 +3129,8 @@ jobs:
           router_id: 192.0.2.10
           packeteer_community: "64512:666"
           providers:
-            - {name: lab-a, source_ip: 127.0.0.1, next_hop: 192.0.2.1}
-            - {name: lab-b, source_ip: 127.0.0.2, next_hop: 192.0.2.2}
-          http:
-            config_editor: true
+            - {name: lab-a, source_ip: 192.0.2.11, next_hop: 192.0.2.1}
+            - {name: lab-b, source_ip: 192.0.2.12, next_hop: 192.0.2.2}
           YAML
           base=http://127.0.0.1:8080
           docker run -d --name pkfr575 --network host --cap-add NET_RAW --cap-add NET_ADMIN \

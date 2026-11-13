@@ -936,22 +936,15 @@ func TestRingLGFixturesMatchAPI(t *testing.T) {
 }
 
 // TestFirstRunDriverMatchesPage keeps the first-run driver (#575) on the
-// settings page it reads, and its /api/me stub on a pending admin. A renamed
-// id fails here instead of as a timeout in CI.
+// settings page it reads. It stubs nothing: the pending flag must come from
+// the controller. A renamed id fails here instead of as a timeout in CI.
 func TestFirstRunDriverMatchesPage(t *testing.T) {
 	f, err := loadFixtures("../ui-fixtures/first-run")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(f.Stubs) != 1 || f.Stubs[0].Path != "/api/me" || f.Inject.Page != "/settings.html" || len(f.driver) == 0 {
+	if len(f.Stubs) != 0 || f.Inject.Page != "/settings.html" || len(f.driver) == 0 {
 		t.Fatalf("fixtures = %+v", f)
-	}
-	var me struct {
-		Role         string `json:"role"`
-		SetupPending bool   `json:"setup_pending"`
-	}
-	if err := json.Unmarshal(f.Stubs[0].body, &me); err != nil || me.Role != "admin" || !me.SetupPending {
-		t.Fatalf("me stub = %s (%v)", f.Stubs[0].body, err)
 	}
 	page, err := os.ReadFile("../../internal/httpapi/web/settings.html")
 	if err != nil {

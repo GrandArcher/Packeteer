@@ -25,12 +25,12 @@ function changeError(msg) {
 // signinLand opens the setup wizard while the first-run setup is pending
 // and the dashboard otherwise (#575). The wizard has no hash: a #wizard
 // anchor scrolls the header and the observe banner off the top.
-function signinLand() {
+function signinLand(me) {
+  var go = function (m) { window.location.href = m && m.setup_pending ? "/settings.html" : "/"; };
+  if (me) { go(me); return Promise.resolve(); }
   return fetch("/api/me", {cache: "no-store", headers: {Accept: "application/json"}}).then(function (res) {
     return res.ok ? res.json() : {};
-  }).catch(function () { return {}; }).then(function (me) {
-    window.location.href = me.setup_pending ? "/settings.html" : "/";
-  });
+  }).catch(function () { return {}; }).then(go);
 }
 
 function changeSubmit(ev) {
@@ -80,7 +80,7 @@ function signinSubmit(ev) {
         return fetch("/api/me", {cache: "no-store", headers: {Accept: "application/json"}}).then(function (me) {
           if (me.ok) {
             if (body.must_change) { pass.value = ""; btn.disabled = false; showChangeForm(); return; }
-            return signinLand();
+            return me.json().catch(function () { return {}; }).then(signinLand);
           }
           pass.value = "";
           signinError("Signed in, but the browser did not keep the session cookie. Open this page over https or on localhost.");

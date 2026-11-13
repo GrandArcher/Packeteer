@@ -61,7 +61,7 @@ vm.runInContext("var wzConfigured = false; var wzSetupPending = false;", context
 // The shell must call the notice, and both sign-in paths must use the landing.
 assert(fn(shell, "shellApplyMe").indexOf("shellSetupNotice(me)") >= 0, "shellApplyMe does not show the notice");
 assert(!/location\.replace|settings\.html#wizard/.test(shell), "the overview must not redirect to the wizard");
-assert((signin.match(/signinLand\(\)/g) || []).length >= 3, "sign-in and password change must both land through signinLand");
+assert((signin.match(/signinLand\(|then\(signinLand\)/g) || []).length >= 3, "sign-in and password change must both land through signinLand");
 
 // The overview shows the notice and nothing else changes while setup is pending.
 var notice = context.shellSetupNotice;
@@ -87,6 +87,15 @@ function lands(me, ok, want, msg) {
 lands({setup_pending: true}, true, "/settings.html", "pending admin lands on the wizard");
 lands({user: "admin"}, true, "/", "done setup lands on the dashboard");
 lands({}, false, "/", "an unreadable session still lands on the dashboard");
+// A session the sign-in already read is used as is, with no second /api/me.
+chain = chain.then(function () {
+  var calls = 0;
+  context.fetch = function () { calls++; return Promise.reject(new Error("unexpected fetch")); };
+  landed = [];
+  return context.signinLand({setup_pending: true}).then(function () {
+    assert(landed.join() === "/settings.html" && calls === 0, "a given pending session lands on the wizard without a fetch: " + landed + " calls " + calls);
+  });
+});
 
 // The wizard body is open for a pending example and collapsed for a finished setup.
 function collapse(configured, pending) {
