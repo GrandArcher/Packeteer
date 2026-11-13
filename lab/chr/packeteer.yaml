@@ -29,6 +29,7 @@ allowlist:
     - 198.51.100.0/24
     - 203.0.113.0/24
 probe:
+  path_check: {enabled: false}
   interval: 2s
   timeout: 500ms
   packets: 4
