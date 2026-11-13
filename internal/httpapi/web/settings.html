@@ -57,8 +57,9 @@
 <div id="ed-off" class="conn" role="alert" hidden></div>
 <main id="main" tabindex="-1">
   <h1>Settings</h1>
-  <section id="wizard">
-    <h2>Setup wizard</h2>
+  <section>
+    <details id="wizard" class="fold">
+    <summary><h2>Setup wizard</h2></summary>
     <p class="tag">Four steps, the last one optional. It starts in observe with an empty allowlist; inject is not a step. Once the config is saved, the preflight checks below decide when injection can be offered. Blocks the wizard does not write are kept. Nothing is written until you save the YAML below.</p>
     <div id="setup-skip" hidden>
       <p class="tag">First-run setup is pending. Saving a config here ends it. Skip setup if the file is already what you want; the editor then turns off at the next start unless http.config_editor is true.</p>
@@ -139,27 +140,17 @@
         <button type="button" id="wz-confirm-no">Cancel</button>
       </div>
     </div>
+    </details>
   </section>
-  <section id="preflight">
-    <h2>Preflight checks</h2>
+  <section>
+    <details id="preflight" class="fold">
+    <summary><h2>Preflight checks</h2></summary>
     <p class="tag">Settings and the API refuse to turn injection on until every check here passes. Each check says what it found and how to fix it, and the same checks run again any time. Running them reads the BGP sessions and sends one TTL-limited probe per provider toward a documentation address. The results are also in <code>/metrics</code> as <code>packeteer_preflight_check</code>.</p>
     <div class="controls">
       <button type="button" id="pf-run">Run checks</button>
       <span id="pf-when" class="tag" role="status"></span>
     </div>
     <ul id="pf-list" class="pf-list"></ul>
-    <h3>Router config</h3>
-    <p class="tag">The session to Packeteer and the two filters, plus flow export when a flow collector is set, written for the router you pick from the answers on this page: the setup wizard fields and the YAML editor, saved or not. It is text to review: Packeteer never connects to your router or applies it, and nothing here is saved. Check it against your software release first.</p>
-    <div class="form">
-      <label class="field"><span class="field-label">Router</span><select id="pf-vendor"></select><span class="field-help">FRR, BIRD, Junos, IOS-XR, Arista EOS, or RouterOS 7.</span></label>
-    </div>
-    <div class="controls">
-      <button type="button" id="pf-snippet-show">Show router config</button>
-      <button type="button" id="pf-snippet-copy">Copy</button>
-      <span id="pf-snippet-status" class="tag" role="status"></span>
-    </div>
-    <ul id="pf-snippet-missing" class="errors" hidden></ul>
-    <pre id="pf-snippet" class="mono" aria-label="Router config" hidden></pre>
     <div id="pf-inject" hidden>
       <h3>Turn on injection</h3>
       <p class="tag">Start with a few prefixes. This fills the YAML editor below with an inject config, shows what will change, and previews the routes inject would send under Blast radius; nothing is written until you tick the confirmation and Save, and Save runs the checks again.</p>
@@ -172,9 +163,27 @@
       <div id="pf-inject-status" class="tag" role="status"></div>
       <ul id="pf-explain"></ul>
     </div>
+    </details>
   </section>
-  <section id="blast">
-    <h2>Blast radius</h2>
+  <section>
+    <details id="router-snippet" class="fold">
+    <summary><h2>Router config</h2></summary>
+    <p class="tag">The session to Packeteer and the two filters, plus flow export when a flow collector is set, written for the router you pick from the answers on this page: the setup wizard fields and the YAML editor, saved or not. It is text to review: Packeteer never connects to your router or applies it, and nothing here is saved. Check it against your software release first.</p>
+    <div class="form">
+      <label class="field"><span class="field-label">Router</span><select id="pf-vendor"></select><span class="field-help">FRR, BIRD, Junos, IOS-XR, Arista EOS, or RouterOS 7.</span></label>
+    </div>
+    <div class="controls">
+      <button type="button" id="pf-snippet-show">Show router config</button>
+      <button type="button" id="pf-snippet-copy">Copy</button>
+      <span id="pf-snippet-status" class="tag" role="status"></span>
+    </div>
+    <ul id="pf-snippet-missing" class="errors" hidden></ul>
+    <pre id="pf-snippet" class="mono" aria-label="Router config" hidden></pre>
+    </details>
+  </section>
+  <section>
+    <details id="blast" class="fold">
+    <summary><h2>Blast radius</h2></summary>
     <p class="tag">What inject would put on the wire now, from the latest probe round and the learned routes, compared with what is on the wire today. It decides the latest round again on a copy of the state, so the live decisions and routes are not touched. Traffic comes from flow data when a flow source is on; a route without it is counted as unknown.</p>
     <div class="controls">
       <button type="button" id="bl-run">Preview inject now</button>
@@ -184,9 +193,11 @@
     <div id="bl-confirm" class="controls" hidden>
       <button type="button" id="bl-apply">Apply this change</button>
     </div>
+    </details>
   </section>
-  <section id="whatif">
-    <h2>Replay history</h2>
+  <section>
+    <details id="whatif" class="fold">
+    <summary><h2>Replay history</h2></summary>
     <p class="tag">Decides the stored probe rounds again under the YAML in the editor and compares the result with the running config: moves, loss and RTT change weighted by traffic, commit relief, flaps, and cap pressure. It works from observe-mode history and needs <code>round_retention</code> on the storage plugin. Each window starts with no improvements standing.</p>
     <div class="controls">
       <label>Window
@@ -201,9 +212,11 @@
       <span id="wi-status" class="tag" role="status"></span>
     </div>
     <div id="wi-body"></div>
+    </details>
   </section>
-  <section id="commit-setup">
-    <h2>Commit setup</h2>
+  <section>
+    <details id="commit-setup" class="fold">
+    <summary><h2>Commit setup</h2></summary>
     <p class="tag">Four steps to turn on commit control for the providers you pay a commit on, then review the YAML. Nothing is saved until you Save, and scorer, telemetry, and provider changes apply after a restart. A provider needs a telemetry binding (an SNMP host and interface) to have a commit; the community is read from an environment variable named here, never typed in. The result shows on <a href="/commit.html">Commit &amp; Cost</a>.</p>
     <ol class="steps">
       <li id="cs-tab-1" class="on">1. Strategy</li>
@@ -266,6 +279,7 @@
     </div>
     <div id="cs-status" class="tag" role="status"></div>
     <ul id="cs-errors" class="errors"></ul>
+    </details>
   </section>
   <section id="editor-section">
     <h2>Settings forms</h2>

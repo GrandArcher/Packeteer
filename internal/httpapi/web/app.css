@@ -51,13 +51,16 @@ button {
 
 main { padding: 16px 20px 32px; max-width: 1100px; }
 /* Eleven columns, the last a sentence, need the whole width of a wide screen. */
-body[data-page="improvements"] main { max-width: none; }
+body[data-page="improvements"] main, body[data-page="providers"] main { max-width: none; }
 td.why { min-width: 18rem; }
 /* Long provider and AS names wrap instead of widening the page (#348). */
 body[data-page="improvements"] main td:not(:first-child) { overflow-wrap: anywhere; }
+/* An AS number, a cause, and a before -> after pair read as one token (#580). */
+body[data-page="improvements"] main td.nw { white-space: nowrap; overflow-wrap: normal; }
 @media (max-width: 759px) { td.why { min-width: 0; } }
 
 section { margin-bottom: 28px; }
+section:has(> details.fold:not([open])) { margin-bottom: 6px; }
 
 h1, h2 { font-size: 1.05rem; margin: 0 0 8px; }
 
@@ -404,6 +407,21 @@ details.advanced > summary { cursor: pointer; color: var(--muted); font-size: 0.
   #providers td[data-label="Provider"], #events td[data-label="What happened"] { order: -1; }
 }
 
+/* Improvements has eleven columns and a sentence, and Providers fourteen;
+   below 1600px they wrap into word fragments or push Mbps and Probes off the
+   right edge (#580). From 760px up to there each row is a grid card; the
+   phone rules above keep one column under 760px. */
+@media (min-width: 760px) and (max-width: 1599px) {
+  :is(#improvements, #providers) table.stacked, :is(#improvements, #providers) table.stacked tbody { display: block; }
+  :is(#improvements, #providers) table.stacked thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  :is(#improvements, #providers) table.stacked tr { display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: 2px 12px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+  :is(#improvements, #providers) table.stacked td { display: block; border: 0; padding: 2px 10px; }
+  :is(#improvements, #providers) table.stacked td:empty { display: none; }
+  :is(#improvements, #providers) table.stacked td[data-label]::before { content: attr(data-label) ": "; color: var(--muted); font-size: 0.8rem; font-weight: 600; }
+  #improvements table.stacked td[data-label="Prefix"], #providers table.stacked td[data-label="Provider"] { grid-column: 1 / -1; font-weight: 600; }
+  #improvements table.stacked td.why { grid-column: 1 / -1; min-width: 0; }
+}
+
 /* Before/after charts (#129) */
 .ts-charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
 .ts-fig { margin: 0; background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
@@ -533,6 +551,8 @@ main:focus { outline: none; }
 
 /* Provider figures and Overview charts (#349) */
 #providers { overflow-x: auto; }
+/* A stacked row has no sideways scroll, and the "Open in" list floats past the last card (#580). */
+#providers:has(table.stacked) { overflow: visible; }
 .stat, td.mbps { white-space: nowrap; font-variant-numeric: tabular-nums; }
 .stat-line { display: flex; gap: 6px; }
 .stat-k { color: var(--muted); font-size: 0.75rem; min-width: 3.2em; }
@@ -582,3 +602,14 @@ main:focus { outline: none; }
 /* Registry hygiene findings (#289). */
 .badge.sev-error { color: #fff; background: #9d1c2a; }
 .badge.sev-info { color: #3b4a59; background: #e7eef5; }
+
+/* Closed-by-default Settings sections (#580). */
+details.fold > summary { cursor: pointer; padding: 6px 0; }
+details.fold > summary h2 { display: inline; margin: 0; }
+details.fold[open] > summary { margin-bottom: 8px; }
+
+/* "Open in" is one menu per row on the Providers table (#580). The list
+   floats over the row so it does not make the row taller. */
+.linkout-menu { position: relative; display: inline-block; }
+.linkout-menu > summary { cursor: pointer; color: var(--muted); font-size: 0.8rem; }
+.linkout-list { position: absolute; z-index: 5; left: 0; top: 100%; display: flex; flex-direction: column; gap: 4px; min-width: 9rem; padding: 8px 10px; background: var(--card); border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15); white-space: nowrap; }

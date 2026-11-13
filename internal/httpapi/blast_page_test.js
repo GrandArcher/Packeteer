@@ -42,6 +42,9 @@ function text(n) {
 var els = {};
 ["bl-body", "bl-status", "bl-confirm", "blast", "ed-yaml", "ed-inject", "ed-sha"].forEach(function (id) { els[id] = node("x"); });
 els["bl-confirm"].hidden = true;
+// The panel sits in a closed fold on the real page (#580).
+var fold = {tagName: "DETAILS", open: false, parentNode: null};
+els["blast"].parentNode = fold;
 els["ed-yaml"].value = "mode: inject\n";
 var calls = [];
 var replies = [];
@@ -67,7 +70,7 @@ var ui = fs.readFileSync(path.join(__dirname, "web", "ui.js"), "utf8");
 var settings = fs.readFileSync(path.join(__dirname, "web", "settings.js"), "utf8");
 ["el", "clear"].forEach(function (n) { vm.runInContext(fn(ui, n), context); });
 vm.runInContext("var blastToken = '';", context);
-["blastRoute", "blastShift", "renderBlast", "loadBlast", "previewCandidate", "putConfig"].forEach(function (n) {
+["showTarget", "blastRoute", "blastShift", "renderBlast", "loadBlast", "previewCandidate", "putConfig"].forEach(function (n) {
   vm.runInContext(fn(settings, n), context);
 });
 
@@ -150,6 +153,7 @@ context.loadBlast().then(function () {
   assert(calls[1].method === "PUT" && calls[1].body.dry_run === true && calls[1].body.base === "base1" && calls[1].body.yaml === "mode: inject\n", "dry run body: " + JSON.stringify(calls[1].body));
   assert(els["bl-confirm"].hidden === false, "Apply is offered");
   assert(text(els["bl-body"]).indexOf("Would be announced (1)") >= 0 && els["blast"].scrolled === true, "the preview is shown");
+  assert(fold.open === true, "a preview opens the closed Blast radius section");
   assert(status.length > 0 && status[status.length - 1].indexOf("Apply this change") >= 0, "the editor status points at Apply: " + status);
 
   calls.length = 0;
@@ -168,10 +172,12 @@ context.loadBlast().then(function () {
 }).then(function () {
   assert(els["bl-confirm"].hidden === true, "no token, no Apply button");
   var bad = new Error("the preview failed");
+  fold.open = false;
   replies.push(Promise.reject(bad));
   return context.previewCandidate(true);
 }).then(function () {
   assert(els["bl-confirm"].hidden === true && els["bl-status"].textContent === "explained: the preview failed", "a failed preview: " + els["bl-status"].textContent);
+  assert(fold.open === true, "a failed preview opens the closed section too, so its message is seen");
   console.log("ok");
 }).catch(function (e) {
   console.error("FAIL: " + (e && e.stack || e));

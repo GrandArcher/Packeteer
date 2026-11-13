@@ -68,6 +68,14 @@ function listText(list) { return (list || []).join(", "); }
 function splitList(text) { return text.split(/[\s,]+/).filter(Boolean); }
 function byId(id) { return document.getElementById(id); }
 
+// showTarget opens every closed fold around an element, so a link such as
+// /settings.html#wizard, or a result written into a section, is visible.
+function showTarget(node) {
+  for (var d = node; d; d = d.parentNode) {
+    if (d.tagName === "DETAILS") d.open = true;
+  }
+}
+
 // guide is filled from reads the page already makes. Empty lists leave the
 // field as free text (#329). Nothing here is announced.
 var guide = {hops: [], sources: [], asns: [], asnNames: {}, originated: [], targets: []};
@@ -2664,11 +2672,13 @@ function previewCandidate(confirm) {
     blastToken = out.preview_token || "";
     byId("bl-confirm").hidden = !(confirm && blastToken);
     byId("bl-status").textContent = confirm ? "Preview of the change in the editor. Nothing is saved yet." : "Preview of the config in the editor.";
+    showTarget(byId("blast"));
     byId("blast").scrollIntoView();
   }, function (err) {
     blastToken = "";
     byId("bl-confirm").hidden = true;
     byId("bl-status").textContent = explain(err);
+    showTarget(byId("blast"));
   });
 }
 
@@ -2880,6 +2890,9 @@ byId("bl-run").addEventListener("click", loadBlast);
 byId("wi-run").addEventListener("click", runWhatIf);
 byId("bl-apply").addEventListener("click", putConfig);
 bindStaticChecks();
+function openHash() { if (location.hash.length > 1) showTarget(byId(location.hash.slice(1))); }
+window.addEventListener("hashchange", openHash);
+openHash();
 loadPreflight();
 loadSetupSkip();
 loadConfig();
