@@ -106,12 +106,14 @@ type ProviderHealth struct {
 	lossSum float64
 }
 
-// Problem is a provider that is down or degraded, for the Overview
-// headline.
+// Problem is one failure named in the Overview headline: a provider that is
+// down or degraded, or (Session) the iBGP sessions being down. A session
+// problem has no provider.
 type Problem struct {
 	Provider string `json:"provider"`
 	State    string `json:"state"`
 	Detail   string `json:"detail"`
+	Session  bool   `json:"session,omitempty"`
 }
 
 // Feature is an optional capability and whether this instance has it on.
@@ -128,7 +130,8 @@ type Overview struct {
 	Started   bool             `json:"started"`
 	Sources   []string         `json:"sources"`
 	Providers []ProviderHealth `json:"providers"`
-	// Problems lists the down providers, then the degraded ones.
+	// Problems lists the iBGP session failure, then the down providers,
+	// then the degraded ones.
 	Problems []Problem      `json:"problems"`
 	Counts   OverviewCounts `json:"counts"`
 	BGP      OverviewBGP    `json:"bgp"`
@@ -256,6 +259,10 @@ func BuildOverview(snap Snapshot, setup Setup, features []Feature) Overview {
 	out.Counts.Improvements = len(snap.Improvements)
 	out.Counts.MaxImprovements = setup.MaxImprovements
 	out.Problems = judgeProviders(&out, setup)
+	if out.Started && out.BGP.Peers > 0 && out.BGP.Established == 0 {
+		// Never up or dropped: either way nothing is learned, so nothing is recommended.
+		out.Problems = append([]Problem{{State: HealthDown, Detail: "no iBGP session", Session: true}}, out.Problems...)
+	}
 	out.Setup = setupHints(out)
 	for _, h := range out.Setup {
 		if h.Level == HintWarn {

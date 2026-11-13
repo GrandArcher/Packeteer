@@ -504,3 +504,57 @@ func TestOverviewGeoIPHints(t *testing.T) {
 		t.Fatalf("warnings = %d", o.Counts.Warnings)
 	}
 }
+
+// A session that never came up and one that was up and dropped are both a
+// problem in the headline list, ahead of the provider problems (#578).
+func TestOverviewHeadlineNamesDownSession(t *testing.T) {
+	p1 := netip.MustParsePrefix("198.51.100.0/24")
+	edge := netip.MustParseAddr("192.0.2.254")
+	setup := Setup{Sources: []string{"static"}, DegradedLossPct: 5, DownLossPct: 50}
+	build := func(started bool, peers ...rib.PeerState) Overview {
+		in := healthInput(answered("transit-a", p1, 10, 10), answered("transit-b", p1, 10, 0))
+		in.Started = started
+		in.BGPConfigured = true
+		in.Peers = peers
+		return BuildOverview(Assemble(in), setup, nil)
+	}
+	session := Problem{State: HealthDown, Detail: "no iBGP session", Session: true}
+	b := Problem{Provider: "transit-b", State: HealthDown, Detail: "100% loss"}
+	up := time.Date(2026, 1, 2, 3, 0, 0, 0, time.UTC)
+
+	for name, peer := range map[string]rib.PeerState{
+		"never up": {Address: edge, State: "active"},
+		"dropped":  {Address: edge, State: "idle", Since: up},
+	} {
+		o := build(true, peer)
+		if len(o.Problems) != 2 || o.Problems[0] != session || o.Problems[1] != b {
+			t.Errorf("%s: problems = %+v", name, o.Problems)
+		}
+	}
+
+	// The session established again: only the providers remain.
+	o := build(true, rib.PeerState{Address: edge, State: "established", Established: true, Since: up})
+	if len(o.Problems) != 1 || o.Problems[0] != b {
+		t.Errorf("session up: problems = %+v", o.Problems)
+	}
+	// One of two neighbors is up: the RIB view still fills, no session problem.
+	o = build(true, rib.PeerState{Address: edge, State: "established", Established: true}, rib.PeerState{Address: netip.MustParseAddr("192.0.2.253"), State: "active"})
+	if len(o.Problems) != 1 || o.Problems[0] != b {
+		t.Errorf("one of two up: problems = %+v", o.Problems)
+	}
+	// Still starting: the session has had no time to come up.
+	o = build(false, rib.PeerState{Address: edge, State: "active"})
+	if len(o.Problems) != 1 || o.Problems[0].Session {
+		t.Errorf("starting: problems = %+v", o.Problems)
+	}
+	// No neighbors (BGP off or BMP alone): there is no session to name.
+	o = build(true)
+	if len(o.Problems) != 1 || o.Problems[0].Session {
+		t.Errorf("no neighbors: problems = %+v", o.Problems)
+	}
+
+	raw, err := json.Marshal(build(true, rib.PeerState{Address: edge, State: "active"}).Problems)
+	if err != nil || !strings.Contains(string(raw), `{"provider":"","state":"down","detail":"no iBGP session","session":true}`) {
+		t.Errorf("json = %s %v", raw, err)
+	}
+}

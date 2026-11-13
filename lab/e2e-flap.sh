@@ -3,7 +3,8 @@
 # between the two providers withdraws Packeteer's route after max_flips
 # changes, the edge stays on its native path while the prefix is parked
 # even though the second provider stays better, the cool-down releases it,
-# and SIGTERM withdraws. Documentation prefix and private ASN only.
+# a session the edge drops shows in the Overview headline and clears when it
+# is back (#578), and SIGTERM withdraws. Documentation prefix and private ASN only.
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -135,6 +136,33 @@ fi
 echo "cool-down ends: released, and the still-better path is announced again"
 wait_log 60 'flap quarantine released'
 wait_route present
+
+# wait_overview <jq filter>: wait until /api/overview matches it.
+wait_overview() {
+	local i
+	for i in $(seq 1 120); do
+		if curl -fsS "$ui/api/overview" 2>/dev/null | jq -e "$1" >/dev/null 2>&1; then
+			return 0
+		fi
+		sleep 1
+	done
+	echo "timed out waiting for the overview to match: $1" >&2
+	curl -fsS "$ui/api/overview" >&2 || true
+	dump_bgp
+	return 1
+}
+
+echo "the edge drops the session: the headline names it; back up, it clears (#578)"
+ui=http://192.0.2.10:8080
+wait_overview '.problems == [] and .bgp.established == 1'
+"${compose[@]}" exec -T edge vtysh -c 'configure terminal' -c 'router bgp 64512' -c 'neighbor 192.0.2.10 shutdown' -c 'end'
+wait_overview '(.problems | map(.detail)) == ["no iBGP session"] and .problems[0].session == true'
+bash lab/ui-smoke.sh "$ui/" '1 problem: </strong><a href="/system.html">no iBGP session</a>' 'headline headline-down' --absent 'Cannot reach'
+"${compose[@]}" exec -T edge vtysh -c 'configure terminal' -c 'router bgp 64512' -c 'no neighbor 192.0.2.10 shutdown' -c 'end'
+wait_overview '.problems == [] and .bgp.established == 1'
+bash lab/ui-smoke.sh "$ui/" 'Providers' --absent 'problem: ' 'problems: ' 'Cannot reach'
+# The session loss withdrew the route; it may wait out a flap cool-down before it returns.
+wait_route present 90
 
 echo "stopping packeteer (SIGTERM, WithdrawAll)"
 "${compose[@]}" stop -t 20 packeteer

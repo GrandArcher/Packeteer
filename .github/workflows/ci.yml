@@ -2273,6 +2273,10 @@ jobs:
           bash lab/ui-smoke.sh "$base/improvements.html" "No BGP session, so Packeteer can't see current routes" '<a href="/system.html">System page</a>' \
             --absent 'None. A move is recommended only when' 'Cannot reach'
           bash lab/ui-smoke.sh "$base/" "$docs/docs/routers.md\"" 'rel="noopener noreferrer">docs/routers.md</a>' --absent 'Cannot reach'
+          # The session that never came up is in the headline sentence with the providers (#578).
+          curl -fsS "$base/api/overview" | jq -e '(.problems | map((.provider // "") + ":" + .detail)) == [":no iBGP session", "lab-b:100% loss", "lab-c:no answer"] and .problems[0].session == true'
+          bash lab/ui-smoke.sh "$base/" '3 problems: </strong><a href="/system.html">no iBGP session</a>, <a href="/providers.html#provider-lab-b">lab-b</a> 100% loss, <a href="/providers.html#provider-lab-c">lab-c</a> no answer' \
+            'headline headline-down' --absent 'Cannot reach'
       - name: UI mitigation, inbound, and anomaly forms smoke (#131, #329; add and remove a rule in observe, guided inputs)
         run: |
           set -euo pipefail

@@ -45,10 +45,12 @@ var context = {
   document: {
     createElement: function (t) { return new Node(t); },
     createElementNS: function (ns, t) { return new Node(t); },
-    createTextNode: function (s) { var n = new Node("#text"); n.text = s; return n; }
+    createTextNode: function (s) { var n = new Node("#text"); n.text = s; return n; },
+    getElementById: function (id) { return id === "headline" ? headline : null; }
   },
   Date: Date, Math: Math, Number: Number, String: String, Infinity: Infinity
 };
+var headline = new Node("div");
 // An SVG attribute lands in attrs, as in a browser.
 vm.createContext(context);
 
@@ -73,7 +75,7 @@ var app = fs.readFileSync(path.join(web, "app.js"), "utf8");
 var charts = fs.readFileSync(path.join(web, "charts.js"), "utf8");
 ["SVG_NS", "SERIES_N", "HOUR_MS", "OV_W", "OV_GAP_MS"].forEach(function (n) { vm.runInContext(varLine(charts, n), context); });
 vm.runInContext(varLine(app, "NO_REPLY"), context);
-[[app, "el"], [app, "clear"], [app, "fmtMs"], [app, "fmtPct"], [app, "statCell"], [app, "liveStat"], [app, "mbpsText"], [app, "reorderCell"],
+[[app, "el"], [app, "clear"], [app, "renderHeadline"], [app, "fmtMs"], [app, "fmtPct"], [app, "statCell"], [app, "liveStat"], [app, "mbpsText"], [app, "reorderCell"],
   [charts, "svgEl"], [charts, "tsTicks"], [charts, "clockLabel"], [charts, "lineChart"], [charts, "seriesClass"],
   [charts, "renderProviderLatency"], [charts, "improvementCounts"], [charts, "renderImprovementCounts"], [charts, "sparkline"]
 ].forEach(function (p) { vm.runInContext(fn(p[0], p[1]), context); });
@@ -228,5 +230,26 @@ assert(withClass(imp, "tag").every(function (n) { return n.textContent.indexOf("
 var cut = new Node("div");
 context.renderImprovementCounts(cut, [{start: hourAgo(1), mode: "observe"}], true);
 assert(cut.textContent.indexOf("a floor") >= 0, "truncation is said");
+
+// ---- Overview headline (#343, #578) ----
+// The iBGP session failure sits in the same sentence as the provider problems,
+// whether the session never came up or dropped (the API gives the same list).
+var sessionProblem = {provider: "", state: "down", detail: "no iBGP session", session: true};
+var provB = {provider: "lab-b", state: "down", detail: "100% loss"};
+var provC = {provider: "lab-c", state: "down", detail: "no answer"};
+context.renderHeadline({problems: [sessionProblem, provB, provC]});
+assert(headline.hidden === false && headline.className === "headline headline-down", "headline shown as down: " + headline.className);
+assert(headline.textContent === "3 problems: no iBGP session, lab-b 100% loss, lab-c no answer", "headline text: " + headline.textContent);
+var links = find(headline, "a").map(function (a) { return a.textContent + ">" + a.href; });
+assert(links.join("|") === "no iBGP session>/system.html|lab-b>/providers.html#provider-lab-b|lab-c>/providers.html#provider-lab-c", "links: " + links);
+// The session alone is one problem, in the singular, not a blank provider link.
+context.renderHeadline({problems: [sessionProblem]});
+assert(headline.textContent === "1 problem: no iBGP session" && find(headline, "a").length === 1, "session alone: " + headline.textContent);
+// Providers only, as before.
+context.renderHeadline({problems: [provB, provC]});
+assert(headline.textContent === "2 problems: lab-b 100% loss, lab-c no answer", "providers only: " + headline.textContent);
+// No problem at all: hidden and empty.
+context.renderHeadline({problems: []});
+assert(headline.hidden === true && headline.textContent === "", "no problems hides the headline");
 
 console.log("ok");
