@@ -1,0 +1,301 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 4207e7a0..6a008738 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -6,6 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
+ 
+ ### Changed
+ 
++- The Events badge counts open alerts, one each; a session that is established again drops out, and the Events page keeps the full log (#579).
+ - The guided inject step adds the gobgp announcer from a schema-built form when none is configured; the checks count it on the plan and the save, and it applies on restart (#568).
+ - Router config panel and `POST /api/snippets` follow unsaved wizard answers and editor text, name the wizard step for a missing answer, and add flow export lines (#569).
+ 
+diff --git a/docs/API.md b/docs/API.md
+index a683e63d..7e672057 100644
+--- a/docs/API.md
++++ b/docs/API.md
+@@ -51,7 +51,7 @@ The dashboard, JSON API, and Prometheus metrics share one listener, `http.listen
+ | `/api/ring_lg` | Viewer. `?prefix=<cidr>`: the NLNOG RING looking-glass view of that prefix, `state` `off` (the default, no request), `ok`, or `unavailable`. Rate limited and cached ([ui.md](ui.md#nlnog-ring-panel)). |
+ | `/api/atlas` | Viewer. `?prefix=<cidr>`: the RIPE Atlas panel (#213), `state` `off` (the default: no data, empty `measurements`, `can_measure` false), `no_key`, or `ok`; with `ok`, `target` (the test address Packeteer measures), `local` (each provider's latest RTT, loss, and confidence level), `measurements` (id, type, trigger, `created`, `credits`, `requested`, `state`, per-probe `probes`, `summary`), `status` (own probe, balance, cap use), and `can_measure`. Reads stored results; makes no Atlas request ([atlas.md](atlas.md)). |
+ | `/api/atlas/measure` | `POST {"prefix":"<cidr>","type":"ping"\|"traceroute"}`. Operator, and needs auth or basic auth. Creates one measurement of the test address Packeteer measures for that prefix; the caller cannot name an address. `404` when atlas is off (checked before the write gate, so also with writes disabled) or the prefix has no test address, `503` with no key, `400` for a bad type or a non-public address, `429` when a cap or the credit balance refuses it, `502` when Atlas does. Audited. |
+-| `/api/events` | Viewer. `severity` (floor), `q`, `from`, `to`, `limit` (1-1000, default 200): `events` with `time`, `source`, `severity`, `kind`, `message`, `fields`, `help_url`, `dedup_key`, and `ack` (`by`, `at`, `note`) on a problem event of an acknowledged alert ([EVENTS.md](EVENTS.md)). |
++| `/api/events` | Viewer. `severity` (floor), `q`, `from`, `to`, `limit` (1-1000, default 200), `open=1` (only the newest event of each open alert: its dedup key's newest event, among the newest 1000 events, is not a resolving one): `events` with `time`, `source`, `severity`, `kind`, `message`, `fields`, `help_url`, `dedup_key`, and `ack` (`by`, `at`, `note`) on a problem event of an acknowledged alert ([EVENTS.md](EVENTS.md)). |
+ | `POST /api/alerts/ack` | Operator. `{"key","note"}`: acknowledges the open warning or critical alert whose `dedup_key` is `key` until an event resolves it (#558, [mcp.md](mcp.md#steering-through-the-api)). `404` when no such alert is among the newest 1000 events, `409` when it is resolved. Notifications and routing are unchanged. |
+ | `/api/anomalies` | Viewer. The flow anomaly detector, open anomalies, and the feed of recent changes ([anomaly.md](anomaly.md)). |
+ | `/api/threat-feeds` | Viewer. Threat feeds: each feed's last fetch and error, the rules, the caps, why listed networks wait, and the listed networks a rule acted on with their mitigation rule ([threat-feeds.md](threat-feeds.md)). |
+diff --git a/docs/ui.md b/docs/ui.md
+index c39ce9f2..62d92426 100644
+--- a/docs/ui.md
++++ b/docs/ui.md
+@@ -64,7 +64,7 @@ POPs stay on Overview and the threat-mitigation monitor stays on Protection. Bot
+ 
+ The brand link shows the Packeteer logo next to the name (`alt="Packeteer logo"`). The same embedded file, `/logo.png` (the 128px mark, drawn at 32px), is the favicon on every page, including sign-in. It is public, with the sign-in files, so the icon loads before a session. Pages do not link `docs/`. The UI smoke test checks the markup and that `/logo.png` returns a PNG.
+ 
+-The top bar holds the mode chip, a search slot, an events slot, and the account menu. The search slot does not query (#172). The events slot opens the Events page and shows how many warnings (or worse) arrived since this browser last opened it. The account menu shows who is signed in (`GET /api/me`). Sign out appears when the request carries a session cookie, from the sign-in page or single sign-on, and calls `POST /auth/logout`. A request signed with basic auth or an API token has no session, so no sign-out item.
++The top bar holds the mode chip, a search slot, an events slot, and the account menu. The search slot does not query (#172). The events slot opens the Events page and shows how many open alerts (warning or worse) have news since this browser last opened it. A session that is established again is not counted. The account menu shows who is signed in (`GET /api/me`). Sign out appears when the request carries a session cookie, from the sign-in page or single sign-on, and calls `POST /auth/logout`. A request signed with basic auth or an API token has no session, so no sign-out item.
+ 
+ **Sign-in page (#176).** With sign-in on (the default, #328), a browser without a session that asks for a page over https (or through a proxy that sends `X-Forwarded-Proto: https`) or on localhost is sent to `/signin.html`. Over plain http to any other address it gets the basic-auth prompt, because the browser would drop the `Secure` cookie. API paths and `/metrics` answer `401`. The page asks for a user name and password, posts them as JSON to `POST /auth/signin`, and on success loads the dashboard. The server keeps the session in memory and sets a `packeteer_session` cookie (`HttpOnly`, `Secure`, `SameSite=Strict`, lifetime `auth.session_ttl`). The page shows the mode banner and a single sign-on link when an `sso` plugin is configured. A wrong user name or password gets one answer (`401`); ten failures from one address in five minutes lock that address out (`429`), counted together with basic auth. Basic auth and API tokens work as before for scripts. The mode banner on the page comes from `GET /auth/signin`, which needs no sign-in. With `auth.enabled: false` the sign-in POST answers `404` and the browser keeps its basic-auth prompt.
+ 
+@@ -330,10 +330,10 @@ The Events page (#173) lists what the controller reports to notifiers ([EVENTS.m
+ 
+ - **Filters.** Severity (all, warning and critical, critical only), a text search over the event kind, message, and field names and values, and a range (last hour, 24 hours, 7 days, 30 days, all kept, or custom from and to). The page reloads every five seconds and on Refresh.
+ - **Where events are kept.** With a `storage` plugin of type `sqlite` they are written to the database and pruned with `retention`, so they survive a restart. Without storage the page shows the newest 1000 events since start, from memory, and says so. Events are recorded whether or not a notifier is configured, and a notifier's filter or rate limit does not hide an event from the page. With storage, a full write queue (256 events) drops new events and logs it. `audit.recorded` events are not listed: the Audit tab shows those records.
+-- **Top bar indicator.** The Events link in the top bar shows a count of warning and critical events newer than the last time this browser opened the page (100 or more shows `100+`). The time is the controller's clock, kept in the browser's local storage; nothing is stored on the controller. It refreshes every 15 seconds.
++- **Top bar indicator.** The Events link in the top bar shows a count of open warning and critical alerts (`open=1`, one per alert; an alert whose newest event is a resolving one, such as a session that is established again, is not counted) with an event newer than the last time this browser opened the page (100 or more shows `100+`). The time is the controller's clock, kept in the browser's local storage; nothing is stored on the controller. It refreshes every 15 seconds.
+ - **Audit tab (admin).** Time, actor, role, method, action, target, result, and status of the newest 200 records of `GET /api/audit` ([auth.md](auth.md#audit-log)). `/events.html#audit` opens it. A viewer or operator does not see the tab, and the API refuses them. It needs a storage plugin that keeps the audit log (`sqlite`); without one the tab says so. Passwords and token secrets are never in an audit record.
+ 
+-`GET /api/events` (viewer) takes `severity` (`info`, `warning`, `critical`; a floor), `q`, `from` and `to` (RFC 3339), and `limit` (1 to 1000, default 200). It returns `events` (`time`, `source`, `severity`, `kind`, `message`, `fields`, `help_url`), `doc_base`, `stored`, `now`, and `since` when storage is off.
++`GET /api/events` (viewer) takes `severity` (`info`, `warning`, `critical`; a floor), `q`, `from` and `to` (RFC 3339), `limit` (1 to 1000, default 200), and `open=1`, which keeps only the newest event of each alert that no later resolving event closed, among the newest 1000 events (the top bar badge uses it). It returns `events` (`time`, `source`, `severity`, `kind`, `message`, `fields`, `help_url`), `doc_base`, `stored`, `now`, and `since` when storage is off.
+ 
+ ## Registry
+ 
+diff --git a/internal/eventlog/eventlog.go b/internal/eventlog/eventlog.go
+index d70e40c4..86c5125f 100644
+--- a/internal/eventlog/eventlog.go
++++ b/internal/eventlog/eventlog.go
+@@ -152,6 +152,36 @@ func (l *Log) Query(ctx context.Context, q plugin.EventQuery) ([]plugin.Event, e
+ 	return out, nil
+ }
+ 
++// Open returns the open alerts matching q, newest first: the newest event
++// of each alert key (Event.DedupKey) when it is a problem event, not one
++// that resolves its group. An alert whose newest event resolved it is
++// left out, however many problem events came before. Only the newest
++// MemoryCap events are read, so q.Limit applies to the alerts, not to the
++// events scanned. q.Text and the time range apply to that newest event.
++func (l *Log) Open(ctx context.Context, q plugin.EventQuery) ([]plugin.Event, error) {
++	evs, err := l.Query(ctx, plugin.EventQuery{Limit: MemoryCap})
++	if err != nil {
++		return nil, err
++	}
++	seen := map[string]bool{}
++	var out []plugin.Event
++	for _, e := range evs {
++		key := e.DedupKey()
++		if seen[key] {
++			continue
++		}
++		seen[key] = true
++		if e.Resolves() || !q.Match(e) {
++			continue
++		}
++		out = append(out, e)
++		if q.Limit > 0 && len(out) == q.Limit {
++			break
++		}
++	}
++	return out, nil
++}
++
+ // Acknowledge records that by has seen the open alert key (an
+ // Event.DedupKey). The newest event with that key among the newest
+ // MemoryCap events must be a warning or critical event that does not
+diff --git a/internal/eventlog/eventlog_test.go b/internal/eventlog/eventlog_test.go
+index 71cbafab..70bd8bde 100644
+--- a/internal/eventlog/eventlog_test.go
++++ b/internal/eventlog/eventlog_test.go
+@@ -299,3 +299,48 @@ func TestAcknowledgementsAreBounded(t *testing.T) {
+ 		t.Errorf("acks = %d, oldest kept %v", n, oldest)
+ 	}
+ }
++
++func neighbor(kind string, sev plugin.Severity, i int, addr string) plugin.Event {
++	e := ev(kind, sev, i)
++	e.Fields = map[string]string{"neighbor": addr}
++	return e
++}
++
++// Open drops an alert whose newest event resolved it, however many
++// problem events came before, and keeps the history in Query.
++func TestOpenSkipsRecoveredAlerts(t *testing.T) {
++	ctx := context.Background()
++	l := New(nil, nil, nil)
++	l.Record(neighbor(plugin.EventBGPSessionStuck, plugin.SeverityCritical, 0, "192.0.2.1"))
++	l.Record(neighbor(plugin.EventBGPSessionStuck, plugin.SeverityCritical, 1, "192.0.2.1"))
++	l.Record(neighbor(plugin.EventBGPSessionUp, plugin.SeverityInfo, 2, "192.0.2.1"))
++	l.Record(neighbor(plugin.EventBGPSessionStuck, plugin.SeverityCritical, 3, "192.0.2.2"))
++	l.Record(provider(plugin.EventProviderDown, plugin.SeverityCritical, 4, "transit-a"))
++	l.Record(provider(plugin.EventProviderUp, plugin.SeverityInfo, 5, "transit-a"))
++	l.Record(provider(plugin.EventProviderDown, plugin.SeverityCritical, 6, "transit-a"))
++
++	warn := plugin.EventQuery{MinSeverity: plugin.SeverityWarning}
++	open, err := l.Open(ctx, warn)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if len(open) != 2 || open[0].Kind != plugin.EventProviderDown || !open[0].Time.Equal(t0.Add(6*time.Second)) ||
++		open[1].Kind != plugin.EventBGPSessionStuck || open[1].Fields["neighbor"] != "192.0.2.2" {
++		t.Fatalf("open = %+v, want transit-a down (re-failed) and 192.0.2.2 not established", open)
++	}
++	all, _ := l.Query(ctx, warn)
++	if len(all) != 5 {
++		t.Errorf("history has %d warning events, want 5 (the recovered session's lines stay)", len(all))
++	}
++
++	l.Record(neighbor(plugin.EventBGPSessionUp, plugin.SeverityInfo, 7, "192.0.2.2"))
++	l.Record(neighbor(plugin.EventBGPSessionDown, plugin.SeverityCritical, 8, "192.0.2.1"))
++	open, _ = l.Open(ctx, plugin.EventQuery{MinSeverity: plugin.SeverityWarning, From: t0.Add(7 * time.Second)})
++	if len(open) != 1 || open[0].Kind != plugin.EventBGPSessionDown || open[0].Fields["neighbor"] != "192.0.2.1" {
++		t.Errorf("open since the last visit = %+v, want only the new drop of 192.0.2.1", open)
++	}
++	open, _ = l.Open(ctx, plugin.EventQuery{MinSeverity: plugin.SeverityWarning, Limit: 1})
++	if len(open) != 1 || open[0].Kind != plugin.EventBGPSessionDown {
++		t.Errorf("limit 1 = %+v, want the newest open alert", open)
++	}
++}
+diff --git a/internal/httpapi/events.go b/internal/httpapi/events.go
+index 9c92d511..8e7ea1c8 100644
+--- a/internal/httpapi/events.go
++++ b/internal/httpapi/events.go
+@@ -89,8 +89,10 @@ type eventRow struct {
+ 	Ack      *eventlog.Ack `json:"ack,omitempty"`
+ }
+ 
+-// handleEvents lists recent controller events (#173), newest first. It
+-// reads the event log and nothing else.
++// handleEvents lists recent controller events (#173), newest first. With
++// open=1 it lists only the open alerts: the newest event of each alert,
++// when that event is a problem (#579). It reads the event log and nothing
++// else.
+ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
+ 	if s.events == nil {
+ 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "the event log is off"})
+@@ -113,7 +115,22 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
+ 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "q must be at most " + strconv.Itoa(maxEventText) + " bytes"})
+ 		return
+ 	}
+-	evs, err := s.events.Query(r.Context(), q)
++	open := false
++	switch v.Get("open") {
++	case "", "0":
++	case "1":
++		open = true
++	default:
++		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "open must be 0 or 1"})
++		return
++	}
++	var evs []plugin.Event
++	var err error
++	if open {
++		evs, err = s.events.Open(r.Context(), q)
++	} else {
++		evs, err = s.events.Query(r.Context(), q)
++	}
+ 	if err != nil {
+ 		s.log.Error("event read", "err", err)
+ 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "event store unavailable"})
+diff --git a/internal/httpapi/events_test.go b/internal/httpapi/events_test.go
+index 299e1214..ad942678 100644
+--- a/internal/httpapi/events_test.go
++++ b/internal/httpapi/events_test.go
+@@ -235,3 +235,65 @@ func TestEventsAPIHelpURL(t *testing.T) {
+ 		t.Errorf("help urls = %v, want %v", got, want)
+ 	}
+ }
++
++// open=1 is the top bar badge's view (#579): a session that failed and is
++// Established again no longer counts, while the plain list keeps every line.
++func TestEventsAPIOpenDropsRecoveredAlerts(t *testing.T) {
++	log := eventlog.New(nil, nil, nil)
++	t0 := time.Now().Add(-time.Hour).UTC()
++	nb := func(n string) map[string]string { return map[string]string{"neighbor": n} }
++	log.Record(plugin.Event{Time: t0, Kind: plugin.EventBGPSessionStuck, Severity: plugin.SeverityCritical, Message: "not established", Fields: nb("192.0.2.1")})
++	log.Record(plugin.Event{Time: t0.Add(time.Minute), Kind: plugin.EventBGPSessionStuck, Severity: plugin.SeverityCritical, Message: "still not established", Fields: nb("192.0.2.1")})
++	log.Record(plugin.Event{Time: t0.Add(2 * time.Minute), Kind: plugin.EventBGPSessionUp, Severity: plugin.SeverityInfo, Message: "session is established", Fields: nb("192.0.2.1")})
++	log.Record(plugin.Event{Time: t0.Add(3 * time.Minute), Kind: plugin.EventBGPSessionDown, Severity: plugin.SeverityCritical, Message: "session down", Fields: nb("192.0.2.2")})
++	log.Record(plugin.Event{Time: t0.Add(4 * time.Minute), Kind: plugin.EventBGPSessionUp, Severity: plugin.SeverityInfo, Message: "session is established", Fields: nb("192.0.2.2")})
++	log.Record(plugin.Event{Time: t0.Add(5 * time.Minute), Kind: plugin.EventBGPSessionDown, Severity: plugin.SeverityCritical, Message: "session down again", Fields: nb("192.0.2.2")})
++	log.Record(plugin.Event{Time: t0.Add(6 * time.Minute), Kind: plugin.EventProviderDown, Severity: plugin.SeverityCritical, Message: "probe source is down",
++		Fields: map[string]string{"provider": "transit-a"}})
++	e := newUIWith(t, func(o *Options) { o.Events = log })
++
++	get := func(query string) []any {
++		t.Helper()
++		rec, body := e.do(t, "GET", "/api/events?"+query, plugin.RoleViewer, nil)
++		if rec.Code != http.StatusOK {
++			t.Fatalf("%s: %d %s", query, rec.Code, rec.Body)
++		}
++		return body["events"].([]any)
++	}
++	messages := func(evs []any) string {
++		var out []string
++		for _, v := range evs {
++			out = append(out, v.(map[string]any)["message"].(string))
++		}
++		return strings.Join(out, "|")
++	}
++
++	if n := len(get("severity=warning")); n != 5 {
++		t.Errorf("the page lists %d critical lines, want all 5", n)
++	}
++	if n := len(get("")); n != 7 {
++		t.Errorf("the page lists %d events, want 7 including the established lines", n)
++	}
++	// Only the newest event of each still-open alert counts: neighbor
++	// 192.0.2.1 recovered; 192.0.2.2 failed again after recovering.
++	if got := messages(get("severity=warning&open=1")); got != "probe source is down|session down again" {
++		t.Errorf("open alerts = %q", got)
++	}
++	if got := messages(get("severity=warning&open=1&limit=1")); got != "probe source is down" {
++		t.Errorf("open alerts with limit=1 = %q", got)
++	}
++	if got := messages(get("severity=warning&open=1&q=transit")); got != "probe source is down" {
++		t.Errorf("open alerts with q = %q", got)
++	}
++	// An alert resolved after the window opened is not counted either.
++	from := t0.Add(30 * time.Second).UTC().Format(time.RFC3339Nano)
++	if got := messages(get("severity=warning&open=1&from=" + from)); got != "probe source is down|session down again" {
++		t.Errorf("open alerts from %s = %q", from, got)
++	}
++	if got := get("severity=warning&open=0"); len(got) != 5 {
++		t.Errorf("open=0 lists %d, want the plain list", len(got))
++	}
++	if rec, _ := e.do(t, "GET", "/api/events?open=yes", plugin.RoleViewer, nil); rec.Code != http.StatusBadRequest {
++		t.Errorf("open=yes = %d, want 400", rec.Code)
++	}
++}
+diff --git a/internal/httpapi/ui_events_test.go b/internal/httpapi/ui_events_test.go
+index 07cad044..4ddc46ad 100644
+--- a/internal/httpapi/ui_events_test.go
++++ b/internal/httpapi/ui_events_test.go
+@@ -48,7 +48,7 @@ func TestEventsPageAssets(t *testing.T) {
+ 		t.Error("a page builds markup from event text")
+ 	}
+ 	for _, s := range []string{
+-		`"/api/events?severity=warning&limit="`, `packeteer.events.seen`, `"&from=" + encodeURIComponent(seen)`,
++		`"/api/events?severity=warning&open=1&limit="`, `packeteer.events.seen`, `"&from=" + encodeURIComponent(seen)`,
+ 		`!== "events"`, `.events-count`,
+ 	} {
+ 		if !strings.Contains(shell, s) {
+diff --git a/internal/httpapi/web/shell.js b/internal/httpapi/web/shell.js
+index 94939393..4be2bfe6 100644
+--- a/internal/httpapi/web/shell.js
++++ b/internal/httpapi/web/shell.js
+@@ -7,7 +7,8 @@ var SHELL_REFRESH_MS = 5000;
+ var shellLastOK = null;
+ 
+ // The events indicator counts warnings (and worse) newer than the time the
+-// Events page was last opened in this browser. The time is the
++// Events page was last opened in this browser, and only those whose alert is
++// still open: a session that came back no longer counts (#579). The time is the
+ // controller's own clock, kept in localStorage; nothing is stored on the
+ // controller.
+ var EVENTS_SEEN_KEY = "packeteer.events.seen";
+@@ -207,7 +208,7 @@ function shellRenderEventsBadge(n) {
+   if (!n) return;
+   var text = n >= EVENTS_BADGE_MAX ? EVENTS_BADGE_MAX + "+" : String(n);
+   link.appendChild(shellEl("span", "events-count", text));
+-  link.setAttribute("aria-label", "Events, " + text + " warnings since you last opened the page");
++  link.setAttribute("aria-label", "Events, " + text + " open warnings since you last opened the page");
+ }
+ 
+ function shellMarkEventsSeen(nowISO) {
+@@ -219,7 +220,7 @@ function shellMarkEventsSeen(nowISO) {
+ function shellEventsBadge() {
+   var seen = null;
+   try { seen = localStorage.getItem(EVENTS_SEEN_KEY); } catch (e) { seen = null; }
+-  var path = "/api/events?severity=warning&limit=" + EVENTS_BADGE_MAX;
++  var path = "/api/events?severity=warning&open=1&limit=" + EVENTS_BADGE_MAX;
+   if (seen) path += "&from=" + encodeURIComponent(seen);
+   shellJSON(path).then(function (body) {
+     shellRenderEventsBadge((body.events || []).length);

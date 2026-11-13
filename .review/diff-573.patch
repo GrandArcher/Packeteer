@@ -1,0 +1,1750 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 9636a418..245913ed 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -3030,6 +3030,49 @@ jobs:
+             'What to do: ' 'neighbor 192.0.2.10 remote-as 64512' \
+             'snippet: ! Packeteer on FRR. Generated for review: nothing is applied.' 'writes: 0' \
+             --absent 'mode-inject' 'Cannot reach'
++      - name: UI router config smoke (#569; the panel follows unsaved wizard answers and names the missing one, adds flow export, writes no config, observe)
++        run: |
++          cat > /tmp/ui569.yaml <<'YAML'
++          mode: observe
++          asn: 64512
++          router_id: 192.0.2.10
++          providers:
++            - {name: lab-a, source_ip: 127.0.0.1, next_hop: 192.0.2.1}
++          http:
++            config_editor: true
++          YAML
++          base=http://127.0.0.1:8080
++          docker run -d --name pkwz569 --network host --cap-add NET_RAW --cap-add NET_ADMIN \
++            -e PACKETEER_HTTP_USER=lab -e PACKETEER_HTTP_PASSWORD=lab-only \
++            -v /tmp/ui569.yaml:/etc/packeteer/config.yaml:ro packeteer:ci
++          proxy=""
++          cleanup() {
++            if [ -n "$proxy" ]; then kill "$proxy" 2>/dev/null || true; fi
++            docker stop -t 15 pkwz569 >/dev/null || true
++            docker logs pkwz569 2>&1 | tail -n 40
++            docker rm pkwz569 >/dev/null || true
++          }
++          trap cleanup EXIT
++          go build -o /tmp/uiproxy ./lab/uiproxy
++          /tmp/uiproxy -listen 127.0.0.1:18569 -upstream "$base" -user lab -password lab-only \
++            -fixtures lab/ui-fixtures/snippet-wizard >/tmp/uiproxy569.log 2>&1 &
++          proxy=$!
++          ok=0
++          for _ in $(seq 1 30); do
++            if curl -fsS http://127.0.0.1:18569/healthz >/dev/null 2>&1; then ok=1; break; fi
++            sleep 1
++          done
++          test "$ok" = 1
++          bash lab/ui-smoke.sh http://127.0.0.1:18569/settings.html 'mode-observe' \
++            'Router config' \
++            'missing: Router address: enter the Edge address in setup step 1' \
++            'raw key error shown: false' \
++            'after edge: neighbor 192.0.2.10 remote-as 64512' \
++            'frr flow: ! this router' 'flow source at 192.0.2.10, UDP 2055.' \
++            'mikrotik flow: /ip traffic-flow target add dst-address=192.0.2.10 port=2055 version=9' \
++            'status: Written from the answers and YAML on this page. Nothing is saved or sent.' \
++            'file unchanged: true' 'writes: 0' \
++            --absent 'mode-inject' 'Cannot reach' 'raw key error shown: true'
+ 
+   snmp:
+     # SNMP agent, traps, informs, and syslog output against net-snmp
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 667e014e..d11e4891 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -4,6 +4,10 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
+ 
+ ## [Unreleased]
+ 
++### Changed
++
++- Router config panel and `POST /api/snippets` follow unsaved wizard answers and editor text, name the wizard step for a missing answer, and add flow export lines (#569).
++
+ ## [1.2.0] - 2026-11-11
+ 
+ The v1.2 release adds steering calls to the REST API and, behind `mcp.write_tools`, to the MCP server, with no new config key and no change to an existing config; the shipped config stays `mode: observe` and injection stays off by default.
+diff --git a/cmd/controller/onboard_test.go b/cmd/controller/onboard_test.go
+index a3d139fa..0474e998 100644
+--- a/cmd/controller/onboard_test.go
++++ b/cmd/controller/onboard_test.go
+@@ -50,6 +50,26 @@ func TestRunSnippetPrintsTheRouterConfig(t *testing.T) {
+ 	}
+ }
+ 
++// A first-run file has no router and no community yet. The CLI says which
++// setup answer fills each one, not a raw key error.
++func TestRunSnippetNamesTheMissingAnswers(t *testing.T) {
++	path := writeOnboardConfig(t, `mode: observe
++asn: 64512
++router_id: 192.0.2.10
++providers:
++  - {name: transit-a, source_ip: 192.0.2.11, next_hop: 192.0.2.1}
++`)
++	var out, errOut bytes.Buffer
++	if code := run(context.Background(), []string{"-config", path, "-snippet", "frr"}, noEnv, &out, &errOut); code != 1 || out.Len() != 0 {
++		t.Fatalf("code %d, stdout %q", code, out.String())
++	}
++	for _, want := range []string{"enter the Edge address in setup step 1", "Set packeteer_community in the file, or press Generate in the UI setup (step 4, Flow) to fill it as 64512:666"} {
++		if !strings.Contains(errOut.String(), want) {
++			t.Errorf("stderr lacks %q:\n%s", want, errOut.String())
++		}
++	}
++}
++
+ // scriptedIP answers ip commands for one provider. changes records the
+ // commands that modify the host.
+ type scriptedIP struct {
+diff --git a/docs/API.md b/docs/API.md
+index 54592eb5..a683e63d 100644
+--- a/docs/API.md
++++ b/docs/API.md
+@@ -92,7 +92,7 @@ The dashboard, JSON API, and Prometheus metrics share one listener, `http.listen
+ | `/api/config` | Admin only, with `http.config_editor: true` and auth or basic auth (#34, #102). `GET` returns the mounted config file, its `sha256`, and `configured` (providers, BGP neighbors, or an `ixp` block present); `POST /api/config/validate {"yaml"}` runs the start checks; `PUT {"yaml","base","confirm_inject"}` writes it (needs the `sha256` it edits, and `confirm_inject` to turn inject on). Applies on restart. `dry_run: true` writes nothing and returns `blast` (the preview of the candidate under its own mode), `required`, and a `preview_token` (#227). A change to `mode`, `thresholds`, `hold_time`, `improvement_ttl`, `flap_quarantine`, `max_improvements`, `allowlist`, `policies`, or `sources` that applies online is saved only with `dry_run: false` and that token from the same file revision (`base`) and the same YAML; otherwise `428` with code `preview_required`. Other changes skip it. `POST /api/config/form` reads or merges the settings form into YAML without writing; its `commit` section holds the commit setup (#174). `GET /api/config/suggestions` lists iBGP or BMP next hops that are not providers (a draft row only; it does not probe or announce). `POST /api/config/wizard` renders an observe config from the setup wizard (edge session, provider rows, optional pinned probe host, optional flow collector; inject is not a step). With `current` (the editor text) it keeps `auth`, `http`, `storage`, and other blocks and returns `existing`, `diff`, and `removes`; `disable_auth` is the only way it turns sign-in off (#345). The settings form also edits every `flow`, `vip`, and `outage` source and every `rules` policy (#130, #226). `POST /api/config/preview {"yaml"}` returns the checks, a line `diff` against the file on disk, and `changes`, without writing; `restart` and `online` on a validate or preview result split `changed`. `GET /api/config/schema` describes the settings blocks (#330). UI: `/settings.html` ([docs/ui.md](ui.md)). |
+ | `/api/whatif` | Admin (it checks candidate YAML like `/api/config/validate`), needs auth. `POST` `{"yaml", "from", "to"}` (#204, [onboarding.md](onboarding.md#replay-history)): decides the stored rounds in the window again under the running config and, when `yaml` is not empty, under that config. `from` and `to` are RFC 3339 times or durations ago (default the last 24 hours). Returns `rounds`, `from`, `to`, `sides` (each with `name`, `summary`, and up to 200 `moves`) and `diff` (prefixes steered differently, up to 200). `404` when the instance has no `round_retention`, and `404` with `code: no_rounds` when the window holds no rounds; `422` `invalid` for a bad window or config or a replay over two minutes; `429` `busy` while another replay runs. Reads storage only; announces nothing. |
+ | `/api/blast` | Operator. The blast-radius preview (#227, [onboarding.md](onboarding.md#blast-radius-preview)): `available`, and `report` with `add`, `move`, `withdraw` (each route has `prefix`, `from`, `to`, `cause`, `reason`, `volume_mbps` when a flow source reports it, and `covering` on a synthesized sub-range, #122), `keep`, `cap`, `providers` (traffic in and out, `current_mbps`, `projected_mbps`, `capacity_mbps`, `limit_mbps`, `commit_mbps`, and `unknown`, the routes without a volume), and `warnings` (`code`, `message`, `prefixes`). It decides the latest round again under inject on a copy of the state and changes nothing; `409` with code `no_round` before the first round. |
+-| `/api/preflight` | The onboarding checks (#221, [onboarding.md](onboarding.md)). `GET` (viewer) returns `available`, `vendors`, and, once the checks have run, `report`: `ran_at`, `ready`, and `results` with per check `id`, `status` (`pass`, `warn`, `fail`, `unverified`), `detail`, `fix`. `POST /api/preflight/run` (operator, needs auth) runs them now; `POST /api/preflight/confirm {"id":"import_filter"}` (admin) records that the router filters were read. `POST /api/config/inject` (admin) renders the guided inject YAML for a small allowlist and answers `412` `preflight_required` while a check blocks; a save that turns inject on is refused the same way. `GET /api/snippets?vendor=` (admin) returns the router config text. |
++| `/api/preflight` | The onboarding checks (#221, [onboarding.md](onboarding.md)). `GET` (viewer) returns `available`, `vendors`, and, once the checks have run, `report`: `ran_at`, `ready`, and `results` with per check `id`, `status` (`pass`, `warn`, `fail`, `unverified`), `detail`, `fix`. `POST /api/preflight/run` (operator, needs auth) runs them now; `POST /api/preflight/confirm {"id":"import_filter"}` (admin) records that the router filters were read. `POST /api/config/inject` (admin) renders the guided inject YAML for a small allowlist and answers `412` `preflight_required` while a check blocks; a save that turns inject on is refused the same way. `GET /api/snippets?vendor=` (admin) returns the router config text for the running config. `POST /api/snippets` (admin) with `{"vendor", "yaml", "answers": {"wizard", "asn", "router_id", "edge", "flow_listen"}}` renders it from unsaved editor text; the answers are read only when `wizard` is true, and then replace `asn`, `router_id`, the community, the neighbors, and the flow source as Generate would. It writes and sends nothing (#569). A missing answer is `422` with `missing`, a list of plain sentences naming the wizard step. |
+ | `/api/dashboards` | Your custom dashboards and the widget catalog (#34). `PUT /api/dashboards/<name>` saves one (layout fields `w`, `h`, `refresh`, and `favorite`: [ui.md](ui.md#custom-dashboards)), `DELETE` removes it. Needs a storage plugin and auth or basic auth. UI: `/dashboards.html`. |
+ | `/api/upgrade` | Admin only. Running version, install type, the last release check, and the rollback target (#196). `POST /api/upgrade/check` lists GitHub releases and changes nothing; `POST /api/upgrade/apply {"tag","confirm":true}` and `POST /api/upgrade/rollback {"confirm":true}` switch versions after the SIGTERM shutdown path has withdrawn every route. Need `upgrade.enabled`, `upgrade.public_key`, and auth or basic auth ([docs/ui.md](ui.md#upgrade-from-the-ui)). |
+ | `/api/subscriptions` | Report subscriptions (#34): schedule, next and last send, errors. `POST /api/subscriptions/<name>/send` (operator) sends one now. |
+diff --git a/docs/FEATURES.md b/docs/FEATURES.md
+index 29945a70..ea342c85 100644
+--- a/docs/FEATURES.md
++++ b/docs/FEATURES.md
+@@ -200,7 +200,7 @@ The `maintenance` policy excludes providers during cron-scheduled, one-off, or o
+ | Per-peer session monitor: BMP peer-down reasons, per-peer prefix counts, and max-prefix warnings | done (#147: BMP Statistics Reports are decoded for the per-peer Adj-RIB-In count (`adj_rib_in`, `packeteer_exchange_peer_adj_rib_in`); `exchange.peer_up`/`exchange.peer_down` carry the decoded RFC 7854 reason including Cease subcode 1; `exchanges[].max_prefix_warn_pct` and `peers[].max_prefix` raise `exchange.max_prefix` and its clear; read-only) | v0.8 | RIB source (`bmp`) + core | #147 | no |
+ | Probe-path (PBR) check per provider and IX peer | done (#150: `probe.path_check` sends a TTL-1 probe from each provider's `source_ip` toward a documentation address every `interval`; a first hop that is not that provider's `next_hop`, no reply, or a send error marks the provider down with reason `probe path mismatch` and emits `provider.down`; `path_check: false` opts a provider or exchange peer out; a provider in another domain is not checked; measurement only) | v0.8 | probe engine (`traceroute`) + core | #150, #24 | no |
+ | Probe multiplexing for large IXs (shared probe source with per-peer fwmark or DSCP) and PBR generator (Linux and router snippets, generation only) | done (#157: providers and exchange peers may share a `source_ip` when each sets a distinct `fwmark` or `dscp`; the probers, the traceroute paths, and the #150 path check tag their packets, and a tag that cannot be applied fails the provider closed in the built-in probers (an `exec` prober must apply the tag itself); `packeteer -pbr linux\|frr\|junos\|cisco\|mikrotik` prints the ip rule/route set or the router PBR snippet for review and never applies or sends it) | v0.8 | core (generator; never pushes to a router) | #157 | no |
+-| Guided onboarding: one-command install, blocking preflight checks, router config snippets, host policy routing | partial: done (#221: `scripts/install.sh` starts observe; Settings and `/api/preflight` run five checks (`bgp_session`, `import_filter`, `probe_egress`, `timers`, `withdrawal`) with a fix each, an administrator confirms the router filters, failing checks block the guided inject step and any save that enables inject, results are metrics; `packeteer -snippet frr\|bird\|junos\|iosxr\|arista\|mikrotik` prints golden-tested router config; `packeteer -pbr linux -apply` shows a diff, applies with `-yes`, verifies and cleans up). Not built: reading the router over its management API (RouterOS, NETCONF, vtysh, birdc) and a live test-route withdrawal | v0.9 | core (`internal/preflight`, `internal/snippet`, `internal/pbr`; never pushes to a router) ([onboarding.md](onboarding.md)) | #221 | no |
++| Guided onboarding: one-command install, blocking preflight checks, router config snippets, host policy routing | partial: done (#221: `scripts/install.sh` starts observe; Settings and `/api/preflight` run five checks (`bgp_session`, `import_filter`, `probe_egress`, `timers`, `withdrawal`) with a fix each, an administrator confirms the router filters, failing checks block the guided inject step and any save that enables inject, results are metrics; `packeteer -snippet frr\|bird\|junos\|iosxr\|arista\|mikrotik` prints golden-tested router config, which #569 also renders from unsaved wizard and editor text with plain missing-answer hints and flow export lines; `packeteer -pbr linux -apply` shows a diff, applies with `-yes`, verifies and cleans up). Not built: reading the router over its management API (RouterOS, NETCONF, vtysh, birdc) and a live test-route withdrawal | v0.9 | core (`internal/preflight`, `internal/snippet`, `internal/pbr`; never pushes to a router) ([onboarding.md](onboarding.md)) | #221 | no |
+ | Shared IX port: capacity, commit, and flat port cost across peers | partial: `exchanges[].port` (`capacity_mbps`, optional `commit_mbps`, flat `port_cost`) with one telemetry binding named like the exchange; the `commit` and `cost` scorers book planned moves against the port and plan none past its capacity or commit, and none onto it without a fresh reading or a volume; `port_cost` makes peers cost 0 per Mbps; `/api/exchanges` shows the port. Performance moves and pins onto a peer are not checked, nothing is moved off a port already over its commit, and the billing period is the binding's `billing_day` (#151) | v0.8 | core (`exchanges[].port`) + scorer (`commit`, `cost`) | #151 | no |
+ | Improvements to exchanges report: improvements per peer with Mbps moved | done (#148: the `exchanges` report and a table on `/providers.html`; Mbps is the prefix rate a target source reports, a dash (an em dash) when none does) | v0.8 | storage (`sqlite`) + UI | #148 | no |
+ | IX LAN health: each peer's next hop is probed from the peer's `source_ip` every probe interval (within `probe.rate_limit_pps`); per-peer reachability, RTT, and loss; `exchange.degraded` when enough peers degrade inside a window | done (#149: `exchanges[].health`, `/api/exchanges` `reach`, `packeteer_exchange_peer_*` and `packeteer_exchange_degraded`, shown on `/providers.html`; measurement only, nothing is announced, withdrawn, or steered from it) | v0.8 | probe engine + core (`internal/exchange`) + notifier events | #149, #104, #124 | no |
+diff --git a/docs/onboarding.md b/docs/onboarding.md
+index 5dfdf442..029d9e43 100644
+--- a/docs/onboarding.md
++++ b/docs/onboarding.md
+@@ -65,6 +65,12 @@ Settings has a Replay history panel that sends the YAML in the editor and a wind
+ 
+ `packeteer -snippet <vendor>` prints the session and filter config for the configured edge and exits. The vendors are `frr`, `bird`, `junos`, `iosxr`, `arista`, and `mikrotik`. The Settings panel shows the same text (`GET /api/snippets?vendor=frr`, admin). The text is generated from the templates in `internal/snippet/templates` and the `asn`, `router_id`, `packeteer_community`, and neighbors in the config; it is never sent to a router. The FRR and BIRD output is loaded by real FRR and BIRD daemons in the `onboarding` CI job.
+ 
++**Before anything is saved (#569).** The panel does not wait for a saved file. It is written from what is on the page: the text in the YAML editor, with the wizard's ASN, Router ID, Edge address, and flow collector laid over it while the wizard is open (on a box that already has a config the wizard stays closed, and is not read, until you press Run setup again). It sends them to `POST /api/snippets` (admin) as `{"vendor", "yaml", "answers": {"wizard", "asn", "router_id", "edge", "flow_listen"}}`, which reads no file, writes nothing, and sends nothing to a router. After you press Show router config, changing one of those fields or the router redraws it. With an empty editor and an empty wizard it reads the running config (`GET /api/snippets`). While the wizard is open the snippet shows what Generate would save: `asn`, `router_id`, one neighbor (the Edge address), the flow source only when it is ticked, and the community by the wizard's rule (`asn:666` for an AS number up to 65535), whatever the text says. Providers (and so IPv6) are still read from the text. With the wizard closed the text is used as it is.
++
++**Missing answers.** A snippet needs the AS number, the router's address (`bgp.neighbors`), Packeteer's address (`router_id`, or the neighbor's `local_address`), and `packeteer_community`. When any is missing the answer is `422` with `missing`, one plain sentence each that says which wizard step fills it and which file key it is, and the panel lists them. `packeteer -snippet` prints the same sentences. An AS number above 65535 gets no community from the wizard, so set `packeteer_community` as a large community (for example `65536:666:1`).
++
++**Flow export.** When the config has a `flow` source with a `listen` address, the snippet also says where the router sends flow records: the listen address, or Packeteer's address when it listens on every address. Junos gets inline IPFIX sampling, IOS-XR NetFlow v9 with a sampler, Arista sFlow (IPFIX flow tracking on EOS depends on the platform), and RouterOS Traffic Flow v9 ([mikrotik.md](mikrotik.md#traffic-flow-netflow--ipfix)). FRR and BIRD do not export flows; their snippet says so and names the collector ([routers.md](routers.md#flow-export)). A flow source with no `listen` (eBPF only) adds nothing. The sampling rates and interface names in these lines are examples to check against your platform. The snippet holds no secret.
++
+ ## Host policy routing
+ 
+ `packeteer -pbr linux` prints the `ip rule` and `ip route` lines for the providers ([policy-routing.md](policy-routing.md)). With `-apply` it compares them with the host and prints the commands that would change; nothing changes until `-yes` is added. After an apply it asks the kernel which way each provider's source leaves and fails if it is not the provider's `next_hop`. A rule is Packeteer's when its priority is 2001 to 2999 and its table is 1001 to 1999; those are removed when their provider is gone; other rules are never touched. In the container this needs `NET_ADMIN`, which the install already grants.
+@@ -81,4 +87,4 @@ Reading the router's filters and timers over its own management API (RouterOS, N
+ 
+ Replay history (#204) changes no announcement. Set `round_retention` back to `0` and restart to stop storing rounds. Rounds already stored stay in the database file until you delete the database or set a non-zero `round_retention` short enough for them to age out. Revert the change to drop `whatif`, `/api/whatif`, and the Settings panel.
+ 
+-The install script, `-snippet`, `-pbr -apply`, and the preflight add no config key and change no router. Remove the container (`docker stop -t 30 packeteer && docker rm packeteer`) to undo the install. Undo an applied host policy routing with `ip rule del` and `ip route flush table <n>` for the lines `-apply` printed, or remove the provider from the config while another provider stays measured from this instance, and run `-pbr linux -apply -yes` again: it removes the rules and routes of the provider that is gone.
++The install script, `-snippet`, `POST /api/snippets`, `-pbr -apply`, and the preflight add no config key and change no router. Revert #569 to bring back the panel that reads only the running file. Remove the container (`docker stop -t 30 packeteer && docker rm packeteer`) to undo the install. Undo an applied host policy routing with `ip rule del` and `ip route flush table <n>` for the lines `-apply` printed, or remove the provider from the config while another provider stays measured from this instance, and run `-pbr linux -apply -yes` again: it removes the rules and routes of the provider that is gone.
+diff --git a/docs/ui.md b/docs/ui.md
+index d636abe5..591f9ca3 100644
+--- a/docs/ui.md
++++ b/docs/ui.md
+@@ -574,7 +574,7 @@ The smoke step "UI settings sections smoke" in the docker job loads the page thr
+ 
+ ## Setup wizard
+ 
+-After the wizard, the Preflight checks panel on the same page decides when injection can be turned on ([onboarding.md](onboarding.md)).
++After the wizard, the Preflight checks panel on the same page decides when injection can be turned on ([onboarding.md](onboarding.md)). Its Router config panel follows the wizard fields and the editor text without a save, lists a missing answer with the wizard step that fills it, and adds flow export when a flow collector is set ([onboarding.md](onboarding.md#router-config)). The step "UI router config smoke" in the onboarding job drives it through `lab/uiproxy -fixtures lab/ui-fixtures/snippet-wizard`: a config with no router shows the missing Edge address, typing the Edge address and a flow collector redraws the FRR and RouterOS text, and the file and the write count stay unchanged.
+ 
+ **First run (#416).** With `http.config_editor` unset and the example providers (every `source_ip` in 192.0.2.0/24) still in the config, a start with no saved setup state needs no config edit: the editor and wizard are on for an admin while the first-run setup is pending, and only with sign-in (never with auth off). A config with a real provider is never pending, so an upgrade or a container re-created without its volume keeps the editor off. After the generated password is changed, the Overview sends the admin to `/settings.html#wizard`. Setup ends when an admin saves a config through the editor or wizard, or presses Skip setup (`POST /api/setup/skip`); the state is the file `first-run-setup-pending` next to the storage file. The editor stays on until the next restart; from then on the old default applies: it is off unless `http.config_editor: true`. `http.config_editor: false` keeps it off from the first start; `true` keeps it on and never redirects. With storage that has no file (memory), nothing is saved, so the example providers decide on each start. A federation settings push needs an explicit `true` whatever the setup state, and an accepted push ends a pending setup ([multi-pop.md](multi-pop.md)). The wizard still writes `mode: observe` and inject is not a step.
+ 
+diff --git a/internal/configedit/wizard.go b/internal/configedit/wizard.go
+index 8fbc56b7..e79a786e 100644
+--- a/internal/configedit/wizard.go
++++ b/internal/configedit/wizard.go
+@@ -185,6 +185,15 @@ func wizardFlowNote(listen string) string {
+ 		"# It only measures which prefixes carry traffic; it never announces.\n"
+ }
+ 
++// WizardCommunity is the packeteer_community the wizard writes for an AS
++// number: asn:666 while the AS number fits a standard community, else empty.
++func WizardCommunity(asn uint32) string {
++	if asn == 0 || asn > 0xffff {
++		return ""
++	}
++	return strconv.FormatUint(uint64(asn), 10) + ":666"
++}
++
+ // Wizard renders an observe-mode config from the three steps and checks
+ // it with config.Parse, the loader the controller uses. The allowlist is
+ // empty and there is no announcer: nothing may be injected until an
+@@ -267,9 +276,7 @@ func Wizard(in WizardInput) ([]byte, error) {
+ 	if flowListen != "" {
+ 		out.Sources = append(out.Sources, wizPlugin{Type: "flow", Config: map[string]any{"listen": flowListen}})
+ 	}
+-	if in.ASN > 0 && in.ASN <= 0xffff {
+-		out.PacketeerCommunity = strconv.FormatUint(uint64(in.ASN), 10) + ":666"
+-	}
++	out.PacketeerCommunity = WizardCommunity(in.ASN)
+ 	if in.Storage {
+ 		out.Storage = &wizPlugin{Type: "sqlite", Config: map[string]string{"path": "/var/lib/packeteer/packeteer.db"}}
+ 	}
+diff --git a/internal/httpapi/access.go b/internal/httpapi/access.go
+index 2db9a99a..a3a895a3 100644
+--- a/internal/httpapi/access.go
++++ b/internal/httpapi/access.go
+@@ -160,6 +160,7 @@ func (s *Server) routeTable() []route {
+ 		{"GET /api/blast", operator, s.handleBlast},
+ 		{"POST /api/whatif", admin, s.handleWhatIf},
+ 		{"GET /api/snippets", admin, s.handleSnippets},
++		{"POST /api/snippets", admin, s.handleSnippetsCandidate},
+ 		{"GET /api/upgrade", admin, s.handleUpgrade},
+ 		{"POST /api/upgrade/check", admin, s.handleUpgradeCheck},
+ 		{"POST /api/upgrade/apply", admin, s.handleUpgradeApply},
+diff --git a/internal/httpapi/preflight.go b/internal/httpapi/preflight.go
+index 41ae9347..873f4c20 100644
+--- a/internal/httpapi/preflight.go
++++ b/internal/httpapi/preflight.go
+@@ -121,12 +121,50 @@ func (s *Server) handleSnippets(w http.ResponseWriter, r *http.Request) {
+ 	vendor := r.URL.Query().Get("vendor")
+ 	text, err := p.Snippet(vendor)
+ 	if err != nil {
+-		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
++		snippetError(w, err)
+ 		return
+ 	}
+ 	writeJSON(w, http.StatusOK, map[string]string{"vendor": vendor, "text": text})
+ }
+ 
++// handleSnippetsCandidate renders the router config from text that is not
++// saved: the YAML in the editor or a wizard result. With answers.wizard set
++// the wizard's answers replace the keys Generate would (see
++// snippet.ForCandidate). It reads no file, writes nothing, and sends nothing
++// to a router, so it works before any config is saved. A missing answer
++// comes back as plain hints in "missing".
++func (s *Server) handleSnippetsCandidate(w http.ResponseWriter, r *http.Request) {
++	var req struct {
++		Vendor  string          `json:"vendor"`
++		YAML    string          `json:"yaml"`
++		Answers snippet.Answers `json:"answers"`
++	}
++	if !decodeLarge(w, r, &req, configBodyLimit) {
++		return
++	}
++	params, err := snippet.ForCandidate([]byte(req.YAML), req.Answers)
++	var text string
++	if err == nil {
++		text, err = snippet.Join(req.Vendor, params)
++	}
++	if err != nil {
++		snippetError(w, err)
++		return
++	}
++	writeJSON(w, http.StatusOK, map[string]string{"vendor": req.Vendor, "text": text})
++}
++
++// snippetError answers 422 with the plain hints when answers are missing, so
++// the page can list what to fill in and where, and with the error otherwise.
++func snippetError(w http.ResponseWriter, err error) {
++	var miss *snippet.MissingError
++	if errors.As(err, &miss) {
++		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": "The router config needs more answers.", "missing": miss.Hints})
++		return
++	}
++	writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
++}
++
+ // handleInjectPlan renders the inject config for a small allowlist, once the
+ // preflight checks pass. It writes nothing: the result goes to the editor,
+ // and Save asks for the inject confirmation and runs the checks again.
+diff --git a/internal/httpapi/preflight_page_test.js b/internal/httpapi/preflight_page_test.js
+index 269a9ac2..46c00e40 100644
+--- a/internal/httpapi/preflight_page_test.js
++++ b/internal/httpapi/preflight_page_test.js
+@@ -42,8 +42,9 @@ function text(n) {
+ }
+ 
+ var els = {};
+-["pf-list", "pf-when", "pf-inject", "pf-run", "pf-vendor", "pf-allow", "pf-allow-err", "pf-cap", "pf-inject-status", "pf-explain", "ed-yaml", "editor-section", "pf-snippet", "pf-snippet-status"].forEach(function (id) { els[id] = node("x"); });
++["pf-list", "pf-when", "pf-inject", "pf-run", "pf-vendor", "pf-allow", "pf-allow-err", "pf-cap", "pf-inject-status", "pf-explain", "ed-yaml", "editor-section", "pf-snippet", "pf-snippet-status", "pf-snippet-missing", "wz-body", "wz-asn", "wz-router", "wz-edge"].forEach(function (id) { els[id] = node("x"); });
+ els["pf-inject"].hidden = true;
++var flowListen = "";
+ var calls = [];
+ var reply = null;
+ var loaded = [];
+@@ -58,6 +59,9 @@ var context = {
+   checkConfig: function () { checked++; },
+   previewCandidate: function (confirm) { previews.push(confirm); },
+   Number: Number,
++  Object: Object,
++  Math: Math,
++  wizardFlowListen: function () { return flowListen; },
+   encodeURIComponent: encodeURIComponent,
+   Promise: Promise,
+   api: function (method, url, body) {
+@@ -72,7 +76,8 @@ var settings = fs.readFileSync(path.join(__dirname, "web", "settings.js"), "utf8
+ ["el", "clear"].forEach(function (n) { vm.runInContext(fn(ui, n), context); });
+ vm.runInContext(settings.slice(settings.indexOf("var pfLabels"), settings.indexOf("var pfBadge")), context);
+ vm.runInContext(settings.slice(settings.indexOf("var pfBadge"), settings.indexOf("function pfSummary")), context);
+-["pfSummary", "pfItem", "renderPreflight", "loadPreflight", "runPreflight", "confirmCheck", "showSnippet", "planInject"].forEach(function (n) {
++vm.runInContext("var snippetShown = false; var snippetSeq = 0;", context);
++["pfSummary", "pfItem", "renderPreflight", "loadPreflight", "runPreflight", "confirmCheck", "snippetCandidate", "showSnippet", "refreshSnippet", "planInject"].forEach(function (n) {
+   vm.runInContext(fn(settings, n), context);
+ });
+ 
+@@ -152,13 +157,75 @@ reply.then(function () {
+ }).then(function () {
+   assert(els["pf-when"].textContent === "The checks have not run yet." && els["pf-vendor"].children.length === 2, "never run: " + els["pf-when"].textContent);
+ 
+-  // The router config is requested for the chosen vendor.
++  // An empty page reads the router config of the running file.
+   els["pf-vendor"].value = "bird";
++  els["ed-yaml"].value = "";
+   reply = Promise.resolve({vendor: "bird", text: "filter packeteer_in {}\n"});
+   calls.length = 0;
+   return context.showSnippet();
+ }).then(function () {
+-  assert(calls[0].url === "/api/snippets?vendor=bird" && els["pf-snippet"].textContent === "filter packeteer_in {}\n" && els["pf-snippet"].hidden === false, "snippet call: " + JSON.stringify(calls));
++  assert(calls.length === 1 && calls[0].method === "GET" && calls[0].url === "/api/snippets?vendor=bird" && els["pf-snippet"].textContent === "filter packeteer_in {}\n" && els["pf-snippet"].hidden === false, "running snippet call: " + JSON.stringify(calls));
++  assert(els["pf-snippet-status"].textContent.indexOf("running config") >= 0, "status names the source: " + els["pf-snippet-status"].textContent);
++
++  // Wizard answers and the editor text that are not saved go to the server.
++  els["wz-asn"].value = " 64496 ";
++  els["wz-router"].value = "192.0.2.10";
++  els["wz-edge"].value = "192.0.2.254";
++  flowListen = ":2055";
++  els["ed-yaml"].value = "mode: observe\n";
++  calls.length = 0;
++  return context.showSnippet();
++}).then(function () {
++  var c = calls[0];
++  assert(calls.length === 1 && c.method === "POST" && c.url === "/api/snippets", "candidate call: " + JSON.stringify(calls));
++  assert(c.body.vendor === "bird" && c.body.yaml === "mode: observe\n" && JSON.stringify(c.body.answers) === JSON.stringify({asn: 64496, router_id: "192.0.2.10", edge: "192.0.2.254", flow_listen: ":2055", wizard: true}), "candidate body: " + JSON.stringify(c.body));
++  assert(els["pf-snippet-status"].textContent.indexOf("on this page") >= 0, "status names the source: " + els["pf-snippet-status"].textContent);
++
++  // A wizard that is collapsed (a box with a config) is not sent.
++  els["wz-body"].hidden = true;
++  calls.length = 0;
++  return context.showSnippet();
++}).then(function () {
++  assert(JSON.stringify(calls[0].body.answers) === "{}", "a collapsed wizard sends no answers and no wizard flag: " + JSON.stringify(calls[0].body));
++  els["wz-body"].hidden = false;
++
++  // Missing answers are listed in plain words, not as one raw error.
++  var err = new Error("The router config needs more answers.");
++  err.status = 422;
++  err.data = {error: err.message, missing: ["Router address: enter the Edge address in setup step 1 (Edge).", "Packeteer's address: enter the Router ID in setup step 1 (Edge)."]};
++  reply = Promise.reject(err);
++  return context.showSnippet();
++}).then(function () {
++  var list = els["pf-snippet-missing"];
++  assert(els["pf-snippet"].hidden === true && list.hidden === false && list.children.length === 2 && list.children[0].textContent.indexOf("Edge address in setup step 1") >= 0, "missing list: " + JSON.stringify(list.children.map(text)));
++  assert(els["pf-snippet-status"].textContent === "The router config needs more answers:", "missing status: " + els["pf-snippet-status"].textContent);
++
++  // Changing an answer redraws the config that was asked for, and clears the list.
++  reply = Promise.resolve({vendor: "bird", text: "second\n"});
++  calls.length = 0;
++  return context.refreshSnippet();
++}).then(function () {
++  assert(calls.length === 1 && els["pf-snippet"].textContent === "second\n" && els["pf-snippet-missing"].hidden === true && els["pf-snippet-missing"].children.length === 0, "refresh: " + JSON.stringify(calls));
++
++  // A slower earlier reply does not replace the answer to the latest change.
++  var slow;
++  var first = new Promise(function (res) { slow = res; });
++  reply = first;
++  var older = context.showSnippet();
++  reply = Promise.resolve({vendor: "bird", text: "newer\n"});
++  var newer = context.showSnippet();
++  return newer.then(function () {
++    slow({vendor: "bird", text: "older\n"});
++    return older;
++  });
++}).then(function () {
++  assert(els["pf-snippet"].textContent === "newer\n", "an older reply overwrote a newer one: " + els["pf-snippet"].textContent);
++
++  // Any other failure is explained as before.
++  reply = Promise.reject(new Error("boom"));
++  return context.showSnippet();
++}).then(function () {
++  assert(els["pf-snippet-status"].textContent === "explained: boom" && els["pf-snippet-missing"].hidden === true, "plain error: " + els["pf-snippet-status"].textContent);
+   console.log("ok");
+ }).catch(function (e) {
+   console.error("FAIL: " + (e && e.stack || e));
+diff --git a/internal/httpapi/preflight_test.go b/internal/httpapi/preflight_test.go
+index 1a081b5d..e824e738 100644
+--- a/internal/httpapi/preflight_test.go
++++ b/internal/httpapi/preflight_test.go
+@@ -3,6 +3,7 @@ package httpapi
+ import (
+ 	"context"
+ 	"net/http"
++	"net/http/httptest"
+ 	"net/netip"
+ 	"os"
+ 	"os/exec"
+@@ -336,3 +337,69 @@ func TestPreflightPage(t *testing.T) {
+ 		t.Fatalf("preflight page: %v\n%s", err, out)
+ 	}
+ }
++
++// missingSnippet is a runner whose running config has no router yet.
++type missingSnippet struct{ fakePreflight }
++
++func (missingSnippet) Snippet(string) (string, error) {
++	return "", &snippet.MissingError{Hints: []string{"Router address: enter the Edge address in setup step 1 (Edge)."}}
++}
++
++func TestSnippetsRunningConfigMissingAnswers(t *testing.T) {
++	f := goodFacts()
++	e := newPreflightUI(t, &f)
++	e.srv.SetPreflight(missingSnippet{fakePreflight{preflight.NewRunner(func(context.Context) preflight.Facts { return f }, nil, nil)}})
++	rec, got := e.do(t, "GET", "/api/snippets?vendor=frr", plugin.RoleAdmin, nil)
++	missing, _ := got["missing"].([]any)
++	if rec.Code != http.StatusUnprocessableEntity || len(missing) != 1 || !strings.Contains(missing[0].(string), "setup step 1") {
++		t.Fatalf("missing: %d %s", rec.Code, rec.Body)
++	}
++}
++
++// The panel renders from what is on the page before anything is saved: the
++// wizard answers over the editor text. No runner is needed, and the file on
++// disk is not touched.
++func TestSnippetsFromUnsavedCandidate(t *testing.T) {
++	e := newUI(t)
++	before, err := os.ReadFile(e.path)
++	if err != nil {
++		t.Fatal(err)
++	}
++	post := func(body any) (*httptest.ResponseRecorder, map[string]any) {
++		return e.do(t, "POST", "/api/snippets", plugin.RoleAdmin, body)
++	}
++
++	rec, got := post(map[string]any{"vendor": "frr", "answers": map[string]any{"wizard": true, "asn": 64496, "router_id": "192.0.2.10", "edge": "192.0.2.254"}})
++	text, _ := got["text"].(string)
++	if rec.Code != http.StatusOK || !strings.Contains(text, "router bgp 64496") || !strings.Contains(text, "permit 64496:666") || !strings.Contains(text, "neighbor 192.0.2.10 remote-as 64496") {
++		t.Fatalf("wizard answers: %d %s", rec.Code, rec.Body)
++	}
++
++	rec, got = post(map[string]any{"vendor": "mikrotik", "answers": map[string]any{"wizard": true, "asn": 64496, "router_id": "192.0.2.10", "edge": "192.0.2.254", "flow_listen": ":2055"}})
++	text, _ = got["text"].(string)
++	if rec.Code != http.StatusOK || !strings.Contains(text, "/ip traffic-flow target add dst-address=192.0.2.10 port=2055") {
++		t.Fatalf("flow answers: %d %s", rec.Code, rec.Body)
++	}
++
++	yaml := "asn: 64497\nrouter_id: 192.0.2.10\npacketeer_community: \"64497:700\"\nbgp:\n  neighbors:\n    - address: 192.0.2.253\n"
++	rec, got = post(map[string]any{"vendor": "bird", "yaml": yaml})
++	text, _ = got["text"].(string)
++	if rec.Code != http.StatusOK || !strings.Contains(text, "(64497, 700) ~ bgp_community") || !strings.Contains(text, "neighbor 192.0.2.10 as 64497") {
++		t.Fatalf("editor text: %d %s", rec.Code, rec.Body)
++	}
++
++	rec, got = post(map[string]any{"vendor": "frr", "answers": map[string]any{"wizard": true, "asn": 64496}})
++	missing, _ := got["missing"].([]any)
++	if rec.Code != http.StatusUnprocessableEntity || len(missing) != 2 || !strings.Contains(missing[0].(string), "Edge address in setup step 1") || !strings.Contains(missing[1].(string), "Router ID in setup step 1") {
++		t.Fatalf("missing answers: %d %s", rec.Code, rec.Body)
++	}
++	if rec, got = post(map[string]any{"vendor": "cumulus", "answers": map[string]any{"wizard": true, "asn": 64496, "router_id": "192.0.2.10", "edge": "192.0.2.254"}}); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(got["error"].(string), "unknown vendor") {
++		t.Fatalf("unknown vendor: %d %s", rec.Code, rec.Body)
++	}
++	if rec, _ = e.do(t, "POST", "/api/snippets", plugin.RoleOperator, map[string]any{"vendor": "frr"}); rec.Code != http.StatusForbidden {
++		t.Fatalf("operator = %d", rec.Code)
++	}
++	if after, _ := os.ReadFile(e.path); string(after) != string(before) {
++		t.Fatalf("the config file changed:\n%s", after)
++	}
++}
+diff --git a/internal/httpapi/web/settings.html b/internal/httpapi/web/settings.html
+index 0b2436e4..1c333a03 100644
+--- a/internal/httpapi/web/settings.html
++++ b/internal/httpapi/web/settings.html
+@@ -149,7 +149,7 @@ <h2>Preflight checks</h2>
+     </div>
+     <ul id="pf-list" class="pf-list"></ul>
+     <h3>Router config</h3>
+-    <p class="tag">The session to Packeteer and the two filters, written from your answers above for the router you pick. It is text to review: Packeteer never connects to your router or applies it. Check it against your software release first.</p>
++    <p class="tag">The session to Packeteer and the two filters, plus flow export when a flow collector is set, written for the router you pick from the answers on this page: the setup wizard fields and the YAML editor, saved or not. It is text to review: Packeteer never connects to your router or applies it, and nothing here is saved. Check it against your software release first.</p>
+     <div class="form">
+       <label class="field"><span class="field-label">Router</span><select id="pf-vendor"></select><span class="field-help">FRR, BIRD, Junos, IOS-XR, Arista EOS, or RouterOS 7.</span></label>
+     </div>
+@@ -158,6 +158,7 @@ <h3>Router config</h3>
+       <button type="button" id="pf-snippet-copy">Copy</button>
+       <span id="pf-snippet-status" class="tag" role="status"></span>
+     </div>
++    <ul id="pf-snippet-missing" class="errors" hidden></ul>
+     <pre id="pf-snippet" class="mono" aria-label="Router config" hidden></pre>
+     <div id="pf-inject" hidden>
+       <h3>Turn on injection</h3>
+diff --git a/internal/httpapi/web/settings.js b/internal/httpapi/web/settings.js
+index 447ff5db..75f7daf6 100644
+--- a/internal/httpapi/web/settings.js
++++ b/internal/httpapi/web/settings.js
+@@ -2321,6 +2321,7 @@ function useWizardYaml(out) {
+   if (!base) api("GET", "/api/config").then(function (f) { base = f.sha256; }, function () {});
+   loadForm(out.yaml);
+   checkConfig();
++  refreshSnippet();
+   document.getElementById("editor-section").scrollIntoView();
+ }
+ 
+@@ -2403,19 +2404,71 @@ function confirmCheck(id, btn) {
+   });
+ }
+ 
++// snippetCandidate is what is on the page now: the wizard's step 1 and flow
++// answers while the wizard is open, over the text in the editor, saved or
++// not. used is false on an empty page, which reads the running config.
++function snippetCandidate() {
++  var answers = {};
++  var open = !byId("wz-body").hidden;
++  if (open) {
++    var asn = Number(byId("wz-asn").value.trim());
++    if (asn >= 1 && asn <= 4294967295 && Math.floor(asn) === asn) answers.asn = asn;
++    var router = byId("wz-router").value.trim();
++    if (router) answers.router_id = router;
++    var edge = byId("wz-edge").value.trim();
++    if (edge) answers.edge = edge;
++    var flow = wizardFlowListen();
++    if (flow) answers.flow_listen = flow;
++  }
++  var yaml = byId("ed-yaml").value;
++  var used = yaml.trim() !== "" || Object.keys(answers).length > 0;
++  if (open) answers.wizard = true;
++  return {yaml: yaml, answers: answers, used: used};
++}
++
++var snippetShown = false;
++var snippetSeq = 0;
++
+ function showSnippet() {
++  snippetShown = true;
++  // A slower earlier reply must not replace the answer to the latest change.
++  var mine = ++snippetSeq;
+   var vendor = byId("pf-vendor").value;
+-  byId("pf-snippet-status").textContent = "";
+-  return api("GET", "/api/snippets?vendor=" + encodeURIComponent(vendor)).then(function (out) {
++  var status = byId("pf-snippet-status");
++  var missing = byId("pf-snippet-missing");
++  status.textContent = "";
++  clear(missing);
++  missing.hidden = true;
++  var cand = snippetCandidate();
++  var call = cand.used
++    ? api("POST", "/api/snippets", {vendor: vendor, yaml: cand.yaml, answers: cand.answers})
++    : api("GET", "/api/snippets?vendor=" + encodeURIComponent(vendor));
++  return call.then(function (out) {
++    if (mine !== snippetSeq) return;
+     var pre = byId("pf-snippet");
+     pre.textContent = out.text;
+     pre.hidden = false;
++    status.textContent = cand.used ? "Written from the answers and YAML on this page. Nothing is saved or sent." : "Written from the running config. Nothing is sent.";
+   }, function (err) {
++    if (mine !== snippetSeq) return;
+     byId("pf-snippet").hidden = true;
+-    byId("pf-snippet-status").textContent = explain(err);
++    var list = err.data && err.data.missing;
++    if (!list || !list.length) {
++      status.textContent = explain(err);
++      return;
++    }
++    status.textContent = "The router config needs more answers:";
++    list.forEach(function (h) { missing.appendChild(el("li", "", h)); });
++    missing.hidden = false;
+   });
+ }
+ 
++// refreshSnippet redraws a router config already asked for when an answer
++// it was written from changes.
++function refreshSnippet() {
++  if (snippetShown) return showSnippet();
++}
++
+ function copySnippet() {
+   var text = byId("pf-snippet").textContent;
+   if (!text) { byId("pf-snippet-status").textContent = "Show the router config first."; return; }
+@@ -2761,6 +2814,9 @@ byId("bar-preview").addEventListener("click", previewConfig);
+ byId("pf-run").addEventListener("click", runPreflight);
+ byId("pf-snippet-show").addEventListener("click", showSnippet);
+ byId("pf-snippet-copy").addEventListener("click", copySnippet);
++["pf-vendor", "wz-asn", "wz-router", "wz-edge", "wz-flow", "wz-flow-addr", "wz-flow-port", "ed-yaml"].forEach(function (id) {
++  byId(id).addEventListener("change", refreshSnippet);
++});
+ byId("pf-inject-plan").addEventListener("click", planInject);
+ byId("bl-run").addEventListener("click", loadBlast);
+ byId("wi-run").addEventListener("click", runWhatIf);
+diff --git a/internal/snippet/candidate.go b/internal/snippet/candidate.go
+new file mode 100644
+index 00000000..4f745e0e
+--- /dev/null
++++ b/internal/snippet/candidate.go
+@@ -0,0 +1,60 @@
++package snippet
++
++import (
++	"bytes"
++	"fmt"
++
++	"github.com/GrandArcher/Packeteer/internal/config"
++	"github.com/GrandArcher/Packeteer/internal/configedit"
++	"gopkg.in/yaml.v3"
++)
++
++// Answers are the setup-wizard fields the router side reads, as typed and
++// not yet saved. Wizard is true while the wizard is open: Generate then
++// replaces asn, router_id, packeteer_community, bgp.neighbors and sources,
++// so those come from the answers and not from the text. Without Wizard the
++// text is used as it is and the other fields are ignored. Generate also
++// replaces providers; the IPv6 family still comes from the text's providers.
++type Answers struct {
++	Wizard   bool   `json:"wizard"`
++	ASN      uint32 `json:"asn"`
++	RouterID string `json:"router_id"`
++	// Edge is the router's address (bgp.neighbors[0].address).
++	Edge string `json:"edge"`
++	// FlowListen is the wizard's flow collector, host:port.
++	FlowListen string `json:"flow_listen"`
++}
++
++// ForCandidate returns the Params for config text that is not saved (the
++// editor, or a wizard result). While the wizard is open the keys it owns
++// are what Generate would write: the community is the wizard's rule for the
++// AS number, one neighbor, and the flow source only when it is ticked. The
++// text is read leniently, because it is part-way through setup: only the
++// keys a snippet reads matter, and a missing one comes back as a
++// *MissingError instead of a config validation error. Nothing is written.
++func ForCandidate(text []byte, a Answers) ([]Params, error) {
++	var cfg config.Config
++	if len(bytes.TrimSpace(text)) > 0 {
++		if err := yaml.Unmarshal(text, &cfg); err != nil {
++			return nil, fmt.Errorf("the YAML does not parse: %w", err)
++		}
++	}
++	if a.Wizard {
++		cfg.ASN = a.ASN
++		cfg.RouterID = a.RouterID
++		cfg.PacketeerCommunity = configedit.WizardCommunity(a.ASN)
++		cfg.BGP.Neighbors = nil
++		if a.Edge != "" {
++			cfg.BGP.Neighbors = []config.BGPNeighbor{{Address: a.Edge}}
++		}
++		cfg.Sources = nil
++		if a.FlowListen != "" {
++			var n yaml.Node
++			if err := n.Encode(map[string]string{"listen": a.FlowListen}); err != nil {
++				return nil, err
++			}
++			cfg.Sources = []config.PluginSpec{{Type: "flow", Config: n}}
++		}
++	}
++	return ForConfig(&cfg)
++}
+diff --git a/internal/snippet/candidate_test.go b/internal/snippet/candidate_test.go
+new file mode 100644
+index 00000000..c6daf8e4
+--- /dev/null
++++ b/internal/snippet/candidate_test.go
+@@ -0,0 +1,156 @@
++package snippet
++
++import (
++	"errors"
++	"strings"
++	"testing"
++)
++
++func wizardAnswers() Answers {
++	return Answers{Wizard: true, ASN: 64496, RouterID: "192.0.2.10", Edge: "192.0.2.254"}
++}
++
++// A first run: nothing is saved, and the answers typed in setup step 1 are
++// enough for a snippet. The community follows the wizard's own rule.
++func TestForCandidateFromWizardAnswersAlone(t *testing.T) {
++	ps, err := ForCandidate(nil, wizardAnswers())
++	if err != nil {
++		t.Fatal(err)
++	}
++	want := Params{ASN: 64496, Router: "192.0.2.254", Packeteer: "192.0.2.10", Community: "64496:666"}
++	if len(ps) != 1 || ps[0] != want {
++		t.Fatalf("params = %+v, want %+v", ps, want)
++	}
++	text, err := Join(FRR, ps)
++	if err != nil || !strings.Contains(text, "bgp community-list standard packeteer permit 64496:666") || !strings.Contains(text, "router bgp 64496") {
++		t.Fatalf("frr = %q, %v", text, err)
++	}
++}
++
++func TestForCandidateFlowStep(t *testing.T) {
++	a := wizardAnswers()
++	a.FlowListen = ":2055"
++	ps, err := ForCandidate(nil, a)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if ps[0].FlowHost != "192.0.2.10" || ps[0].FlowPort != 2055 {
++		t.Fatalf("collector = %s:%d", ps[0].FlowHost, ps[0].FlowPort)
++	}
++	text, err := Generate(MikroTik, ps[0])
++	if err != nil || !strings.Contains(text, "dst-address=192.0.2.10 port=2055") {
++		t.Fatalf("mikrotik = %q, %v", text, err)
++	}
++}
++
++const exampleText = `asn: 64496
++router_id: 192.0.2.10
++packeteer_community: "64512:666"
++bgp:
++  neighbors:
++    - address: 192.0.2.253
++      add_path: true
++    - address: 192.0.2.252
++sources:
++  - type: flow
++    config:
++      listen: "192.0.2.10:6343"
++providers:
++  - name: transit-v6
++    source_ip: 2001:db8::11
++    next_hop: 2001:db8::1
++`
++
++// With the wizard closed the text is what will run, so it is used as it is.
++func TestForCandidateTextAlone(t *testing.T) {
++	ps, err := ForCandidate([]byte(exampleText), Answers{})
++	if err != nil {
++		t.Fatal(err)
++	}
++	if len(ps) != 2 {
++		t.Fatalf("%d params, want one per neighbor", len(ps))
++	}
++	want := Params{ASN: 64496, Router: "192.0.2.253", Packeteer: "192.0.2.10", Community: "64512:666", AddPath: true, IPv6: true, FlowHost: "192.0.2.10", FlowPort: 6343}
++	if ps[0] != want {
++		t.Fatalf("params = %+v, want %+v", ps[0], want)
++	}
++	if ps[1].Router != "192.0.2.252" || ps[1].AddPath {
++		t.Fatalf("second neighbor = %+v", ps[1])
++	}
++}
++
++// Answers sent without the wizard flag are not read.
++func TestForCandidateIgnoresAnswersWithoutWizard(t *testing.T) {
++	ps, err := ForCandidate([]byte(exampleText), Answers{ASN: 64999, RouterID: "192.0.2.99", Edge: "192.0.2.98", FlowListen: "192.0.2.20:2055"})
++	if err != nil {
++		t.Fatal(err)
++	}
++	if len(ps) != 2 || ps[0].ASN != 64496 || ps[0].Router != "192.0.2.253" || ps[0].Community != "64512:666" || ps[0].FlowPort != 6343 {
++		t.Fatalf("answers leaked into the text: %+v", ps)
++	}
++}
++
++// While the wizard is open Generate replaces asn, router_id, the community,
++// the neighbors, and the sources, so the snippet must show those and not the
++// text: a router filter on 64512:666 would reject routes saved as 64496:666.
++func TestForCandidateWizardOwnsItsKeys(t *testing.T) {
++	ps, err := ForCandidate([]byte(exampleText), Answers{Wizard: true, ASN: 64496, RouterID: "192.0.2.10", Edge: "192.0.2.254"})
++	if err != nil {
++		t.Fatal(err)
++	}
++	want := Params{ASN: 64496, Router: "192.0.2.254", Packeteer: "192.0.2.10", Community: "64496:666", IPv6: true}
++	if len(ps) != 1 || ps[0] != want {
++		t.Fatalf("params = %+v, want %+v", ps, want)
++	}
++	ps, err = ForCandidate([]byte(exampleText), Answers{Wizard: true, ASN: 64496, RouterID: "192.0.2.10", Edge: "192.0.2.254", FlowListen: "192.0.2.20:2055"})
++	if err != nil {
++		t.Fatal(err)
++	}
++	want.FlowHost, want.FlowPort = "192.0.2.20", 2055
++	if len(ps) != 1 || ps[0] != want {
++		t.Fatalf("with flow: %+v, want %+v", ps, want)
++	}
++}
++
++func TestForCandidateMissingAnswers(t *testing.T) {
++	cases := []struct {
++		name string
++		text string
++		a    Answers
++		want []string
++	}{
++		{"nothing yet", "", Answers{Wizard: true}, []string{"AS number: enter it as ASN in setup step 1", "Router address: enter the Edge address in setup step 1", "Packeteer community:", "Packeteer's address: enter the Router ID in setup step 1"}},
++		{"only the AS number", "", Answers{Wizard: true, ASN: 64496}, []string{"Router address: enter the Edge address in setup step 1", "Packeteer's address: enter the Router ID in setup step 1"}},
++		{"no router id", "", Answers{Wizard: true, ASN: 64496, Edge: "192.0.2.254"}, []string{"Packeteer's address: enter the Router ID in setup step 1"}},
++		{"32-bit AS number", "", Answers{Wizard: true, ASN: 65536, RouterID: "192.0.2.10", Edge: "192.0.2.254"}, []string{"above 65535"}},
++	}
++	for _, c := range cases {
++		_, err := ForCandidate([]byte(c.text), c.a)
++		var miss *MissingError
++		if !errors.As(err, &miss) {
++			t.Fatalf("%s: err = %v, want a *MissingError", c.name, err)
++		}
++		if len(miss.Hints) != len(c.want) {
++			t.Fatalf("%s: %d hints, want %d: %q", c.name, len(miss.Hints), len(c.want), miss.Hints)
++		}
++		for i, w := range c.want {
++			if !strings.Contains(miss.Hints[i], w) {
++				t.Errorf("%s: hint %d = %q, want %q in it", c.name, i, miss.Hints[i], w)
++			}
++		}
++		if strings.Contains(err.Error(), "no bgp.neighbors") || strings.Contains(err.Error(), "is not set:") {
++			t.Errorf("%s: raw key error leaked: %v", c.name, err)
++		}
++	}
++}
++
++func TestForCandidateRefusals(t *testing.T) {
++	if _, err := ForCandidate([]byte("asn: [1"), Answers{}); err == nil || !strings.Contains(err.Error(), "does not parse") {
++		t.Errorf("bad yaml: %v", err)
++	}
++	a := wizardAnswers()
++	a.Edge = "edge"
++	if _, err := ForCandidate(nil, a); err == nil || !strings.Contains(err.Error(), `bgp.neighbors address "edge"`) {
++		t.Errorf("bad edge: %v", err)
++	}
++}
+diff --git a/internal/snippet/snippet.go b/internal/snippet/snippet.go
+index 0653979d..39fc39a1 100644
+--- a/internal/snippet/snippet.go
++++ b/internal/snippet/snippet.go
+@@ -10,11 +10,14 @@ import (
+ 	"embed"
+ 	"errors"
+ 	"fmt"
++	"net"
+ 	"net/netip"
++	"strconv"
+ 	"strings"
+ 	"text/template"
+ 
+ 	"github.com/GrandArcher/Packeteer/internal/config"
++	"gopkg.in/yaml.v3"
+ )
+ 
+ // Router vendors.
+@@ -52,6 +55,11 @@ type Params struct {
+ 	AddPath bool
+ 	// IPv6 is true when the session or a provider is IPv6.
+ 	IPv6 bool
++	// FlowHost and FlowPort are where the router sends flow records: the
++	// flow source's listen address. FlowPort is 0 when no flow source
++	// listens.
++	FlowHost string
++	FlowPort int
+ }
+ 
+ // Large reports whether Community is a large community (RFC 8092).
+@@ -69,14 +77,51 @@ func (p Params) BirdMatch() string {
+ // cannot express.
+ var ErrUnsupported = errors.New("unsupported")
+ 
++// MissingError lists, in plain words, the answers a snippet still needs and
++// where to give each one. It is not an internal error: the operator is
++// part-way through setup.
++type MissingError struct{ Hints []string }
++
++func (e *MissingError) Error() string { return strings.Join(e.Hints, "\n") }
++
++const (
++	hintASN       = "AS number: enter it as ASN in setup step 1 (Edge), or set asn in the file."
++	hintEdge      = "Router address: enter the Edge address in setup step 1 (Edge), or set bgp.neighbors in the file. The snippet is for that router."
++	hintSelf      = "Packeteer's address: enter the Router ID in setup step 1 (Edge), or set router_id or the neighbor's local_address in the file. The router needs it to peer with Packeteer."
++	hintNoComm    = "Packeteer community: the router filters match it. Set packeteer_community in the file, or press Generate in the UI setup (step 4, Flow) to fill it as %d:666."
++	hintNoASNComm = "Packeteer community: set packeteer_community in the file, or enter the ASN in setup step 1 (Edge) so setup can fill it."
++	hintBigASN    = "Packeteer community: setup leaves it empty for an AS number above 65535, because the standard community has 16 bits. Set packeteer_community in the settings form or the file as a large community, for example 65536:666:1."
++)
++
++func communityHint(asn uint32) string {
++	if asn > 0xffff {
++		return hintBigASN
++	}
++	if asn == 0 {
++		return hintNoASNComm
++	}
++	return fmt.Sprintf(hintNoComm, asn)
++}
++
+ // ForConfig returns one Params per bgp.neighbors entry: each neighbor is a
+-// router that needs its own snippet.
++// router that needs its own snippet. When answers are missing it returns a
++// *MissingError naming every one, not just the first.
+ func ForConfig(cfg *config.Config) ([]Params, error) {
++	var miss []string
++	if cfg.ASN == 0 {
++		miss = append(miss, hintASN)
++	}
+ 	if len(cfg.BGP.Neighbors) == 0 {
+-		return nil, errors.New("no bgp.neighbors: a snippet is for the router Packeteer peers with")
++		miss = append(miss, hintEdge)
+ 	}
+ 	if cfg.PacketeerCommunity == "" {
+-		return nil, errors.New("packeteer_community is not set: the router filters match it")
++		miss = append(miss, communityHint(cfg.ASN))
++	}
++	if cfg.RouterID == "" && !allHaveLocalAddress(cfg.BGP.Neighbors) {
++		miss = append(miss, hintSelf)
++	}
++	if len(miss) > 0 {
++		return nil, &MissingError{Hints: miss}
+ 	}
+ 	community, err := config.CommunityText(cfg.PacketeerCommunity)
+ 	if err != nil {
+@@ -88,6 +133,7 @@ func ForConfig(cfg *config.Config) ([]Params, error) {
+ 			v6 = true
+ 		}
+ 	}
++	listen := flowListen(cfg)
+ 	var out []Params
+ 	for _, n := range cfg.BGP.Neighbors {
+ 		router, err := netip.ParseAddr(n.Address)
+@@ -100,16 +146,78 @@ func ForConfig(cfg *config.Config) ([]Params, error) {
+ 		}
+ 		pk, err := netip.ParseAddr(self)
+ 		if err != nil {
+-			return nil, fmt.Errorf("the router needs Packeteer's address: set router_id or bgp.neighbors local_address (got %q)", self)
++			return nil, fmt.Errorf("the router needs Packeteer's address, and %q is not an IP address: fix the Router ID in setup step 1, or router_id and the neighbor's local_address in the file", self)
+ 		}
+-		out = append(out, Params{
++		p := Params{
+ 			ASN: cfg.ASN, Router: router.Unmap().String(), Packeteer: pk.Unmap().String(), Community: community,
+ 			AddPath: n.AddPath, IPv6: v6 || router.Is6() && !router.Is4In6(),
+-		})
++		}
++		p.FlowHost, p.FlowPort = p.collector(listen)
++		out = append(out, p)
+ 	}
+ 	return out, nil
+ }
+ 
++// allHaveLocalAddress reports whether every neighbor sets local_address; with
++// no neighbors it is false.
++func allHaveLocalAddress(ns []config.BGPNeighbor) bool {
++	for _, n := range ns {
++		if n.LocalAddress == "" {
++			return false
++		}
++	}
++	return len(ns) > 0
++}
++
++// flowListen is the first usable host:port a configured flow source
++// listens on, or "" when there is none (no flow source, or an eBPF-only one).
++func flowListen(cfg *config.Config) string {
++	for _, s := range cfg.Sources {
++		if s.Type != "flow" {
++			continue
++		}
++		var c struct {
++			Listen yaml.Node `yaml:"listen"`
++		}
++		if s.Config.Decode(&c) != nil {
++			continue
++		}
++		var list []string
++		switch c.Listen.Kind {
++		case yaml.ScalarNode:
++			list = []string{c.Listen.Value}
++		case yaml.SequenceNode:
++			_ = c.Listen.Decode(&list)
++		}
++		for _, l := range list {
++			if _, port, err := net.SplitHostPort(l); err == nil && port != "0" {
++				return l
++			}
++		}
++	}
++	return ""
++}
++
++// collector is where the router sends flow records: the flow source's
++// listen address, or Packeteer's own address when it listens on every one.
++func (p Params) collector(listen string) (string, int) {
++	if listen == "" {
++		return "", 0
++	}
++	host, port, err := net.SplitHostPort(listen)
++	if err != nil {
++		return "", 0
++	}
++	n, err := strconv.Atoi(port)
++	if err != nil || n < 1 || n > 65535 {
++		return "", 0
++	}
++	if a, err := netip.ParseAddr(host); err != nil || a.IsUnspecified() {
++		host = p.Packeteer
++	}
++	return host, n
++}
++
+ // Generate renders the snippet for one vendor.
+ func Generate(vendor string, p Params) (string, error) {
+ 	if vendor == Arista && p.Large() {
+diff --git a/internal/snippet/snippet_test.go b/internal/snippet/snippet_test.go
+index 21bd7ba1..a77524f4 100644
+--- a/internal/snippet/snippet_test.go
++++ b/internal/snippet/snippet_test.go
+@@ -9,6 +9,7 @@ import (
+ 	"testing"
+ 
+ 	"github.com/GrandArcher/Packeteer/internal/config"
++	"gopkg.in/yaml.v3"
+ )
+ 
+ var update = flag.Bool("update", false, "rewrite the golden files")
+@@ -29,6 +30,12 @@ func full() Params {
+ 	return p
+ }
+ 
++func flow() Params {
++	p := std()
++	p.FlowHost, p.FlowPort = "192.0.2.10", 2055
++	return p
++}
++
+ func golden(t *testing.T, name, got string) {
+ 	t.Helper()
+ 	path := filepath.Join("testdata", name+".golden")
+@@ -49,7 +56,7 @@ func golden(t *testing.T, name, got string) {
+ 
+ func TestGolden(t *testing.T) {
+ 	for _, vendor := range Vendors {
+-		cases := map[string]Params{vendor: std(), vendor + "-addpath-v6": full()}
++		cases := map[string]Params{vendor: std(), vendor + "-addpath-v6": full(), vendor + "-flow": flow()}
+ 		if vendor != Arista {
+ 			cases[vendor+"-large"] = large()
+ 		}
+@@ -196,11 +203,11 @@ func TestForConfigSetsIPv6FromProviders(t *testing.T) {
+ 
+ func TestForConfigRefusals(t *testing.T) {
+ 	cases := map[string]func(*config.Config){
+-		"no bgp.neighbors":       func(c *config.Config) { c.BGP.Neighbors = nil },
+-		"packeteer_community":    func(c *config.Config) { c.PacketeerCommunity = "" },
+-		"packeteer_community: ":  func(c *config.Config) { c.PacketeerCommunity = "65536:1" },
+-		"needs Packeteer's addr": func(c *config.Config) { c.RouterID = "" },
+-		"bgp.neighbors address":  func(c *config.Config) { c.BGP.Neighbors[0].Address = "edge" },
++		"setup step 1 (Edge), or set bgp.neighbors":                             func(c *config.Config) { c.BGP.Neighbors = nil },
++		"press Generate in the UI setup (step 4, Flow) to fill it as 64512:666": func(c *config.Config) { c.PacketeerCommunity = "" },
++		"packeteer_community: ":                                                 func(c *config.Config) { c.PacketeerCommunity = "65536:1" },
++		"enter the Router ID in setup step 1":                                   func(c *config.Config) { c.RouterID = "" },
++		"bgp.neighbors address":                                                 func(c *config.Config) { c.BGP.Neighbors[0].Address = "edge" },
+ 	}
+ 	for want, mut := range cases {
+ 		cfg := loadConfig(t, "")
+@@ -210,3 +217,77 @@ func TestForConfigRefusals(t *testing.T) {
+ 		}
+ 	}
+ }
++
++// With a flow source every vendor says where the router sends records. The
++// vendors that can express it (Junos, IOS-XR, Arista, RouterOS) print the
++// export config; FRR and BIRD cannot, and say so. Without one, nothing about
++// flows appears.
++func TestFlowExportLines(t *testing.T) {
++	want := map[string][]string{
++		FRR:      {"FRR does not export flows", "192.0.2.10, UDP 2055"},
++		BIRD:     {"BIRD does not export flows", "192.0.2.10, UDP 2055"},
++		Junos:    {"flow-server 192.0.2.10 {", "port 2055;", "source-address 192.0.2.254;", "version-ipfix"},
++		IOSXR:    {"transport udp 2055", "destination 192.0.2.10", "flow exporter-map packeteer"},
++		Arista:   {"sflow destination 192.0.2.10 2055", "sflow source 192.0.2.254", "sflow run"},
++		MikroTik: {"/ip traffic-flow target add dst-address=192.0.2.10 port=2055 version=9", "src-address=192.0.2.254"},
++	}
++	for _, vendor := range Vendors {
++		got, err := Generate(vendor, flow())
++		if err != nil {
++			t.Fatal(err)
++		}
++		for _, line := range want[vendor] {
++			if !strings.Contains(got, line) {
++				t.Errorf("%s: %q missing from\n%s", vendor, line, got)
++			}
++		}
++		plain, err := Generate(vendor, std())
++		if err != nil {
++			t.Fatal(err)
++		}
++		if strings.Contains(strings.ToLower(plain), "flow") {
++			t.Errorf("%s: flow text without a flow source:\n%s", vendor, plain)
++		}
++	}
++}
++
++func TestForConfigFlowCollector(t *testing.T) {
++	flowSource := func(listen string) config.PluginSpec {
++		var n yaml.Node
++		if err := n.Encode(map[string]any{"listen": listen}); err != nil {
++			t.Fatal(err)
++		}
++		return config.PluginSpec{Type: "flow", Config: n}
++	}
++	cases := []struct {
++		name    string
++		sources func() []config.PluginSpec
++		host    string
++		port    int
++	}{
++		{"no flow source", func() []config.PluginSpec { return nil }, "", 0},
++		{"listen on every address uses Packeteer's address", func() []config.PluginSpec { return []config.PluginSpec{flowSource("0.0.0.0:2055")} }, "192.0.2.10", 2055},
++		{"empty host", func() []config.PluginSpec { return []config.PluginSpec{flowSource(":4739")} }, "192.0.2.10", 4739},
++		{"a given address", func() []config.PluginSpec { return []config.PluginSpec{flowSource("192.0.2.77:2055")} }, "192.0.2.77", 2055},
++		{"ipv6 address", func() []config.PluginSpec { return []config.PluginSpec{flowSource("[2001:db8::10]:2055")} }, "2001:db8::10", 2055},
++		{"another source type is ignored", func() []config.PluginSpec {
++			s := flowSource("192.0.2.77:2055")
++			s.Type = "static"
++			return []config.PluginSpec{s}
++		}, "", 0},
++		{"a flow source with no listen (ebpf only)", func() []config.PluginSpec {
++			return []config.PluginSpec{{Type: "flow"}}
++		}, "", 0},
++	}
++	for _, c := range cases {
++		cfg := loadConfig(t, "")
++		cfg.Sources = c.sources()
++		ps, err := ForConfig(cfg)
++		if err != nil {
++			t.Fatalf("%s: %v", c.name, err)
++		}
++		if ps[0].FlowHost != c.host || ps[0].FlowPort != c.port {
++			t.Errorf("%s: collector = %s:%d, want %s:%d", c.name, ps[0].FlowHost, ps[0].FlowPort, c.host, c.port)
++		}
++	}
++}
+diff --git a/internal/snippet/templates/arista.tmpl b/internal/snippet/templates/arista.tmpl
+index 393db055..1d45b0da 100644
+--- a/internal/snippet/templates/arista.tmpl
++++ b/internal/snippet/templates/arista.tmpl
+@@ -34,3 +34,14 @@ router bgp {{.ASN}}
+    ! add-path send toward {{.Packeteer}} in each address family.
+ {{- end}}
+ !
++{{- if .FlowPort}}
++!
++! Flow records to Packeteer's flow source at {{.FlowHost}}, UDP {{.FlowPort}}: sFlow with
++! 1-in-4096 sampling. IPFIX flow tracking on EOS depends on the platform, so
++! this uses sFlow. Check which interfaces are sampled on your release.
++sflow sample 4096
++sflow source {{.Router}}
++sflow destination {{.FlowHost}} {{.FlowPort}}
++sflow run
++!
++{{- end}}
+diff --git a/internal/snippet/templates/bird.tmpl b/internal/snippet/templates/bird.tmpl
+index f2060aed..84891b4e 100644
+--- a/internal/snippet/templates/bird.tmpl
++++ b/internal/snippet/templates/bird.tmpl
+@@ -47,3 +47,8 @@ protocol bgp packeteer {
+ 	};
+ {{- end}}
+ }
++{{- if .FlowPort}}
++
++# Flow records: BIRD does not export flows. Send NetFlow, IPFIX, or sFlow from
++# this router's host to Packeteer's flow source at {{.FlowHost}}, UDP {{.FlowPort}}.
++{{- end}}
+diff --git a/internal/snippet/templates/frr.tmpl b/internal/snippet/templates/frr.tmpl
+index f60bbc44..e91e7df6 100644
+--- a/internal/snippet/templates/frr.tmpl
++++ b/internal/snippet/templates/frr.tmpl
+@@ -42,3 +42,8 @@ router bgp {{.ASN}}
+  exit-address-family
+ {{- end}}
+ !
++{{- if .FlowPort}}
++! Flow records: FRR does not export flows. Send NetFlow, IPFIX, or sFlow from
++! this router's host to Packeteer's flow source at {{.FlowHost}}, UDP {{.FlowPort}}.
++!
++{{- end}}
+diff --git a/internal/snippet/templates/iosxr.tmpl b/internal/snippet/templates/iosxr.tmpl
+index 98cc9d76..7303b2f7 100644
+--- a/internal/snippet/templates/iosxr.tmpl
++++ b/internal/snippet/templates/iosxr.tmpl
+@@ -50,3 +50,30 @@ router bgp {{.ASN}}
+ ! add-path send toward {{.Packeteer}} ("additional-paths send" in each
+ ! address family, with an "additional-paths selection" policy).
+ {{- end}}
++{{- if .FlowPort}}
++!
++! Flow records to Packeteer's flow source at {{.FlowHost}}, UDP {{.FlowPort}}: NetFlow v9
++! with 1-in-1000 sampling. Replace Loopback0 with the interface whose address
++! is {{.Router}}, then add the last line to each interface that faces an upstream
++! (replace TenGigE0/0/0/0). Check it against your release first.
++flow exporter-map packeteer
++ version v9
++  options interface-table timeout 60
++  template data timeout 60
++ !
++ transport udp {{.FlowPort}}
++ source Loopback0
++ destination {{.FlowHost}}
++!
++flow monitor-map packeteer-ipv4
++ record ipv4
++ exporter packeteer
++ cache timeout active 60
++ cache timeout inactive 15
++!
++sampler-map packeteer
++ random 1 out-of 1000
++!
++! interface TenGigE0/0/0/0
++!  flow ipv4 monitor packeteer-ipv4 sampler packeteer ingress
++{{- end}}
+diff --git a/internal/snippet/templates/junos.tmpl b/internal/snippet/templates/junos.tmpl
+index a746029a..d9a63ed1 100644
+--- a/internal/snippet/templates/junos.tmpl
++++ b/internal/snippet/templates/junos.tmpl
+@@ -68,3 +68,52 @@ protocols {
+ routing-options {
+     autonomous-system {{.ASN}};
+ }
++{{- if .FlowPort}}
++/* Flow records to Packeteer's flow source at {{.FlowHost}}, UDP {{.FlowPort}}: inline
++   IPFIX sampling. Check it against your platform and release: inline
++   sampling needs a supported line card. Packeteer scales byte counts by the
++   sampling rate only when the export carries it. Then turn sampling on for
++   the interfaces that face your upstreams ("family inet { sampling { input; } }"),
++   and set your FPC slot in "chassis fpc <slot> sampling-instance packeteer". */
++services {
++    flow-monitoring {
++        version-ipfix {
++            template ipv4 {
++                flow-active-timeout 60;
++                flow-inactive-timeout 15;
++                template-refresh-rate {
++                    seconds 60;
++                }
++                option-refresh-rate {
++                    seconds 60;
++                }
++                ipv4-template;
++            }
++        }
++    }
++}
++forwarding-options {
++    sampling {
++        instance packeteer {
++            input {
++                rate 1000;
++            }
++            family inet {
++                output {
++                    flow-server {{.FlowHost}} {
++                        port {{.FlowPort}};
++                        version-ipfix {
++                            template {
++                                ipv4;
++                            }
++                        }
++                    }
++                    inline-jflow {
++                        source-address {{.Router}};
++                    }
++                }
++            }
++        }
++    }
++}
++{{- end}}
+diff --git a/internal/snippet/templates/mikrotik.tmpl b/internal/snippet/templates/mikrotik.tmpl
+index 237e1273..e26a2db8 100644
+--- a/internal/snippet/templates/mikrotik.tmpl
++++ b/internal/snippet/templates/mikrotik.tmpl
+@@ -27,3 +27,12 @@
+ # add_path is set for this neighbor in Packeteer's config: also make the
+ # router send every path if your RouterOS release can.
+ {{- end}}
++{{- if .FlowPort}}
++
++# Flow records to Packeteer's flow source at {{.FlowHost}}, UDP {{.FlowPort}}: NetFlow v9
++# (docs/mikrotik.md, Traffic Flow).
++/ip traffic-flow set enabled=yes interfaces=all cache-entries=16k \
++    active-flow-timeout=1m inactive-flow-timeout=15s
++/ip traffic-flow target add dst-address={{.FlowHost}} port={{.FlowPort}} version=9 \
++    src-address={{.Router}} v9-template-timeout=5m
++{{- end}}
+diff --git a/internal/snippet/testdata/arista-flow.golden b/internal/snippet/testdata/arista-flow.golden
+new file mode 100644
+index 00000000..1931e35e
+--- /dev/null
++++ b/internal/snippet/testdata/arista-flow.golden
+@@ -0,0 +1,37 @@
++! Packeteer on Arista EOS. Generated for review: nothing is applied. Paste it
++! into configure mode, or use "configure session" and "commit timer".
++! This router: AS 64512, 192.0.2.254. Packeteer: 192.0.2.10.
++!
++ip community-list packeteer permit 64512:666
++!
++! From Packeteer: only routes that carry the Packeteer community.
++route-map packeteer-in permit 10
++   match community packeteer
++route-map packeteer-in deny 100
++!
++! Toward every eBGP neighbor, customers and peers included: never a route
++! with the Packeteer community. Put this deny first in the outbound
++! route-map each eBGP neighbor already uses (rename ebgp-out to it); your
++! existing terms follow.
++route-map ebgp-out deny 10
++   match community packeteer
++!
++router bgp 64512
++   neighbor 192.0.2.10 remote-as 64512
++   neighbor 192.0.2.10 description packeteer
++   ! Keepalive 10s, hold time 30s: a crashed Packeteer's routes go within 30s.
++   neighbor 192.0.2.10 timers 10 30
++   neighbor 192.0.2.10 route-map packeteer-in in
++   ! Packeteer never offers graceful restart. Leave "graceful-restart" off.
++   address-family ipv4
++      neighbor 192.0.2.10 activate
++!
++!
++! Flow records to Packeteer's flow source at 192.0.2.10, UDP 2055: sFlow with
++! 1-in-4096 sampling. IPFIX flow tracking on EOS depends on the platform, so
++! this uses sFlow. Check which interfaces are sampled on your release.
++sflow sample 4096
++sflow source 192.0.2.254
++sflow destination 192.0.2.10 2055
++sflow run
++!
+diff --git a/internal/snippet/testdata/bird-flow.golden b/internal/snippet/testdata/bird-flow.golden
+new file mode 100644
+index 00000000..5fe93d17
+--- /dev/null
++++ b/internal/snippet/testdata/bird-flow.golden
+@@ -0,0 +1,40 @@
++# Packeteer on BIRD 2 and 3. Generated for review: nothing is applied.
++# Merge it into your bird.conf, then run: birdc configure check
++# This router: AS 64512, 192.0.2.254. Packeteer: 192.0.2.10.
++
++# From Packeteer: only routes that carry the Packeteer community.
++filter packeteer_in {
++	if (64512, 666) ~ bgp_community then accept;
++	reject;
++}
++
++# Toward every eBGP neighbor, customers and peers included: never a route
++# with the Packeteer community. Use this as the export filter of each eBGP
++# protocol, or copy its first line to the top of the filter you use; your
++# existing terms replace the final accept.
++filter ebgp_out {
++	if (64512, 666) ~ bgp_community then reject;
++	accept;
++}
++
++protocol bgp packeteer {
++	description "packeteer";
++	local 192.0.2.254 as 64512;
++	neighbor 192.0.2.10 as 64512;
++	# Resolves next hops on the connected LAN without an IGP table. Remove
++	# it when an IGP carries them.
++	direct;
++	# Keepalive 10s, hold time 30s: a crashed Packeteer's routes go within 30s.
++	hold time 30;
++	keepalive time 10;
++	# Packeteer never offers graceful restart; keep it off here too.
++	graceful restart off;
++	long lived graceful restart off;
++	ipv4 {
++		import filter packeteer_in;
++		export where source = RTS_BGP;
++	};
++}
++
++# Flow records: BIRD does not export flows. Send NetFlow, IPFIX, or sFlow from
++# this router's host to Packeteer's flow source at 192.0.2.10, UDP 2055.
+diff --git a/internal/snippet/testdata/frr-flow.golden b/internal/snippet/testdata/frr-flow.golden
+new file mode 100644
+index 00000000..dd6bf1f0
+--- /dev/null
++++ b/internal/snippet/testdata/frr-flow.golden
+@@ -0,0 +1,34 @@
++! Packeteer on FRR. Generated for review: nothing is applied. Paste it into
++! vtysh (configure terminal) after checking it against your own config.
++! This router: AS 64512, 192.0.2.254. Packeteer: 192.0.2.10.
++!
++bgp community-list standard packeteer permit 64512:666
++!
++! From Packeteer: only routes that carry the Packeteer community.
++route-map packeteer-in permit 10
++ match community packeteer
++route-map packeteer-in deny 100
++!
++! Toward every eBGP neighbor, customers and peers included: never a route
++! with the Packeteer community. Put this deny first in the outbound
++! route-map each eBGP neighbor already uses (rename ebgp-out to it); your
++! existing terms follow.
++route-map ebgp-out deny 10
++ match community packeteer
++!
++router bgp 64512
++ neighbor 192.0.2.10 remote-as 64512
++ neighbor 192.0.2.10 description packeteer
++ ! Packeteer never offers graceful restart; this keeps it off here too.
++ neighbor 192.0.2.10 graceful-restart-disable
++ ! Keepalive 10s, hold time 30s: a crashed Packeteer's routes go within 30s.
++ neighbor 192.0.2.10 timers 10 30
++ !
++ address-family ipv4 unicast
++  neighbor 192.0.2.10 activate
++  neighbor 192.0.2.10 route-map packeteer-in in
++ exit-address-family
++!
++! Flow records: FRR does not export flows. Send NetFlow, IPFIX, or sFlow from
++! this router's host to Packeteer's flow source at 192.0.2.10, UDP 2055.
++!
+diff --git a/internal/snippet/testdata/iosxr-flow.golden b/internal/snippet/testdata/iosxr-flow.golden
+new file mode 100644
+index 00000000..872c5bbd
+--- /dev/null
++++ b/internal/snippet/testdata/iosxr-flow.golden
+@@ -0,0 +1,65 @@
++! Packeteer on Cisco IOS-XR. Generated for review: nothing is applied. Load it
++! with "load" in configuration mode, then "commit confirmed".
++! This router: AS 64512, 192.0.2.254. Packeteer: 192.0.2.10.
++community-set packeteer
++  64512:666
++end-set
++!
++! From Packeteer: only routes that carry the Packeteer community.
++route-policy packeteer-in
++  if community matches-any packeteer then
++    pass
++  else
++    drop
++  endif
++end-policy
++!
++! Toward every eBGP neighbor, customers and peers included: never a route
++! with the Packeteer community. Put the first "if" at the top of the
++! outbound route-policy each eBGP neighbor already uses (rename ebgp-out to
++! it); your existing terms replace the final pass.
++route-policy ebgp-out
++  if community matches-any packeteer then
++    drop
++  endif
++  pass
++end-policy
++!
++router bgp 64512
++ neighbor 192.0.2.10
++  remote-as 64512
++  description packeteer
++  ! Keepalive 10s, hold time 30s: a crashed Packeteer's routes go within 30s.
++  timers 10 30
++  ! Packeteer never offers graceful restart. Leave "graceful-restart" off
++  ! for this neighbor.
++  address-family ipv4 unicast
++   route-policy packeteer-in in
++  !
++ !
++!
++!
++! Flow records to Packeteer's flow source at 192.0.2.10, UDP 2055: NetFlow v9
++! with 1-in-1000 sampling. Replace Loopback0 with the interface whose address
++! is 192.0.2.254, then add the last line to each interface that faces an upstream
++! (replace TenGigE0/0/0/0). Check it against your release first.
++flow exporter-map packeteer
++ version v9
++  options interface-table timeout 60
++  template data timeout 60
++ !
++ transport udp 2055
++ source Loopback0
++ destination 192.0.2.10
++!
++flow monitor-map packeteer-ipv4
++ record ipv4
++ exporter packeteer
++ cache timeout active 60
++ cache timeout inactive 15
++!
++sampler-map packeteer
++ random 1 out-of 1000
++!
++! interface TenGigE0/0/0/0
++!  flow ipv4 monitor packeteer-ipv4 sampler packeteer ingress
+diff --git a/internal/snippet/testdata/junos-flow.golden b/internal/snippet/testdata/junos-flow.golden
+new file mode 100644
+index 00000000..bfd8679b
+--- /dev/null
++++ b/internal/snippet/testdata/junos-flow.golden
+@@ -0,0 +1,95 @@
++/* Packeteer on Junos. Generated for review: nothing is applied. Load it with
++   "load merge terminal", then run "commit check" and "commit confirmed".
++   This router: AS 64512, 192.0.2.254. Packeteer: 192.0.2.10. */
++policy-options {
++    community packeteer members 64512:666;
++    /* From Packeteer: only routes that carry the Packeteer community. */
++    policy-statement packeteer-in {
++        term tagged {
++            from community packeteer;
++            then accept;
++        }
++        term rest {
++            then reject;
++        }
++    }
++    /* Toward every eBGP neighbor, customers and peers included: never a
++       route with the Packeteer community. Put it first in each eBGP export,
++       for example: export [ no-packeteer-out your-export-policy ]. A route
++       it does not match falls through to the next policy. */
++    policy-statement no-packeteer-out {
++        term no-packeteer {
++            from community packeteer;
++            then reject;
++        }
++    }
++}
++protocols {
++    bgp {
++        group packeteer {
++            type internal;
++            local-address 192.0.2.254;
++            /* Hold time 30s: a crashed Packeteer's routes go within 30s. */
++            hold-time 30;
++            import packeteer-in;
++            /* Packeteer never offers graceful restart; keep it off here too. */
++            graceful-restart {
++                disable;
++            }
++            neighbor 192.0.2.10 {
++                description packeteer;
++                peer-as 64512;
++            }
++        }
++    }
++}
++routing-options {
++    autonomous-system 64512;
++}
++/* Flow records to Packeteer's flow source at 192.0.2.10, UDP 2055: inline
++   IPFIX sampling. Check it against your platform and release: inline
++   sampling needs a supported line card. Packeteer scales byte counts by the
++   sampling rate only when the export carries it. Then turn sampling on for
++   the interfaces that face your upstreams ("family inet { sampling { input; } }"),
++   and set your FPC slot in "chassis fpc <slot> sampling-instance packeteer". */
++services {
++    flow-monitoring {
++        version-ipfix {
++            template ipv4 {
++                flow-active-timeout 60;
++                flow-inactive-timeout 15;
++                template-refresh-rate {
++                    seconds 60;
++                }
++                option-refresh-rate {
++                    seconds 60;
++                }
++                ipv4-template;
++            }
++        }
++    }
++}
++forwarding-options {
++    sampling {
++        instance packeteer {
++            input {
++                rate 1000;
++            }
++            family inet {
++                output {
++                    flow-server 192.0.2.10 {
++                        port 2055;
++                        version-ipfix {
++                            template {
++                                ipv4;
++                            }
++                        }
++                    }
++                    inline-jflow {
++                        source-address 192.0.2.254;
++                    }
++                }
++            }
++        }
++    }
++}
+diff --git a/internal/snippet/testdata/mikrotik-flow.golden b/internal/snippet/testdata/mikrotik-flow.golden
+new file mode 100644
+index 00000000..af5160a7
+--- /dev/null
++++ b/internal/snippet/testdata/mikrotik-flow.golden
+@@ -0,0 +1,32 @@
++# Packeteer on RouterOS 7. Generated for review: nothing is applied. Check the
++# commands against your RouterOS release first.
++# This router: AS 64512, 192.0.2.254. Packeteer: 192.0.2.10.
++# Skip the instance line when the router already has a BGP instance, and
++# use its name below.
++/routing bgp instance add name=edge as=64512 router-id=192.0.2.254
++/routing bgp connection add name=packeteer instance=edge \
++    local.address=192.0.2.254 local.role=ibgp \
++    remote.address=192.0.2.10 remote.as=64512 \
++    output.redistribute=bgp output.default-originate=never \
++    hold-time=30s \
++    input.filter=packeteer-in
++
++# From Packeteer: accept only routes that carry the Packeteer community.
++/routing filter rule add chain=packeteer-in \
++    rule="if (bgp-communities includes 64512:666) { accept }"
++/routing filter rule add chain=packeteer-in rule="reject"
++
++# Toward every eBGP peer, customers included: never export that community.
++# Add this rule at the top of the output chain each transit, peer, and IX
++# connection already uses (rename ebgp-out to it); place-before=0 keeps your
++# existing rules after it, and no connection is changed.
++/routing filter rule add chain=ebgp-out place-before=0 \
++    rule="if (bgp-communities includes 64512:666) { reject }"
++# Packeteer never offers graceful restart. Leave it off for this connection.
++
++# Flow records to Packeteer's flow source at 192.0.2.10, UDP 2055: NetFlow v9
++# (docs/mikrotik.md, Traffic Flow).
++/ip traffic-flow set enabled=yes interfaces=all cache-entries=16k \
++    active-flow-timeout=1m inactive-flow-timeout=15s
++/ip traffic-flow target add dst-address=192.0.2.10 port=2055 version=9 \
++    src-address=192.0.2.254 v9-template-timeout=5m
+diff --git a/lab/ui-fixtures/snippet-wizard/driver.js b/lab/ui-fixtures/snippet-wizard/driver.js
+new file mode 100644
+index 00000000..c464b821
+--- /dev/null
++++ b/lab/ui-fixtures/snippet-wizard/driver.js
+@@ -0,0 +1,92 @@
++"use strict";
++// Page driver for the UI smoke test (#569). The running file has an AS
++// number, a router ID, and a provider, but no router (bgp.neighbors) yet.
++// uiproxy adds this script to /settings.html. It asks for the FRR router
++// config, which names the missing answer; reopens the wizard, types the edge
++// address and a flow collector without saving; and writes what the panel
++// shows into the page for lab/ui-smoke.sh to match. It counts every call that
++// could write the config, and checks that the file did not change.
++
++var writes = 0;
++var realFetch = window.fetch;
++window.fetch = function (url, opts) {
++  var method = (opts && opts.method) || "GET";
++  var u = String(url);
++  // POST /api/snippets only renders text from the page; it writes nothing.
++  if (method !== "GET" && u.indexOf("/api/snippets") < 0) writes++;
++  return realFetch.apply(window, arguments);
++};
++
++function note(id, text) {
++  var p = document.createElement("p");
++  p.id = id;
++  p.textContent = text;
++  document.querySelector("main").appendChild(p);
++}
++
++function byId(id) { return document.getElementById(id); }
++
++function type(id, value) {
++  var e = byId(id);
++  e.value = value;
++  e.dispatchEvent(new Event("change", {bubbles: true}));
++}
++
++function missing() {
++  return Array.prototype.map.call(document.querySelectorAll("#pf-snippet-missing li"), function (li) { return li.textContent; });
++}
++
++var savedYaml = "";
++var steps = [
++  function () { return !!byId("pf-snippet-show") && byId("pf-vendor").options.length > 0 && byId("ed-yaml").value.indexOf("asn: 64512") >= 0; },
++  function () {
++    savedYaml = byId("ed-yaml").value;
++    byId("pf-vendor").value = "frr";
++    byId("pf-snippet-show").click();
++  },
++  function () { return missing().length > 0; },
++  function () {
++    note("fixture-missing", "missing: " + missing().join(" | "));
++    note("fixture-missing-raw", "raw key error shown: " + (/no bgp\.neighbors|is not set/.test(byId("pf-snippet-status").textContent + missing().join(" "))));
++    byId("wz-reopen").click();
++    type("wz-edge", "192.0.2.254");
++  },
++  function () { return !byId("pf-snippet").hidden; },
++  function () {
++    note("fixture-edge", "after edge: " + byId("pf-snippet").textContent.split("\n").filter(function (l) { return l.indexOf("remote-as") >= 0; })[0].trim());
++    byId("wz-flow").checked = true;
++    type("wz-flow-addr", "192.0.2.10");
++    type("wz-flow-port", "2055");
++  },
++  function () { return byId("pf-snippet").textContent.indexOf("UDP 2055") >= 0; },
++  function () {
++    note("fixture-flow-frr", "frr flow: " + byId("pf-snippet").textContent.split("\n").filter(function (l) { return l.indexOf("UDP 2055") >= 0; })[0].trim());
++    type("pf-vendor", "mikrotik");
++  },
++  function () { return byId("pf-snippet").textContent.indexOf("/ip traffic-flow target add") >= 0; },
++  function () {
++    note("fixture-flow-mikrotik", "mikrotik flow: " + byId("pf-snippet").textContent.split("\n").filter(function (l) { return l.indexOf("traffic-flow target add") >= 0; })[0].trim());
++    note("fixture-source", "status: " + byId("pf-snippet-status").textContent);
++    return realFetch("/api/config", {cache: "no-store", headers: {Accept: "application/json"}}).then(function (r) { return r.json(); }).then(function (f) {
++      note("fixture-file", "file unchanged: " + (f.yaml === savedYaml));
++      note("fixture-writes", "writes: " + writes);
++    });
++  }
++];
++
++var tries = 0;
++var busy = false;
++function next() {
++  if (!steps.length || tries++ > 80) return;
++  if (busy) { setTimeout(next, 300); return; }
++  var r = steps[0]();
++  if (r && typeof r.then === "function") {
++    busy = true;
++    r.then(function () { steps.shift(); busy = false; });
++  } else if (r !== false) {
++    steps.shift();
++  }
++  setTimeout(next, 300);
++}
++
++next();
+diff --git a/lab/ui-fixtures/snippet-wizard/fixtures.json b/lab/ui-fixtures/snippet-wizard/fixtures.json
+new file mode 100644
+index 00000000..8d229b64
+--- /dev/null
++++ b/lab/ui-fixtures/snippet-wizard/fixtures.json
+@@ -0,0 +1,4 @@
++{
++  "inject": {"page": "/settings.html", "script": "driver.js"},
++  "stubs": []
++}
+diff --git a/lab/uiproxy/main_test.go b/lab/uiproxy/main_test.go
+index 6d582fb4..70eb0588 100644
+--- a/lab/uiproxy/main_test.go
++++ b/lab/uiproxy/main_test.go
+@@ -497,6 +497,37 @@ func TestGuidedDriverMatchesPage(t *testing.T) {
+ 	}
+ }
+ 
++// TestSnippetWizardDriverMatchesPage keeps the router config driver (#569) on
++// the settings page it drives. It stubs nothing, so the panel talks to the
++// real API, and it never writes the config. A renamed id fails here instead
++// of as a timeout in CI.
++func TestSnippetWizardDriverMatchesPage(t *testing.T) {
++	f, err := loadFixtures("../ui-fixtures/snippet-wizard")
++	if err != nil {
++		t.Fatal(err)
++	}
++	if len(f.Stubs) != 0 || f.Inject.Page != "/settings.html" || len(f.driver) == 0 {
++		t.Fatalf("fixtures = %+v", f)
++	}
++	page, err := os.ReadFile("../../internal/httpapi/web/settings.html")
++	if err != nil {
++		t.Fatal(err)
++	}
++	driver := string(f.driver)
++	if strings.Contains(driver, "confirm_inject") || strings.Contains(driver, `"PUT"`) || !strings.Contains(driver, "/api/snippets") {
++		t.Fatal("driver must exempt only /api/snippets from the write count and never save")
++	}
++	ids := regexp.MustCompile(`(?:byId|type)\("([^"]+)"`).FindAllStringSubmatch(driver, -1)
++	if len(ids) == 0 {
++		t.Fatal("the driver uses no element")
++	}
++	for _, m := range ids {
++		if !strings.Contains(string(page), `id="`+m[1]+`"`) {
++			t.Errorf("driver uses #%s, which settings.html lacks", m[1])
++		}
++	}
++}
++
+ // TestObserveWordingFixturesMatchAPI decodes the canned observe-mode
+ // answers with the API's own types (#346): a pending recommendation whose
+ // current exit is the learned path, and the event worded as a recommendation.
