@@ -519,7 +519,7 @@ function renderProviderLatency(root, stats, names, health) {
     });
     fig.appendChild(legend);
   }
-  if (down.length) fig.appendChild(el("p", "tag ts-down", "Down now, so no line: " + down.join(", ") + ". Its earlier hours are not drawn."));
+  if (down.length) fig.appendChild(el("p", "tag ts-down", "Down now, so no line: " + down.join(", ") + ". Earlier hours are not drawn."));
   if (silent.length) fig.appendChild(el("p", "tag ts-silent", "No reply from " + silent.join(", ") + ": nothing came back, so there is no latency line."));
   fig.appendChild(el("p", "tag", "Each point is one hour of replies, as the mean round-trip time. The Providers page has the median over 15 minutes and 24 hours."));
   root.appendChild(fig);

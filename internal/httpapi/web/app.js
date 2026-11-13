@@ -192,8 +192,10 @@ function statCell(st, key, fmt, health) {
     else text = fmt(win[key]);
     line.appendChild(el("span", live || (win && win.slots && win[key] != null) ? "stat-v" : "stat-v muted", text));
     // A window is the median of five-minute slots, so after an outage starts
-    // it still holds the healthy samples from before it.
-    if (down && !live && win && win.slots) line.appendChild(el("span", "stat-note muted", " includes earlier samples"));
+    // it still holds the samples from before it. Say so unless the window
+    // already reads as down.
+    var earlier = key === "loss_pct" ? win && win.loss_pct < 100 : win && win[key] != null;
+    if (down && !live && win && win.slots && earlier) line.appendChild(el("span", "stat-note muted", " includes earlier samples"));
     td.appendChild(line);
   });
   return td;

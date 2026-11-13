@@ -100,7 +100,7 @@ function sampleRow(s) {
   tr.appendChild(el("td", "", fmtPct(s.loss_pct)));
   tr.appendChild(el("td", silent ? "muted" : "", silent ? NO_REPLY : fmtMs(s.rtt_ms)));
   tr.appendChild(el("td", silent ? "muted" : "", silent ? NO_REPLY : fmtMs(s.jitter_ms)));
-  tr.appendChild(el("td", "", s.usable ? String(Math.round(s.score * 10) / 10) : "-"));
+  tr.appendChild(el("td", "", s.usable && !silent ? String(Math.round(s.score * 10) / 10) : "-"));
   tr.appendChild(confidenceCell(s.confidence, s.evidence));
   var status = s.usable ? "usable" : "not usable: " + (s.why || "no reason");
   if (s.usable && silent) status = "no reply: 100% loss";

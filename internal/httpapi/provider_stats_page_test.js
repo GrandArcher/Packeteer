@@ -114,9 +114,15 @@ assert(context.statCell(wasHealthy, "rtt_ms", context.fmtMs, srcDown).textConten
 var partly = {name: "lab-b", up: true, state: "down", ok: 1, failed: 3, loss_pct: 75};
 assert(context.statCell(wasHealthy, "loss_pct", context.fmtPct, partly).textContent === "15 min75.0% now24 h0.0% includes earlier samples", "partly down loss");
 assert(context.statCell(wasHealthy, "rtt_ms", context.fmtMs, partly).textContent === "15 min22.8 ms includes earlier samples24 h22.8 ms includes earlier samples", "partly down latency");
+// A down provider whose windows are already all silent has no earlier samples to flag.
+var allSilent = {last_15m: {slots: 3, loss_pct: 100}, last_24h: {slots: 3, loss_pct: 100}};
+assert(context.statCell(allSilent, "loss_pct", context.fmtPct, downNow).textContent === "15 min100.0% now24 h100.0%", "no note when the 24 h window is all loss");
+assert(context.statCell(allSilent, "rtt_ms", context.fmtMs, downNow).textContent === "15 minno reply now24 hno reply", "no note when nothing ever answered");
 // Healthy and degraded providers are unchanged.
 var okNow = {name: "lab-a", up: true, state: "up", ok: 2, failed: 0, loss_pct: 0};
 assert(context.statCell(wasHealthy, "loss_pct", context.fmtPct, okNow).textContent === "15 min0.0%24 h0.0%", "healthy provider cell is unchanged");
+var degradedNow = {name: "lab-a", up: true, state: "degraded", ok: 1, failed: 1, loss_pct: 10};
+assert(context.statCell(wasHealthy, "loss_pct", context.fmtPct, degradedNow).textContent === "15 min0.0%24 h0.0%", "degraded provider cell is unchanged");
 
 // No probes at all in a window: no data.
 assert(context.statCell(undefined, "rtt_ms", context.fmtMs).textContent === "15 minno data24 hno data", "no stats");
@@ -197,7 +203,7 @@ context.renderProviderLatency(downChart, stats, ["lab-a", "lab-b", "lab-c"], hea
 assert(find(downChart, "polyline").length === 1, "only the provider that is up is drawn");
 assert(withClass(downChart, "ts-key").map(function (n) { return n.textContent; }).join("|") === "lab-a: median 118.0 ms", "legend omits down providers");
 var downNote = withClass(downChart, "ts-down")[0];
-assert(downNote && downNote.textContent === "Down now, so no line: lab-b (100% loss), lab-c (no answer). Its earlier hours are not drawn.", "down note: " + (downNote && downNote.textContent));
+assert(downNote && downNote.textContent === "Down now, so no line: lab-b (100% loss), lab-c (no answer). Earlier hours are not drawn.", "down note: " + (downNote && downNote.textContent));
 assert(withClass(downChart, "ts-silent").length === 0, "a down provider is not also listed as silent");
 var allDown = new Node("div");
 context.renderProviderLatency(allDown, stats, ["lab-b"], [{name: "lab-b", state: "down", detail: "100% loss"}]);
