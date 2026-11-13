@@ -332,7 +332,7 @@ policies:
 // under.
 func steeringConfig() *config.Config {
 	return &config.Config{Providers: []config.Provider{{Name: "transit-a"}, {Name: "transit-b"}},
-		Allowlist: config.Allowlist{Prefixes: []string{"198.51.100.0/22"}}}
+		Allowlist: config.Allowlist{Prefixes: []string{"198.51.100.0/24"}}}
 }
 
 // newTestSteering is one instance's steering state over store and events.
@@ -384,7 +384,7 @@ func TestSteeringStateSurvivesRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.testPins().Add(pin.Request{Prefix: netip.MustParsePrefix("198.51.101.0/24"), Provider: "transit-b", MaxLossPct: 2, Duration: pin.MinDuration}, now); err != nil {
+	if _, err := a.testPins().Add(pin.Request{Prefix: netip.MustParsePrefix("198.51.100.64/26"), Provider: "transit-b", MaxLossPct: 2, Duration: pin.MinDuration}, now); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := a.opt.Pause("noc1", "upstream incident", now); !ok {

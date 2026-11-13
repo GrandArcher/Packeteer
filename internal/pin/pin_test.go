@@ -17,8 +17,8 @@ var (
 	learned = netip.MustParsePrefix("198.51.100.0/24")
 	rails   = Rails{
 		Providers: []string{"transit-a", "transit-b"},
-		Allowlist: []netip.Prefix{netip.MustParsePrefix("198.51.100.0/22"), netip.MustParsePrefix("2001:db8::/32")},
-		Learned:   func(p netip.Prefix) bool { return p == learned || p == netip.MustParsePrefix("198.51.101.0/24") },
+		Allowlist: []netip.Prefix{netip.MustParsePrefix("198.51.100.0/24"), netip.MustParsePrefix("2001:db8::/32")},
+		Learned:   func(p netip.Prefix) bool { return p == learned || p == netip.MustParsePrefix("198.51.100.64/26") },
 	}
 )
 
@@ -42,7 +42,7 @@ func TestAddChecksTheRails(t *testing.T) {
 		"too long":       {func(r *Request) { r.Duration = 8 * 24 * time.Hour }, "duration"},
 		"reason":         {func(r *Request) { r.Reason = strings.Repeat("x", MaxReason+1) }, "reason"},
 		"not allowlist":  {func(r *Request) { r.Prefix = netip.MustParsePrefix("203.0.113.0/24") }, "not inside allowlist.prefixes"},
-		"not in the RIB": {func(r *Request) { r.Prefix = netip.MustParsePrefix("198.51.102.0/24") }, "not in the learned RIB view"},
+		"not in the RIB": {func(r *Request) { r.Prefix = netip.MustParsePrefix("198.51.100.128/26") }, "not in the learned RIB view"},
 	} {
 		r := req("198.51.100.0/24")
 		tc.edit(&r)
@@ -75,7 +75,7 @@ func TestAddListRemoveAndVerdicts(t *testing.T) {
 	if _, err := s.Add(req("198.51.100.0/24"), rails, t0); !errors.Is(err, ErrConflict) || !strings.Contains(err.Error(), "pin-1") {
 		t.Fatalf("second pin on the prefix: %v", err)
 	}
-	if _, err := s.Add(req("198.51.101.0/24"), rails, t0); err != nil {
+	if _, err := s.Add(req("198.51.100.64/26"), rails, t0); err != nil {
 		t.Fatal(err)
 	}
 	if l := s.List(t0); len(l) != 2 || l[0].Prefix != learned || l[1].ID != "pin-2" {
@@ -130,17 +130,17 @@ func TestRestoreDropsExpiredAndOffRailsPins(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	short := req("198.51.101.0/24")
+	short := req("198.51.100.64/26")
 	short.Duration = MinDuration
 	if _, err := src.Add(short, rails, t0); err != nil {
 		t.Fatal(err)
 	}
 	saved := src.List(t0)
 	saved = append(saved,
-		Pin{ID: "pin-7", Prefix: netip.MustParsePrefix("198.51.102.0/24"), Provider: "transit-z", Created: t0, Expires: t0.Add(time.Hour)},
+		Pin{ID: "pin-7", Prefix: netip.MustParsePrefix("198.51.100.128/26"), Provider: "transit-z", Created: t0, Expires: t0.Add(time.Hour)},
 		Pin{ID: "pin-8", Prefix: netip.MustParsePrefix("203.0.113.0/24"), Provider: "transit-a", Created: t0, Expires: t0.Add(time.Hour)},
 		Pin{ID: "pin-9", Prefix: kept.Prefix, Provider: "transit-a", Created: t0, Expires: t0.Add(time.Hour)},
-		Pin{ID: "pin-6", Prefix: netip.MustParsePrefix("198.51.103.0/24"), Provider: "transit-a", Created: t0, Expires: t0.Add(MaxDuration + time.Hour)},
+		Pin{ID: "pin-6", Prefix: netip.MustParsePrefix("198.51.100.192/26"), Provider: "transit-a", Created: t0, Expires: t0.Add(MaxDuration + time.Hour)},
 		Pin{ID: "pin-4", Prefix: netip.MustParsePrefix("198.51.100.7/24"), Provider: "transit-a", Created: t0, Expires: t0.Add(time.Hour)},
 		Pin{ID: "pin-5", Prefix: netip.MustParsePrefix("0.0.0.0/0"), Provider: "transit-a", Created: t0, Expires: t0.Add(time.Hour)})
 
@@ -152,14 +152,14 @@ func TestRestoreDropsExpiredAndOffRailsPins(t *testing.T) {
 	if len(got) != 1 || got[0] != kept {
 		t.Fatalf("restored %+v, want only %+v", got, kept)
 	}
-	want := []string{"pin-2 198.51.101.0/24: expired", `pin-7 198.51.102.0/24: provider "transit-z" is not configured`,
-		"pin-8 203.0.113.0/24: outside allowlist.prefixes", "pin-9 198.51.100.0/24: prefix pinned twice", "pin-6 198.51.103.0/24: longer than 168h0m0s",
+	want := []string{"pin-2 198.51.100.64/26: expired", `pin-7 198.51.100.128/26: provider "transit-z" is not configured`,
+		"pin-8 203.0.113.0/24: outside allowlist.prefixes", "pin-9 198.51.100.0/24: prefix pinned twice", "pin-6 198.51.100.192/26: longer than 168h0m0s",
 		"pin-4 198.51.100.7/24: invalid prefix", "pin-5 0.0.0.0/0: invalid prefix"}
 	if strings.Join(dropped, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("dropped %q, want %q", dropped, want)
 	}
 	// New ids continue after the highest restored one.
-	p, err := s.Add(req("198.51.101.0/24"), rails, now)
+	p, err := s.Add(req("198.51.100.64/26"), rails, now)
 	if err != nil || p.ID != "pin-10" {
 		t.Fatalf("next pin %+v, %v; want pin-10", p, err)
 	}
