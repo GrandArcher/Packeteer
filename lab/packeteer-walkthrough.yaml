@@ -21,6 +21,7 @@ bgp:
     - address: 192.0.2.254
       description: edge
 probe:
+  path_check: {enabled: false}
   interval: 2s
   timeout: 500ms
   packets: 4

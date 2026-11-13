@@ -253,9 +253,10 @@ type Engine struct {
 	results map[key]Result
 	status  map[string]ProviderStatus
 	// srcDown is the source-unavailable reason from the last round a
-	// provider ran; pathDown is the probe-path mismatch mark (#150). Both
-	// are guarded by mu and persist across rounds so a provider a round
-	// did not run, or a source that is still mis-routed, does not flip up.
+	// provider ran; pathDown is the path-check mark: a mismatch (#150) or
+	// a source missing from this host (#581). Both are guarded by mu and
+	// persist across rounds so a provider a round did not run, or a source
+	// that is still mis-routed, does not flip up.
 	srcDown  map[string]string
 	pathDown map[string]string
 	// cadence is the probe interval per prefix from the last complete

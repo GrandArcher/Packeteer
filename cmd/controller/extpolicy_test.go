@@ -199,7 +199,7 @@ http: {listen: "127.0.0.1:%d"}
 providers:
   - {name: transit-a, source_ip: 192.0.2.11, next_hop: 192.0.2.1}
   - {name: transit-b, source_ip: 192.0.2.12, next_hop: 192.0.2.2}
-probe: {interval: 1s, timeout: 200ms, packets: 1}
+probe: {interval: 1s, timeout: 200ms, packets: 1, path_check: {enabled: false}}
 bgp:
   neighbors:
     - {address: 127.0.0.1, port: %d, local_address: 127.0.0.2}
@@ -225,7 +225,7 @@ packeteer_community: "64512:666"
 local_pref: 250
 hold_time: 1m
 http: {listen: ""}
-probe: {interval: 1s, timeout: 200ms}
+probe: {interval: 1s, timeout: 200ms, path_check: {enabled: false}}
 thresholds: {min_loss_delta_pct: 1, min_rtt_delta_ms: 15}
 providers:
   - {name: transit-a, source_ip: 192.0.2.11, next_hop: 192.0.2.1}

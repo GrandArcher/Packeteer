@@ -8,16 +8,28 @@ import (
 	"log/slog"
 	"net/netip"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/config"
+	"github.com/GrandArcher/Packeteer/internal/httpapi"
+	checks "github.com/GrandArcher/Packeteer/internal/preflight"
+	"github.com/GrandArcher/Packeteer/internal/probe"
 	"github.com/GrandArcher/Packeteer/internal/sockmark"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
 type fakePathStatus struct {
-	calls map[string]bool
+	calls   map[string]bool
+	missing map[string]bool
+}
+
+func (f *fakePathStatus) SetSourceMissing(name string) {
+	if f.missing == nil {
+		f.missing = map[string]bool{}
+	}
+	f.missing[name] = true
 }
 
 func (f *fakePathStatus) SetPathMismatch(name string, mismatch bool) {
@@ -105,7 +117,7 @@ func TestPathCheckRoundRecordsEveryVerdict(t *testing.T) {
 	}
 }
 
-func TestPathCheckRoundSkipsUnavailableSource(t *testing.T) {
+func TestPathCheckRoundMarksUnavailableSource(t *testing.T) {
 	status := &fakePathStatus{}
 	c := &pathChecker{
 		status:  status,
@@ -116,11 +128,67 @@ func TestPathCheckRoundSkipsUnavailableSource(t *testing.T) {
 		timeout: time.Second,
 		log:     discardLog(),
 	}
-	if n := c.round(context.Background()); n != 0 {
-		t.Fatalf("checked = %d, want 0", n)
+	if n := c.round(context.Background()); n != 1 {
+		t.Fatalf("checked = %d, want 1", n)
 	}
-	if len(status.calls) != 0 {
-		t.Fatalf("unavailable source changed status: %+v", status.calls)
+	if !status.missing["transit-a"] || len(status.calls) != 0 {
+		t.Fatalf("missing = %+v, mismatch calls = %+v", status.missing, status.calls)
+	}
+}
+
+// The System page and preflight read the same check: a source_ip that is
+// not on this host is not "usable" on either (#581).
+func TestSystemAndPreflightAgreeOnMissingProbeSource(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("the path check runs on Linux only")
+	}
+	cfg := preflightConfig(t, `
+  - {name: transit-a, source_ip: 192.0.2.11, next_hop: 192.0.2.1}
+  - {name: transit-b, source_ip: 192.0.2.12, next_hop: 192.0.2.2}
+`)
+	engine, err := probe.New(
+		[]probe.Provider{
+			{Name: "transit-a", Source: netip.MustParseAddr("192.0.2.11")},
+			{Name: "transit-b", Source: netip.MustParseAddr("192.0.2.12")},
+		},
+		[]probe.NamedProber{{Name: "icmp", Prober: &fakeNet{}}}, nil,
+		probe.Options{Interval: time.Second, Timeout: 50 * time.Millisecond, Packets: 3, Workers: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hop := hopFrom(
+		map[string]netip.Addr{"192.0.2.12": netip.MustParseAddr("192.0.2.2")},
+		map[string]error{"192.0.2.11": plugin.ErrSourceUnavailable})
+	c := &pathChecker{status: engine, targets: pathTargets(cfg), hop: hop, timeout: time.Second, log: discardLog()}
+	c.round(context.Background())
+
+	pre := map[string]checks.Provider{}
+	for _, p := range (&preflightSource{live: &liveConfig{cfg: cfg}, log: discardLog(), hop: hop}).providers(context.Background(), cfg) {
+		pre[p.Name] = p
+	}
+	var snap httpapi.Snapshot
+	for _, st := range engine.Providers() {
+		snap.Providers = append(snap.Providers, httpapi.Provider{Name: st.Name, Up: st.Up, Reason: st.Reason, Since: st.Since})
+	}
+	sys := httpapi.BuildSystem(snap, httpapi.SystemFacts{}, nil, nil)
+	row := map[string]httpapi.Component{}
+	for _, comp := range sys.Components {
+		if comp.Kind == httpapi.KindProbeSource {
+			row[comp.Name] = comp
+		}
+	}
+
+	if pre["transit-a"].Egress != checks.EgressNoReply || !strings.Contains(pre["transit-a"].Why, "not configured on this host") {
+		t.Fatalf("preflight transit-a = %+v", pre["transit-a"])
+	}
+	if r := row["transit-a"]; r.State != httpapi.StateDown || !strings.Contains(r.Error, "not configured on this host") || strings.Contains(r.Detail, "usable") {
+		t.Errorf("System transit-a = %+v", r)
+	}
+	if pre["transit-b"].Egress != checks.EgressOK {
+		t.Fatalf("preflight transit-b = %+v", pre["transit-b"])
+	}
+	if r := row["transit-b"]; r.State != httpapi.StateOK {
+		t.Errorf("System transit-b = %+v", r)
 	}
 }
 

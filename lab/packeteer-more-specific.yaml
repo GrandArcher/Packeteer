@@ -29,6 +29,7 @@ more_specific:
   enabled: true
   max_routes: 4
 probe:
+  path_check: {enabled: false}
   interval: 2s
   timeout: 500ms
   packets: 4

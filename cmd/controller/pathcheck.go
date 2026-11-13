@@ -40,6 +40,7 @@ var (
 // implements it.
 type pathStatus interface {
 	SetPathMismatch(name string, mismatch bool)
+	SetSourceMissing(name string)
 }
 
 // pathHop sends one TTL-limited probe from src toward dst and returns the
@@ -128,24 +129,34 @@ func (c *pathChecker) round(ctx context.Context) int {
 		if ctx.Err() != nil {
 			return checked
 		}
-		mismatch, ok := c.one(ctx, t)
-		if !ok {
+		r := c.check(ctx, t)
+		switch {
+		case r.missing:
+			c.log.Warn("probe source is not configured on this host", "provider", t.Name, "source", t.Source)
+			c.status.SetSourceMissing(t.Name)
+		case !r.ok:
 			continue
+		default:
+			if r.mismatch {
+				c.log.Warn("probe path mismatch: "+r.why, "provider", t.Name, "source", t.Source, "next_hop", t.NextHop)
+			}
+			c.status.SetPathMismatch(t.Name, r.mismatch)
 		}
-		c.status.SetPathMismatch(t.Name, mismatch)
 		checked++
 	}
 	return checked
 }
 
 // pathResult is the outcome of one check. ok is false when no status change
-// should be made: the context ended, or the source_ip could not be bound
-// (the normal probes already fail that provider closed). Every other
-// outcome, including no reply, is a verdict, so a mis-routed source is not
-// missed.
+// should be made: the context ended. A source_ip that cannot be bound is
+// reported as missing, not ok. Every other outcome, including no reply, is
+// a verdict, so a mis-routed source is not missed.
 type pathResult struct {
 	ok       bool
 	mismatch bool
+	// missing is set when the source_ip is not an address of this host. It
+	// marks the provider down like a mismatch, and preflight reports it.
+	missing bool
 	// from is the address that answered, when one did.
 	from netip.Addr
 	// why says in words what went wrong: the send error, no answer, the
@@ -167,7 +178,7 @@ func (c *pathChecker) check(ctx context.Context, t pathTarget) pathResult {
 	from, _, err := c.hop(sockmark.WithContext(ctx, t.Marking), t.Source, dst, firstHopTTL, pathCheckPort, c.timeout)
 	if err != nil {
 		if errors.Is(err, plugin.ErrSourceUnavailable) {
-			return pathResult{why: "the source address is not configured on this host"}
+			return pathResult{missing: true, why: "the source address is not configured on this host"}
 		}
 		if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return pathResult{}
@@ -182,13 +193,4 @@ func (c *pathChecker) check(ctx context.Context, t pathTarget) pathResult {
 		return pathResult{ok: true, mismatch: true, from: from, why: "the first hop is " + from.String()}
 	}
 	return pathResult{ok: true, from: from}
-}
-
-// one probes a single target and logs a mismatch.
-func (c *pathChecker) one(ctx context.Context, t pathTarget) (mismatch, ok bool) {
-	r := c.check(ctx, t)
-	if r.mismatch {
-		c.log.Warn("probe path mismatch: "+r.why, "provider", t.Name, "source", t.Source, "next_hop", t.NextHop)
-	}
-	return r.mismatch, r.ok
 }

@@ -444,7 +444,7 @@ func startNonBGPDaemon(t *testing.T, allowlist string) *nonbgpDaemon {
 	y = strings.Replace(y, "  - type: icmp\n", "  - type: fixed\n    config: {paths: [{provider: isp-a, rtt_ms: 90}, {provider: isp-b, rtt_ms: 20}]}\n", 1)
 	y = strings.Replace(y, "127.0.0.1:2055", "127.0.0.1:"+strconv.Itoa(port), 1)
 	y = strings.Replace(y, "[198.51.100.0/24]", allowlist, 1)
-	y += "probe: {interval: 2s, timeout: 500ms}\n"
+	y += "probe: {interval: 2s, timeout: 500ms, path_check: {enabled: false}}\n"
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(y), 0o600); err != nil {
 		t.Fatal(err)

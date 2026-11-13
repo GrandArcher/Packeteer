@@ -6,6 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Changed
 
+- The System page and the `provider.down` event mark a provider down when the path check finds its `source_ip` is not on this host, as preflight reports; it no longer shows "usable" (#581).
 - Settings keeps the wizard, preflight, router config, blast radius, and raw YAML in closed sections; Improvements and Providers show cards below 1600 px and Providers has one Open in menu (#580).
 - The Events badge counts open alerts, one each; a session that is established again drops out, and the Events page keeps the full log (#579).
 - A start or HA takeover that loses pins or the pause (memory storage, or saved pins off the providers or allowlist) sends `steering.lost`, logs a warning, and shows on the System page (#566).
