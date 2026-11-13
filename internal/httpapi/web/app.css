@@ -531,6 +531,14 @@ td.num { text-align: right; }
 .savebar #bar-msg { flex: 1; min-width: 12rem; margin: 0; }
 .savebar[data-state="form"] { border-top-color: var(--diff); }
 
+/* Review dialog for a save the blast-radius preview gates (#576). The confirm
+   button sits under a scrolling body, so it is in view however long the
+   preview is. */
+.review { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; padding: 12px; background: rgba(23, 32, 42, 0.55); }
+.review-box { display: flex; flex-direction: column; width: min(48rem, 100%); max-height: 100%; padding: 12px 16px; background: var(--card); border: 1px solid var(--muted); border-radius: 6px; }
+.review-box h2 { margin: 0 0 4px; font-size: 1.1rem; overflow-wrap: anywhere; }
+.review-body { flex: 1; min-height: 0; overflow: auto; }
+
 /* Keyboard focus (#353). One mid-tone blue reaches 3:1 against the dark nav
    (#12263a), the page (#f3f5f7), and white (WCAG 1.4.11). The nav ring sits
    inside the link so the nav edge does not clip it. */
