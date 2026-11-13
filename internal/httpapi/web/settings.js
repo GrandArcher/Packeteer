@@ -2248,7 +2248,7 @@ function runWizard() {
     return;
   }
   body.current = document.getElementById("ed-yaml").value;
-  if (wzConfigured && byId("wz-auth-off").checked) body.disable_auth = true;
+  if (wzConfigured && !wzSetupPending && byId("wz-auth-off").checked) body.disable_auth = true;
   status.textContent = "Generating…";
   api("POST", "/api/config/wizard", body).then(function (out) {
     if (!out.existing) {
