@@ -489,9 +489,21 @@ probers:
 func TestInteractionOwnedPrefixStillTakesTheDecisionSlot(t *testing.T) {
 	edge := newMSEdge(t)
 	edge.advertise("192.0.2.0/24", "198.51.100.0/24")
-	usage := filepath.Join(t.TempDir(), "usage.yaml")
+	dir := t.TempDir()
+	usage := filepath.Join(dir, "usage.yaml")
 	writeFile(t, usage, ixUnderCommit)
-	d := startIX(t, edge, `thresholds: {min_loss_delta_pct: 1, min_rtt_delta_ms: 15}
+	// 198.51.100.0/24 gains only once the owned prefix holds the slot: the
+	// view is ready at the first update, so a round can run before
+	// 192.0.2.0/24 is learned and would give the slot to 198.51.100.0/24.
+	paths := filepath.Join(dir, "paths.yaml")
+	owned := `paths:
+  - {provider: transit-a, target: 192.0.2.10, rtt_ms: 200}
+  - {provider: transit-b, target: 192.0.2.10, rtt_ms: 10}
+  - {provider: transit-a, target: 198.51.100.10, rtt_ms: 10}
+  - {provider: transit-b, target: 198.51.100.10, rtt_ms: 10}
+`
+	writeFile(t, paths, owned)
+	d := startIX(t, edge, fmt.Sprintf(`thresholds: {min_loss_delta_pct: 1, min_rtt_delta_ms: 15}
 max_improvements: 1
 allowlist: {prefixes: ["192.0.2.0/24", "198.51.100.0/24"]}
 sources:
@@ -499,15 +511,12 @@ sources:
     config: {targets: [{prefix: 192.0.2.0/24, host: 192.0.2.10}, {prefix: 198.51.100.0/24, host: 198.51.100.10}]}
 probers:
   - type: fixed
-    config:
-      paths:
-        - {provider: transit-a, target: 192.0.2.10, rtt_ms: 200}
-        - {provider: transit-b, target: 192.0.2.10, rtt_ms: 10}
-        - {provider: transit-a, target: 198.51.100.10, rtt_ms: 80}
-        - {provider: transit-b, target: 198.51.100.10, rtt_ms: 10}
-`+ixInbound(usage, "192.0.2.0/24"))
+    config: {file: %s}
+`, paths)+ixInbound(usage, "192.0.2.0/24"))
 
 	d.waitLog("announce: 192.0.2.0/24 is reserved for inbound steering or threat mitigation")
+	writeFile(t, paths, strings.Replace(owned, "transit-a, target: 198.51.100.10, rtt_ms: 10", "transit-a, target: 198.51.100.10, rtt_ms: 80", 1))
+	d.waitLog("provider=transit-a prefix=198.51.100.0/24 target=198.51.100.10 targets=[198.51.100.10] prober=fixed loss_pct=0 rtt_avg=80ms")
 	d.holdWire("nothing on the wire", 4*time.Second, func(w map[string]ixRoute) bool { return len(w) == 0 })
 	d.stop()
 }

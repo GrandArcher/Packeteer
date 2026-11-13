@@ -2513,9 +2513,9 @@ jobs:
           # The page is one run: a retry would start from the saved file.
           UI_SMOKE_ATTEMPTS=1 bash lab/ui-smoke.sh http://127.0.0.1:18577/settings.html \
             'mode-observe' 'It announces nothing.' \
-            'dialog: Review and save hold_time 1m -> 2m | confirm in view yes | confirm focused yes | blast radius apply gone yes | observe yes | not saved yet yes | writes 0' \
+            'dialog: Review and save hold_time 1m -&gt; 2m | confirm in view yes | confirm focused yes | blast radius apply gone yes | observe yes | not saved yet yes | writes 0' \
             'cancelled: Nothing was saved: the review was cancelled. | dialog closed yes | writes 0' \
-            'saved: Saved 1 change: hold_time 1m -> 2m' \
+            'saved: Saved 1 change: hold_time 1m -&gt; 2m' \
             '| dialog closed yes | writes 1' \
             --absent 'id="ht-jserr"' 'id="ht-error"' 'id="ht-timeout"' 'mode-inject'
           # The file on disk has the new value and is still observe.
