@@ -482,15 +482,23 @@ function seriesClass(i) { return "series-" + (i % SERIES_N); }
 // the /api/providers/stats answer and names the configured providers, in
 // order: a provider reconfigured away has no line. A provider that never
 // answered is named in the legend, since a missing line would look like
-// missing data.
-function renderProviderLatency(root, stats, names) {
+// missing data. health is the Overview's provider list: a provider that is
+// down now has no line, since its earlier hours would draw it as healthy,
+// and is named instead.
+function renderProviderLatency(root, stats, names, health) {
   clear(root);
   var by = {};
   ((stats && stats.providers) || []).forEach(function (st) { by[st.provider] = st; });
   var now = Date.now(), from = now - 24 * HOUR_MS;
-  var series = [], silent = [];
+  var state = {};
+  (health || []).forEach(function (h) { state[h.name] = h; });
+  var series = [], silent = [], down = [];
   names.forEach(function (name) {
     var st = by[name];
+    if (state[name] && state[name].state === "down") {
+      down.push(name + (state[name].detail ? " (" + state[name].detail + ")" : ""));
+      return;
+    }
     if (!st) return;
     var pts = (st.points || []).filter(function (p) { return p.rtt_ms != null; })
       .map(function (p) { return {t: Date.parse(p.t), v: p.rtt_ms}; });
@@ -500,7 +508,8 @@ function renderProviderLatency(root, stats, names) {
   var fig = el("figure", "ts-fig");
   fig.appendChild(el("figcaption", "", "Latency by provider, last 24 h"));
   if (!series.length) {
-    fig.appendChild(el("p", "empty ts-empty", "No provider has answered a probe in the last 24 hours, so there is no latency to draw."));
+    fig.appendChild(el("p", "empty ts-empty", down.length ? "Every provider with latency data is down now, so there is no line to draw." :
+      "No provider has answered a probe in the last 24 hours, so there is no latency to draw."));
   } else {
     fig.appendChild(lineChart("Latency by provider over the last 24 hours, in milliseconds", "Time of day (last 24 hours)", "Round-trip time (ms)", "ms", series, from, now));
     var legend = el("p", "ts-legend tag");
@@ -510,6 +519,7 @@ function renderProviderLatency(root, stats, names) {
     });
     fig.appendChild(legend);
   }
+  if (down.length) fig.appendChild(el("p", "tag ts-down", "Down now, so no line: " + down.join(", ") + ". Earlier hours are not drawn."));
   if (silent.length) fig.appendChild(el("p", "tag ts-silent", "No reply from " + silent.join(", ") + ": nothing came back, so there is no latency line."));
   fig.appendChild(el("p", "tag", "Each point is one hour of replies, as the mean round-trip time. The Providers page has the median over 15 minutes and 24 hours."));
   root.appendChild(fig);

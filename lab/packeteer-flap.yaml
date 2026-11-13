@@ -50,6 +50,11 @@ probers:
 announcer:
   type: gobgp
 
+# Lab only: the UI smoke in lab/e2e-flap.sh (#578) reads the Overview over
+# the lab bridge.
+http:
+  listen: 0.0.0.0:8080
+
 # Lab only: no sign-in, so the e2e scripts can read the API (#328).
 auth:
   enabled: false
