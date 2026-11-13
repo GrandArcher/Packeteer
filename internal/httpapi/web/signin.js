@@ -22,6 +22,17 @@ function changeError(msg) {
   node.hidden = !msg;
 }
 
+// signinLand opens the setup wizard while the first-run setup is pending
+// and the dashboard otherwise (#575). The wizard has no hash: a #wizard
+// anchor scrolls the header and the observe banner off the top.
+function signinLand() {
+  return fetch("/api/me", {cache: "no-store", headers: {Accept: "application/json"}}).then(function (res) {
+    return res.ok ? res.json() : {};
+  }).catch(function () { return {}; }).then(function (me) {
+    window.location.href = me.setup_pending ? "/settings.html" : "/";
+  });
+}
+
 function changeSubmit(ev) {
   ev.preventDefault();
   var cur = document.getElementById("change-current");
@@ -38,10 +49,7 @@ function changeSubmit(ev) {
     body: JSON.stringify({current_password: cur.value, new_password: next.value})
   }).then(function (res) {
     return res.json().catch(function () { return {}; }).then(function (body) {
-      if (res.ok) {
-        window.location.href = "/";
-        return;
-      }
+      if (res.ok) return signinLand();
       cur.value = next.value = again.value = "";
       if (res.status === 401) changeError("Your session ended. Sign in again.");
       else changeError(body.error || "The password was not changed.");
@@ -72,8 +80,7 @@ function signinSubmit(ev) {
         return fetch("/api/me", {cache: "no-store", headers: {Accept: "application/json"}}).then(function (me) {
           if (me.ok) {
             if (body.must_change) { pass.value = ""; btn.disabled = false; showChangeForm(); return; }
-            window.location.href = "/";
-            return;
+            return signinLand();
           }
           pass.value = "";
           signinError("Signed in, but the browser did not keep the session cookie. Open this page over https or on localhost.");

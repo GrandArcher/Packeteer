@@ -119,12 +119,12 @@ function shellMarkCurrent() {
   }
 }
 
-// shellSetupRedirect sends an admin from the overview to the setup wizard
-// while the first-run setup is pending (#416). Other pages stay reachable.
-function shellSetupRedirect(me) {
-  if (me && me.setup_pending && document.body.getAttribute("data-page") === "overview") {
-    window.location.replace("/settings.html#wizard");
-  }
+// shellSetupNotice shows the first-run notice on the overview while the
+// setup is pending (#416, #575). The overview stays open: its checklist is
+// the next step. Only the sign-in landing goes straight to the wizard.
+function shellSetupNotice(me) {
+  var box = document.getElementById("setup-pending");
+  if (box) box.hidden = !(me && me.setup_pending);
 }
 
 // Settings and Admin are admin pages. With role-based auth, a lower role
@@ -135,7 +135,7 @@ function shellApplyMe(me) {
   var rbac = me && me.auth === "rbac";
   var admin = !rbac || me.role === "admin";
   shellAdmin = admin;
-  shellSetupRedirect(me);
+  shellSetupNotice(me);
   var gated = document.querySelectorAll("[data-min-role='admin']");
   for (var i = 0; i < gated.length; i++) gated[i].hidden = !admin;
   var who = document.getElementById("account-who");
