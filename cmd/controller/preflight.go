@@ -161,13 +161,14 @@ type preflightAPI struct {
 func (p preflightAPI) Snippet(vendor string) (string, error) { return snippetFor(p.live, vendor) }
 
 // Gate checks that the candidate keeps the setup the confirmations were made
-// for, then runs the checks.
+// for, then runs the checks. An announcer the candidate adds counts for the
+// withdrawal check: it starts with the restart the save needs.
 func (p preflightAPI) Gate(ctx context.Context, candidate []byte) error {
 	next, err := config.Parse(candidate)
 	if err != nil {
 		return fmt.Errorf("the candidate config does not load: %w", err)
 	}
-	return p.Runner.Gate(ctx, preflightFingerprint(next))
+	return p.Runner.Gate(ctx, checks.Candidate{Fingerprint: preflightFingerprint(next), Announcer: next.Announcer != nil})
 }
 
 // newPreflight builds the onboarding checks. A confirmations file that cannot

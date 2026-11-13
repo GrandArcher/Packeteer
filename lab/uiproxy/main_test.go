@@ -17,6 +17,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/federation"
 	"github.com/GrandArcher/Packeteer/internal/history"
 	"github.com/GrandArcher/Packeteer/internal/httpapi"
+	"github.com/GrandArcher/Packeteer/internal/preflight"
 	"github.com/GrandArcher/Packeteer/internal/ringlg"
 	"github.com/GrandArcher/Packeteer/internal/troubleshoot"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
@@ -493,6 +494,90 @@ func TestGuidedDriverMatchesPage(t *testing.T) {
 	for _, id := range []string{"form-providers", "form-flows", "form-policies", "form-vips", "form-outages", "form-exchanges", "form-allow", "form-anomaly-rules", "in-prefix-box", "in-perf-loss-on", "fm-hold"} {
 		if !strings.Contains(driver, id) || !strings.Contains(string(page), `id="`+id+`"`) {
 			t.Errorf("guided card %s is missing from the driver or the page", id)
+		}
+	}
+}
+
+// TestSnippetWizardDriverMatchesPage keeps the router config driver (#569) on
+// the settings page it drives. It stubs nothing, so the panel talks to the
+// real API, and it never writes the config. A renamed id fails here instead
+// of as a timeout in CI.
+func TestSnippetWizardDriverMatchesPage(t *testing.T) {
+	f, err := loadFixtures("../ui-fixtures/snippet-wizard")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Stubs) != 0 || f.Inject.Page != "/settings.html" || len(f.driver) == 0 {
+		t.Fatalf("fixtures = %+v", f)
+	}
+	page, err := os.ReadFile("../../internal/httpapi/web/settings.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	driver := string(f.driver)
+	if strings.Contains(driver, "confirm_inject") || strings.Contains(driver, `"PUT"`) || !strings.Contains(driver, "/api/snippets") {
+		t.Fatal("driver must exempt only /api/snippets from the write count and never save")
+	}
+	ids := regexp.MustCompile(`(?:byId|type)\("([^"]+)"`).FindAllStringSubmatch(driver, -1)
+	if len(ids) == 0 {
+		t.Fatal("the driver uses no element")
+	}
+	for _, m := range ids {
+		if !strings.Contains(string(page), `id="`+m[1]+`"`) {
+			t.Errorf("driver uses #%s, which settings.html lacks", m[1])
+		}
+	}
+}
+
+// TestAnnouncerStepFixturesMatchAPI decodes the canned preflight report of
+// the announcer step smoke (#568) with the API's own types: only the missing
+// announcer blocks. The plan call is not stubbed, so the real server's
+// checks decide it, and the driver never saves. A renamed id fails here
+// instead of as a timeout in CI.
+func TestAnnouncerStepFixturesMatchAPI(t *testing.T) {
+	f, err := loadFixtures("../ui-fixtures/announcer-step")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Stubs) != 1 || f.Stubs[0].Method != "GET" || f.Stubs[0].Path != "/api/preflight" {
+		t.Fatalf("stubs = %+v, want only the preflight report", f.Stubs)
+	}
+	var body struct {
+		Version     string            `json:"version"`
+		Mode        string            `json:"mode"`
+		Ready       bool              `json:"ready"`
+		GeneratedAt string            `json:"generated_at"`
+		Available   bool              `json:"available"`
+		Report      *preflight.Report `json:"report"`
+		Vendors     []string          `json:"vendors"`
+	}
+	dec := json.NewDecoder(bytes.NewReader(f.Stubs[0].body))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if !body.Available || body.Report == nil || len(body.Vendors) == 0 || body.Mode != "observe" {
+		t.Fatalf("preflight answer = %+v", body)
+	}
+	rep := *body.Report
+	if !rep.AnnouncerMissing || rep.Ready || strings.Join(rep.Blocking(), ",") != preflight.CheckWithdrawal {
+		t.Fatalf("report = %+v, want only the announcer missing", rep)
+	}
+	driver := string(f.driver)
+	if strings.Contains(driver, "confirm_inject") || strings.Contains(driver, `"PUT"`) || !strings.Contains(driver, "/api/config/inject") {
+		t.Fatal("driver must exempt only the plan from the write count and never save")
+	}
+	page, err := os.ReadFile("../../internal/httpapi/web/settings.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := regexp.MustCompile(`(?:byId\("|querySelector(?:All)?\("#)([a-z-]+)`).FindAllStringSubmatch(driver, -1)
+	if len(ids) == 0 {
+		t.Fatal("the driver uses no element")
+	}
+	for _, m := range ids {
+		if !strings.Contains(string(page), `id="`+m[1]+`"`) {
+			t.Errorf("driver uses #%s, which settings.html lacks", m[1])
 		}
 	}
 }

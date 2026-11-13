@@ -2321,6 +2321,7 @@ function useWizardYaml(out) {
   if (!base) api("GET", "/api/config").then(function (f) { base = f.sha256; }, function () {});
   loadForm(out.yaml);
   checkConfig();
+  refreshSnippet();
   document.getElementById("editor-section").scrollIntoView();
 }
 
@@ -2329,9 +2330,19 @@ function useWizardYaml(out) {
 var pfLabels = {pass: "Passed", warn: "Warning", fail: "Failed", unverified: "Needs confirmation"};
 var pfBadge = {pass: "sys-ok", warn: "sys-degraded", fail: "sys-down", unverified: "sys-idle"};
 
+function pfBlocks(r) { return r.status === "fail" || r.status === "unverified"; }
+
+// pfOffered reports whether the inject step shows: every check passed, or
+// the only one that blocks is the missing announcer, which the step adds.
+// The server runs the checks again on what the step would save.
+function pfOffered(rep) {
+  return rep.ready || !!rep.announcer_missing && rep.results.every(function (r) { return r.id === "withdrawal" || !pfBlocks(r); });
+}
+
 function pfSummary(rep) {
-  var blocking = rep.results.filter(function (r) { return r.status === "fail" || r.status === "unverified"; }).length;
+  var blocking = rep.results.filter(pfBlocks).length;
   if (!blocking) return "Every check passed. Injection can be turned on below.";
+  if (pfOffered(rep)) return "Every other check passed. No announcer is configured: the step below adds one.";
   return "Injection stays off: " + blocking + (blocking === 1 ? " check needs" : " checks need") + " attention.";
 }
 
@@ -2364,7 +2375,42 @@ function renderPreflight(rep) {
   clear(list);
   rep.results.forEach(function (r) { list.appendChild(pfItem(r)); });
   byId("pf-when").textContent = pfSummary(rep) + " Last run " + rep.ran_at + ".";
-  byId("pf-inject").hidden = !rep.ready;
+  byId("pf-inject").hidden = !pfOffered(rep);
+  pfReport = rep;
+  renderPfAnnouncer();
+}
+
+var pfReport = null;
+// pfAnnouncer holds the announcer form values while the running config has
+// no announcer; planInject sends them.
+var pfAnnouncer = null;
+
+// renderPfAnnouncer draws the announcer fields of the inject settings block
+// from GET /api/config/schema (blocks.js loads it), so the step offers what
+// the loader accepts. blocks.js calls it again when the schema arrives.
+function renderPfAnnouncer() {
+  var box = byId("pf-announcer");
+  clear(box);
+  box.hidden = !(pfReport && pfReport.announcer_missing);
+  if (box.hidden) {
+    pfAnnouncer = null;
+    return;
+  }
+  var inject = schema && schema.blocks.filter(function (b) { return b.id === "inject"; })[0];
+  var f = inject && inject.fields.filter(function (x) { return x.key === "announcer"; })[0];
+  if (!f) {
+    box.appendChild(el("p", "empty", schemaFailed ? "The announcer form could not be loaded. Add announcer: {type: gobgp} in the YAML editor." : "Loading the announcer form..."));
+    return;
+  }
+  if (!pfAnnouncer) {
+    pfAnnouncer = blankValues(f.fields);
+    f.fields.forEach(function (g) {
+      if (g.kind === "enum" && g.required && !pfAnnouncer[g.key]) pfAnnouncer[g.key] = g.options[0];
+    });
+  }
+  box.appendChild(el("h4", "", f.label));
+  box.appendChild(el("p", "field-help", f.help + " No announcer is configured, so the step adds this one. It starts when Packeteer restarts after the save."));
+  renderFields(box, f.fields, pfAnnouncer, "announcer", renderPfAnnouncer);
 }
 
 function loadPreflight() {
@@ -2403,17 +2449,69 @@ function confirmCheck(id, btn) {
   });
 }
 
+// snippetCandidate is what is on the page now: the wizard's step 1 and flow
+// answers while the wizard is open, over the text in the editor, saved or
+// not. used is false on an empty page, which reads the running config.
+function snippetCandidate() {
+  var answers = {};
+  var open = !byId("wz-body").hidden;
+  if (open) {
+    var asn = Number(byId("wz-asn").value.trim());
+    if (asn >= 1 && asn <= 4294967295 && Math.floor(asn) === asn) answers.asn = asn;
+    var router = byId("wz-router").value.trim();
+    if (router) answers.router_id = router;
+    var edge = byId("wz-edge").value.trim();
+    if (edge) answers.edge = edge;
+    var flow = wizardFlowListen();
+    if (flow) answers.flow_listen = flow;
+  }
+  var yaml = byId("ed-yaml").value;
+  var used = yaml.trim() !== "" || Object.keys(answers).length > 0;
+  if (open) answers.wizard = true;
+  return {yaml: yaml, answers: answers, used: used};
+}
+
+var snippetShown = false;
+var snippetSeq = 0;
+
 function showSnippet() {
+  snippetShown = true;
+  // A slower earlier reply must not replace the answer to the latest change.
+  var mine = ++snippetSeq;
   var vendor = byId("pf-vendor").value;
-  byId("pf-snippet-status").textContent = "";
-  return api("GET", "/api/snippets?vendor=" + encodeURIComponent(vendor)).then(function (out) {
+  var status = byId("pf-snippet-status");
+  var missing = byId("pf-snippet-missing");
+  status.textContent = "";
+  clear(missing);
+  missing.hidden = true;
+  var cand = snippetCandidate();
+  var call = cand.used
+    ? api("POST", "/api/snippets", {vendor: vendor, yaml: cand.yaml, answers: cand.answers})
+    : api("GET", "/api/snippets?vendor=" + encodeURIComponent(vendor));
+  return call.then(function (out) {
+    if (mine !== snippetSeq) return;
     var pre = byId("pf-snippet");
     pre.textContent = out.text;
     pre.hidden = false;
+    status.textContent = cand.used ? "Written from the answers and YAML on this page. Nothing is saved or sent." : "Written from the running config. Nothing is sent.";
   }, function (err) {
+    if (mine !== snippetSeq) return;
     byId("pf-snippet").hidden = true;
-    byId("pf-snippet-status").textContent = explain(err);
+    var list = err.data && err.data.missing;
+    if (!list || !list.length) {
+      status.textContent = explain(err);
+      return;
+    }
+    status.textContent = "The router config needs more answers:";
+    list.forEach(function (h) { missing.appendChild(el("li", "", h)); });
+    missing.hidden = false;
   });
+}
+
+// refreshSnippet redraws a router config already asked for when an answer
+// it was written from changes.
+function refreshSnippet() {
+  if (snippetShown) return showSnippet();
 }
 
 function copySnippet() {
@@ -2572,6 +2670,8 @@ function planInject() {
   var body = {current: byId("ed-yaml").value, allowlist: prefixes};
   var cap = byId("pf-cap").value.trim();
   if (cap) body.max_improvements = Number(cap);
+  // An announcer saved but not yet running is in the editor text already.
+  if (pfAnnouncer && !/^announcer:/m.test(body.current)) body.announcer = pfAnnouncer;
   var status = byId("pf-inject-status");
   var list = byId("pf-explain");
   clear(list);
@@ -2761,6 +2861,9 @@ byId("bar-preview").addEventListener("click", previewConfig);
 byId("pf-run").addEventListener("click", runPreflight);
 byId("pf-snippet-show").addEventListener("click", showSnippet);
 byId("pf-snippet-copy").addEventListener("click", copySnippet);
+["pf-vendor", "wz-asn", "wz-router", "wz-edge", "wz-flow", "wz-flow-addr", "wz-flow-port", "ed-yaml"].forEach(function (id) {
+  byId(id).addEventListener("change", refreshSnippet);
+});
 byId("pf-inject-plan").addEventListener("click", planInject);
 byId("bl-run").addEventListener("click", loadBlast);
 byId("wi-run").addEventListener("click", runWhatIf);

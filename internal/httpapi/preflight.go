@@ -121,15 +121,54 @@ func (s *Server) handleSnippets(w http.ResponseWriter, r *http.Request) {
 	vendor := r.URL.Query().Get("vendor")
 	text, err := p.Snippet(vendor)
 	if err != nil {
-		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
+		snippetError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"vendor": vendor, "text": text})
 }
 
-// handleInjectPlan renders the inject config for a small allowlist, once the
-// preflight checks pass. It writes nothing: the result goes to the editor,
-// and Save asks for the inject confirmation and runs the checks again.
+// handleSnippetsCandidate renders the router config from text that is not
+// saved: the YAML in the editor or a wizard result. With answers.wizard set
+// the wizard's answers replace the keys Generate would (see
+// snippet.ForCandidate). It reads no file, writes nothing, and sends nothing
+// to a router, so it works before any config is saved. A missing answer
+// comes back as plain hints in "missing".
+func (s *Server) handleSnippetsCandidate(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Vendor  string          `json:"vendor"`
+		YAML    string          `json:"yaml"`
+		Answers snippet.Answers `json:"answers"`
+	}
+	if !decodeLarge(w, r, &req, configBodyLimit) {
+		return
+	}
+	params, err := snippet.ForCandidate([]byte(req.YAML), req.Answers)
+	var text string
+	if err == nil {
+		text, err = snippet.Join(req.Vendor, params)
+	}
+	if err != nil {
+		snippetError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"vendor": req.Vendor, "text": text})
+}
+
+// snippetError answers 422 with the plain hints when answers are missing, so
+// the page can list what to fill in and where, and with the error otherwise.
+func snippetError(w http.ResponseWriter, err error) {
+	var miss *snippet.MissingError
+	if errors.As(err, &miss) {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": "The router config needs more answers.", "missing": miss.Hints})
+		return
+	}
+	writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
+}
+
+// handleInjectPlan renders the inject config for a small allowlist, and the
+// announcer when the config has none, once the preflight checks pass for
+// that config. It writes nothing: the result goes to the editor, and Save
+// asks for the inject confirmation and runs the checks again.
 func (s *Server) handleInjectPlan(w http.ResponseWriter, r *http.Request) {
 	if !s.editorOn(w) {
 		return
@@ -145,12 +184,12 @@ func (s *Server) handleInjectPlan(w http.ResponseWriter, r *http.Request) {
 	if !decodeLarge(w, r, &req, configBodyLimit) {
 		return
 	}
-	if !s.preflightGate(w, r, true, []byte(req.Current)) {
-		return
-	}
 	plan, err := configedit.EnableInject(req.InjectInput, []byte(req.Current))
 	if err != nil {
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
+		return
+	}
+	if !s.preflightGate(w, r, true, []byte(plan.YAML)) {
 		return
 	}
 	body := map[string]any{"yaml": plan.YAML, "diff": plan.Diff, "explain": plan.Explain}

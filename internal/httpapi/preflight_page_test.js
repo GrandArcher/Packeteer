@@ -2,8 +2,10 @@
 // Runs the preflight section of the settings page script (#221) against a
 // small DOM stand-in: each check shows its status, what was found, and the
 // fix; an unverified check offers Confirm; the inject step appears only
-// when every check passed and posts the editor text and the prefixes. The
-// functions are cut out of the real settings.js. Run by TestPreflightPage.
+// when every check passed, or when only the announcer is missing (it then
+// shows the announcer fields of the config schema), and posts the editor
+// text, the prefixes, and the announcer. The functions are cut out of the
+// real settings.js and blocks.js. Run by TestPreflightPage.
 
 var fs = require("fs");
 var path = require("path");
@@ -42,14 +44,19 @@ function text(n) {
 }
 
 var els = {};
-["pf-list", "pf-when", "pf-inject", "pf-run", "pf-vendor", "pf-allow", "pf-allow-err", "pf-cap", "pf-inject-status", "pf-explain", "ed-yaml", "editor-section", "pf-snippet", "pf-snippet-status"].forEach(function (id) { els[id] = node("x"); });
+["pf-list", "pf-when", "pf-inject", "pf-run", "pf-vendor", "pf-allow", "pf-allow-err", "pf-cap", "pf-inject-status", "pf-explain", "ed-yaml", "editor-section", "pf-snippet", "pf-snippet-status", "pf-snippet-missing", "wz-body", "wz-asn", "wz-router", "wz-edge", "pf-announcer"].forEach(function (id) { els[id] = node("x"); });
 els["pf-inject"].hidden = true;
+var flowListen = "";
 var calls = [];
 var reply = null;
 var loaded = [];
 var checked = 0;
 var previews = [];
+var drawn = [];
 var context = {
+  schema: null,
+  schemaFailed: false,
+  renderFields: function (parent, fields, obj, path) { drawn.push({fields: fields, obj: obj, path: path}); },
   document: {createElement: node, createTextNode: function (t) { var n = node("#text"); n.textContent = t; return n; }},
   byId: function (id) { return els[id]; },
   explain: function (err) { return "explained: " + err.message; },
@@ -58,6 +65,9 @@ var context = {
   checkConfig: function () { checked++; },
   previewCandidate: function (confirm) { previews.push(confirm); },
   Number: Number,
+  Object: Object,
+  Math: Math,
+  wizardFlowListen: function () { return flowListen; },
   encodeURIComponent: encodeURIComponent,
   Promise: Promise,
   api: function (method, url, body) {
@@ -69,10 +79,14 @@ vm.createContext(context);
 
 var ui = fs.readFileSync(path.join(__dirname, "web", "ui.js"), "utf8");
 var settings = fs.readFileSync(path.join(__dirname, "web", "settings.js"), "utf8");
+var blocks = fs.readFileSync(path.join(__dirname, "web", "blocks.js"), "utf8");
 ["el", "clear"].forEach(function (n) { vm.runInContext(fn(ui, n), context); });
+vm.runInContext(fn(blocks, "blankValues"), context);
+vm.runInContext("var pfReport = null; var pfAnnouncer = null;", context);
 vm.runInContext(settings.slice(settings.indexOf("var pfLabels"), settings.indexOf("var pfBadge")), context);
 vm.runInContext(settings.slice(settings.indexOf("var pfBadge"), settings.indexOf("function pfSummary")), context);
-["pfSummary", "pfItem", "renderPreflight", "loadPreflight", "runPreflight", "confirmCheck", "showSnippet", "planInject"].forEach(function (n) {
+vm.runInContext("var snippetShown = false; var snippetSeq = 0;", context);
+["pfBlocks", "pfOffered", "renderPfAnnouncer", "pfSummary", "pfItem", "renderPreflight", "loadPreflight", "runPreflight", "confirmCheck", "snippetCandidate", "showSnippet", "refreshSnippet", "planInject"].forEach(function (n) {
   vm.runInContext(fn(settings, n), context);
 });
 
@@ -152,13 +166,139 @@ reply.then(function () {
 }).then(function () {
   assert(els["pf-when"].textContent === "The checks have not run yet." && els["pf-vendor"].children.length === 2, "never run: " + els["pf-when"].textContent);
 
-  // The router config is requested for the chosen vendor.
+  // An empty page reads the router config of the running file.
   els["pf-vendor"].value = "bird";
+  els["ed-yaml"].value = "";
   reply = Promise.resolve({vendor: "bird", text: "filter packeteer_in {}\n"});
   calls.length = 0;
   return context.showSnippet();
 }).then(function () {
-  assert(calls[0].url === "/api/snippets?vendor=bird" && els["pf-snippet"].textContent === "filter packeteer_in {}\n" && els["pf-snippet"].hidden === false, "snippet call: " + JSON.stringify(calls));
+  assert(calls.length === 1 && calls[0].method === "GET" && calls[0].url === "/api/snippets?vendor=bird" && els["pf-snippet"].textContent === "filter packeteer_in {}\n" && els["pf-snippet"].hidden === false, "running snippet call: " + JSON.stringify(calls));
+  assert(els["pf-snippet-status"].textContent.indexOf("running config") >= 0, "status names the source: " + els["pf-snippet-status"].textContent);
+
+  // Wizard answers and the editor text that are not saved go to the server.
+  els["wz-asn"].value = " 64496 ";
+  els["wz-router"].value = "192.0.2.10";
+  els["wz-edge"].value = "192.0.2.254";
+  flowListen = ":2055";
+  els["ed-yaml"].value = "mode: observe\n";
+  calls.length = 0;
+  return context.showSnippet();
+}).then(function () {
+  var c = calls[0];
+  assert(calls.length === 1 && c.method === "POST" && c.url === "/api/snippets", "candidate call: " + JSON.stringify(calls));
+  assert(c.body.vendor === "bird" && c.body.yaml === "mode: observe\n" && JSON.stringify(c.body.answers) === JSON.stringify({asn: 64496, router_id: "192.0.2.10", edge: "192.0.2.254", flow_listen: ":2055", wizard: true}), "candidate body: " + JSON.stringify(c.body));
+  assert(els["pf-snippet-status"].textContent.indexOf("on this page") >= 0, "status names the source: " + els["pf-snippet-status"].textContent);
+
+  // A wizard that is collapsed (a box with a config) is not sent.
+  els["wz-body"].hidden = true;
+  calls.length = 0;
+  return context.showSnippet();
+}).then(function () {
+  assert(JSON.stringify(calls[0].body.answers) === "{}", "a collapsed wizard sends no answers and no wizard flag: " + JSON.stringify(calls[0].body));
+  els["wz-body"].hidden = false;
+
+  // Missing answers are listed in plain words, not as one raw error.
+  var err = new Error("The router config needs more answers.");
+  err.status = 422;
+  err.data = {error: err.message, missing: ["Router address: enter the Edge address in setup step 1 (Edge).", "Packeteer's address: enter the Router ID in setup step 1 (Edge)."]};
+  reply = Promise.reject(err);
+  return context.showSnippet();
+}).then(function () {
+  var list = els["pf-snippet-missing"];
+  assert(els["pf-snippet"].hidden === true && list.hidden === false && list.children.length === 2 && list.children[0].textContent.indexOf("Edge address in setup step 1") >= 0, "missing list: " + JSON.stringify(list.children.map(text)));
+  assert(els["pf-snippet-status"].textContent === "The router config needs more answers:", "missing status: " + els["pf-snippet-status"].textContent);
+
+  // Changing an answer redraws the config that was asked for, and clears the list.
+  reply = Promise.resolve({vendor: "bird", text: "second\n"});
+  calls.length = 0;
+  return context.refreshSnippet();
+}).then(function () {
+  assert(calls.length === 1 && els["pf-snippet"].textContent === "second\n" && els["pf-snippet-missing"].hidden === true && els["pf-snippet-missing"].children.length === 0, "refresh: " + JSON.stringify(calls));
+
+  // A slower earlier reply does not replace the answer to the latest change.
+  var slow;
+  var first = new Promise(function (res) { slow = res; });
+  reply = first;
+  var older = context.showSnippet();
+  reply = Promise.resolve({vendor: "bird", text: "newer\n"});
+  var newer = context.showSnippet();
+  return newer.then(function () {
+    slow({vendor: "bird", text: "older\n"});
+    return older;
+  });
+}).then(function () {
+  assert(els["pf-snippet"].textContent === "newer\n", "an older reply overwrote a newer one: " + els["pf-snippet"].textContent);
+
+  // Any other failure is explained as before.
+  reply = Promise.reject(new Error("boom"));
+  return context.showSnippet();
+}).then(function () {
+  assert(els["pf-snippet-status"].textContent === "explained: boom" && els["pf-snippet-missing"].hidden === true, "plain error: " + els["pf-snippet-status"].textContent);
+
+  // Only the announcer is missing: the step shows the announcer fields of
+  // the inject settings block once the schema is there, and sends them.
+  var noAnnouncer = JSON.parse(JSON.stringify(ready));
+  noAnnouncer.ready = false;
+  noAnnouncer.announcer_missing = true;
+  noAnnouncer.results.push({id: "withdrawal", title: "Routes are withdrawn when Packeteer stops", status: "fail", detail: "No announcer is configured.", fix: "Add one."});
+  context.renderPreflight(noAnnouncer);
+  assert(els["pf-inject"].hidden === false && els["pf-announcer"].hidden === false, "the step shows when only the announcer is missing");
+  assert(els["pf-when"].textContent.indexOf("Every other check passed. No announcer is configured: the step below adds one.") === 0, "summary: " + els["pf-when"].textContent);
+  assert(text(els["pf-announcer"]) === "Loading the announcer form..." && drawn.length === 0, "before the schema: " + text(els["pf-announcer"]));
+
+  var typeField = {key: "type", label: "Type", kind: "enum", options: ["gobgp"], required: true};
+  context.schema = {blocks: [{id: "scorer", fields: []}, {id: "inject", fields: [
+    {key: "packeteer_community", label: "Route community", kind: "string"},
+    {key: "announcer", label: "Announcer", help: "The in-process BGP announcer.", kind: "group", fields: [typeField]}
+  ]}]};
+  context.renderPfAnnouncer();
+  assert(drawn.length === 1 && drawn[0].fields[0] === typeField && drawn[0].path === "announcer" && drawn[0].obj.type === "gobgp", "the schema's announcer fields are drawn with the one type chosen: " + JSON.stringify(drawn));
+  assert(text(els["pf-announcer"]).indexOf("Announcer") === 0 && text(els["pf-announcer"]).indexOf("starts when Packeteer restarts") > 0, "form text: " + text(els["pf-announcer"]));
+
+  // A redraw keeps what was chosen.
+  drawn[0].obj.type = "picked";
+  context.renderPfAnnouncer();
+  assert(drawn[1].obj.type === "picked", "a redraw reset the form");
+  drawn[1].obj.type = "gobgp";
+
+  els["pf-allow"].value = "198.51.100.0/24";
+  els["pf-cap"].value = "";
+  calls.length = 0;
+  reply = Promise.resolve({yaml: "mode: inject\nannouncer:\n  type: gobgp\n", explain: ["announcer gobgp is added."]});
+  return context.planInject();
+}).then(function () {
+  assert(calls.length === 1 && calls[0].body.announcer && calls[0].body.announcer.type === "gobgp" && calls[0].body.max_improvements === undefined, "plan body carries the announcer: " + JSON.stringify(calls[0].body));
+
+  // An announcer that is saved but not running yet is in the text: none is sent.
+  els["ed-yaml"].value = "mode: observe\nannouncer:\n  type: gobgp\n";
+  calls.length = 0;
+  return context.planInject();
+}).then(function () {
+  assert(!("announcer" in calls[0].body), "a second announcer was sent: " + JSON.stringify(calls[0].body));
+  els["ed-yaml"].value = "mode: observe\n";
+
+  // Another check that blocks keeps the step hidden.
+  var twoBlock = JSON.parse(JSON.stringify(blocked));
+  twoBlock.announcer_missing = true;
+  twoBlock.results.push({id: "withdrawal", title: "w", status: "fail", detail: "No announcer is configured."});
+  context.renderPreflight(twoBlock);
+  assert(els["pf-inject"].hidden === true, "the step shows although another check blocks");
+
+  // The schema failed: the form says where to add it by hand.
+  context.schema = null;
+  context.schemaFailed = true;
+  context.renderPfAnnouncer();
+  assert(text(els["pf-announcer"]).indexOf("could not be loaded") >= 0, "schema failure text: " + text(els["pf-announcer"]));
+
+  // With an announcer running, the step sends none.
+  context.renderPreflight(ready);
+  assert(els["pf-announcer"].hidden === true, "the announcer form shows with an announcer configured");
+  calls.length = 0;
+  reply = Promise.resolve({yaml: "mode: inject\n", explain: []});
+  return context.planInject();
+}).then(function () {
+  assert(!("announcer" in calls[0].body), "a config with an announcer was sent another: " + JSON.stringify(calls[0].body));
   console.log("ok");
 }).catch(function (e) {
   console.error("FAIL: " + (e && e.stack || e));

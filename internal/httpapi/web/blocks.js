@@ -371,6 +371,7 @@ function renderBlocks() {
   var mounts = document.querySelectorAll("[data-block]");
   Array.prototype.forEach.call(mounts, function (mount) { renderBlock(mount); });
   if (typeof renderFlowExtras === "function") renderFlowExtras();
+  if (typeof renderPfAnnouncer === "function") renderPfAnnouncer();
   renderPlugins();
 }
 

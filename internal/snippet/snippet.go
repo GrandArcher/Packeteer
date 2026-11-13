@@ -10,11 +10,14 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"net"
 	"net/netip"
+	"strconv"
 	"strings"
 	"text/template"
 
 	"github.com/GrandArcher/Packeteer/internal/config"
+	"gopkg.in/yaml.v3"
 )
 
 // Router vendors.
@@ -52,6 +55,11 @@ type Params struct {
 	AddPath bool
 	// IPv6 is true when the session or a provider is IPv6.
 	IPv6 bool
+	// FlowHost and FlowPort are where the router sends flow records: the
+	// flow source's listen address. FlowPort is 0 when no flow source
+	// listens.
+	FlowHost string
+	FlowPort int
 }
 
 // Large reports whether Community is a large community (RFC 8092).
@@ -69,14 +77,51 @@ func (p Params) BirdMatch() string {
 // cannot express.
 var ErrUnsupported = errors.New("unsupported")
 
+// MissingError lists, in plain words, the answers a snippet still needs and
+// where to give each one. It is not an internal error: the operator is
+// part-way through setup.
+type MissingError struct{ Hints []string }
+
+func (e *MissingError) Error() string { return strings.Join(e.Hints, "\n") }
+
+const (
+	hintASN       = "AS number: enter it as ASN in setup step 1 (Edge), or set asn in the file."
+	hintEdge      = "Router address: enter the Edge address in setup step 1 (Edge), or set bgp.neighbors in the file. The snippet is for that router."
+	hintSelf      = "Packeteer's address: enter the Router ID in setup step 1 (Edge), or set router_id or the neighbor's local_address in the file. The router needs it to peer with Packeteer."
+	hintNoComm    = "Packeteer community: the router filters match it. Set packeteer_community in the file, or press Generate in the UI setup (step 4, Flow) to fill it as %d:666."
+	hintNoASNComm = "Packeteer community: set packeteer_community in the file, or enter the ASN in setup step 1 (Edge) so setup can fill it."
+	hintBigASN    = "Packeteer community: setup leaves it empty for an AS number above 65535, because the standard community has 16 bits. Set packeteer_community in the settings form or the file as a large community, for example 65536:666:1."
+)
+
+func communityHint(asn uint32) string {
+	if asn > 0xffff {
+		return hintBigASN
+	}
+	if asn == 0 {
+		return hintNoASNComm
+	}
+	return fmt.Sprintf(hintNoComm, asn)
+}
+
 // ForConfig returns one Params per bgp.neighbors entry: each neighbor is a
-// router that needs its own snippet.
+// router that needs its own snippet. When answers are missing it returns a
+// *MissingError naming every one, not just the first.
 func ForConfig(cfg *config.Config) ([]Params, error) {
+	var miss []string
+	if cfg.ASN == 0 {
+		miss = append(miss, hintASN)
+	}
 	if len(cfg.BGP.Neighbors) == 0 {
-		return nil, errors.New("no bgp.neighbors: a snippet is for the router Packeteer peers with")
+		miss = append(miss, hintEdge)
 	}
 	if cfg.PacketeerCommunity == "" {
-		return nil, errors.New("packeteer_community is not set: the router filters match it")
+		miss = append(miss, communityHint(cfg.ASN))
+	}
+	if cfg.RouterID == "" && !allHaveLocalAddress(cfg.BGP.Neighbors) {
+		miss = append(miss, hintSelf)
+	}
+	if len(miss) > 0 {
+		return nil, &MissingError{Hints: miss}
 	}
 	community, err := config.CommunityText(cfg.PacketeerCommunity)
 	if err != nil {
@@ -88,6 +133,7 @@ func ForConfig(cfg *config.Config) ([]Params, error) {
 			v6 = true
 		}
 	}
+	listen := flowListen(cfg)
 	var out []Params
 	for _, n := range cfg.BGP.Neighbors {
 		router, err := netip.ParseAddr(n.Address)
@@ -100,14 +146,76 @@ func ForConfig(cfg *config.Config) ([]Params, error) {
 		}
 		pk, err := netip.ParseAddr(self)
 		if err != nil {
-			return nil, fmt.Errorf("the router needs Packeteer's address: set router_id or bgp.neighbors local_address (got %q)", self)
+			return nil, fmt.Errorf("the router needs Packeteer's address, and %q is not an IP address: fix the Router ID in setup step 1, or router_id and the neighbor's local_address in the file", self)
 		}
-		out = append(out, Params{
+		p := Params{
 			ASN: cfg.ASN, Router: router.Unmap().String(), Packeteer: pk.Unmap().String(), Community: community,
 			AddPath: n.AddPath, IPv6: v6 || router.Is6() && !router.Is4In6(),
-		})
+		}
+		p.FlowHost, p.FlowPort = p.collector(listen)
+		out = append(out, p)
 	}
 	return out, nil
+}
+
+// allHaveLocalAddress reports whether every neighbor sets local_address; with
+// no neighbors it is false.
+func allHaveLocalAddress(ns []config.BGPNeighbor) bool {
+	for _, n := range ns {
+		if n.LocalAddress == "" {
+			return false
+		}
+	}
+	return len(ns) > 0
+}
+
+// flowListen is the first usable host:port a configured flow source
+// listens on, or "" when there is none (no flow source, or an eBPF-only one).
+func flowListen(cfg *config.Config) string {
+	for _, s := range cfg.Sources {
+		if s.Type != "flow" {
+			continue
+		}
+		var c struct {
+			Listen yaml.Node `yaml:"listen"`
+		}
+		if s.Config.Decode(&c) != nil {
+			continue
+		}
+		var list []string
+		switch c.Listen.Kind {
+		case yaml.ScalarNode:
+			list = []string{c.Listen.Value}
+		case yaml.SequenceNode:
+			_ = c.Listen.Decode(&list)
+		}
+		for _, l := range list {
+			if _, port, err := net.SplitHostPort(l); err == nil && port != "0" {
+				return l
+			}
+		}
+	}
+	return ""
+}
+
+// collector is where the router sends flow records: the flow source's
+// listen address, or Packeteer's own address when it listens on every one.
+func (p Params) collector(listen string) (string, int) {
+	if listen == "" {
+		return "", 0
+	}
+	host, port, err := net.SplitHostPort(listen)
+	if err != nil {
+		return "", 0
+	}
+	n, err := strconv.Atoi(port)
+	if err != nil || n < 1 || n > 65535 {
+		return "", 0
+	}
+	if a, err := netip.ParseAddr(host); err != nil || a.IsUnspecified() {
+		host = p.Packeteer
+	}
+	return host, n
 }
 
 // Generate renders the snippet for one vendor.
