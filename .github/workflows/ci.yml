@@ -2189,10 +2189,13 @@ jobs:
           curl -fsS "$base/api/overview" | jq -e '.mode == "observe" and .counts.providers_healthy == 1 and (.problems | map(.provider + ":" + .detail)) == ["lab-b:100% loss", "lab-c:no answer"]'
           bash lab/ui-smoke.sh "$base/" '2 problems: </strong><a href="/providers.html#provider-lab-b">lab-b</a> 100% loss, <a href="/providers.html#provider-lab-c">lab-c</a> no answer' \
             'headline headline-down' '<div class="tile bad"><span class="k">Providers</span><span class="tile-v">1 of 3 healthy</span>' \
-            '2 warnings' 'mode-observe' --absent 'all ok' 'Providers up' 'Cannot reach'
+            '2 warnings' 'mode-observe' '100% loss through lab-b' 'No answer through lab-c' \
+            'Down now, so no line: lab-b (100% loss), lab-c (no answer)' \
+            --absent 'all ok' 'Providers up' 'Cannot reach' 'No answer through lab-b'
           bash lab/ui-smoke.sh "$base/providers.html" '<span class="dot up">up</span>' \
             '<span class="dot down">down</span><span class="muted"> 100% loss</span>' '<span class="dot down">down</span><span class="muted"> no answer</span>' \
-            '0 ok, 2 failed' --absent '2 ok, 0' 'Cannot reach'
+            '0 ok, 2 failed' '<span class="stat-v">100.0% now</span>' '<span class="stat-v">no reply now</span>' 'includes earlier samples' \
+            --absent '2 ok, 0' 'Cannot reach'
           bash lab/ui-smoke.sh "$base/prefix/198.51.100.0%2F24" \
             '<td>lab-b <span class="dot down">down</span></td><td class="num bad">100.0%</td><td class="bad">no reply</td>' \
             '<td>lab-c <span class="dot down">down</span></td>' '<td class="num">12.0 ms</td>' --absent 'Cannot reach'

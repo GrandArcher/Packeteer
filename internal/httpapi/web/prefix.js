@@ -86,16 +86,25 @@ function gateRow(g) {
   return tr;
 }
 
+// silentPath is true for a path nothing came back through. The probe has no
+// RTT then, and 0.0 ms would read as the fastest path.
+function silentPath(loss) {
+  return Number(loss) >= 100;
+}
+
 function sampleRow(s) {
   var tr = el("tr");
+  var silent = silentPath(s.loss_pct);
   tr.appendChild(el("td", "", s.provider));
   tr.appendChild(el("td", "", s.role || "-"));
   tr.appendChild(el("td", "", fmtPct(s.loss_pct)));
-  tr.appendChild(el("td", "", fmtMs(s.rtt_ms)));
-  tr.appendChild(el("td", "", fmtMs(s.jitter_ms)));
+  tr.appendChild(el("td", silent ? "muted" : "", silent ? NO_REPLY : fmtMs(s.rtt_ms)));
+  tr.appendChild(el("td", silent ? "muted" : "", silent ? NO_REPLY : fmtMs(s.jitter_ms)));
   tr.appendChild(el("td", "", s.usable ? String(Math.round(s.score * 10) / 10) : "-"));
   tr.appendChild(confidenceCell(s.confidence, s.evidence));
-  tr.appendChild(el("td", "", s.usable ? "usable" : "not usable: " + (s.why || "no reason")));
+  var status = s.usable ? "usable" : "not usable: " + (s.why || "no reason");
+  if (s.usable && silent) status = "no reply: 100% loss";
+  tr.appendChild(el("td", "", status));
   return tr;
 }
 
@@ -139,7 +148,7 @@ function timelineVerb(mode) {
 }
 
 function measure(loss, rtt) {
-  return "loss " + fmtPct(loss) + ", RTT " + fmtMs(rtt);
+  return "loss " + fmtPct(loss) + ", RTT " + (silentPath(loss) ? NO_REPLY : fmtMs(rtt));
 }
 
 function improvementEntries(im) {

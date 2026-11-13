@@ -68,8 +68,9 @@ var web = path.join(__dirname, "web");
 var app = fs.readFileSync(path.join(web, "app.js"), "utf8");
 var page = fs.readFileSync(path.join(web, "prefix.js"), "utf8");
 ["GATE_LABELS", "GATE_RESULTS", "OUTCOMES"].forEach(function (n) { vm.runInContext(varBlock(page, n), context); });
+vm.runInContext(/^var NO_REPLY = [^;]*;$/m.exec(app)[0], context);
 [[app, "el"], [app, "clear"], [app, "fmtMs"], [app, "fmtPct"], [app, "fmtTime"], [app, "table"], [app, "confidenceCell"],
-  [page, "gateLabel"], [page, "whyHeadline"], [page, "gateRow"], [page, "sampleRow"], [page, "renderWhy"], [page, "loadWhy"],
+  [page, "gateLabel"], [page, "whyHeadline"], [page, "gateRow"], [page, "silentPath"], [page, "sampleRow"], [page, "renderWhy"], [page, "loadWhy"],
   [page, "whyStored"], [page, "timelineVerb"], [page, "measure"], [page, "improvementEntries"]
 ].forEach(function (p) { vm.runInContext(fn(p[0], p[1]), context); });
 vm.runInContext('var thisPrefix = "198.51.100.0/24";', context);
@@ -110,6 +111,16 @@ assert(withClass(body, "badge warn").length === 1 && withClass(body, "badge warn
 assert(text.indexOf("no measurement") < 0, "a failed sample shows no evidence text");
 assert(text.indexOf("Max simultaneous moves") >= 0 && text.indexOf("Learned RIB") >= 0, "gate labels are plain words");
 assert(text.indexOf("not usable: stale") >= 0 && text.indexOf("challenger") >= 0, "samples: " + text);
+
+// A path with 100% loss has no RTT and is not "usable" at 0.0 ms (#577).
+var silentRow = context.sampleRow({provider: "lab-b", role: "challenger", loss_pct: 100, rtt_ms: 0, jitter_ms: 0, score: 9999, usable: true, confidence: "none", evidence: ""});
+var cells = silentRow.children.map(function (c) { return c.textContent; });
+assert(cells[2] === "100.0%" && cells[3] === "no reply" && cells[4] === "no reply", "silent path shows no reply, not 0.0 ms: " + cells);
+assert(cells[7] === "no reply: 100% loss" && cells.indexOf("usable") < 0, "silent path is not usable: " + cells);
+assert(silentRow.textContent.indexOf("0.0 ms") < 0, "no 0.0 ms anywhere in the row");
+var liveRow = context.sampleRow({provider: "lab-a", loss_pct: 0, rtt_ms: 0, jitter_ms: 0, score: 1, usable: true, confidence: "high", evidence: "e"});
+assert(liveRow.children[3].textContent === "0.0 ms" && liveRow.children[7].textContent === "usable", "a path that answers keeps its figures");
+assert(context.measure(100, 0) === "loss 100.0%, RTT no reply" && context.measure(0, 12) === "loss 0.0%, RTT 12.0 ms", "timeline measure");
 
 var moved = JSON.parse(JSON.stringify(held));
 moved.explain.outcome = "moved";

@@ -41,6 +41,6 @@ function renderOverviewCharts(stats, overview) {
   var latency = document.getElementById("chart-latency");
   if (!latency || !overview) return;
   var names = (overview.providers || []).map(function (p) { return p.name; });
-  renderProviderLatency(latency, stats, names);
+  renderProviderLatency(latency, stats, names, overview.providers);
   loadImprovementReport();
 }

@@ -73,7 +73,7 @@ var app = fs.readFileSync(path.join(web, "app.js"), "utf8");
 var charts = fs.readFileSync(path.join(web, "charts.js"), "utf8");
 ["SVG_NS", "SERIES_N", "HOUR_MS", "OV_W", "OV_GAP_MS"].forEach(function (n) { vm.runInContext(varLine(charts, n), context); });
 vm.runInContext(varLine(app, "NO_REPLY"), context);
-[[app, "el"], [app, "clear"], [app, "fmtMs"], [app, "fmtPct"], [app, "statCell"], [app, "mbpsText"], [app, "reorderCell"],
+[[app, "el"], [app, "clear"], [app, "fmtMs"], [app, "fmtPct"], [app, "statCell"], [app, "liveStat"], [app, "mbpsText"], [app, "reorderCell"],
   [charts, "svgEl"], [charts, "tsTicks"], [charts, "clockLabel"], [charts, "lineChart"], [charts, "seriesClass"],
   [charts, "renderProviderLatency"], [charts, "improvementCounts"], [charts, "renderImprovementCounts"], [charts, "sparkline"]
 ].forEach(function (p) { vm.runInContext(fn(p[0], p[1]), context); });
@@ -97,6 +97,26 @@ assert(s15 === "15 minno reply24 h90.0 ms", "no reply: " + s15);
 assert(s15.indexOf("15 min0.0 ms") < 0, "a silent path has no 0.0 ms");
 assert(context.statCell(silent, "loss_pct", context.fmtPct).textContent === "15 min100.0%24 h40.0%", "loss while silent");
 assert(withClass(context.statCell(silent, "rtt_ms", context.fmtMs), "muted").length === 1, "only the silent window is muted");
+
+// Down now (#577): the 15 min line follows the latest round, and a window
+// that still holds earlier samples says so.
+var wasHealthy = {last_15m: {slots: 3, loss_pct: 0, rtt_ms: 22.8, jitter_ms: 1}, last_24h: {slots: 288, loss_pct: 0, rtt_ms: 22.8, jitter_ms: 1}};
+var downNow = {name: "lab-b", up: true, state: "down", ok: 0, failed: 2, loss_pct: 100};
+var dl = context.statCell(wasHealthy, "loss_pct", context.fmtPct, downNow).textContent;
+assert(dl === "15 min100.0% now24 h0.0% includes earlier samples", "down provider loss cell: " + dl);
+assert(context.statCell(wasHealthy, "loss_pct", context.fmtPct, downNow).textContent.indexOf("15 min0.0%") < 0, "a down provider is not 0.0% in the 15 min column");
+var dr = context.statCell(wasHealthy, "rtt_ms", context.fmtMs, downNow).textContent;
+assert(dr === "15 minno reply now24 h22.8 ms includes earlier samples", "down provider latency cell: " + dr);
+assert(dr.indexOf("22.8 ms") === dr.lastIndexOf("22.8 ms") && dr.indexOf("15 min22.8") < 0, "no healthy latency in the 15 min column");
+var srcDown = {name: "lab-b", up: false, state: "down", ok: 0, failed: 0, loss_pct: 0};
+assert(context.statCell(wasHealthy, "rtt_ms", context.fmtMs, srcDown).textContent === "15 mindown now24 h22.8 ms includes earlier samples", "source down: no live figure");
+// Partly down: loss is live; latency still comes from the window and is marked.
+var partly = {name: "lab-b", up: true, state: "down", ok: 1, failed: 3, loss_pct: 75};
+assert(context.statCell(wasHealthy, "loss_pct", context.fmtPct, partly).textContent === "15 min75.0% now24 h0.0% includes earlier samples", "partly down loss");
+assert(context.statCell(wasHealthy, "rtt_ms", context.fmtMs, partly).textContent === "15 min22.8 ms includes earlier samples24 h22.8 ms includes earlier samples", "partly down latency");
+// Healthy and degraded providers are unchanged.
+var okNow = {name: "lab-a", up: true, state: "up", ok: 2, failed: 0, loss_pct: 0};
+assert(context.statCell(wasHealthy, "loss_pct", context.fmtPct, okNow).textContent === "15 min0.0%24 h0.0%", "healthy provider cell is unchanged");
 
 // No probes at all in a window: no data.
 assert(context.statCell(undefined, "rtt_ms", context.fmtMs).textContent === "15 minno data24 hno data", "no stats");
@@ -168,6 +188,20 @@ var legend = withClass(latency, "ts-key").map(function (n) { return n.textConten
 assert(legend.join("|") === "lab-a: median 118.0 ms|lab-b: median 40.0 ms", "legend names each line: " + legend);
 assert(withClass(latency, "ts-silent")[0].textContent.indexOf("No reply from lab-c") === 0, "a silent provider is named, not dropped");
 assert(latency.textContent.indexOf("old") < 0, "a provider that is not configured is not drawn");
+
+// A provider that is down now has no line and is named (#577), however
+// healthy its earlier hours were; the others still draw.
+var downChart = new Node("div");
+var health = [{name: "lab-a", state: "up"}, {name: "lab-b", state: "down", detail: "100% loss"}, {name: "lab-c", state: "down", detail: "no answer"}];
+context.renderProviderLatency(downChart, stats, ["lab-a", "lab-b", "lab-c"], health);
+assert(find(downChart, "polyline").length === 1, "only the provider that is up is drawn");
+assert(withClass(downChart, "ts-key").map(function (n) { return n.textContent; }).join("|") === "lab-a: median 118.0 ms", "legend omits down providers");
+var downNote = withClass(downChart, "ts-down")[0];
+assert(downNote && downNote.textContent === "Down now, so no line: lab-b (100% loss), lab-c (no answer). Its earlier hours are not drawn.", "down note: " + (downNote && downNote.textContent));
+assert(withClass(downChart, "ts-silent").length === 0, "a down provider is not also listed as silent");
+var allDown = new Node("div");
+context.renderProviderLatency(allDown, stats, ["lab-b"], [{name: "lab-b", state: "down", detail: "100% loss"}]);
+assert(find(allDown, "svg").length === 0 && withClass(allDown, "ts-empty")[0].textContent.indexOf("down now") >= 0, "every provider down: a sentence, no healthy line");
 
 var none = new Node("div");
 context.renderProviderLatency(none, {providers: []}, ["lab-a"]);

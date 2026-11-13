@@ -177,20 +177,36 @@ function originASN(row) {
 // statCell shows one measured figure over the last 15 minutes and the last
 // 24 hours. A path that never answered has loss but no latency, so it reads
 // "no reply", not 0.0 ms (#343).
-function statCell(st, key, fmt) {
+function statCell(st, key, fmt, health) {
+  var down = health && health.state === "down";
   var td = el("td", "stat");
-  [["15 min", st && st.last_15m], ["24 h", st && st.last_24h]].forEach(function (w) {
+  [["15 min", st && st.last_15m], ["24 h", st && st.last_24h]].forEach(function (w, i) {
     var line = el("div", "stat-line");
     line.appendChild(el("span", "stat-k", w[0]));
     var win = w[1];
+    var live = down && i === 0 ? liveStat(health, key, fmt) : null;
     var text;
-    if (!win || !win.slots) text = "no data";
+    if (live) text = live;
+    else if (!win || !win.slots) text = "no data";
     else if (win[key] == null) text = NO_REPLY;
     else text = fmt(win[key]);
-    line.appendChild(el("span", win && win.slots && win[key] != null ? "stat-v" : "stat-v muted", text));
+    line.appendChild(el("span", live || (win && win.slots && win[key] != null) ? "stat-v" : "stat-v muted", text));
+    // A window is the median of five-minute slots, so after an outage starts
+    // it still holds the healthy samples from before it.
+    if (down && !live && win && win.slots) line.appendChild(el("span", "stat-note muted", " includes earlier samples"));
     td.appendChild(line);
   });
   return td;
+}
+
+// liveStat is what the 15 min line shows for a provider that is down now:
+// the latest round's figure instead of the window median. It is null when
+// the latest round has no figure for key, so the window and its note show.
+function liveStat(health, key, fmt) {
+  if (!health.up || health.ok + health.failed === 0) return "down now";
+  if (key === "loss_pct") return fmt(health.loss_pct) + " now";
+  if (health.ok === 0) return NO_REPLY + " now";
+  return null;
 }
 
 // mbpsText is the provider's current rate. Without a flow source there is
@@ -276,9 +292,9 @@ function renderProviders(data) {
     if (h && h.detail) cell.appendChild(el("span", "muted", " " + h.detail));
     tr.appendChild(cell);
     var st = stats[p.name];
-    tr.appendChild(statCell(st, "rtt_ms", fmtMs));
-    tr.appendChild(statCell(st, "loss_pct", fmtPct));
-    tr.appendChild(statCell(st, "jitter_ms", fmtMs));
+    tr.appendChild(statCell(st, "rtt_ms", fmtMs, h));
+    tr.appendChild(statCell(st, "loss_pct", fmtPct, h));
+    tr.appendChild(statCell(st, "jitter_ms", fmtMs, h));
     tr.appendChild(reorderCell(p.reorder));
     var trend = el("td", "trend");
     trend.appendChild(sparkline(st && st.points));
