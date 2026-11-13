@@ -51,6 +51,7 @@ leak_watch:
         listen: "192.0.2.10:11020"
         external_routers: [192.0.2.30]
 probe:
+  path_check: {enabled: false}
   interval: 2s
   timeout: 500ms
   packets: 4

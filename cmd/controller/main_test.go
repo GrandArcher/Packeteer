@@ -814,7 +814,7 @@ http: {listen: "127.0.0.1:%d"}
 providers:
   - {name: transit-a, source_ip: 192.0.2.11, next_hop: 192.0.2.1}
   - {name: transit-b, source_ip: 192.0.2.12, next_hop: 192.0.2.2}
-probe: {interval: 200ms, timeout: 50ms, packets: 4}
+probe: {interval: 200ms, timeout: 50ms, packets: 4, path_check: {enabled: false}}
 probers:
   - type: fixed
     config:

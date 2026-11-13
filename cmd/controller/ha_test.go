@@ -226,7 +226,7 @@ providers:
   - {name: transit-a, source_ip: 192.0.2.11, next_hop: 192.0.2.1}
   - {name: transit-b, source_ip: 192.0.2.12, next_hop: 192.0.2.2}
 allowlist: {prefixes: ["198.51.100.0/24"]}
-probe: {interval: 1s, timeout: 200ms, packets: 1}
+probe: {interval: 1s, timeout: 200ms, packets: 1, path_check: {enabled: false}}
 sources:
   - type: static
     config: {targets: [{prefix: 198.51.100.0/24}]}

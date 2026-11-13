@@ -278,7 +278,9 @@ jobs:
           }
           # 1. The shipped example with the sign-in opt-out (#328, the stock
           # file signs in; see the step above): observe, nothing to
-          # probe yet, and the dashboard says what to add.
+          # probe yet, and the dashboard says what to add. Its source_ip
+          # addresses are not on the runner, so both providers show down
+          # with the preflight reason (#581).
           { cat config.example.yaml; printf '\nauth:\n  enabled: false\n'; } > /tmp/example-open.yaml
           docker run -d --name pkui --network host --cap-add NET_RAW --cap-add NET_ADMIN \
             -v /tmp/example-open.yaml:/etc/packeteer/config.yaml:ro packeteer:ci
@@ -292,10 +294,12 @@ jobs:
             'data-hint="sources"' 'Nothing to probe yet' 'mode-observe' 'aria-current="page"' \
             'href="/improvements.html"' 'href="/prefixes.html"' 'href="/settings.html"' 'id="search-slot"' 'id="top-search-recent"' 'id="events-slot"' 'id="account"' \
             'alt="Packeteer logo"' 'src="/logo.png"' 'rel="icon" href="/logo.png"' \
-            --absent 'Cannot reach' 'Inject mode' 'Active improvements' 'no data yet' 'docs/assets' 'problems: ' 'problem: '
+            '2 problems: </strong><a href="/providers.html#provider-transit-a">transit-a</a> probe source down: probe source address is not configured on this host' \
+            --absent 'Cannot reach' 'Inject mode' 'Active improvements' 'no data yet' 'docs/assets'
+          curl -fsS "$base/api/overview" | jq -e '(.problems | map(.provider + ":" + .detail)) == ["transit-a:probe source down: probe source address is not configured on this host", "transit-b:probe source down: probe source address is not configured on this host"]'
           bash lab/ui-smoke.sh "$base/improvements.html" 'Recommended improvements' 'It announces nothing.' 'mode-observe' \
             --absent 'Active improvements' 'Cannot reach'
-          bash lab/ui-smoke.sh "$base/providers.html" 'no data yet' 'It announces nothing.' 'No exchanges in the config.' \
+          bash lab/ui-smoke.sh "$base/providers.html" 'probe source address is not configured on this host' 'It announces nothing.' 'No exchanges in the config.' \
             --absent 'Cannot reach'
           bash lab/ui-smoke.sh "$base/prefixes.html" 'ASN map' 'It announces nothing.' \
             --absent 'Cannot reach'

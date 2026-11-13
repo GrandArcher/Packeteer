@@ -6,6 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Changed
 
+- A provider whose `source_ip` is not on this host is marked down (System page, `provider.down`), as preflight reports; if it is off-host on purpose, set `path_check: false` on that provider (#581).
 - A Settings Save of a gated change such as Hold time opens one "Review and save" dialog with the preview and a confirm button, instead of an Apply button under Blast radius (#576).
 - The Overview headline names a down iBGP session ("no iBGP session") with the provider problems, whether it never came up or dropped (#578).
 - Settings keeps the wizard, preflight, router config, blast radius, and raw YAML in closed sections; Improvements and Providers show cards below 1600 px and Providers has one Open in menu (#580).

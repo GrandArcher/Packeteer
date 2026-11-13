@@ -340,6 +340,9 @@ func TestBudgetFileProfilesAndGeneratedConfig(t *testing.T) {
 		if cfg.Mode != config.ModeObserve || len(cfg.Allowlist.Prefixes) != 0 {
 			t.Fatalf("%s: generated config must be observe with an empty allowlist", name)
 		}
+		if cfg.Probe.PathCheck.On() {
+			t.Fatalf("%s: the path check must be off, the source_ip addresses are not on the soak host", name)
+		}
 	}
 	if _, err := loadProfile("budgets.yaml", "nope"); err == nil {
 		t.Fatal("unknown profile accepted")

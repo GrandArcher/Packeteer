@@ -55,6 +55,29 @@ func TestSetPathMismatchKeepsSourceReason(t *testing.T) {
 	}
 }
 
+func TestSetSourceMissingMarksAndIsReplacedByACheck(t *testing.T) {
+	p := &fakeProber{fn: ok(5, 5, 5)}
+	e, _ := New([]Provider{provA}, []NamedProber{{Name: "p", Prober: p}},
+		src(plugin.Target{Prefix: pfx1, Host: netip.MustParseAddr("198.51.100.1")}), opts())
+
+	e.SetSourceMissing("transit-a")
+	if st := e.Providers()[0]; st.Up || st.Reason != SourceMissingReason {
+		t.Fatalf("missing status = %+v", st)
+	}
+	e.RunOnce(context.Background())
+	if st := e.Providers()[0]; st.Up || st.Reason != SourceMissingReason {
+		t.Fatalf("a good round cleared the mark: %+v", st)
+	}
+	e.SetPathMismatch("transit-a", false)
+	if st := e.Providers()[0]; !st.Up || st.Reason != "" {
+		t.Fatalf("cleared status = %+v", st)
+	}
+	e.SetSourceMissing("transit-z")
+	if st := e.Providers()[0]; !st.Up {
+		t.Fatalf("unknown provider changed status: %+v", st)
+	}
+}
+
 func TestSetPathMismatchUnknownProvider(t *testing.T) {
 	p := &fakeProber{fn: ok(5, 5, 5)}
 	e, _ := New([]Provider{provA}, []NamedProber{{Name: "p", Prober: p}}, src(plugin.Target{Prefix: pfx1}), opts())
