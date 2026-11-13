@@ -1,0 +1,31 @@
+# Config for the hold-time review smoke test (#576). Documentation prefixes
+# and addresses, a private ASN, observe mode. The controller in the test has
+# no router; nothing is announced.
+mode: observe
+asn: 64512
+router_id: 192.0.2.10
+packeteer_community: "64512:666"
+hold_time: 1m
+max_improvements: 50
+http:
+  listen: "127.0.0.1:18576"
+  config_editor: true
+  allow_from: [127.0.0.0/8]
+providers:
+  - name: lab-a
+    source_ip: 127.0.0.1
+    next_hop: 192.0.2.1
+  - name: lab-b
+    source_ip: 127.0.0.2
+    next_hop: 192.0.2.2
+allowlist:
+  prefixes: [198.51.100.0/24]
+probe: {interval: 2s, timeout: 200ms, packets: 1}
+sources:
+  - type: static
+    config:
+      targets: [{prefix: 198.51.100.0/24}]
+probers:
+  - type: fixed
+    config:
+      paths: [{provider: lab-a, rtt_ms: 12}, {provider: lab-b, rtt_ms: 20}]

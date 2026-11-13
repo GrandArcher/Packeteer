@@ -132,6 +132,9 @@ func (s *Server) configGate(w http.ResponseWriter, r *http.Request, req configRe
 		return false
 	}
 	noteAudit(r, "config", fmt.Sprintf("blast preview add=%d move=%d withdraw=%d", len(rep.Add), len(rep.Move), len(rep.Withdraw)))
+	if cur, err := s.editor.Read(); err == nil {
+		res.Changes = configedit.Diff([]byte(cur.YAML), []byte(req.YAML))
+	}
 	body := map[string]any{"dry_run": true, "result": res, "blast": rep, "required": gated}
 	if gated {
 		body["preview_token"] = s.previewToken(req.Base, []byte(req.YAML), s.blastNow())

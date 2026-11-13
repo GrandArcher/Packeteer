@@ -1120,8 +1120,7 @@ function putConfig() {
     body.preview_token = blastToken;
   }
   api("PUT", "/api/config", body).then(function (out) {
-    blastToken = "";
-    byId("bl-confirm").hidden = true;
+    closeReview();
     base = out.file.sha256;
     yamlSaved = body.yaml;
     document.getElementById("ed-sha").textContent = base.slice(0, 12);
@@ -1132,11 +1131,10 @@ function putConfig() {
     previewConfig();
   }, function (err) {
     if (err.data && err.data.code === "preview_required") {
-      blastToken = "";
-      edStatus("This change can alter what is announced. Read the preview under Blast radius, then press Apply this change.");
-      previewCandidate(true);
+      reviewCandidate();
       return;
     }
+    closeReview();
     var res = err.data && err.data.result;
     edStatus(err.message + (res ? " - " + describe(res) : ""), res && res.errors);
     if (typeof showServerErrors === "function") showServerErrors(res && res.errors);
@@ -1154,6 +1152,15 @@ function changeValue(v) {
   return v.length > 60 ? v.slice(0, 57) + "..." : v;
 }
 
+// changeList names each changed key, old value to new, up to maxListedChanges.
+function changeList(changes) {
+  var shown = changes.slice(0, maxListedChanges).map(function (c) {
+    return c.key + " " + changeValue(c.old) + " -> " + changeValue(c.new);
+  });
+  if (changes.length > shown.length) shown.push("and " + (changes.length - shown.length) + " more");
+  return shown;
+}
+
 // savedMessage names each key the save changed, old value to new, and says
 // whether it is live. A save that changed nothing says so.
 function savedMessage(out) {
@@ -1166,11 +1173,7 @@ function savedMessage(out) {
   else if (out.applied && out.applied.length) live = " (applied online)";
   else if (res.reload_online) live = " (not applied yet: send SIGHUP)";
   if (!changes.length) return "No changes to save." + live;
-  var shown = changes.slice(0, maxListedChanges).map(function (c) {
-    return c.key + " " + changeValue(c.old) + " -> " + changeValue(c.new);
-  });
-  if (changes.length > shown.length) shown.push("and " + (changes.length - shown.length) + " more");
-  var msg = "Saved " + changes.length + (changes.length === 1 ? " change: " : " changes: ") + shown.join("; ") + live + ".";
+  var msg = "Saved " + changes.length + (changes.length === 1 ? " change: " : " changes: ") + changeList(changes).join("; ") + live + ".";
   if (res.mode) msg += " Mode " + res.mode + ".";
   if (res.enables_inject) msg += " Turns inject on.";
   return msg;
@@ -2560,8 +2563,8 @@ function blastShift(s) {
   return text;
 }
 
-function renderBlast(rep) {
-  var root = byId("bl-body");
+function renderBlast(rep, root) {
+  root = root || byId("bl-body");
   clear(root);
   if (!rep.announces) root.appendChild(el("p", "tag", "This config does not announce, so every route announced now would be withdrawn."));
   [["Would be announced", rep.add], ["Would move", rep.move], ["Would be withdrawn", rep.withdraw]].forEach(function (g) {
@@ -2663,22 +2666,51 @@ function runWhatIf() {
   });
 }
 
-// previewCandidate previews the editor text without saving it. With confirm
-// set, the Apply button saves it with the token the preview returned.
-function previewCandidate(confirm) {
+// previewCandidate previews the editor text in the Blast radius panel
+// without saving it.
+function previewCandidate() {
   var body = {yaml: byId("ed-yaml").value, base: base, dry_run: true};
   return api("PUT", "/api/config", body).then(function (out) {
     renderBlast(out.blast);
     blastToken = out.preview_token || "";
-    byId("bl-confirm").hidden = !(confirm && blastToken);
-    byId("bl-status").textContent = confirm ? "Preview of the change in the editor. Nothing is saved yet." : "Preview of the config in the editor.";
+    byId("bl-status").textContent = "Preview of the config in the editor.";
     showTarget(byId("blast"));
     byId("blast").scrollIntoView();
   }, function (err) {
     blastToken = "";
-    byId("bl-confirm").hidden = true;
     byId("bl-status").textContent = explain(err);
     showTarget(byId("blast"));
+  });
+}
+
+function closeReview() {
+  blastToken = "";
+  byId("review").hidden = true;
+}
+
+// reviewCandidate runs when the server gates a save: it previews the editor
+// text and shows it in a dialog with the one button that saves it with the
+// token the preview returned. A preview that fails, or returns no token,
+// saves nothing and says so in the status and the bar.
+function reviewCandidate() {
+  blastToken = "";
+  var body = {yaml: byId("ed-yaml").value, base: base, dry_run: true};
+  return api("PUT", "/api/config", body).then(function (out) {
+    if (!out.preview_token) {
+      closeReview();
+      edStatus("Nothing was saved: the server did not ask for a review. Press Save again.");
+      return;
+    }
+    blastToken = out.preview_token;
+    var changes = (out.result && out.result.changes) || [];
+    byId("rv-title").textContent = changes.length ? "Review and save " + changeList(changes).join("; ") : "Review and save this change";
+    renderBlast(out.blast, byId("rv-body"));
+    byId("review").hidden = false;
+    byId("rv-confirm").focus();
+    edStatus("Review the change in the dialog, then confirm to save. Nothing is saved yet.");
+  }, function (err) {
+    closeReview();
+    edStatus("Nothing was saved: " + explain(err));
   });
 }
 
@@ -2706,7 +2738,7 @@ function planInject() {
       text += " Your router does not advertise " + out.not_learned.join(", ") + " to Packeteer now, so " + (out.not_learned.length === 1 ? "it" : "they") + " would not be announced.";
     }
     status.textContent = text;
-    previewCandidate(false);
+    previewCandidate();
   }, function (e) {
     status.textContent = e.data && e.data.code === "preflight_required" ? "A check no longer passes. " + pfSummary(e.data.preflight) : explain(e);
     if (e.data && e.data.preflight) renderPreflight(e.data.preflight);
@@ -2888,7 +2920,14 @@ byId("pf-snippet-copy").addEventListener("click", copySnippet);
 byId("pf-inject-plan").addEventListener("click", planInject);
 byId("bl-run").addEventListener("click", loadBlast);
 byId("wi-run").addEventListener("click", runWhatIf);
-byId("bl-apply").addEventListener("click", putConfig);
+byId("rv-confirm").addEventListener("click", putConfig);
+byId("rv-cancel").addEventListener("click", function () {
+  closeReview();
+  edStatus("Nothing was saved: the review was cancelled.");
+});
+byId("review").addEventListener("keydown", function (e) {
+  if (e.key === "Escape") byId("rv-cancel").click();
+});
 bindStaticChecks();
 function openHash() { if (location.hash.length > 1) showTarget(byId(location.hash.slice(1))); }
 window.addEventListener("hashchange", openHash);

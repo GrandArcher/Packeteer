@@ -121,6 +121,14 @@ func TestBuildNotInjectWithdrawsEverything(t *testing.T) {
 	if len(rep.Warnings) != 0 {
 		t.Fatalf("observe warnings = %+v", rep.Warnings)
 	}
+	// The page reads warnings.length, so none is [] and never null.
+	b, err := json.Marshal(rep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"warnings":[]`) {
+		t.Fatalf("report JSON = %s", b)
+	}
 }
 
 func TestBuildRefusedRoutesAreNotAnnounced(t *testing.T) {
