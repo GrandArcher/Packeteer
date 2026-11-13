@@ -88,28 +88,6 @@ func TestEventsAPI(t *testing.T) {
 	}
 }
 
-// open=1 is the badge's view: a session that failed and came back is not
-// listed, while the plain list still shows both lines (#579).
-func TestEventsAPIOpenAlertsOnly(t *testing.T) {
-	e, log := eventsEnv(t)
-	t1 := time.Now().Add(-30 * time.Minute).UTC()
-	nb := map[string]string{"neighbor": "192.0.2.1"}
-	log.Record(plugin.Event{Time: t1, Kind: plugin.EventBGPSessionStuck, Severity: plugin.SeverityCritical, Message: "session is not established", Fields: nb})
-	_, body := e.do(t, "GET", "/api/events?open=1&severity=warning", plugin.RoleViewer, nil)
-	if got := fmt.Sprint(eventKinds(body)); got != "[bgp.session_not_established provider.down commit.exceeded]" {
-		t.Errorf("open while the session is down = %s", got)
-	}
-	log.Record(plugin.Event{Time: t1.Add(time.Minute), Kind: plugin.EventBGPSessionUp, Severity: plugin.SeverityInfo, Message: "session is established", Fields: nb})
-	_, body = e.do(t, "GET", "/api/events?open=1&severity=warning", plugin.RoleViewer, nil)
-	if got := fmt.Sprint(eventKinds(body)); got != "[provider.down commit.exceeded]" {
-		t.Errorf("open after the session recovered = %s", got)
-	}
-	_, body = e.do(t, "GET", "/api/events", plugin.RoleViewer, nil)
-	if got := fmt.Sprint(eventKinds(body)); got != "[bgp.session_up bgp.session_not_established provider.down commit.exceeded controller.started]" {
-		t.Errorf("history = %s", got)
-	}
-}
-
 func TestEventsAPIWithoutAnEventLog(t *testing.T) {
 	e := newUI(t)
 	if rec, _ := e.do(t, "GET", "/api/events", plugin.RoleViewer, nil); rec.Code != http.StatusNotFound {

@@ -208,7 +208,7 @@ function shellRenderEventsBadge(n) {
   if (!n) return;
   var text = n >= EVENTS_BADGE_MAX ? EVENTS_BADGE_MAX + "+" : String(n);
   link.appendChild(shellEl("span", "events-count", text));
-  link.setAttribute("aria-label", "Events, " + text + " open open warnings since you last opened the page");
+  link.setAttribute("aria-label", "Events, " + text + " open warnings since you last opened the page");
 }
 
 function shellMarkEventsSeen(nowISO) {
