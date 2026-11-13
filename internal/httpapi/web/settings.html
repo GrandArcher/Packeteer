@@ -181,9 +181,6 @@
       <span id="bl-status" class="tag" role="status"></span>
     </div>
     <div id="bl-body"></div>
-    <div id="bl-confirm" class="controls" hidden>
-      <button type="button" id="bl-apply">Apply this change</button>
-    </div>
   </section>
   <section id="whatif">
     <h2>Replay history</h2>
@@ -490,6 +487,17 @@
     <div id="up-status" class="tag" role="status"></div>
   </section>
 </main>
+<div id="review" class="review" role="alertdialog" aria-modal="true" aria-labelledby="rv-title" hidden>
+  <div class="review-box">
+    <h2 id="rv-title"></h2>
+    <p class="tag">This change can alter routing decisions. Below is what the config would do now. Nothing is saved until you confirm.</p>
+    <div id="rv-body" class="review-body"></div>
+    <div class="controls">
+      <button type="button" id="rv-confirm">Confirm and save</button>
+      <button type="button" id="rv-cancel">Cancel</button>
+    </div>
+  </div>
+</div>
 <div id="save-bar" class="savebar" data-state="clean" role="region" aria-label="Apply and save">
   <span id="unsaved" class="badge warn" hidden>Unsaved changes</span>
   <span id="bar-msg" class="tag" role="status"></span>

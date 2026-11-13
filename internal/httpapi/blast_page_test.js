@@ -1,8 +1,9 @@
 "use strict";
 // Runs the blast-radius section of the settings page script (#227) against
 // a small DOM stand-in: the panel lists what would be announced, move, and
-// be withdrawn with the warnings; a save the server wants previewed shows
-// the preview and saves only with the token it returned. The functions are
+// be withdrawn with the warnings; a save the server wants previewed opens a
+// review dialog (#576) that names the change, shows the preview, and saves
+// only with the token it returned. The functions are
 // cut out of the real settings.js. Run by TestBlastPage.
 
 var fs = require("fs");
@@ -40,8 +41,9 @@ function text(n) {
 }
 
 var els = {};
-["bl-body", "bl-status", "bl-confirm", "blast", "ed-yaml", "ed-inject", "ed-sha"].forEach(function (id) { els[id] = node("x"); });
-els["bl-confirm"].hidden = true;
+["bl-body", "bl-status", "blast", "ed-yaml", "ed-inject", "ed-sha", "review", "rv-title", "rv-body", "rv-confirm"].forEach(function (id) { els[id] = node("x"); });
+els["review"].hidden = true;
+els["rv-confirm"].focus = function () { els["rv-confirm"].focused = true; };
 els["ed-yaml"].value = "mode: inject\n";
 var calls = [];
 var replies = [];
@@ -66,8 +68,8 @@ vm.createContext(context);
 var ui = fs.readFileSync(path.join(__dirname, "web", "ui.js"), "utf8");
 var settings = fs.readFileSync(path.join(__dirname, "web", "settings.js"), "utf8");
 ["el", "clear"].forEach(function (n) { vm.runInContext(fn(ui, n), context); });
-vm.runInContext("var blastToken = '';", context);
-["blastRoute", "blastShift", "renderBlast", "loadBlast", "previewCandidate", "putConfig"].forEach(function (n) {
+vm.runInContext("var blastToken = ''; var maxListedChanges = 8;", context);
+["blastRoute", "blastShift", "renderBlast", "loadBlast", "previewCandidate", "putConfig", "changeValue", "changeList", "closeReview", "reviewCandidate"].forEach(function (n) {
   vm.runInContext(fn(settings, n), context);
 });
 
@@ -135,43 +137,79 @@ context.loadBlast().then(function () {
   assert(els["bl-status"].textContent === "explained: no decision round has run yet", "no round: " + els["bl-status"].textContent);
 
   // A save the server wants previewed: the first PUT is refused with
-  // preview_required, the page asks for the dry run and shows it with an
-  // Apply button, and Apply sends the token with dry_run false.
+  // preview_required, the page asks for the dry run and opens the review
+  // dialog, and the dialog's confirm sends the token with dry_run false.
   calls.length = 0;
   var need = new Error("this change can alter what is announced");
   need.data = {code: "preview_required"};
   replies.push(Promise.reject(need));
-  replies.push(Promise.resolve({dry_run: true, required: true, preview_token: "tok1", blast: report}));
+  replies.push(Promise.resolve({dry_run: true, required: true, preview_token: "tok1", blast: report,
+    result: {changes: [{key: "hold_time", old: "1m", new: "2m"}]}}));
   context.putConfig();
   return new Promise(function (r) { setTimeout(r, 20); });
 }).then(function () {
   assert(calls.length === 2, "save then dry run: " + JSON.stringify(calls));
   assert(calls[0].method === "PUT" && calls[0].body.dry_run === undefined && calls[0].body.preview_token === undefined, "the first save has no token: " + JSON.stringify(calls[0].body));
   assert(calls[1].method === "PUT" && calls[1].body.dry_run === true && calls[1].body.base === "base1" && calls[1].body.yaml === "mode: inject\n", "dry run body: " + JSON.stringify(calls[1].body));
-  assert(els["bl-confirm"].hidden === false, "Apply is offered");
-  assert(text(els["bl-body"]).indexOf("Would be announced (1)") >= 0 && els["blast"].scrolled === true, "the preview is shown");
-  assert(status.length > 0 && status[status.length - 1].indexOf("Apply this change") >= 0, "the editor status points at Apply: " + status);
+  assert(els["review"].hidden === false && els["rv-confirm"].focused === true, "the review dialog is open on its confirm button");
+  assert(els["rv-title"].textContent === "Review and save hold_time 1m -> 2m", "title names the change: " + els["rv-title"].textContent);
+  assert(text(els["rv-body"]).indexOf("Would be announced (1)") >= 0, "the preview is in the dialog: " + text(els["rv-body"]));
+  var many = [];
+  for (var k = 0; k < 10; k++) many.push({key: "k" + k, old: null, new: "v"});
+  var listed = context.changeList(many);
+  assert(listed.length === 9 && listed[0] === "k0 (unset) -> v" && listed[8] === "and 2 more", "long change lists are cut: " + listed);
+  assert(status[status.length - 1].indexOf("Nothing is saved yet") >= 0, "the bar says nothing is saved: " + status[status.length - 1]);
 
   calls.length = 0;
+  status.length = 0;
   replies.push(Promise.resolve({file: {sha256: "base2"}, result: {}}));
   context.putConfig();
   return new Promise(function (r) { setTimeout(r, 20); });
 }).then(function () {
   var b = calls[0].body;
-  assert(b.dry_run === false && b.preview_token === "tok1", "Apply sends the token with dry_run false: " + JSON.stringify(b));
-  assert(els["bl-confirm"].hidden === true && context.blastToken === "", "the token is spent and Apply hides");
+  assert(b.dry_run === false && b.preview_token === "tok1", "confirm sends the token with dry_run false: " + JSON.stringify(b));
+  assert(els["review"].hidden === true && context.blastToken === "", "the token is spent and the dialog closes");
+  assert(status.length === 1 && status[0] === "saved", "success is reported once the file is written: " + status);
 
-  // A dry run for a change that needs no confirmation, or one that fails,
-  // offers no Apply button.
-  replies.push(Promise.resolve({dry_run: true, required: false, blast: report}));
-  return context.previewCandidate(true);
+  // A refused save does not claim success and closes the dialog.
+  els["review"].hidden = false;
+  calls.length = 0;
+  status.length = 0;
+  var stale = new Error("the file changed since it was loaded");
+  replies.push(Promise.reject(stale));
+  context.putConfig();
+  return new Promise(function (r) { setTimeout(r, 20); });
 }).then(function () {
-  assert(els["bl-confirm"].hidden === true, "no token, no Apply button");
+  assert(els["review"].hidden === true, "a refused save closes the dialog");
+  assert(status.length === 1 && status[0] === "the file changed since it was loaded" && status[0].indexOf("Saved") < 0, "refusal is shown, not a Saved: " + status);
+
+  // A dry run that fails (no round yet) saves nothing and opens no dialog.
+  status.length = 0;
+  var noRound = new Error("no decision round has run yet");
+  noRound.data = {code: "no_round"};
+  replies.push(Promise.reject(noRound));
+  return context.reviewCandidate();
+}).then(function () {
+  assert(els["review"].hidden === true && context.blastToken === "", "no dialog and no token after a failed preview");
+  assert(status[0] === "Nothing was saved: explained: no decision round has run yet", "failed preview says nothing was saved: " + status);
+
+  // A dry run that returns no token cannot be confirmed.
+  status.length = 0;
+  replies.push(Promise.resolve({dry_run: true, required: false, blast: report}));
+  return context.reviewCandidate();
+}).then(function () {
+  assert(els["review"].hidden === true && status[0].indexOf("Nothing was saved") === 0, "no token, no dialog: " + status);
+
+  // The guided inject step previews in the panel and keeps the token for Save.
+  replies.push(Promise.resolve({dry_run: true, required: true, preview_token: "tok2", blast: report}));
+  return context.previewCandidate();
+}).then(function () {
+  assert(els["review"].hidden === true && context.blastToken === "tok2", "the panel keeps the token and opens no dialog");
   var bad = new Error("the preview failed");
   replies.push(Promise.reject(bad));
-  return context.previewCandidate(true);
+  return context.previewCandidate();
 }).then(function () {
-  assert(els["bl-confirm"].hidden === true && els["bl-status"].textContent === "explained: the preview failed", "a failed preview: " + els["bl-status"].textContent);
+  assert(context.blastToken === "" && els["bl-status"].textContent === "explained: the preview failed", "a failed preview: " + els["bl-status"].textContent);
   console.log("ok");
 }).catch(function (e) {
   console.error("FAIL: " + (e && e.stack || e));

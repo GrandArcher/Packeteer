@@ -141,6 +141,16 @@ func TestConfigSaveNeedsPreviewForAnnouncingChange(t *testing.T) {
 	if onDisk(t, e.path) != editorYAML {
 		t.Fatal("a dry run wrote the file")
 	}
+	// The dry run names what the save would change, so the review dialog
+	// (#576) can say it before anything is written.
+	res, _ := got["result"].(map[string]any)
+	changes, _ := res["changes"].([]any)
+	if len(changes) != 2 {
+		t.Fatalf("dry run changes: %v", res["changes"])
+	}
+	if c, _ := changes[0].(map[string]any); c["key"] != "thresholds.min_loss_delta_pct" || c["old"] != nil || c["new"] != "2" {
+		t.Fatalf("first change: %v", changes[0])
+	}
 
 	// A token for another candidate, or another revision, does not open it.
 	rec, _ = e.do(t, "PUT", "/api/config", admin, map[string]any{"yaml": yaml + "\n", "base": base, "dry_run": false, "preview_token": token})
