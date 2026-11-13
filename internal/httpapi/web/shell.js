@@ -7,7 +7,8 @@ var SHELL_REFRESH_MS = 5000;
 var shellLastOK = null;
 
 // The events indicator counts warnings (and worse) newer than the time the
-// Events page was last opened in this browser. The time is the
+// Events page was last opened in this browser, and only those whose alert is
+// still open: a session that came back no longer counts (#579). The time is the
 // controller's own clock, kept in localStorage; nothing is stored on the
 // controller.
 var EVENTS_SEEN_KEY = "packeteer.events.seen";
@@ -207,7 +208,7 @@ function shellRenderEventsBadge(n) {
   if (!n) return;
   var text = n >= EVENTS_BADGE_MAX ? EVENTS_BADGE_MAX + "+" : String(n);
   link.appendChild(shellEl("span", "events-count", text));
-  link.setAttribute("aria-label", "Events, " + text + " warnings since you last opened the page");
+  link.setAttribute("aria-label", "Events, " + text + " open open warnings since you last opened the page");
 }
 
 function shellMarkEventsSeen(nowISO) {
@@ -219,7 +220,7 @@ function shellMarkEventsSeen(nowISO) {
 function shellEventsBadge() {
   var seen = null;
   try { seen = localStorage.getItem(EVENTS_SEEN_KEY); } catch (e) { seen = null; }
-  var path = "/api/events?severity=warning&limit=" + EVENTS_BADGE_MAX;
+  var path = "/api/events?severity=warning&open=1&limit=" + EVENTS_BADGE_MAX;
   if (seen) path += "&from=" + encodeURIComponent(seen);
   shellJSON(path).then(function (body) {
     shellRenderEventsBadge((body.events || []).length);

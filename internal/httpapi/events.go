@@ -89,8 +89,10 @@ type eventRow struct {
 	Ack      *eventlog.Ack `json:"ack,omitempty"`
 }
 
-// handleEvents lists recent controller events (#173), newest first. It
-// reads the event log and nothing else.
+// handleEvents lists recent controller events (#173), newest first. With
+// open=1 it lists only the open alerts: the newest event of each alert,
+// when that event is a problem (#579). It reads the event log and nothing
+// else.
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	if s.events == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "the event log is off"})
@@ -113,7 +115,25 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "q must be at most " + strconv.Itoa(maxEventText) + " bytes"})
 		return
 	}
-	evs, err := s.events.Query(r.Context(), q)
+	open := false
+	switch v.Get("open") {
+	case "", "0":
+	case "1":
+		open = true
+	default:
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "open must be 0 or 1"})
+		return
+	}
+	query := q
+	if open {
+		// Resolving events are info and may not match q or the floor, so
+		// read the whole window and filter once each alert's last state is known.
+		query = plugin.EventQuery{From: q.From, To: q.To, Limit: maxEventRows}
+	}
+	evs, err := s.events.Query(r.Context(), query)
+	if err == nil && open {
+		evs = openAlerts(evs, q)
+	}
 	if err != nil {
 		s.log.Error("event read", "err", err)
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "event store unavailable"})
@@ -131,6 +151,28 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		body["since"] = s.events.Started().UTC()
 	}
 	writeJSON(w, http.StatusOK, body)
+}
+
+// openAlerts keeps, from evs (newest first), the events of q whose alert is
+// still open: the newest event of its dedup key is not a resolving one. An
+// alert that recovered drops out of the badge but stays in the plain list.
+func openAlerts(evs []plugin.Event, q plugin.EventQuery) []plugin.Event {
+	latest := map[string]bool{}
+	var out []plugin.Event
+	for _, e := range evs {
+		k := e.DedupKey()
+		if latest[k] {
+			continue
+		}
+		latest[k] = true
+		if e.Resolves() || !q.Match(e) {
+			continue
+		}
+		if out = append(out, e); q.Limit > 0 && len(out) == q.Limit {
+			break
+		}
+	}
+	return out
 }
 
 // Bounds for POST /api/alerts/ack.

@@ -88,6 +88,28 @@ func TestEventsAPI(t *testing.T) {
 	}
 }
 
+// open=1 is the badge's view: a session that failed and came back is not
+// listed, while the plain list still shows both lines (#579).
+func TestEventsAPIOpenAlertsOnly(t *testing.T) {
+	e, log := eventsEnv(t)
+	t1 := time.Now().Add(-30 * time.Minute).UTC()
+	nb := map[string]string{"neighbor": "192.0.2.1"}
+	log.Record(plugin.Event{Time: t1, Kind: plugin.EventBGPSessionStuck, Severity: plugin.SeverityCritical, Message: "session is not established", Fields: nb})
+	_, body := e.do(t, "GET", "/api/events?open=1&severity=warning", plugin.RoleViewer, nil)
+	if got := fmt.Sprint(eventKinds(body)); got != "[bgp.session_not_established provider.down commit.exceeded]" {
+		t.Errorf("open while the session is down = %s", got)
+	}
+	log.Record(plugin.Event{Time: t1.Add(time.Minute), Kind: plugin.EventBGPSessionUp, Severity: plugin.SeverityInfo, Message: "session is established", Fields: nb})
+	_, body = e.do(t, "GET", "/api/events?open=1&severity=warning", plugin.RoleViewer, nil)
+	if got := fmt.Sprint(eventKinds(body)); got != "[provider.down commit.exceeded]" {
+		t.Errorf("open after the session recovered = %s", got)
+	}
+	_, body = e.do(t, "GET", "/api/events", plugin.RoleViewer, nil)
+	if got := fmt.Sprint(eventKinds(body)); got != "[bgp.session_up bgp.session_not_established provider.down commit.exceeded controller.started]" {
+		t.Errorf("history = %s", got)
+	}
+}
+
 func TestEventsAPIWithoutAnEventLog(t *testing.T) {
 	e := newUI(t)
 	if rec, _ := e.do(t, "GET", "/api/events", plugin.RoleViewer, nil); rec.Code != http.StatusNotFound {
@@ -233,5 +255,67 @@ func TestEventsAPIHelpURL(t *testing.T) {
 	}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Errorf("help urls = %v, want %v", got, want)
+	}
+}
+
+// open=1 is the top bar badge's view (#579): a session that failed and is
+// Established again no longer counts, while the plain list keeps every line.
+func TestEventsAPIOpenDropsRecoveredAlerts(t *testing.T) {
+	log := eventlog.New(nil, nil, nil)
+	t0 := time.Now().Add(-time.Hour).UTC()
+	nb := func(n string) map[string]string { return map[string]string{"neighbor": n} }
+	log.Record(plugin.Event{Time: t0, Kind: plugin.EventBGPSessionStuck, Severity: plugin.SeverityCritical, Message: "not established", Fields: nb("192.0.2.1")})
+	log.Record(plugin.Event{Time: t0.Add(time.Minute), Kind: plugin.EventBGPSessionStuck, Severity: plugin.SeverityCritical, Message: "still not established", Fields: nb("192.0.2.1")})
+	log.Record(plugin.Event{Time: t0.Add(2 * time.Minute), Kind: plugin.EventBGPSessionUp, Severity: plugin.SeverityInfo, Message: "session is established", Fields: nb("192.0.2.1")})
+	log.Record(plugin.Event{Time: t0.Add(3 * time.Minute), Kind: plugin.EventBGPSessionDown, Severity: plugin.SeverityCritical, Message: "session down", Fields: nb("192.0.2.2")})
+	log.Record(plugin.Event{Time: t0.Add(4 * time.Minute), Kind: plugin.EventBGPSessionUp, Severity: plugin.SeverityInfo, Message: "session is established", Fields: nb("192.0.2.2")})
+	log.Record(plugin.Event{Time: t0.Add(5 * time.Minute), Kind: plugin.EventBGPSessionDown, Severity: plugin.SeverityCritical, Message: "session down again", Fields: nb("192.0.2.2")})
+	log.Record(plugin.Event{Time: t0.Add(6 * time.Minute), Kind: plugin.EventProviderDown, Severity: plugin.SeverityCritical, Message: "probe source is down",
+		Fields: map[string]string{"provider": "transit-a"}})
+	e := newUIWith(t, func(o *Options) { o.Events = log })
+
+	get := func(query string) []any {
+		t.Helper()
+		rec, body := e.do(t, "GET", "/api/events?"+query, plugin.RoleViewer, nil)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: %d %s", query, rec.Code, rec.Body)
+		}
+		return body["events"].([]any)
+	}
+	messages := func(evs []any) string {
+		var out []string
+		for _, v := range evs {
+			out = append(out, v.(map[string]any)["message"].(string))
+		}
+		return strings.Join(out, "|")
+	}
+
+	if n := len(get("severity=warning")); n != 5 {
+		t.Errorf("the page lists %d critical lines, want all 5", n)
+	}
+	if n := len(get("")); n != 7 {
+		t.Errorf("the page lists %d events, want 7 including the established lines", n)
+	}
+	// Only the newest event of each still-open alert counts: neighbor
+	// 192.0.2.1 recovered; 192.0.2.2 failed again after recovering.
+	if got := messages(get("severity=warning&open=1")); got != "probe source is down|session down again" {
+		t.Errorf("open alerts = %q", got)
+	}
+	if got := messages(get("severity=warning&open=1&limit=1")); got != "probe source is down" {
+		t.Errorf("open alerts with limit=1 = %q", got)
+	}
+	if got := messages(get("severity=warning&open=1&q=transit")); got != "probe source is down" {
+		t.Errorf("open alerts with q = %q", got)
+	}
+	// An alert resolved after the window opened is not counted either.
+	from := t0.Add(30 * time.Second).UTC().Format(time.RFC3339Nano)
+	if got := messages(get("severity=warning&open=1&from=" + from)); got != "probe source is down|session down again" {
+		t.Errorf("open alerts from %s = %q", from, got)
+	}
+	if got := get("severity=warning&open=0"); len(got) != 5 {
+		t.Errorf("open=0 lists %d, want the plain list", len(got))
+	}
+	if rec, _ := e.do(t, "GET", "/api/events?open=yes", plugin.RoleViewer, nil); rec.Code != http.StatusBadRequest {
+		t.Errorf("open=yes = %d, want 400", rec.Code)
 	}
 }
