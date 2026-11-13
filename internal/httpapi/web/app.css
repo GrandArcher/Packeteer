@@ -551,6 +551,8 @@ main:focus { outline: none; }
 
 /* Provider figures and Overview charts (#349) */
 #providers { overflow-x: auto; }
+/* A stacked row has no sideways scroll, and the "Open in" list floats past the last card (#580). */
+#providers:has(table.stacked) { overflow: visible; }
 .stat, td.mbps { white-space: nowrap; font-variant-numeric: tabular-nums; }
 .stat-line { display: flex; gap: 6px; }
 .stat-k { color: var(--muted); font-size: 0.75rem; min-width: 3.2em; }

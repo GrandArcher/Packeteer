@@ -224,6 +224,9 @@ function reorderCell(r) {
 function renderProviders(data) {
   var root = document.getElementById("providers");
   if (!root) return;
+  // The redraw replaces every row, so an open "Open in" menu is reopened.
+  var openMenu = root.querySelector("details.linkout-menu[open]");
+  var openRow = openMenu ? openMenu.closest("tr").id : "";
   clear(root);
   var rows = (data && data.providers) || [];
   if (!rows.length) {
@@ -288,6 +291,8 @@ function renderProviders(data) {
   });
   table.appendChild(tb);
   root.appendChild(table);
+  var reopened = openRow && document.getElementById(openRow).querySelector("details.linkout-menu");
+  if (reopened) reopened.open = true;
 
   var bgp = data && data.bgp;
   if (!bgp || !bgp.configured) return;

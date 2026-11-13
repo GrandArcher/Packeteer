@@ -9,8 +9,7 @@ import (
 
 // TestLinkoutMenuPage runs linkout_menu_page_test.js, which exercises the
 // Open in menu and the table stacking rule against a DOM stand-in. It is
-// skipped without Node
-// locally and required in CI.
+// skipped without Node locally and required in CI.
 func TestLinkoutMenuPage(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {

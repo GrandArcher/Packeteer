@@ -45,8 +45,8 @@ func TestWideTablesStackBelowSameWidth(t *testing.T) {
 	if !strings.Contains(css, rule) {
 		t.Errorf("app.css lacks %q, the card rules for the width shell.js stacks at", rule)
 	}
-	if !strings.Contains(shell, `t.closest("#improvements, #providers")`) {
-		t.Error("shell.js must stack only the Improvements and Providers tables at the medium width")
+	if !strings.Contains(shell, `t.matches("#improvements table, #providers > table:first-of-type")`) {
+		t.Error("shell.js must stack only the Improvements and provider tables at the medium width, not the BGP sessions table")
 	}
 	if !strings.Contains(css, `:is(#improvements, #providers) table.stacked tr { display: grid;`) {
 		t.Error("app.css lacks the card grid for the stacked rows")

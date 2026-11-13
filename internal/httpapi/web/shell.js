@@ -375,12 +375,13 @@ function shellNavMenu() {
 // column name. The names are copied from the header only while the screen is
 // narrow, and removed when it is not, so a wide page keeps its plain markup.
 // A table inside .table-wrap scrolls sideways instead.
-// The Improvements and Providers tables have too many columns for 1599px and below and stack there (#580).
+// The Improvements table and the provider table (not the BGP sessions table
+// below it) have too many columns for 1599px and below and stack there (#580).
 var shellNarrow = window.matchMedia("(max-width: 759px)");
 var shellMedium = window.matchMedia("(max-width: 1599px)");
 
 function shellStackTable(t) {
-  var query = t.closest("#improvements, #providers") ? shellMedium : shellNarrow;
+  var query = t.matches("#improvements table, #providers > table:first-of-type") ? shellMedium : shellNarrow;
   var narrow = query.matches && !t.closest(".table-wrap");
   var heads = t.querySelectorAll(":scope > thead th");
   t.classList.toggle("stacked", narrow);

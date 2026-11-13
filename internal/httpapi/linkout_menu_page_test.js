@@ -99,7 +99,8 @@ function table(wide) {
   var t = {
     className: "", cls: {},
     classList: {toggle: function (name, on) { t.cls[name] = on; }},
-    closest: function (sel) { return sel === ".table-wrap" ? null : (wide && sel.indexOf("#improvements") >= 0 ? {} : null); },
+    closest: function () { return null; },
+    matches: function (sel) { return wide && sel.indexOf("#improvements table") >= 0; },
     querySelectorAll: function () { return heads; },
     tBodies: [{rows: [{cells: cells}]}],
     removeAttribute: function () {}

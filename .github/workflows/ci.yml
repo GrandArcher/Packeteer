@@ -635,7 +635,7 @@ jobs:
           UI_SMOKE_ATTEMPTS=3 bash lab/ui-smoke.sh http://127.0.0.1:18093/providers.html \
             'settings: closed yes | hold time on first screen yes | h1 1 | #wizard opens yes | #commit-setup opens yes' \
             'improvements: 3 rows | cards yes | tokens whole yes | asn AS64500 | cause performance | fits yes' \
-            'providers: 5 rows | cards yes | mbps and probes on screen yes | menus 5 | links hidden yes | fits yes | menu: opens 5 links | row height same yes | inside yes | escape closes yes' \
+            'providers: 5 rows | cards yes | mbps and probes on screen yes | menus 5 | links hidden yes | fits yes | menu: opens 5 links | row height same yes | inside yes | open after refresh yes' \
             --absent ' no |' 'desk-jserr'
           kill "$proxy580"
       - name: UI system page smoke (#184; a failing notifier and a dead probe source show on their rows, observe)

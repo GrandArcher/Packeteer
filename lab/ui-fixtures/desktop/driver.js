@@ -108,6 +108,10 @@ function improvements(f) {
     " | fits " + yes(fits(f));
 }
 
+// shown is true when a link is drawn. A link inside a closed details element
+// is skipped by the browser, which checkVisibility reports.
+function shown(a) { return a.checkVisibility() && a.getClientRects().length > 0; }
+
 function providers(f) {
   var d = f.contentDocument, w = f.contentWindow;
   var table = d.querySelector("#providers table");
@@ -124,23 +128,42 @@ function providers(f) {
   var menus = d.querySelectorAll("#providers tbody details.linkout-menu");
   var links = d.querySelectorAll("#providers tbody a[target=_blank]");
   var hidden = links.length > 0;
-  for (var i = 0; i < links.length; i++) if (links[i].getClientRects().length > 0) hidden = false;
+  for (var i = 0; i < links.length; i++) if (shown(links[i])) hidden = false;
   var line = "providers: " + rows.length + " rows | cards " + yes(table && table.classList.contains("stacked")) +
     " | mbps and probes on screen " + yes(numbers) + " | menus " + menus.length +
     " | links hidden " + yes(hidden) + " | fits " + yes(fits(f));
 
-  var first = menus[0];
-  var row = first.closest("tr");
-  var before = row.getBoundingClientRect().height;
-  first.querySelector("summary").click();
-  var list = first.querySelector(".linkout-list");
-  var shown = Array.prototype.filter.call(list.querySelectorAll("a"), function (a) { return a.getClientRects().length > 0; }).length;
-  var box = list.getBoundingClientRect();
-  var same = Math.abs(row.getBoundingClientRect().height - before) < 1;
-  var inside = box.right <= w.innerWidth && box.bottom > 0;
-  d.dispatchEvent(new w.KeyboardEvent("keydown", {key: "Escape", bubbles: true}));
-  return line + "\nmenu: opens " + shown + " links | row height same " + yes(same) + " | inside " + yes(inside) +
-    " | escape closes " + yes(!first.open);
+  // Every menu opens over its row: all five links show, the row keeps its
+  // height, and the list is not cut off by the container or the window.
+  var most = 0, least = 99, same = true, inside = true;
+  var providersBox = d.getElementById("providers");
+  var overflow = w.getComputedStyle(providersBox).overflowY;
+  for (var m = 0; m < menus.length; m++) {
+    var row = menus[m].closest("tr");
+    var before = row.getBoundingClientRect().height;
+    menus[m].querySelector("summary").click();
+    var list = menus[m].querySelector(".linkout-list");
+    var count = Array.prototype.filter.call(list.querySelectorAll("a"), shown).length;
+    most = Math.max(most, count);
+    least = Math.min(least, count);
+    var box = list.getBoundingClientRect();
+    if (Math.abs(row.getBoundingClientRect().height - before) >= 1) same = false;
+    if (box.right > w.innerWidth || box.bottom > d.documentElement.scrollHeight) inside = false;
+    d.dispatchEvent(new w.KeyboardEvent("keydown", {key: "Escape", bubbles: true}));
+    if (menus[m].open) inside = false;
+  }
+  line += "\nmenu: opens " + (most === least ? most : least + "-" + most) + " links | row height same " + yes(same) +
+    " | inside " + yes(inside && overflow === "visible");
+
+  // The page redraws every 5 seconds; an open menu must survive that.
+  menus[0].querySelector("summary").click();
+  var id = menus[0].closest("tr").id;
+  w.refresh();
+  return new Promise(function (resolve) { setTimeout(resolve, 1500); }).then(function () {
+    var again = d.getElementById(id);
+    var kept = !!again && !!again.querySelector("details.linkout-menu[open]");
+    return line + " | open after refresh " + yes(kept);
+  });
 }
 
 var settingsReady = function (d) { var h = d.getElementById("fm-hold"); return h && h.getBoundingClientRect().height > 0; };
@@ -160,5 +183,5 @@ Promise.all([
   note("desk-settings", settings(frames[0]) + " | #wizard opens " + yes(opens(frames[1], "wizard")) +
     " | #commit-setup opens " + yes(opens(frames[2], "commit-setup")));
   note("desk-improvements", improvements(frames[3]));
-  note("desk-providers", providers(frames[4]).replace("\n", " | "));
-}, function (e) { note("desk-jserr", "load: " + e.message); });
+  return providers(frames[4]).then(function (text) { note("desk-providers", text.replace("\n", " | ")); });
+}).then(null, function (e) { note("desk-jserr", "load: " + e.message); });

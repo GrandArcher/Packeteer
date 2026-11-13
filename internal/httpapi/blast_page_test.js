@@ -153,7 +153,7 @@ context.loadBlast().then(function () {
   assert(calls[1].method === "PUT" && calls[1].body.dry_run === true && calls[1].body.base === "base1" && calls[1].body.yaml === "mode: inject\n", "dry run body: " + JSON.stringify(calls[1].body));
   assert(els["bl-confirm"].hidden === false, "Apply is offered");
   assert(text(els["bl-body"]).indexOf("Would be announced (1)") >= 0 && els["blast"].scrolled === true, "the preview is shown");
-assert(fold.open === true, "a preview opens the closed Blast radius section");
+  assert(fold.open === true, "a preview opens the closed Blast radius section");
   assert(status.length > 0 && status[status.length - 1].indexOf("Apply this change") >= 0, "the editor status points at Apply: " + status);
 
   calls.length = 0;
