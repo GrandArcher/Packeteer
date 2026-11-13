@@ -20,13 +20,16 @@ IMPORTS
         FROM SNMPv2-CONF;
 
 packeteer MODULE-IDENTITY
-    LAST-UPDATED "202611090000Z"
+    LAST-UPDATED "202611130000Z"
     ORGANIZATION "Packeteer project"
     CONTACT-INFO
         "https://github.com/GrandArcher/Packeteer"
     DESCRIPTION
         "Status and notifications of a Packeteer BGP performance
          controller. Nothing in this module is writable."
+    REVISION "202611130000Z"
+    DESCRIPTION
+        "Adds pktrSteeringLost and pktrSteeringRestored."
     REVISION "202611090000Z"
     DESCRIPTION
         "Adds pktrRpkiOnlyInvalid, pktrRpkiOnlyInvalidCleared, and
@@ -1044,6 +1047,24 @@ pktrRpkiSlurmReview NOTIFICATION-TYPE
         "Event rpki.slurm_review. An approved SLURM exception is older than
          its review_after and is due for review."
     ::= { pktrNotifications 75 }
+
+pktrSteeringLost NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event steering.lost. A start or HA takeover did not bring back the
+         pins or the optimization pause an operator set."
+    ::= { pktrNotifications 76 }
+
+pktrSteeringRestored NOTIFICATION-TYPE
+    OBJECTS { pktrEventKind, pktrEventSeverity, pktrEventMessage,
+              pktrEventTime, pktrEventFields, pktrEventDedupKey }
+    STATUS current
+    DESCRIPTION
+        "Event steering.restored. A later start or takeover restored the
+         saved pins and pause with nothing lost. Resolves steering.lost."
+    ::= { pktrNotifications 77 }
 -- Conformance.
 
 pktrCompliances OBJECT IDENTIFIER ::= { pktrConformance 1 }
@@ -1116,7 +1137,7 @@ pktrNotificationsGroup NOTIFICATION-GROUP
         pktrOverloadRefused, pktrOverloadShed, pktrOverloadCleared,
         pktrMedOverridden, pktrLeakUnconfirmed,
         pktrRpkiOnlyInvalid, pktrRpkiOnlyInvalidCleared,
-        pktrRpkiSlurmReview
+        pktrRpkiSlurmReview, pktrSteeringLost, pktrSteeringRestored
     }
     STATUS current
     DESCRIPTION

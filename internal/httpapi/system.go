@@ -38,6 +38,7 @@ const (
 	KindSource      = "source"
 	KindScorer      = "scorer"
 	KindAnnouncer   = "announcer"
+	KindSteering    = "steering"
 	KindStorage     = "storage"
 	KindNotifier    = "notifier"
 	KindTelemetry   = "telemetry"
@@ -143,6 +144,20 @@ type IRRFact struct {
 	Err     string
 }
 
+// SteeringFact is where the pins and the optimization pause are kept and
+// what their last restore did (#566). Store is the plugin type that saves
+// them, empty when they are in memory only. Restored is false on a standby
+// and while Held says why the saved state cannot be used. Lost is the
+// open steering.lost message, AckedBy who acknowledged it.
+type SteeringFact struct {
+	Store    string
+	Restored bool
+	At       time.Time
+	Held     string
+	Lost     string
+	AckedBy  string
+}
+
 // SystemFacts is what the controller knows about its configured plugins
 // and their latest results. Everything else on the page comes from the
 // snapshot, the elector, and the federation view. It holds no secrets and
@@ -160,6 +175,8 @@ type SystemFacts struct {
 	IRR        []IRRFact
 	// Atlas is the RIPE Atlas integration (#213); nil or off adds no row.
 	Atlas *atlas.Status
+	// Steering is nil when the API cannot set pins or the pause.
+	Steering *SteeringFact
 }
 
 func (s *Server) handleSystem(w http.ResponseWriter, _ *http.Request) {
@@ -220,6 +237,9 @@ func BuildSystem(snap Snapshot, facts SystemFacts, ha *plugin.ElectorStatus, fed
 		add(Component{Kind: KindScorer, Name: facts.Scorer.Name, Type: facts.Scorer.Type, State: StateOK})
 	}
 	add(announcerRow(facts.Announcer, snap, ha))
+	if facts.Steering != nil {
+		add(steeringRow(*facts.Steering))
+	}
 	add(storageRow(facts.Storage))
 	for _, n := range facts.Notifiers {
 		add(notifierRow(n))
@@ -255,6 +275,30 @@ func ptrTime(t time.Time) *time.Time {
 	}
 	t = t.UTC()
 	return &t
+}
+
+// steeringRow is degraded while a steering.lost alert is open and not
+// acknowledged, so a pause or pins lost on a restart or failover show on
+// the System tile until an operator has seen them.
+func steeringRow(f SteeringFact) Component {
+	c := Component{Kind: KindSteering, Name: "pins and pause", Type: f.Store, Since: ptrTime(f.At)}
+	if c.Type == "" {
+		c.Type = "memory"
+	}
+	switch {
+	case f.Held != "":
+		c.State, c.Error = StateDown, f.Held
+	case !f.Restored:
+		c.State, c.Detail = StateIdle, "standby: restored when this instance takes over"
+	case f.Lost != "" && f.AckedBy == "":
+		c.State, c.Error = StateDegraded, f.Lost
+		c.Detail = "acknowledge the steering.lost alert on the Events page once handled"
+	case f.Lost != "":
+		c.State, c.Detail = StateOK, "acknowledged by "+f.AckedBy+": "+f.Lost
+	default:
+		c.State, c.Detail = StateOK, "restored from the saved state"
+	}
+	return c
 }
 
 func haRow(ha *plugin.ElectorStatus) Component {

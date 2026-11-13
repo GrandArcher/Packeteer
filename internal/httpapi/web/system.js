@@ -16,6 +16,7 @@ var KIND_TITLES = [
   ["source", "Target sources"],
   ["scorer", "Scorer"],
   ["announcer", "Announcer"],
+  ["steering", "Pins and pause"],
   ["storage", "Storage"],
   ["notifier", "Notifiers"],
   ["telemetry", "Telemetry"],

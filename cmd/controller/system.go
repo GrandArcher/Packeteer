@@ -43,10 +43,15 @@ func storageOutcome(health *syshealth.Tracker) *syshealth.Outcome {
 // systemFacts reads the configured plugins and their latest results for
 // GET /api/system. The engine is created after the HTTP server, so it is
 // read through an atomic pointer. Only state is read: the Snapshot of a
-// telemetry plugin is the call the dashboard already makes.
-func systemFacts(plugins *pluginhost.Set, engine *atomic.Pointer[probe.Engine], health *syshealth.Tracker, registry *irr.Checker, atl *atlas.Client) func() httpapi.SystemFacts {
+// telemetry plugin is the call the dashboard already makes. The steering
+// state is created after the HTTP server too.
+func systemFacts(plugins *pluginhost.Set, engine *atomic.Pointer[probe.Engine], health *syshealth.Tracker, registry *irr.Checker, atl *atlas.Client,
+	steering *atomic.Pointer[steeringState]) func() httpapi.SystemFacts {
 	return func() httpapi.SystemFacts {
 		var f httpapi.SystemFacts
+		if st := steering.Load(); st != nil {
+			f.Steering = st.fact()
+		}
 		if st := atl.Status(); st.State != atlas.StateOff {
 			f.Atlas = &st
 		}

@@ -133,12 +133,12 @@ func (r Request) check(rails Rails) error {
 // provider is no longer configured, its prefix is outside the allowlist,
 // or MaxPins are already kept. The learned RIB view is not read: it is
 // empty at start, and Decide and the announcer check it on every round.
-// Restore returns why each was dropped.
-func (s *Store) Restore(saved []Pin, rails Rails, now time.Time) []string {
+// Restore returns the expired pins, which ended as set, apart from the
+// others it dropped, which the operator lost (#566); each says why.
+func (s *Store) Restore(saved []Pin, rails Rails, now time.Time) (expired, dropped []string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pins = map[netip.Prefix]Pin{}
-	var dropped []string
 	for _, p := range saved {
 		// A dropped pin's id is not given out again: history and the
 		// audit log name it.
@@ -163,13 +163,16 @@ func (s *Store) Restore(saved []Pin, rails Rails, now time.Time) []string {
 		case len(s.pins) >= MaxPins:
 			why = "more than " + strconv.Itoa(MaxPins) + " pins"
 		}
-		if why != "" {
+		switch why {
+		case "":
+			s.pins[p.Prefix] = p
+		case "expired":
+			expired = append(expired, p.ID+" "+p.Prefix.String()+": "+why)
+		default:
 			dropped = append(dropped, p.ID+" "+p.Prefix.String()+": "+why)
-			continue
 		}
-		s.pins[p.Prefix] = p
 	}
-	return dropped
+	return expired, dropped
 }
 
 // Remove deletes the pin with that id.

@@ -48,6 +48,7 @@ var eventHelp = map[string]string{
 	"exchange_prefix": "docs/CONFIG.md#exchanges",
 	"herd":            "docs/herd.md",
 	"rpki":            "docs/CONFIG.md#rpki",
+	"steering":        "docs/mcp.md#steering-through-the-api",
 
 	"rpki_only_invalid": "docs/only-invalid.md",
 	"rpki_slurm":        "docs/only-invalid.md#slurm-exceptions",
