@@ -45,10 +45,12 @@ var context = {
   document: {
     createElement: function (t) { return new Node(t); },
     createElementNS: function (ns, t) { return new Node(t); },
-    createTextNode: function (s) { var n = new Node("#text"); n.text = s; return n; }
+    createTextNode: function (s) { var n = new Node("#text"); n.text = s; return n; },
+    getElementById: function (id) { return id === "headline" ? headline : null; }
   },
   Date: Date, Math: Math, Number: Number, String: String, Infinity: Infinity
 };
+var headline = new Node("div");
 // An SVG attribute lands in attrs, as in a browser.
 vm.createContext(context);
 
@@ -73,7 +75,7 @@ var app = fs.readFileSync(path.join(web, "app.js"), "utf8");
 var charts = fs.readFileSync(path.join(web, "charts.js"), "utf8");
 ["SVG_NS", "SERIES_N", "HOUR_MS", "OV_W", "OV_GAP_MS"].forEach(function (n) { vm.runInContext(varLine(charts, n), context); });
 vm.runInContext(varLine(app, "NO_REPLY"), context);
-[[app, "el"], [app, "clear"], [app, "fmtMs"], [app, "fmtPct"], [app, "statCell"], [app, "mbpsText"], [app, "reorderCell"],
+[[app, "el"], [app, "clear"], [app, "renderHeadline"], [app, "fmtMs"], [app, "fmtPct"], [app, "statCell"], [app, "liveStat"], [app, "mbpsText"], [app, "reorderCell"],
   [charts, "svgEl"], [charts, "tsTicks"], [charts, "clockLabel"], [charts, "lineChart"], [charts, "seriesClass"],
   [charts, "renderProviderLatency"], [charts, "improvementCounts"], [charts, "renderImprovementCounts"], [charts, "sparkline"]
 ].forEach(function (p) { vm.runInContext(fn(p[0], p[1]), context); });
@@ -97,6 +99,32 @@ assert(s15 === "15 minno reply24 h90.0 ms", "no reply: " + s15);
 assert(s15.indexOf("15 min0.0 ms") < 0, "a silent path has no 0.0 ms");
 assert(context.statCell(silent, "loss_pct", context.fmtPct).textContent === "15 min100.0%24 h40.0%", "loss while silent");
 assert(withClass(context.statCell(silent, "rtt_ms", context.fmtMs), "muted").length === 1, "only the silent window is muted");
+
+// Down now (#577): the 15 min line follows the latest round, and a window
+// that still holds earlier samples says so.
+var wasHealthy = {last_15m: {slots: 3, loss_pct: 0, rtt_ms: 22.8, jitter_ms: 1}, last_24h: {slots: 288, loss_pct: 0, rtt_ms: 22.8, jitter_ms: 1}};
+var downNow = {name: "lab-b", up: true, state: "down", ok: 0, failed: 2, loss_pct: 100};
+var dl = context.statCell(wasHealthy, "loss_pct", context.fmtPct, downNow).textContent;
+assert(dl === "15 min100.0% now24 h0.0% includes earlier samples", "down provider loss cell: " + dl);
+assert(context.statCell(wasHealthy, "loss_pct", context.fmtPct, downNow).textContent.indexOf("15 min0.0%") < 0, "a down provider is not 0.0% in the 15 min column");
+var dr = context.statCell(wasHealthy, "rtt_ms", context.fmtMs, downNow).textContent;
+assert(dr === "15 minno reply now24 h22.8 ms includes earlier samples", "down provider latency cell: " + dr);
+assert(dr.indexOf("22.8 ms") === dr.lastIndexOf("22.8 ms") && dr.indexOf("15 min22.8") < 0, "no healthy latency in the 15 min column");
+var srcDown = {name: "lab-b", up: false, state: "down", ok: 0, failed: 0, loss_pct: 0};
+assert(context.statCell(wasHealthy, "rtt_ms", context.fmtMs, srcDown).textContent === "15 mindown now24 h22.8 ms includes earlier samples", "source down: no live figure");
+// Partly down: loss is live; latency still comes from the window and is marked.
+var partly = {name: "lab-b", up: true, state: "down", ok: 1, failed: 3, loss_pct: 75};
+assert(context.statCell(wasHealthy, "loss_pct", context.fmtPct, partly).textContent === "15 min75.0% now24 h0.0% includes earlier samples", "partly down loss");
+assert(context.statCell(wasHealthy, "rtt_ms", context.fmtMs, partly).textContent === "15 min22.8 ms includes earlier samples24 h22.8 ms includes earlier samples", "partly down latency");
+// A down provider whose windows are already all silent has no earlier samples to flag.
+var allSilent = {last_15m: {slots: 3, loss_pct: 100}, last_24h: {slots: 3, loss_pct: 100}};
+assert(context.statCell(allSilent, "loss_pct", context.fmtPct, downNow).textContent === "15 min100.0% now24 h100.0%", "no note when the 24 h window is all loss");
+assert(context.statCell(allSilent, "rtt_ms", context.fmtMs, downNow).textContent === "15 minno reply now24 hno reply", "no note when nothing ever answered");
+// Healthy and degraded providers are unchanged.
+var okNow = {name: "lab-a", up: true, state: "up", ok: 2, failed: 0, loss_pct: 0};
+assert(context.statCell(wasHealthy, "loss_pct", context.fmtPct, okNow).textContent === "15 min0.0%24 h0.0%", "healthy provider cell is unchanged");
+var degradedNow = {name: "lab-a", up: true, state: "degraded", ok: 1, failed: 1, loss_pct: 10};
+assert(context.statCell(wasHealthy, "loss_pct", context.fmtPct, degradedNow).textContent === "15 min0.0%24 h0.0%", "degraded provider cell is unchanged");
 
 // No probes at all in a window: no data.
 assert(context.statCell(undefined, "rtt_ms", context.fmtMs).textContent === "15 minno data24 hno data", "no stats");
@@ -169,6 +197,20 @@ assert(legend.join("|") === "lab-a: median 118.0 ms|lab-b: median 40.0 ms", "leg
 assert(withClass(latency, "ts-silent")[0].textContent.indexOf("No reply from lab-c") === 0, "a silent provider is named, not dropped");
 assert(latency.textContent.indexOf("old") < 0, "a provider that is not configured is not drawn");
 
+// A provider that is down now has no line and is named (#577), however
+// healthy its earlier hours were; the others still draw.
+var downChart = new Node("div");
+var health = [{name: "lab-a", state: "up"}, {name: "lab-b", state: "down", detail: "100% loss"}, {name: "lab-c", state: "down", detail: "no answer"}];
+context.renderProviderLatency(downChart, stats, ["lab-a", "lab-b", "lab-c"], health);
+assert(find(downChart, "polyline").length === 1, "only the provider that is up is drawn");
+assert(withClass(downChart, "ts-key").map(function (n) { return n.textContent; }).join("|") === "lab-a: median 118.0 ms", "legend omits down providers");
+var downNote = withClass(downChart, "ts-down")[0];
+assert(downNote && downNote.textContent === "Down now, so no line: lab-b (100% loss), lab-c (no answer). Earlier hours are not drawn.", "down note: " + (downNote && downNote.textContent));
+assert(withClass(downChart, "ts-silent").length === 0, "a down provider is not also listed as silent");
+var allDown = new Node("div");
+context.renderProviderLatency(allDown, stats, ["lab-b"], [{name: "lab-b", state: "down", detail: "100% loss"}]);
+assert(find(allDown, "svg").length === 0 && withClass(allDown, "ts-empty")[0].textContent.indexOf("down now") >= 0, "every provider down: a sentence, no healthy line");
+
 var none = new Node("div");
 context.renderProviderLatency(none, {providers: []}, ["lab-a"]);
 assert(withClass(none, "ts-empty").length === 1 && find(none, "svg").length === 0, "no stats, no chart, a sentence");
@@ -188,5 +230,26 @@ assert(withClass(imp, "tag").every(function (n) { return n.textContent.indexOf("
 var cut = new Node("div");
 context.renderImprovementCounts(cut, [{start: hourAgo(1), mode: "observe"}], true);
 assert(cut.textContent.indexOf("a floor") >= 0, "truncation is said");
+
+// ---- Overview headline (#343, #578) ----
+// The iBGP session failure sits in the same sentence as the provider problems,
+// whether the session never came up or dropped (the API gives the same list).
+var sessionProblem = {provider: "", state: "down", detail: "no iBGP session", session: true};
+var provB = {provider: "lab-b", state: "down", detail: "100% loss"};
+var provC = {provider: "lab-c", state: "down", detail: "no answer"};
+context.renderHeadline({problems: [sessionProblem, provB, provC]});
+assert(headline.hidden === false && headline.className === "headline headline-down", "headline shown as down: " + headline.className);
+assert(headline.textContent === "3 problems: no iBGP session, lab-b 100% loss, lab-c no answer", "headline text: " + headline.textContent);
+var links = find(headline, "a").map(function (a) { return a.textContent + ">" + a.href; });
+assert(links.join("|") === "no iBGP session>/system.html|lab-b>/providers.html#provider-lab-b|lab-c>/providers.html#provider-lab-c", "links: " + links);
+// The session alone is one problem, in the singular, not a blank provider link.
+context.renderHeadline({problems: [sessionProblem]});
+assert(headline.textContent === "1 problem: no iBGP session" && find(headline, "a").length === 1, "session alone: " + headline.textContent);
+// Providers only, as before.
+context.renderHeadline({problems: [provB, provC]});
+assert(headline.textContent === "2 problems: lab-b 100% loss, lab-c no answer", "providers only: " + headline.textContent);
+// No problem at all: hidden and empty.
+context.renderHeadline({problems: []});
+assert(headline.hidden === true && headline.textContent === "", "no problems hides the headline");
 
 console.log("ok");

@@ -7,7 +7,9 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 ### Changed
 
 - A Settings Save of a gated change such as Hold time opens one "Review and save" dialog with the preview and a confirm button, instead of an Apply button under Blast radius (#576).
+- The Overview headline names a down iBGP session ("no iBGP session") with the provider problems, whether it never came up or dropped (#578).
 - Settings keeps the wizard, preflight, router config, blast radius, and raw YAML in closed sections; Improvements and Providers show cards below 1600 px and Providers has one Open in menu (#580).
+- A provider that is down now is not shown healthy: 15 min figures follow the latest round, the chart drops its line, and Why? and the checklist say 100% loss instead of usable or no answer (#577).
 - The Events badge counts open alerts, one each; a session that is established again drops out, and the Events page keeps the full log (#579).
 - A start or HA takeover that loses pins or the pause (memory storage, or saved pins off the providers or allowlist) sends `steering.lost`, logs a warning, and shows on the System page (#566).
 - Pins, the optimization pause, and alert acknowledgements are saved in sqlite storage, or with `ha` beside the lease, and restored on restart and HA takeover; expired pins are dropped (#565).
