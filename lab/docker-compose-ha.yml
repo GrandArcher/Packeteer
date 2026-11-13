@@ -20,6 +20,10 @@ x-packeteer: &packeteer
   environment:
     PACKETEER_CONFIG: /etc/packeteer/config.yaml
     PACKETEER_LOG_LEVEL: debug
+    # Lab-only credentials: pins and the pause refuse writes without
+    # basic auth.
+    PACKETEER_HTTP_USER: lab
+    PACKETEER_HTTP_PASSWORD: lab-only
 services:
   edge:
     image: quay.io/frrouting/frr:10.2.4

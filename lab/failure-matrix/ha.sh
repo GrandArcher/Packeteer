@@ -44,9 +44,13 @@ surface_reset() {
 	"${dc[@]}" up -d --no-deps packeteer-a
 }
 
+# The lab-only basic-auth account from lab/docker-compose-ha.yml; without
+# it every API read answers 401.
+ha_auth="lab:lab-only"
+
 standby_ready() {
 	local out
-	out=$("${dc[@]}" exec -T packeteer-b wget -qO- http://127.0.0.1:8080/api/ha 2>/dev/null) || return 1
+	out=$(curl -sf --max-time 5 -u "$ha_auth" http://192.0.2.20:8080/api/ha 2>/dev/null) || return 1
 	[[ "$out" == *'"role":"standby"'* && "$out" == *'"eligible":true'* ]]
 }
 

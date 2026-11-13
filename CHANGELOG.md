@@ -7,6 +7,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 ### Changed
 
 - The Events badge counts open alerts, one each; a session that is established again drops out, and the Events page keeps the full log (#579).
+- Pins, the optimization pause, and alert acknowledgements are saved in sqlite storage, or with `ha` beside the lease, and restored on restart and HA takeover; expired pins are dropped (#565).
 - The guided inject step adds the gobgp announcer from a schema-built form when none is configured; the checks count it on the plan and the save, and it applies on restart (#568).
 - Router config panel and `POST /api/snippets` follow unsaved wizard answers and editor text, name the wizard step for a missing answer, and add flow export lines (#569).
 

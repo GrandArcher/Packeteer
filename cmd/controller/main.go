@@ -694,6 +694,9 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	var sysEngine atomic.Pointer[probe.Engine]
 	atl := atlas.New(cfg.Atlas, getenv(atlas.KeyEnv), version, log)
 	var httpSrv *httpapi.Server
+	// steering is set once the decision engine and the elector exist;
+	// until then the API refuses steering changes.
+	var steering atomic.Pointer[steeringState]
 	if addr := cfg.HTTPListen(); addr != "" {
 		var err error
 		httpSrv, err = httpapi.New(httpapi.Options{
@@ -709,6 +712,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			log.Error("refusing to start", "err", err)
 			return 1
 		}
+		httpSrv.SetSteeringGate(func() bool { st := steering.Load(); return st == nil || st.refuse() })
 		if err := httpSrv.Start(); err != nil {
 			log.Error("refusing to start", "err", err)
 			return 1
@@ -971,14 +975,19 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		check: candidateChecker(getenv, httpUser), held: lw.Held,
 		reserved: func(p netip.Prefix) bool { return inb.Reserved(p) || mit.Holds(p) }}
 	pins := pin.NewStore()
+	steer := &steeringState{store: steeringStoreOf(plugins), pins: pins, events: evlog, cfg: live.snapshot, ha: ha, log: log}
+	steer.opt = &optimizationControl{decider: decider, log: log, poke: poke, save: steer.save}
+	evlog.OnAck(steer.save)
+	steer.start(ctx, time.Now())
+	steering.Store(steer)
 	if httpSrv != nil && cfg.IXP == nil {
 		httpSrv.SetPreflight(newPreflight(live, view, lw, plugins, pktLimiter, log))
 		httpSrv.SetBlast(preview)
-		pc := pinControl{store: pins, cfg: live.snapshot, log: log, poke: poke}
+		pc := pinControl{store: pins, cfg: live.snapshot, log: log, poke: poke, save: steer.save}
 		if view != nil {
 			pc.learned = func(p netip.Prefix) bool { _, ok := view.Exact(p); return ok }
 		}
-		httpSrv.SetSteering(pc, &optimizationControl{decider: decider, log: log, poke: poke})
+		httpSrv.SetSteering(pc, steer.opt)
 		if rs, ok := roundStoreOf(plugins); ok {
 			httpSrv.SetWhatIf(&whatIfSource{live: live, store: rs, check: preview.check, log: log, getenv: getenv})
 		}
@@ -1030,10 +1039,12 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			if snap == nil {
 				snap = cfg
 			}
-			if !ha.active() {
+			// A round that may not decide withdraws like a standby's.
+			if !steer.mayDecide(loopCtx, now, ha.active()) {
 				if leading {
 					// Stepped down: no intent survives into a later
 					// takeover. Drop the retained probe targets with it.
+					steer.stepDown()
 					decider.Reset()
 					verifier.reset()
 					retainImprovedPrefixes(engine, nil)

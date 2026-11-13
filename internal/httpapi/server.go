@@ -246,6 +246,9 @@ type Server struct {
 	// Nil until SetSteering.
 	pins         atomic.Value
 	optimization atomic.Value
+	// steerGate refuses steering changes (#565). Nil until
+	// SetSteeringGate.
+	steerGate atomic.Value
 	// candidates is the Protection form's prefix picker (#131).
 	candidates atomic.Value
 	// rpkiStatus is the health of the rpki.sources (#200). Nil until
@@ -371,6 +374,17 @@ func (s *Server) SetSteering(pins PinControl, opt OptimizationControl) {
 	}
 	s.pins.Store(pins)
 	s.optimization.Store(opt)
+}
+
+// SetSteeringGate installs the check that refuses a pin, an unpin, a
+// pause, a resume, or an acknowledgement (#565): while the saved steering
+// state is not restored yet, and while this instance is an HA standby,
+// because the active instance saves the pair's state.
+func (s *Server) SetSteeringGate(refuse func() bool) {
+	if s == nil {
+		return
+	}
+	s.steerGate.Store(refuse)
 }
 
 // writeTimeout outlasts the slowest handler, an on-demand tool bounded by
