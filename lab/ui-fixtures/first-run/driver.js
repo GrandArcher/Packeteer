@@ -32,7 +32,7 @@ function next() {
   note("fixture-wizard", "wizard open: " + !byId("wz-body").hidden + ", run again hidden: " + byId("wz-again").hidden);
   note("fixture-values", "asn " + byId("wz-asn").value + ", router " + byId("wz-router").value + ", provider rows " + byId("wz-providers").children.length);
   note("fixture-button", "button: " + byId("wz-run").textContent);
-  note("fixture-view", "header in view: " + (window.scrollY === 0 && brand.top >= 0) + ", observe banner in view: " + (byId("banner").getBoundingClientRect().top >= 0));
+  note("fixture-view", "header in view: " + (window.scrollY === 0 && brand.top >= 0));
   note("fixture-writes", "writes: " + writes);
 }
 

@@ -2273,6 +2273,7 @@ var wzSetupPending = false;
 function setWizardConfigured(on) {
   wzConfigured = on;
   applyWizardCollapse();
+  byId("wz-confirm").hidden = true;
 }
 
 function applyWizardCollapse() {
@@ -2281,7 +2282,6 @@ function applyWizardCollapse() {
   byId("wz-body").hidden = collapsed;
   byId("wz-auth-row").hidden = !collapsed;
   byId("wz-run").textContent = collapsed ? "Generate (replaces your config)" : "Generate observe config";
-  byId("wz-confirm").hidden = true;
 }
 
 // skipSetup ends the first-run setup without saving a config (#416).
