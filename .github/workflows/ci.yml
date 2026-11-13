@@ -1689,8 +1689,8 @@ jobs:
           test "$ok" = 1
           # The page asks for one prefix. uiproxy answers the decision and the
           # stored history from lab/ui-fixtures/why (documentation prefix):
-          # a decision held back by the thresholds, a silent path (100% loss), and an earlier move with its
-          # stored checks. The gate list itself is checked against the real
+          # a decision held back by the thresholds, a silent path (100% loss),
+          # and an earlier move with its stored checks. The gate list itself is checked against the real
           # engine in the Go tests (TestDecisionExplainAPI). 192.0.2.0/24 has
           # no fixture, so the image answers it with a 404.
           go build -o /tmp/uiproxy ./lab/uiproxy
