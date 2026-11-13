@@ -10,6 +10,8 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"maps"
+	"slices"
 	"sync"
 	"time"
 
@@ -40,11 +42,13 @@ type Log struct {
 	q      chan plugin.Event
 	done   chan struct{}
 	acks   map[string]Ack // by Event.DedupKey, at most MemoryCap
+	onAck  func()
 }
 
 // Ack is an operator's acknowledgement of an open alert: a note that
 // someone has it in hand. Notifications are unchanged. It ends when an
-// event resolves the alert, and it is kept in memory only.
+// event resolves the alert. A steering store keeps it across a restart
+// (#565).
 type Ack struct {
 	Key  string    `json:"key"`
 	By   string    `json:"by"`
@@ -93,13 +97,25 @@ func (l *Log) Record(e plugin.Event) {
 	if e.Kind == plugin.EventAudit {
 		return
 	}
+	if fn := l.keep(e); fn != nil {
+		fn()
+	}
+}
+
+// keep stores e. When e resolves an alert that was acknowledged, it drops
+// the ack and returns onAck, to run without the lock: the saved state must
+// not keep an ack for a resolved alert.
+func (l *Log) keep(e plugin.Event) (saveAcks func()) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.closed {
-		return
+		return nil
 	}
 	if e.Resolves() {
-		delete(l.acks, e.DedupKey())
+		if _, ok := l.acks[e.DedupKey()]; ok {
+			delete(l.acks, e.DedupKey())
+			saveAcks = l.onAck
+		}
 	}
 	if l.store == nil {
 		if len(l.ring) == MemoryCap {
@@ -107,13 +123,14 @@ func (l *Log) Record(e plugin.Event) {
 			l.ring = l.ring[:MemoryCap-1]
 		}
 		l.ring = append(l.ring, e)
-		return
+		return saveAcks
 	}
 	select {
 	case l.q <- e:
 	default:
 		l.log.Warn("event log queue full; event not stored", "kind", e.Kind)
 	}
+	return saveAcks
 }
 
 func (l *Log) write() {
@@ -187,7 +204,6 @@ func (l *Log) Acknowledge(ctx context.Context, key, by, note string, now time.Ti
 		return Ack{}, ErrNoAlert
 	}
 	l.mu.Lock()
-	defer l.mu.Unlock()
 	if l.acks == nil {
 		l.acks = map[string]Ack{}
 	}
@@ -201,7 +217,74 @@ func (l *Log) Acknowledge(ctx context.Context, key, by, note string, now time.Ti
 		delete(l.acks, oldest)
 	}
 	l.acks[key] = a
+	fn := l.onAck
+	l.mu.Unlock()
+	if fn != nil {
+		fn()
+	}
 	return a, nil
+}
+
+// OnAck sets fn, called after each acknowledgement without the log's lock.
+func (l *Log) OnAck(fn func()) {
+	l.mu.Lock()
+	l.onAck = fn
+	l.mu.Unlock()
+}
+
+// SavedAck is an acknowledgement as the steering state saves it (#565).
+type SavedAck struct {
+	Ack
+	Since time.Time `json:"since,omitzero"`
+}
+
+// SavedAcks returns the acknowledgements, sorted by key.
+func (l *Log) SavedAcks() []SavedAck {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	out := make([]SavedAck, 0, len(l.acks))
+	for _, k := range slices.Sorted(maps.Keys(l.acks)) {
+		a := l.acks[k]
+		out = append(out, SavedAck{Ack: a, Since: a.since})
+	}
+	return out
+}
+
+// RestoreAcks replaces the acknowledgements with saved ones. One whose
+// alert has resolved since, by an event among the newest MemoryCap, is
+// dropped, as Record would have dropped it. With none saved it only
+// clears, so a step-down never keeps an acknowledgement when the events
+// cannot be read.
+func (l *Log) RestoreAcks(ctx context.Context, saved []SavedAck) error {
+	if len(saved) == 0 {
+		l.mu.Lock()
+		l.acks = map[string]Ack{}
+		l.mu.Unlock()
+		return nil
+	}
+	evs, err := l.Query(ctx, plugin.EventQuery{Limit: MemoryCap})
+	if err != nil {
+		return err
+	}
+	resolved := map[string]time.Time{}
+	for _, e := range evs {
+		if k := e.DedupKey(); e.Resolves() && e.Time.After(resolved[k]) {
+			resolved[k] = e.Time
+		}
+	}
+	acks := map[string]Ack{}
+	for _, s := range saved {
+		if s.Key == "" || resolved[s.Key].After(s.Since) || len(acks) >= MemoryCap {
+			continue
+		}
+		a := s.Ack
+		a.since = s.Since
+		acks[s.Key] = a
+	}
+	l.mu.Lock()
+	l.acks = acks
+	l.mu.Unlock()
+	return nil
 }
 
 // AckOf is the acknowledgement covering e: e is a problem event of an

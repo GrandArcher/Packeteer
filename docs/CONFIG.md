@@ -1891,6 +1891,7 @@ What is stored:
 - Per prefix: origin ASN, country, and latest volume.
 - Recent events (#173) for the Events page: time, kind, severity, message, and fields. Pruned by `retention`. Without `storage` the page keeps the newest 1000 in memory.
 - SNMP 95th-percentile samples (#127), when a `telemetry` plugin of type `snmp` is configured: one row per provider binding and sample time (inbound and outbound bits per second, and the billing period). The collector loads the open period on start. A closed period stays until `retention` (rows whose period has ended by the cutoff). This does not announce. Without `storage`, those samples stay in memory and a restart clears them.
+- The operator steering state (#565), one row: API pins, the optimization pause, and alert acknowledgements, replaced after each change and restored on start ([mcp.md](mcp.md#steering-through-the-api)). With `ha` it is kept beside the lease instead. Retention does not prune it.
 
 The recorder buffers in memory and writes once a minute and on shutdown, after the routes are withdrawn. Rows a previous process left open are closed on start with `controller restarted (routes withdrawn)`.
 
@@ -2017,7 +2018,7 @@ The role is set at every sign-in. An SSO user is stored with no password; an adm
 
 ### Elector `lease`
 
-The built-in active/standby elector (#31): a lease file on storage both instances mount (one Docker volume on one host, or a shared filesystem with working `flock`). It never announces. Every read-modify-write happens under an exclusive lock on `path` + `.lock` and replaces the record with an atomic rename.
+The built-in active/standby elector (#31): a lease file on storage both instances mount (one Docker volume on one host, or a shared filesystem with working `flock`). It never announces. Every read-modify-write happens under an exclusive lock on `path` + `.lock` and replaces the record with an atomic rename. The active instance also writes the operator steering state (#565) to `path` + `.steering` with an atomic rename; an instance restores it when it takes over.
 
 | Key | Default | Meaning |
 |---|---|---|

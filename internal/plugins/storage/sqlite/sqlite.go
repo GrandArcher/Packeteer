@@ -281,6 +281,10 @@ CREATE TABLE IF NOT EXISTS provider_samples (
 	jitter_sum_ms REAL NOT NULL,
 	PRIMARY KEY (provider, slot_ms)
 );
+CREATE TABLE IF NOT EXISTS steering_state (
+	id INTEGER PRIMARY KEY CHECK (id = 1),
+	doc BLOB NOT NULL
+);
 `
 
 // addColumn adds a column to a table created before the column existed.

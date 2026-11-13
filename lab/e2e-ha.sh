@@ -19,8 +19,11 @@
 #  7. SIGTERM pk-a: it withdraws and resigns, and pk-b takes over at once.
 #     The release is read from the lease file (lab/checklease), not from
 #     one pass over the container log;
-#  8. SIGTERM pk-b: nothing is left on the edge;
-#  9. restore the backup with the stock image into a stopped instance's
+#  8. pk-a restarts as standby and refuses a pause; pk-b pauses, which
+#     withdraws its route; SIGTERM pk-b: pk-a takes over still paused
+#     (#565), announces nothing, and announces again once resumed;
+#  9. SIGTERM pk-a: nothing is left on the edge;
+# 10. restore the backup with the stock image into a stopped instance's
 #     volume, and the restored config passes -check.
 set -euo pipefail
 export LC_ALL=C
@@ -51,8 +54,29 @@ vty() {
 	"${compose[@]}" exec -T edge vtysh "$@"
 }
 
+# addr svc: the instance's address on the lab network.
+addr() {
+	case "$1" in
+	packeteer-a) echo 192.0.2.10 ;;
+	packeteer-b) echo 192.0.2.20 ;;
+	esac
+}
+
+# The lab-only basic-auth account from lab/docker-compose-ha.yml.
+lab_user=lab
+lab_pass=lab-only
+
 api() {
-	"${compose[@]}" exec -T "$1" wget -qO- "http://127.0.0.1:8080$2" 2>/dev/null || true
+	curl -sS --max-time 5 -u "$lab_user:$lab_pass" "http://$(addr "$1"):8080$2" 2>/dev/null || true
+}
+
+# change svc method path [body]: the HTTP status of a write to svc's API.
+change() {
+	local args=(-sS -o /dev/null -w '%{http_code}' --max-time 10 -u "$lab_user:$lab_pass" -X "$2")
+	if [ -n "${4:-}" ]; then
+		args+=(-H 'Content-Type: application/json' -d "$4")
+	fi
+	curl "${args[@]}" "http://$(addr "$1"):8080$3" 2>/dev/null || true
 }
 
 dump() {
@@ -126,6 +150,7 @@ stay() {
 		case "$who" in
 		a) [ "$a" = "$want_route" ] && [ -z "$b" ] && { sleep 0.5; continue; } ;;
 		b) [ "$b" = "$want_route" ] && [ -z "$a" ] && { sleep 0.5; continue; } ;;
+		none) [ -z "$a" ] && [ -z "$b" ] && { sleep 0.5; continue; } ;;
 		esac
 		echo "FAIL: expected the route from $who only: pk-a [$a] pk-b [$b]" >&2
 		dump
@@ -289,11 +314,62 @@ if ! wait "$lease_watch"; then
 fi
 attributes 192.0.2.20
 
-echo "8. SIGTERM pk-b: nothing left on the edge"
+echo "8. a pause on the active pk-b survives the failover to pk-a"
+"${compose[@]}" start packeteer-a
+role packeteer-a standby pk-b
+stay b 5
+got=$(change packeteer-a POST /api/optimization/pause '{"reason":"lab"}')
+if [ "$got" != 409 ]; then
+	echo "FAIL: the standby pk-a answered $got to a pause (want 409)" >&2
+	dump
+	exit 1
+fi
+got=$(change packeteer-b POST /api/optimization/pause '{"reason":"lab"}')
+if [ "$got" != 200 ]; then
+	echo "FAIL: pause on the active pk-b answered $got" >&2
+	dump
+	exit 1
+fi
+only none 30
 "${compose[@]}" stop -t 20 packeteer-b
+role packeteer-a active pk-a
+# The takeover restores the pause before pk-a's first decision; the API
+# shows it once that round has run.
+paused=0
+for _ in $(seq 1 20); do
+	out=$(api packeteer-a /api/optimization)
+	if [[ "$out" == *'"paused":true'* ]]; then
+		paused=1
+		break
+	fi
+	if sample && [ -n "$a" ]; then
+		echo "FAIL: pk-a announced before it restored the pause: [$a]" >&2
+		dump
+		exit 1
+	fi
+	sleep 0.5
+done
+if [ "$paused" != 1 ]; then
+	echo "FAIL: pk-a took over without the pause: $out" >&2
+	dump
+	exit 1
+fi
+# Several decision rounds (probe interval 2s): the restored pause holds.
+stay none 15
+got=$(change packeteer-a DELETE /api/optimization/pause)
+if [ "$got" != 204 ]; then
+	echo "FAIL: resume on pk-a answered $got" >&2
+	dump
+	exit 1
+fi
+only a 60
+attributes 192.0.2.10
+
+echo "9. SIGTERM pk-a: nothing left on the edge"
+"${compose[@]}" stop -t 20 packeteer-a
 only none 20
 
-echo "9. restore the backup into pk-b's stopped volume with the stock image"
+echo "10. restore the backup into pk-b's stopped volume with the stock image"
 "${compose[@]}" run --rm --no-deps -T packeteer-b \
 	-restore /var/lib/packeteer/ha/backup.tgz -restore-config /var/lib/packeteer/ha/restored.yaml -force
 # Capture before matching: grep -q exits on the first match, and under

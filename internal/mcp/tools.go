@@ -134,7 +134,7 @@ var Catalog = []Tool{
 	{Name: "unpin_prefix", Desc: "WRITE. Remove a pin by id; the prefix goes back to normal decisions. Confirm with the user before calling.", Method: http.MethodDelete, Path: "/api/pins/{id}", Write: true, Params: []Param{
 		{Name: "id", Desc: "Pin id from pins.", In: inPath, Kind: kindID, Required: true},
 	}},
-	{Name: "optimization_pause", Desc: "WRITE. Pause optimization: every improvement is withdrawn now and none is made until resumed or the controller restarts. Confirm with the user before calling.", Method: http.MethodPost, Path: "/api/optimization/pause", Write: true, Params: []Param{
+	{Name: "optimization_pause", Desc: "WRITE. Pause optimization: every improvement is withdrawn now and none is made until resumed (a saved pause survives a restart). Confirm with the user before calling.", Method: http.MethodPost, Path: "/api/optimization/pause", Write: true, Params: []Param{
 		{Name: "reason", Desc: "Why, for the audit log.", In: inBody, Kind: kindString, Required: true},
 	}},
 	{Name: "optimization_resume", Desc: "WRITE. Resume a paused optimization; the next decision round may improve again. Confirm with the user before calling.", Method: http.MethodDelete, Path: "/api/optimization/pause", Write: true},

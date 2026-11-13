@@ -209,3 +209,49 @@ func TestAlertAcknowledge(t *testing.T) {
 		t.Fatalf("resolved: %d %s", rec.Code, rec.Body)
 	}
 }
+
+// While the gate is closed (an HA standby, or the saved state not yet
+// restored) every steering change is refused.
+func TestSteeringChangesRefusedOnStandby(t *testing.T) {
+	log := eventlog.New(nil, nil, nil)
+	down := plugin.Event{Time: time.Now().Add(-time.Minute), Kind: plugin.EventProviderDown, Severity: plugin.SeverityCritical, Message: "down", Fields: map[string]string{"provider": "transit-a"}}
+	log.Record(down)
+	pins, opt := newStorePins(), &fakeOpt{}
+	s, err := New(Options{User: "ops", Password: "secret", Events: log, Snapshot: func() Snapshot { return Assemble(sampleInput()) }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.SetSteering(pins, opt)
+	standby := true
+	s.SetSteeringGate(func() bool { return standby })
+	h := s.Handler()
+	const js = "application/json"
+	calls := []struct{ method, path, body string }{
+		{http.MethodPost, "/api/pins", pinBody},
+		{http.MethodPost, "/api/optimization/pause", `{"reason":"upstream incident"}`},
+		{http.MethodPost, "/api/alerts/ack", `{"key":"` + down.DedupKey() + `"}`},
+	}
+	for _, c := range calls {
+		if rec := mdo(h, c.method, c.path, js, c.body, true); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "HA standby") {
+			t.Errorf("standby %s %s: %d %s", c.method, c.path, rec.Code, rec.Body)
+		}
+	}
+	if len(pins.List(time.Now())) != 0 || opt.st.Paused {
+		t.Fatal("a standby applied a change")
+	}
+	standby = false
+	for _, c := range calls {
+		if rec := mdo(h, c.method, c.path, js, c.body, true); rec.Code >= 300 {
+			t.Errorf("active %s %s: %d %s", c.method, c.path, rec.Code, rec.Body)
+		}
+	}
+	standby = true
+	for _, path := range []string{"/api/pins/pin-1", "/api/optimization/pause"} {
+		if rec := mdo(h, http.MethodDelete, path, "", "", true); rec.Code != http.StatusConflict {
+			t.Errorf("standby DELETE %s: %d %s", path, rec.Code, rec.Body)
+		}
+	}
+	if len(pins.List(time.Now())) != 1 || !opt.st.Paused {
+		t.Fatal("a standby removed a pin or resumed")
+	}
+}

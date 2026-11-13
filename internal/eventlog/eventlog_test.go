@@ -299,3 +299,71 @@ func TestAcknowledgementsAreBounded(t *testing.T) {
 		t.Errorf("acks = %d, oldest kept %v", n, oldest)
 	}
 }
+
+// A restart restores acknowledgements, except one whose alert resolved
+// before the restart (#565).
+func TestRestoreAcksAfterRestart(t *testing.T) {
+	ctx := context.Background()
+	store := &fakeStore{}
+	l := New(store, nil, nil)
+	saves := 0
+	l.OnAck(func() { saves++; _ = l.SavedAcks() })
+	l.Record(provider(plugin.EventProviderDown, plugin.SeverityCritical, 0, "transit-a"))
+	l.Record(provider(plugin.EventProviderUp, plugin.SeverityInfo, 1, "transit-a"))
+	open := provider(plugin.EventProviderDown, plugin.SeverityCritical, 2, "transit-a")
+	other := provider(plugin.EventProviderDown, plugin.SeverityCritical, 3, "transit-b")
+	l.Record(open)
+	l.Record(other)
+	_ = l.Close(ctx)
+	for _, e := range []plugin.Event{open, other} {
+		if _, err := l.Acknowledge(ctx, e.DedupKey(), "noc1", "ticket 7", t0.Add(4*time.Second)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if saves != 2 {
+		t.Fatalf("OnAck ran %d times, want 2", saves)
+	}
+	saved := l.SavedAcks()
+	if len(saved) != 2 || !saved[0].Since.Equal(t0.Add(time.Second)) {
+		t.Fatalf("saved %+v", saved)
+	}
+
+	// transit-b resolved after its ack was saved; the next start finds it.
+	store.rows = append(store.rows, provider(plugin.EventProviderUp, plugin.SeverityInfo, 5, "transit-b"))
+	r := New(store, nil, nil)
+	defer r.Close(ctx)
+	if err := r.RestoreAcks(ctx, saved); err != nil {
+		t.Fatal(err)
+	}
+	if a, ok := r.AckOf(open); !ok || a.Note != "ticket 7" {
+		t.Errorf("open alert not acknowledged after restart: %+v %v", a, ok)
+	}
+	if _, ok := r.AckOf(provider(plugin.EventProviderDown, plugin.SeverityCritical, 0, "transit-a")); ok {
+		t.Error("the earlier incident is covered after restart")
+	}
+	if _, ok := r.AckOf(other); ok {
+		t.Error("an alert resolved before the restart is still acknowledged")
+	}
+}
+
+// An alert that resolves drops its ack and the ack is saved again, so the
+// saved state does not keep acks for resolved alerts (#565).
+func TestResolveSavesTheDroppedAck(t *testing.T) {
+	ctx := context.Background()
+	l := New(nil, nil, nil)
+	var saved [][]SavedAck
+	l.OnAck(func() { saved = append(saved, l.SavedAcks()) })
+	down := provider(plugin.EventProviderDown, plugin.SeverityCritical, 0, "transit-a")
+	l.Record(down)
+	if _, err := l.Acknowledge(ctx, down.DedupKey(), "noc1", "ticket 7", t0.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	l.Record(provider(plugin.EventProviderUp, plugin.SeverityInfo, 2, "transit-a"))
+	if len(saved) != 2 || len(saved[0]) != 1 || len(saved[1]) != 0 {
+		t.Fatalf("saved acks per change = %+v, want one then none", saved)
+	}
+	l.Record(provider(plugin.EventProviderUp, plugin.SeverityInfo, 3, "transit-a"))
+	if len(saved) != 2 {
+		t.Fatalf("a resolve with no ack saved again: %d saves", len(saved))
+	}
+}
