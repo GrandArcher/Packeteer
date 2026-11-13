@@ -6,7 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Changed
 
-- The System page and the `provider.down` event mark a provider down when the path check finds its `source_ip` is not on this host, as preflight reports; it no longer shows "usable" (#581).
+- A provider whose `source_ip` is not on this host is marked down (System page, `provider.down`), as preflight reports; if it is off-host on purpose, set `path_check: false` on that provider (#581).
 - The Overview headline names a down iBGP session ("no iBGP session") with the provider problems, whether it never came up or dropped (#578).
 - Settings keeps the wizard, preflight, router config, blast radius, and raw YAML in closed sections; Improvements and Providers show cards below 1600 px and Providers has one Open in menu (#580).
 - A provider that is down now is not shown healthy: 15 min figures follow the latest round, the chart drops its line, and Why? and the checklist say 100% loss instead of usable or no answer (#577).
