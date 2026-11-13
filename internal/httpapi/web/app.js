@@ -291,7 +291,8 @@ function renderProviders(data) {
   });
   table.appendChild(tb);
   root.appendChild(table);
-  var reopened = openRow && document.getElementById(openRow).querySelector("details.linkout-menu");
+  var row = openRow && document.getElementById(openRow);
+  var reopened = row && row.querySelector("details.linkout-menu");
   if (reopened) reopened.open = true;
 
   var bgp = data && data.bgp;

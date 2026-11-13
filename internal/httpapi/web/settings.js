@@ -2667,6 +2667,7 @@ function previewCandidate(confirm) {
     blastToken = "";
     byId("bl-confirm").hidden = true;
     byId("bl-status").textContent = explain(err);
+    showTarget(byId("blast"));
   });
 }
 

@@ -134,7 +134,8 @@ function providers(f) {
     " | links hidden " + yes(hidden) + " | fits " + yes(fits(f));
 
   // Every menu opens over its row: all five links show, the row keeps its
-  // height, and the list is not cut off by the container or the window.
+  // height, the list stays inside the window width and is not clipped by its
+  // container (#providers is overflow visible), and Escape closes it.
   var most = 0, least = 99, same = true, inside = true;
   var providersBox = d.getElementById("providers");
   var overflow = w.getComputedStyle(providersBox).overflowY;

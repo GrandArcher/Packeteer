@@ -172,10 +172,12 @@ context.loadBlast().then(function () {
 }).then(function () {
   assert(els["bl-confirm"].hidden === true, "no token, no Apply button");
   var bad = new Error("the preview failed");
+  fold.open = false;
   replies.push(Promise.reject(bad));
   return context.previewCandidate(true);
 }).then(function () {
   assert(els["bl-confirm"].hidden === true && els["bl-status"].textContent === "explained: the preview failed", "a failed preview: " + els["bl-status"].textContent);
+  assert(fold.open === true, "a failed preview opens the closed section too, so its message is seen");
   console.log("ok");
 }).catch(function (e) {
   console.error("FAIL: " + (e && e.stack || e));
