@@ -970,3 +970,29 @@ func TestFirstRunDriverMatchesPage(t *testing.T) {
 		}
 	}
 }
+
+// TestHoldtimeDriverMatchesPage keeps the hold-time review driver (#576) on
+// the settings page it reads. It stubs nothing: the gate, the preview, and the
+// save are the controller's. A renamed id fails here instead of as a timeout
+// in CI.
+func TestHoldtimeDriverMatchesPage(t *testing.T) {
+	f, err := loadFixtures("../ui-fixtures/holdtime")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Stubs) != 0 || f.Inject.Page != "/settings.html" || len(f.driver) == 0 {
+		t.Fatalf("fixtures = %+v", f)
+	}
+	page, err := os.ReadFile("../../internal/httpapi/web/settings.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range regexp.MustCompile(`byId\("([^"]+)"`).FindAllStringSubmatch(string(f.driver), -1) {
+		if !strings.Contains(string(page), `id="`+m[1]+`"`) {
+			t.Errorf("driver uses #%s, which settings.html lacks", m[1])
+		}
+	}
+	if strings.Contains(string(page), `id="bl-apply"`) {
+		t.Error("the Blast radius panel has an Apply button again; the review dialog is the only confirm")
+	}
+}
