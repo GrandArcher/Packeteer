@@ -621,6 +621,23 @@ jobs:
             '/registry.html collapsed yes | top yes | fits yes' \
             --absent ' collapsed no |' ' | top no |' 'clipped' 'no label' 'mobile-jserr'
           kill "$proxy352"
+          # Desktop width (#580): its driver loads Settings, Improvements, and
+          # Providers in 1440x900 frames. Improvements and Providers are answered
+          # from lab/ui-fixtures/desktop (documentation prefixes and ASNs).
+          /tmp/uiproxy -listen 127.0.0.1:18093 -upstream "$base" -user lab -password lab-only \
+            -fixtures lab/ui-fixtures/desktop >/tmp/uiproxy580.log 2>&1 &
+          proxy580=$!
+          for _ in $(seq 1 20); do
+            curl -fsS http://127.0.0.1:18093/healthz >/dev/null 2>&1 && break
+            sleep 0.2
+          done
+          curl -fsS http://127.0.0.1:18093/healthz >/dev/null
+          UI_SMOKE_ATTEMPTS=3 bash lab/ui-smoke.sh http://127.0.0.1:18093/providers.html \
+            'settings: closed yes | hold time on first screen yes | h1 1 | #wizard opens yes | #commit-setup opens yes' \
+            'improvements: 3 rows | cards yes | tokens whole yes | asn AS64500 | cause performance | fits yes' \
+            'providers: 5 rows | cards yes | mbps and probes on screen yes | menus 5 | links hidden yes | fits yes | menu: opens 5 links | row height same yes | inside yes | escape closes yes' \
+            --absent ' no |' 'desk-jserr'
+          kill "$proxy580"
       - name: UI system page smoke (#184; a failing notifier and a dead probe source show on their rows, observe)
         run: |
           set -euo pipefail

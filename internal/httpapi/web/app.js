@@ -89,8 +89,10 @@ var linkoutCache = {};
 var linkoutWaiting = {};
 var linkoutTimer = null;
 
-function linkoutSpan(kind, value) {
+// With menu set the links sit behind one "Open in" control, for a table cell.
+function linkoutSpan(kind, value, menu) {
   var span = el("span", "linkouts");
+  span.menu = Boolean(menu);
   var key = kind + "|" + value;
   if (linkoutCache[key]) {
     fillLinkouts(span, linkoutCache[key]);
@@ -104,15 +106,38 @@ function linkoutSpan(kind, value) {
 function fillLinkouts(span, links) {
   var shown = links.filter(function (l) { return /^https:/.test(l.url); });
   if (!shown.length) return;
-  span.appendChild(el("span", "k", "Open in"));
+  var holder = span;
+  if (span.menu) {
+    var menu = el("details", "linkout-menu");
+    menu.appendChild(el("summary", "", "Open in"));
+    holder = el("div", "linkout-list");
+    menu.appendChild(holder);
+    span.appendChild(menu);
+  } else {
+    span.appendChild(el("span", "k", "Open in"));
+  }
   shown.forEach(function (l) {
     var a = el("a", "", l.name);
     a.href = l.url;
     a.target = "_blank";
     a.rel = "noopener noreferrer";
-    span.appendChild(a);
+    holder.appendChild(a);
   });
 }
+
+// An open menu closes on a click elsewhere or Escape.
+document.addEventListener("click", function (ev) {
+  var open = document.querySelectorAll("details.linkout-menu[open]");
+  for (var i = 0; i < open.length; i++) if (!open[i].contains(ev.target)) open[i].open = false;
+});
+document.addEventListener("keydown", function (ev) {
+  if (ev.key !== "Escape") return;
+  var open = document.querySelectorAll("details.linkout-menu[open]");
+  for (var i = 0; i < open.length; i++) {
+    open[i].open = false;
+    open[i].querySelector("summary").focus();
+  }
+});
 
 function flushLinkouts() {
   var waiting = linkoutWaiting;
@@ -211,7 +236,7 @@ function renderProviders(data) {
   ((lastOverview && lastOverview.providers) || []).forEach(function (h) { health[h.name] = h; });
   var stats = {};
   ((lastProviderStats && lastProviderStats.providers) || []).forEach(function (st) { stats[st.provider] = st; });
-  ["Provider", "Source", "Next hop", "Open in", "Health", "Latency", "Loss", "Jitter", "Reordering", "Trend, 24 h", "Mbps", "Probes", "Since", "Detail"].forEach(function (h) {
+  ["Provider", "Source", "Next hop", "Peer", "Health", "Latency", "Loss", "Jitter", "Reordering", "Trend, 24 h", "Mbps", "Probes", "Since", "Detail"].forEach(function (h) {
     head.appendChild(el("th", "", h));
   });
   var thead = el("thead");
@@ -232,10 +257,10 @@ function renderProviders(data) {
     var peer = el("td");
     if (p.peer_asn) {
       peer.appendChild(el("span", "k", p.exchange + " AS" + p.peer_asn));
-      peer.appendChild(linkoutSpan("asn", p.peer_asn));
+      peer.appendChild(linkoutSpan("asn", p.peer_asn, true));
     } else if (p.asn) {
       peer.appendChild(el("span", "k", (p.type ? p.type + " " : "") + "AS" + p.asn));
-      peer.appendChild(linkoutSpan("asn", p.asn));
+      peer.appendChild(linkoutSpan("asn", p.asn, true));
     } else if (p.type) {
       peer.appendChild(el("span", "k", p.type));
     } else {
@@ -630,12 +655,12 @@ function renderImprovements(data) {
     if (im.source) tr.lastChild.appendChild(el("span", "badge muted", im.source));
     tr.appendChild(el("td", "", im.native || "—"));
     tr.appendChild(el("td", "", im.provider || "—"));
-    tr.appendChild(el("td", "", im.cause || "—"));
-    tr.appendChild(el("td", "", beforeAfter(im.native_rtt_ms, im.rtt_ms, " ms")));
-    tr.appendChild(el("td", "", beforeAfter(im.native_loss_pct, im.loss_pct, "%")));
+    tr.appendChild(el("td", "nw", im.cause || "—"));
+    tr.appendChild(el("td", "nw", beforeAfter(im.native_rtt_ms, im.rtt_ms, " ms")));
+    tr.appendChild(el("td", "nw", beforeAfter(im.native_loss_pct, im.loss_pct, "%")));
     tr.appendChild(el("td", "", gainText(im)));
-    tr.appendChild(el("td", "", im.volume_mbps ? fmtNum(im.volume_mbps) : "no flow data"));
-    tr.appendChild(el("td", "", im.asn ? "AS" + im.asn : "-"));
+    tr.appendChild(el("td", "nw", im.volume_mbps ? fmtNum(im.volume_mbps) : "no flow data"));
+    tr.appendChild(el("td", "nw", im.asn ? "AS" + im.asn : "-"));
     tr.appendChild(el("td", "", im.as_name || "-"));
     tr.appendChild(el("td", "why", whyText(im, inject)));
     tb.appendChild(tr);

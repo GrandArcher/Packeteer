@@ -77,7 +77,7 @@ func TestCommitSetupAssets(t *testing.T) {
 			t.Errorf("commitsetup.js looks up #%s, which settings.html lacks", id)
 		}
 	}
-	if strings.Index(html, `src="/settings.js"`) > strings.Index(html, `src="/commitsetup.js"`) || !strings.Contains(html, `<section id="commit-setup">`) {
+	if strings.Index(html, `src="/settings.js"`) > strings.Index(html, `src="/commitsetup.js"`) || !strings.Contains(html, `<details id="commit-setup" class="fold">`) {
 		t.Error("settings.html must load settings.js before commitsetup.js and hold the commit-setup section")
 	}
 	for _, bad := range []string{"innerHTML", "api(", "fetch(", `"PUT"`, `type = "password"`, "passphrase"} {

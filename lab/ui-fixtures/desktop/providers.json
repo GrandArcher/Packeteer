@@ -1,0 +1,18 @@
+{
+ "version": "fixture",
+ "mode": "observe",
+ "ready": true,
+ "generated_at": "2026-11-12T12:00:00Z",
+ "providers": [
+  {"name": "lab-transit-a", "source": "192.0.2.10", "next_hop": "192.0.2.1", "asn": 64496, "type": "transit", "exclude": false, "up": true, "since": "2026-11-12T11:00:00Z"},
+  {"name": "lab-transit-b", "source": "198.51.100.10", "next_hop": "198.51.100.1", "asn": 64497, "type": "transit", "exclude": false, "up": true, "since": "2026-11-12T11:10:00Z"},
+  {"name": "lab-ix-peer", "source": "203.0.113.10", "next_hop": "203.0.113.1", "exclude": false, "up": true, "since": "2026-11-12T11:20:00Z", "exchange": "ix-lab", "peer_asn": 64498},
+  {"name": "lab-backup-long-provider-name", "source": "192.0.2.20", "next_hop": "192.0.2.2", "asn": 64499, "type": "transit", "exclude": false, "up": false, "since": "2026-11-12T11:30:00Z", "reason": "100% loss", "group": "backup", "cc_disable": true},
+  {"name": "lab-customer", "source": "198.51.100.20", "next_hop": "198.51.100.2", "asn": 64500, "type": "customer", "exclude": false, "up": true, "since": "2026-11-12T11:40:00Z"}
+ ],
+ "bgp": {
+  "configured": false,
+  "ready": false,
+  "peers": []
+ }
+}
