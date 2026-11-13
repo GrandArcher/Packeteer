@@ -867,7 +867,8 @@ function renderFeatures(o) {
 }
 
 // renderHeadline is the one sentence above the tiles when a provider is
-// down or degraded. It is hidden when every provider is healthy (#343).
+// down or degraded or the iBGP session is down. It is hidden when all are
+// healthy (#343, #578).
 function renderHeadline(o) {
   var node = document.getElementById("headline");
   if (!node) return;
@@ -879,6 +880,12 @@ function renderHeadline(o) {
   node.appendChild(el("strong", "", problems.length + (problems.length === 1 ? " problem: " : " problems: ")));
   problems.forEach(function (p, i) {
     if (i) node.appendChild(document.createTextNode(", "));
+    if (p.session) {
+      var s = el("a", "", p.detail);
+      s.href = "/system.html";
+      node.appendChild(s);
+      return;
+    }
     var a = el("a", "", p.provider);
     a.href = "/providers.html#provider-" + encodeURIComponent(p.provider);
     node.appendChild(a);
