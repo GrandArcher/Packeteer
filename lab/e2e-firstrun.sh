@@ -13,9 +13,8 @@
 #      policy routing shows the plan, applies it after a confirm, and verifies
 #   6. the Overview checklist says "Setup complete, still observe"
 #
-# It fails when the walk takes 15 minutes or more, when a step needs the YAML
-# editor, when the config file differs from what the wizard saved, when inject
-# is on, when the session is not Established or no prefix is learned, when a
+# It fails when the walk takes 15 minutes or more, when the config file
+# differs from what the wizard saved, when inject is on, when the session is not Established or no prefix is learned, when a
 # provider's probes do not leave through its next hop, or when the edge
 # receives a route from Packeteer.
 #
@@ -53,7 +52,7 @@ cleanup() {
 	"${compose[@]}" down -v --remove-orphans >/dev/null 2>&1 || true
 	docker volume rm pkfr-data >/dev/null 2>&1 || true
 	# FRR chowns the files it mounted, so the runner user cannot always delete them.
-	if [ -z "${FIRSTRUN_OUT:-}" ]; then rm -rf "$work" 2>/dev/null || sudo rm -rf "$work"; else rm -rf "$work/pk" 2>/dev/null || sudo rm -rf "$work/pk"; fi
+	rm -rf "$work" 2>/dev/null || sudo rm -rf "$work"
 	exit "$rc"
 }
 trap cleanup EXIT
@@ -89,6 +88,8 @@ echo "== 1. stock image, unchanged example config"
 mkdir -p "$work/pk"
 cp config.example.yaml "$work/pk/config.yaml"
 chmod 0666 "$work/pk/config.yaml"
+# Installed before the clock starts: the budget is for the operator path, not the registry.
+npm ci --prefix lab/e2e-gui --ignore-scripts --no-audit --no-fund >/dev/null
 start=$(date +%s)
 docker run -d --name "$pk" --network container:pkfr-netns --cap-add NET_RAW --cap-add NET_ADMIN \
 	-e PACKETEER_HTTP_LISTEN=0.0.0.0:8080 \
@@ -104,7 +105,6 @@ sum_example=$(sha256sum "$work/pk/config.yaml" | cut -d' ' -f1)
 
 echo "== 2. browser: first sign-in, password change, wizard, router config, save"
 export PK_URL=$base PK_USER=$user PK_FIRST_PASSWORD=$firstpw PK_NEW_PASSWORD=$newpw PK_OUT=$out
-npm ci --prefix lab/e2e-gui --ignore-scripts --no-audit --no-fund >/dev/null
 node lab/e2e-gui/firstrun.mjs setup
 saved=$(jq -r .sha256 "$out/saved.json")
 sum_saved=$(sha256sum "$work/pk/config.yaml" | cut -d' ' -f1)

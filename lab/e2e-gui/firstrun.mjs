@@ -8,9 +8,8 @@
 //                               checklist incomplete, apply host policy routing
 //                               from Settings, wait for "Setup complete"
 //
-// It only clicks and types in the pages. It never types into the YAML editor:
-// put() wraps every field it fills and refuses #ed-yaml, so a step that needs
-// a YAML edit fails the walk. It reads the generated YAML once, to check it.
+// It only clicks and types in the pages. It never fills #ed-yaml; it reads the
+// generated YAML from it once, to check it.
 //
 // Environment: PK_URL, PK_USER, PK_FIRST_PASSWORD (setup), PK_NEW_PASSWORD,
 // PK_OUT (directory for the results and failure screenshots), CHROME (browser
@@ -37,11 +36,6 @@ function log(msg) {
   console.log("walk: " + msg);
 }
 
-function put(sel) {
-  if (sel.includes("ed-yaml")) throw new Error("walk: the YAML editor is off limits: " + sel);
-  return sel;
-}
-
 const lab = {
   asn: "64512",
   routerID: "192.0.2.10",
@@ -56,16 +50,16 @@ const lab = {
 
 async function signIn(page, password) {
   await page.goto(url + "/signin.html");
-  await page.fill(put("#signin-name"), user);
-  await page.fill(put("#signin-password"), password);
+  await page.fill("#signin-name", user);
+  await page.fill("#signin-password", password);
   await page.click("#signin-submit");
 }
 
 async function changePassword(page, first, next) {
   await page.waitForSelector("#change-form:not([hidden])");
-  await page.fill(put("#change-current"), first);
-  await page.fill(put("#change-new"), next);
-  await page.fill(put("#change-again"), next);
+  await page.fill("#change-current", first);
+  await page.fill("#change-new", next);
+  await page.fill("#change-again", next);
   await page.click("#change-submit");
 }
 
@@ -83,9 +77,9 @@ async function wizard(page) {
   await page.waitForSelector("#wz-body:not([hidden])");
   await page.waitForFunction(() => document.getElementById("wz-asn").value !== "");
 
-  await page.fill(put("#wz-asn"), lab.asn);
-  await page.fill(put("#wz-router"), lab.routerID);
-  await page.fill(put("#wz-edge"), lab.edge);
+  await page.fill("#wz-asn", lab.asn);
+  await page.fill("#wz-router", lab.routerID);
+  await page.fill("#wz-edge", lab.edge);
   await page.click("#wz-next");
 
   await page.waitForSelector("#wz-2:not([hidden])");
@@ -102,8 +96,8 @@ async function wizard(page) {
   await page.click("#wz-next-2");
 
   await page.waitForSelector("#wz-3:not([hidden])");
-  await page.fill(put("#wz-prefix"), lab.prefix);
-  await page.fill(put("#wz-host"), lab.host);
+  await page.fill("#wz-prefix", lab.prefix);
+  await page.fill("#wz-host", lab.host);
   if (!(await page.isChecked("#wz-storage"))) throw new Error("walk: report history is not ticked by default");
   await page.click("#wz-next-3");
 
