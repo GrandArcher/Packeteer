@@ -135,6 +135,7 @@ func TestReportBadRequests(t *testing.T) {
 		{"/api/reports/summary?days=2&from=2026-09-01", http.StatusBadRequest},
 		{"/api/reports/summary?limit=-1", http.StatusBadRequest},
 		{"/api/reports/prefixes?sort=size", http.StatusBadRequest},
+		{"/api/reports/value?limit=5", http.StatusBadRequest},
 	} {
 		code, _, body := do(t, http.MethodGet, ts.URL+tc.path, "", "")
 		if code != tc.code {
@@ -482,5 +483,31 @@ func TestScorecardReportDefaultsTo30Days(t *testing.T) {
 		if code, _, _ := do(t, http.MethodGet, ts.URL+"/api/reports/scorecard"+qs, "", ""); code != http.StatusBadRequest {
 			t.Errorf("scorecard%s: %d, want 400", qs, code)
 		}
+	}
+}
+
+// #583: the value report is served as JSON, CSV, and XLSX like the others,
+// and a record with no mode is labeled an estimate, not an announced move.
+func TestValueReportFormats(t *testing.T) {
+	ts := reportServer(t, &fakeReports{}, "", "")
+	code, _, body := do(t, http.MethodGet, ts.URL+"/api/reports/value?days=1&provider=transit-b", "", "")
+	if code != http.StatusOK {
+		t.Fatalf("json %d %s", code, body)
+	}
+	var got struct {
+		Rows []history.ValueRow `json:"rows"`
+	}
+	if err := json.Unmarshal([]byte(body), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Rows) != 3 || got.Rows[0].Scope != history.ValueTotal || got.Rows[0].Basis != history.BasisEstimate || *got.Rows[0].LossAvoided != 5 {
+		t.Fatalf("rows = %+v", got.Rows)
+	}
+	code, hdr, csvBody := do(t, http.MethodGet, ts.URL+"/api/reports/value?days=1&format=csv", "", "")
+	if code != http.StatusOK || !strings.HasPrefix(hdr.Get("Content-Type"), "text/csv") || !bytes.HasPrefix(csvBody, []byte("scope,provider,day,basis,")) {
+		t.Fatalf("csv %d %q", code, csvBody)
+	}
+	if code, _, _ := do(t, http.MethodGet, ts.URL+"/api/reports/value?days=1&format=xlsx", "", ""); code != http.StatusOK {
+		t.Fatalf("xlsx %d", code)
 	}
 }

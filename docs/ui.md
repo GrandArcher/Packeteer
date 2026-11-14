@@ -167,7 +167,7 @@ CI loads the page twice in the graphs step of the docker job (`lab/ui-smoke.sh`)
 
 ## Reports
 
-`/reports.html` (#178) lists the stored reports by category: Overview (`summary`), Improvements (`improvements`, `exchanges`, `causes`), Performance (`performance`, `timeseries`, `providers`, `probes`, `probe_asns`, `scorecard`), Traffic (`prefixes`, `asns`, `countries`), Cost (`savings`), and Protection (`mitigations`, `anomalies`). It needs `storage: {type: sqlite}` and says so when history is off. It is read-only and announces nothing; the mode banner is on top in every mode.
+`/reports.html` (#178) lists the stored reports by category: Overview (`summary`), Improvements (`improvements`, `exchanges`, `causes`), Performance (`performance`, `timeseries`, `value`, `providers`, `probes`, `probe_asns`, `scorecard`), Traffic (`prefixes`, `asns`, `countries`), Cost (`savings`), and Protection (`mitigations`, `anomalies`). It needs `storage: {type: sqlite}` and says so when history is off. It is read-only and announces nothing; the mode banner is on top in every mode.
 
 - **Range.** Last 1, 7, 30, 90, or 365 days, or a custom From and To typed in the browser's local time. The page sends a custom range as UTC (`from` and `to` as RFC 3339), and the count line shows the range back in local time. A range is at most 3660 days.
 - **Filters.** Only the filters the report takes are shown. A filter that matches nothing gives an empty table, not an error.
@@ -181,7 +181,7 @@ Filters by report. All filters are optional and combine with AND.
 
 | Report | Filters |
 |---|---|
-| `improvements`, `exchanges`, `causes`, `performance`, `savings` | `provider`, `asn`, `prefix`, `cause`, `ip_version` |
+| `improvements`, `exchanges`, `causes`, `performance`, `savings`, `value` | `provider`, `asn`, `prefix`, `cause`, `ip_version` |
 | `summary`, `providers`, `probes`, `probe_asns`, `prefixes`, `asns`, `countries` | `provider`, `asn`, `prefix`, `ip_version` |
 | `scorecard` | `asn`, `prefix`, `ip_version` |
 | `timeseries` | `asn`, `prefix`, `cause`, `ip_version` |
@@ -210,6 +210,19 @@ The `scorecard` report (#209, Performance on `/reports.html`) answers whether a 
 - **Export.** CSV and XLSX of the same query, with the column keys as the CSV header.
 
 The "UI reports smoke" step of the docker job checks the API (rows, ranks, sort, CSV header, the refused `provider` filter) and loads the page against the `lab/mkhistory` seed (no volume, so equal weights). `internal/history`, `internal/httpapi`, and `lab/mkhistory` tests cover the weighted percentiles, the ranks and ties, the silent provider, the filters, the sort with empty cells last, the CSV, and the 30-day default. Rollback: the report adds no config key and no stored data; revert the change.
+
+## Value delivered
+
+The `value` report (#583, Performance on `/reports.html`) answers "what did Packeteer do for us in latency and loss, per provider and over this range" from stored history. It works in `observe` and needs `storage: {type: sqlite}`; without it the page says history is off. It is read-only and announces nothing. It adds no dollar figure; the `savings` report and [roi.md](roi.md) have the cost side.
+
+- **What is counted.** Improvements that started in the range, the same set as `improvements` and the `improvements_to` column of `providers`. For each, avoided loss is the native path's loss minus the chosen path's, and avoided RTT likewise, both as recorded when the move started (`before_*` and `after_*` in the `improvements` report). A positive number is better; a move onto a path that measured worse subtracts, and nothing is clamped to zero.
+- **Rows.** `scope` is `total`, `provider` (the chosen provider, so a provider is credited only for traffic moved onto it), or `day` (UTC day the move started, oldest first). A provider that no move chose has no row. `improvements` counts the moves and `measured` those with both a before and an after figure. A move with no measurement of either path, for example because the chosen path never answered, counts in `improvements` and `steered_hours` but adds no gain; a row with `measured` 0 has no `*_avoided_*` fields. `steered_hours` is the time inside the range of the counted moves, so it can be lower than `providers`, which also counts moves that started earlier. Rows are not cut by `limit`.
+- **Basis.** `announced` rows come from improvements recorded in `inject`: the routes were on the wire. `estimate` rows come from `observe` and `suggest`, and from records stored before the mode was kept: the move was recommended and traffic did not change path. The two bases are never added together; the same total, provider, or day appears once per basis it has. Read `estimate` as what Packeteer would have avoided.
+- **Weighting.** `weighting` is `flow` when every measured move in the row had a prefix volume from a flow (or other) source, and the means are weighted by that volume (`volume_mbps` is the weight sum). Otherwise it is `equal`, an unweighted mean over the measured moves, and `volume_mbps` is 0.
+- **Filters.** `provider`, `asn`, `prefix`, `cause`, and `ip_version`. `provider` keeps only moves onto that provider. Every cause counts by default, so a cost move onto a slower path lowers the figure; `cause=performance` keeps the moves made for loss or latency.
+- **Export.** CSV and XLSX of the same query, with the column keys as the CSV header.
+
+`internal/history` tests check the figures against a hand calculation from the improvement rows (the weighted and the unweighted case, a provider that never answered, a worse path, and the two bases); `internal/httpapi` tests cover JSON, CSV, and the refused `limit`. Rollback: the report adds no config key and no stored data; revert the change.
 
 ## Link-outs
 
