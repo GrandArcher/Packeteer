@@ -18,6 +18,12 @@ import (
 // prefix learned and both providers measured.
 func upInput() Input {
 	in := firstRun()
+	at := in.At
+	p := netip.MustParsePrefix("198.51.100.0/24")
+	in.Results = []probe.Result{
+		{Provider: "transit-a", Prefix: p, Stats: probe.Stats{Sent: 3, Received: 3}, Time: at},
+		{Provider: "transit-b", Prefix: p, Stats: probe.Stats{Sent: 3, Received: 3}, Time: at},
+	}
 	in.BGPConfigured = true
 	in.RIBReady = true
 	in.RIBPrefixes = 1
@@ -42,6 +48,8 @@ func TestSetupCompleteStates(t *testing.T) {
 		{"a probe source is down", func(in *Input) {
 			in.Status[1] = probe.ProviderStatus{Name: "transit-b", Up: false, Reason: "probe source address unavailable"}
 		}, false, false},
+		{"no probe has answered yet", func(in *Input) { in.Results = nil }, false, false},
+		{"one provider has no result yet", func(in *Input) { in.Results = in.Results[:1] }, false, false},
 		{"preflight egress fails", func(*Input) {}, true, false},
 		{"controller still starting", func(in *Input) { in.Started = false }, false, false},
 	}
@@ -70,7 +78,10 @@ func TestEgressCheckFails(t *testing.T) {
 // incomplete when that run fails probe_egress.
 func TestOverviewAPISetupComplete(t *testing.T) {
 	facts := goodFacts()
-	e := newUIWith(t, func(o *Options) { o.Snapshot = func() Snapshot { return Assemble(upInput()) } })
+	e := newUIWith(t, func(o *Options) {
+		o.Snapshot = func() Snapshot { return Assemble(upInput()) }
+		o.Setup = Setup{DegradedLossPct: 5, DownLossPct: 50}
+	})
 	store, err := preflight.OpenStore("")
 	if err != nil {
 		t.Fatal(err)

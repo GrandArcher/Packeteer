@@ -7,7 +7,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 ### Added
 
 - Settings Host policy routing panel: shows the `ip rule`/`ip route` plan, applies it after a confirm and verifies each source leaves via its next hop; `GET /api/pbr`, `POST /api/pbr/apply` (#582).
-- The Overview checklist says "Setup complete, still observe" once the session is up, a prefix is learned and probes egress correctly; `setup_complete` in `/api/overview` (#582).
+- The Overview checklist says "Setup complete, still observe" once the session is up, a prefix is learned, every provider has answered and preflight egress is not failing; `setup_complete` in `/api/overview` (#582).
 
 ### Changed
 

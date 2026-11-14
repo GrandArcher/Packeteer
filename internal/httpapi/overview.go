@@ -300,11 +300,12 @@ func egressCheckFails(rep preflight.Report) bool {
 }
 
 // setupComplete is the checklist's end state (#582): every iBGP neighbor is
-// established, the learned RIB holds a prefix, a provider is measured and
-// none is down, and the last preflight run did not fail probe_egress. A
-// session or probe source that goes down makes it false again.
+// established, the learned RIB holds a prefix, every provider probed here has
+// answered (none is down or still without a result, and at least one is
+// measured), and the last preflight run did not fail probe_egress. A session
+// or probe source that goes down makes it false again.
 func setupComplete(o Overview, egressFailing bool) bool {
-	if !o.Started || !o.BGP.Configured || o.BGP.Peers == 0 || o.BGP.Established < o.BGP.Peers || o.BGP.Learned == 0 || o.Counts.Providers == 0 || egressFailing {
+	if !o.Started || !o.BGP.Configured || o.BGP.Peers == 0 || o.BGP.Established < o.BGP.Peers || o.BGP.Learned == 0 || egressFailing {
 		return false
 	}
 	for _, p := range o.Problems {
@@ -312,7 +313,16 @@ func setupComplete(o Overview, egressFailing bool) bool {
 			return false
 		}
 	}
-	return true
+	measured := 0
+	for _, h := range o.Providers {
+		switch {
+		case h.State == HealthUp || h.State == HealthDegraded:
+			measured++
+		case h.State == HealthUnknown && !h.Excluded && !strings.HasPrefix(h.reason, ReasonMeasuredByPeer):
+			return false
+		}
+	}
+	return measured > 0
 }
 
 // tally adds one probe result to the provider's counts. A probe that errored or got no reply counts as full loss.

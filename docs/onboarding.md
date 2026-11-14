@@ -81,7 +81,7 @@ Settings has a Replay history panel that sends the YAML in the editor and a wind
 
 ## Setup complete
 
-The Overview checklist ends in a "Setup complete" line when every `bgp.neighbors` session is established, the learned RIB holds a prefix, no provider is down, and the last preflight run (when there is one) did not fail `probe_egress`. In `mode: observe` it reads "Setup complete, still observe." and says nothing is announced; it does not turn inject on. A session or probe source that goes down, or a failing `probe_egress`, takes it back to "Setup is not complete", with a link to the host policy routing panel. `GET /api/overview` has the same answer as `setup_complete`, and `bgp.learned` is the number of prefixes in the learned RIB. Run the preflight checks after fixing a provider's routing: until they run again, a failing `probe_egress` stays on record.
+The Overview checklist ends in a "Setup complete" line when every `bgp.neighbors` session is established, the learned RIB holds a prefix, every provider measured here has answered (none is down or still without a result), and the last preflight run (when there is one) did not fail `probe_egress`. In `mode: observe` it reads "Setup complete, still observe." and says nothing is announced; it does not turn inject on. A session or probe source that goes down, or a failing `probe_egress`, takes it back to "Setup is not complete", with a link to the host policy routing panel for an administrator. `GET /api/overview` has the same answer as `setup_complete`, and `bgp.learned` is the number of prefixes in the learned RIB. Run the preflight checks after fixing a provider's routing: until they run again, a failing `probe_egress` stays on record.
 
 ## Metrics
 
