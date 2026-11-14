@@ -59,6 +59,19 @@ Read this before you change `mode`.
 
 Threat model: [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md). Agent rules: [AGENTS.md](AGENTS.md).
 
+## Try the demo
+
+To see Packeteer work without touching a router, run the one-command lab from a clone. It starts an FRR edge, two simulated transits, and Packeteer in `observe` with sign-in on, all on a Docker bridge with documentation addresses; no probe packet leaves it.
+
+```sh
+git clone https://github.com/GrandArcher/Packeteer.git
+cd Packeteer
+./scripts/demo.sh        # prints the dashboard URL (127.0.0.1:18080) and a generated admin password
+./scripts/demo.sh stop   # removes the containers
+```
+
+About 30 seconds after the start, Overview recommends transit-b for `198.51.100.0/24` while the edge keeps transit-a and holds no route from Packeteer. [docs/demo.md](docs/demo.md) is a five-minute script to follow on screen, with the expected output of each step; CI runs it. For a host install, use [docs/quickstart.md](docs/quickstart.md). For observe, suggest, and inject on a simulated network, use [docs/walkthrough.md](docs/walkthrough.md).
+
 ## Install
 
 The image is `ghcr.io/grandarcher/packeteer`, linux/amd64 and linux/arm64. It runs as root inside the container so it can open raw ICMP sockets and, if you ask it to, TCP port 179. Give it `NET_RAW` and `NET_ADMIN`. It needs host networking: probes must leave from each provider's source address, the iBGP session must reach the router, and a flow collector binds host UDP ports.

@@ -82,3 +82,61 @@ func TestDemoComposeAndScripts(t *testing.T) {
 		}
 	}
 }
+
+// The camera script (#590) runs the one-command demo and stays in observe:
+// no mode change, no announcer, no committed or printed password, and only
+// the clone is skipped in CI.
+func TestDemoGuideStaysObserve(t *testing.T) {
+	steps, err := Parse(strings.NewReader(repoFile(t, "docs/demo.md")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	all := ""
+	for _, s := range steps {
+		if s.Skip != "" && !strings.Contains(s.Body, "git clone") {
+			t.Errorf("demo step at line %d is skipped (%s); only the clone may be", s.Line, s.Skip)
+		}
+		all += s.Body + "\n"
+	}
+	for _, bad := range []string{"mode: inject", "mode: suggest", "sed ", "announcer", "echo \"$PACKETEER_DEMO_PASSWORD", "printenv", "admin:admin", "-u admin"} {
+		if strings.Contains(all, bad) {
+			t.Errorf("demo commands contain %q", bad)
+		}
+	}
+	for _, want := range []string{"./scripts/demo.sh\n", "./scripts/demo.sh stop", "/api/overview", "/api/prefixes", "/api/improvements", "/api/blast", "neighbors 192.0.2.10 routes"} {
+		if !strings.Contains(all, want) {
+			t.Errorf("demo commands lack %q", want)
+		}
+	}
+	var checks []string
+	for _, s := range steps {
+		checks = append(checks, s.Expect...)
+		checks = append(checks, s.Absent...)
+	}
+	joined := strings.Join(checks, "\n")
+	for _, want := range []string{`"mode":"observe"`, `"recommended":"transit-b"`, "64512:666", "198.51.100.0/24", `"code":"no_allowlist"`} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("demo checks lack %q", want)
+		}
+	}
+}
+
+// README points a clone at the demo, its script, the host install, and the
+// inject walkthrough.
+func TestReadmePointsAtDemo(t *testing.T) {
+	readme := repoFile(t, "README.md")
+	i := strings.Index(readme, "## Try the demo")
+	j := strings.Index(readme, "## Install")
+	if i < 0 || j < i {
+		t.Fatal("README has no Try the demo section before Install")
+	}
+	section := readme[i:j]
+	for _, want := range []string{"./scripts/demo.sh", "./scripts/demo.sh stop", "docs/demo.md", "docs/quickstart.md", "docs/walkthrough.md"} {
+		if !strings.Contains(section, want) {
+			t.Errorf("README demo section lacks %q", want)
+		}
+	}
+	if strings.Contains(section, "mode: inject") {
+		t.Error("README demo section shows inject")
+	}
+}

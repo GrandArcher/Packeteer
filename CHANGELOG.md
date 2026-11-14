@@ -6,6 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Added
 
+- `docs/demo.md`: a five-minute observe-only script for the demo lab, run in CI, and a README "Try the demo" section (#590).
 - `scripts/demo.sh`: one command starts an FRR edge, two simulated transits, and Packeteer in observe with sign-in on and the dashboard on loopback; CI runs it (#586).
 - Settings Host policy routing panel: shows the `ip rule`/`ip route` plan, applies it after a confirm and verifies each source leaves via its next hop; `GET /api/pbr`, `POST /api/pbr/apply` (#582).
 - The Overview checklist says "Setup complete, still observe" once the session is up, a prefix is learned, every provider answered, egress not failing; `setup_complete` in `/api/overview` (#582).
