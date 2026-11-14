@@ -132,15 +132,15 @@ function valueDays(basis, rows, data) {
 }
 
 // valueSavings words the summary report's estimated savings. Shown only when
-// there is a figure; it adds no arithmetic of its own. The report sums every
-// move whatever its mode, so "accrued" is claimed only when every move in the
-// range was announced.
-function valueSavings(s, bases) {
+// there is a figure; it adds no arithmetic of its own. The summary sums every
+// move active in the range whatever its mode or start, so the wording claims
+// neither that routes were announced nor that the money accrued.
+function valueSavings(s) {
   if (!s || (!s.est_savings_accrued && !s.est_savings_rate)) return null;
   var p = el("p", "tag value-savings");
   var accrued = s.est_savings_accrued;
   p.textContent = "Estimated cost: " + (accrued < 0 ? "extra spend of " + valueNum(-accrued) : "savings of " + valueNum(accrued)) +
-    (bases.announced && !bases.estimate ? " accrued in this range" : bases.announced ? " in this range from announced and recommended moves together" : " in this range if the recommendations were followed") + ", and " + valueNum(s.est_savings_rate) + " per month from the improvements active now. " +
+    " for the moves active in this range, announced and recommended alike, and " + valueNum(s.est_savings_rate) + " per month from the improvements active now. " +
     "These are estimates from your provider prices and prefix volumes, not billing. The Savings report has the detail.";
   return p;
 }
@@ -168,7 +168,7 @@ function renderValue(root, data, ctx) {
     sec.appendChild(valueDays(basis, valueRows(rows, "day", basis), data));
     root.appendChild(sec);
   });
-  var cost = valueSavings(ctx && ctx.savings, {announced: valueRows(rows, "total", "announced").length > 0, estimate: valueRows(rows, "total", "estimate").length > 0});
+  var cost = valueSavings(ctx && ctx.savings);
   if (cost) root.appendChild(cost);
 }
 
