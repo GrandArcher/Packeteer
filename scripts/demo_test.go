@@ -36,7 +36,7 @@ const demoFakeUname = `#!/bin/sh
 echo "${FAKE_UNAME:-Linux}"
 `
 
-func demoEnv(t *testing.T, skip ...string) (run func(extra ...string) (string, error), log func() string) {
+func demoEnv(t *testing.T, skipDocker bool) (run func(extra ...string) (string, error), log func() string) {
 	t.Helper()
 	bin := t.TempDir()
 	logf := filepath.Join(t.TempDir(), "log")
@@ -54,8 +54,8 @@ func demoEnv(t *testing.T, skip ...string) (run func(extra ...string) (string, e
 			t.Fatal(err)
 		}
 	}
-	for _, name := range skip {
-		_ = os.Remove(filepath.Join(bin, name))
+	if skipDocker {
+		_ = os.Remove(filepath.Join(bin, "docker"))
 	}
 	bash, err := exec.LookPath("bash")
 	if err != nil {
@@ -100,7 +100,7 @@ func TestDemoPreflightFailsFastWithOneLineFix(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			run, log := demoEnv(t)
+			run, log := demoEnv(t, false)
 			out, err := run(c.extra...)
 			if err == nil {
 				t.Fatalf("demo.sh succeeded; want a preflight failure\n%s", out)
@@ -119,7 +119,7 @@ func TestDemoPreflightFailsFastWithOneLineFix(t *testing.T) {
 }
 
 func TestDemoPreflightNoDocker(t *testing.T) {
-	run, _ := demoEnv(t, "docker")
+	run, _ := demoEnv(t, true)
 	out, err := run()
 	if err == nil || !strings.Contains(out, "docker is not installed") {
 		t.Fatalf("err %v, output %q", err, out)
@@ -132,7 +132,7 @@ func TestDemoPreflightPortInUse(t *testing.T) {
 		t.Skipf("127.0.0.1:18080 is in use on this machine: %v", err)
 	}
 	defer l.Close()
-	run, log := demoEnv(t)
+	run, log := demoEnv(t, false)
 	out, err := run()
 	if err == nil || !strings.Contains(out, "127.0.0.1:18080 is already in use. Fix: ") {
 		t.Fatalf("err %v, output %q", err, out)
@@ -144,7 +144,7 @@ func TestDemoPreflightPortInUse(t *testing.T) {
 
 func TestDemoPreflightPassesOnACleanHost(t *testing.T) {
 	port18080Free(t)
-	run, log := demoEnv(t)
+	run, log := demoEnv(t, false)
 	out, err := run("FAKE_NETWORKS=bridge 172.17.0.0/16 ")
 	if err != nil {
 		t.Fatalf("demo.sh: %v\n%s", err, out)
@@ -157,8 +157,19 @@ func TestDemoPreflightPassesOnACleanHost(t *testing.T) {
 // A lab that is already up owns the port and the bridge; rerunning "up" is
 // a no-op for compose and must not be reported as a clash.
 func TestDemoPreflightAllowsARunningLab(t *testing.T) {
-	run, log := demoEnv(t)
+	run, log := demoEnv(t, false)
 	out, err := run("FAKE_RUNNING=1", "FAKE_NETWORKS=lab_lab 192.0.2.0/24 ")
+	if err != nil || !strings.Contains(log(), "up -d --build") {
+		t.Fatalf("demo.sh: %v\n%s\n%s", err, out, log())
+	}
+}
+
+// After a reboot or docker stop the demo's own network remains while its
+// containers are gone; "up" restarts the lab and must not be called a clash.
+func TestDemoPreflightAllowsItsOwnStoppedLab(t *testing.T) {
+	port18080Free(t)
+	run, log := demoEnv(t, false)
+	out, err := run("FAKE_NETWORKS=packeteer-demo_lab 192.0.2.0/24 ")
 	if err != nil || !strings.Contains(log(), "up -d --build") {
 		t.Fatalf("demo.sh: %v\n%s\n%s", err, out, log())
 	}

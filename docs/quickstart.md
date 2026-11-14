@@ -178,7 +178,7 @@ docker compose logs packeteer
 <!-- ci-expect: "mode":"observe" -->
 <!-- ci-expect: packeteer running -->
 
-The Compose file pins the same flags: host networking, the two capabilities, the config and plugin mounts, a data volume, and `restart: unless-stopped`. It passes `PACKETEER_ADMIN_PASSWORD` from your shell (still set from Step 4; Compose starts its own volume, `packeteer_packeteer-data`, and creates the admin from it); leave it unset to get a generated password, which is in `/var/lib/packeteer/first-run-admin-password` (read it with `docker compose exec packeteer cat /var/lib/packeteer/first-run-admin-password`); the log names that file but never shows the password. Its `image` line pins the release, 1.4.0, like step 1.
+The Compose file pins the same flags: host networking, the two capabilities, the config and plugin mounts, a data volume, and `restart: unless-stopped`. It passes `PACKETEER_ADMIN_PASSWORD` from your shell to the container. Compose starts with a new data volume of its own, so the admin is created again from that password. Export it first (as in Step 4) if this is a new shell, or the `curl` above is refused. Leave it unset to get a generated password, which is in `/var/lib/packeteer/first-run-admin-password` (read it with `docker compose exec packeteer cat /var/lib/packeteer/first-run-admin-password`); the log names that file but never shows the password. Its `image` line pins the release, 1.4.0, like step 1.
 
 ## 6. Stop
 

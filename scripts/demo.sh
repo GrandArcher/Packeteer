@@ -54,7 +54,8 @@ preflight() {
 	if [ -n "$ids" ]; then
 		# shellcheck disable=SC2086
 		net=$(docker network inspect --format '{{.Name}} {{range .IPAM.Config}}{{.Subnet}} {{end}}' $ids | awk '/(^| )192\.0\.2\.0\/24( |$)/ {print $1; exit}')
-		if [ -n "$net" ]; then
+		# The demo's own network survives `docker stop` or a reboot; `up` reuses it.
+		if [ -n "$net" ] && [ "$net" != packeteer-demo_lab ]; then
 			fail "the Docker network $net already uses 192.0.2.0/24. Fix: stop the lab that owns it (the walkthrough: docker compose -f lab/docker-compose-walkthrough.yml down -v), or docker network rm $net."
 		fi
 	fi
