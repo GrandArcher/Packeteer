@@ -1,0 +1,79 @@
+# First-run GUI lab (lab/e2e-firstrun.sh, #587): an FRR edge with two simulated
+# eBGP transits and the network namespace Packeteer runs in. The script starts
+# the stock image on top of it with the unchanged config.example.yaml, and the
+# walk through Settings does the rest. Documentation addresses (RFC 5737) and
+# documentation/private ASNs only.
+#
+# The edge has no session to Packeteer yet: the script pastes the router config
+# the Settings page writes. Each transit answers 198.51.100.1, the host the
+# wizard pins, and forwards (ip_forward) so it answers the TTL-limited probe of
+# the egress check with its own address.
+#
+# The namespace holder keeps the probe source addresses and the route table
+# across a Packeteer restart, and publishes the dashboard on loopback. The lab
+# bridge is not a way out: the script removes the holder's default route, so a
+# probe that does not go through a provider's next hop has nowhere to go.
+name: packeteer-firstrun
+x-frr: &frr
+  image: quay.io/frrouting/frr:10.2.4
+  privileged: true
+  entrypoint: ["/bin/sh", "/lab/frr-start.sh"]
+services:
+  edge:
+    <<: *frr
+    container_name: pkfr-edge
+    hostname: edge
+    environment:
+      FRR_EXPECT: "neighbor 192.0.2.21 remote-as 64496;neighbor 192.0.2.22 remote-as 64497"
+    volumes:
+      - ./frr-firstrun:/etc/frr
+      - ./frr-start.sh:/lab/frr-start.sh:ro
+    networks:
+      lab:
+        ipv4_address: 192.0.2.254
+  transit-a:
+    <<: *frr
+    container_name: pkfr-transit-a
+    hostname: transit-a
+    sysctls:
+      net.ipv4.ip_forward: "1"
+    environment:
+      FRR_EXPECT: "router bgp 64496;network 198.51.100.0/24"
+    volumes:
+      - ./frr-bmp-transit-a:/etc/frr
+      - ./frr-start.sh:/lab/frr-start.sh:ro
+    networks:
+      lab:
+        ipv4_address: 192.0.2.21
+  transit-b:
+    <<: *frr
+    container_name: pkfr-transit-b
+    hostname: transit-b
+    sysctls:
+      net.ipv4.ip_forward: "1"
+    environment:
+      FRR_EXPECT: "router bgp 64497;network 198.51.100.0/24;route-map to-edge out"
+    volumes:
+      - ./frr-bmp-transit-b:/etc/frr
+      - ./frr-start.sh:/lab/frr-start.sh:ro
+    networks:
+      lab:
+        ipv4_address: 192.0.2.22
+  netns:
+    image: ${PACKETEER_IMAGE:?set PACKETEER_IMAGE to the image under test}
+    container_name: pkfr-netns
+    entrypoint: ["sleep", "86400"]
+    cap_add:
+      - NET_ADMIN
+    ports:
+      - "127.0.0.1:18587:8080"
+    networks:
+      lab:
+        ipv4_address: 192.0.2.10
+networks:
+  lab:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 192.0.2.0/24
+          gateway: 192.0.2.3

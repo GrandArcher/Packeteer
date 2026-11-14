@@ -1,0 +1,9 @@
+{
+  "name": "packeteer-lab-firstrun-gui",
+  "private": true,
+  "description": "Browser driver of lab/e2e-firstrun.sh (#587). Lab only: never installed in the image or the Go module.",
+  "type": "module",
+  "dependencies": {
+    "playwright-core": "1.65.1"
+  }
+}

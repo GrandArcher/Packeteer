@@ -8,6 +8,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 - Settings Host policy routing panel: shows the `ip rule`/`ip route` plan, applies it after a confirm and verifies each source leaves via its next hop; `GET /api/pbr`, `POST /api/pbr/apply` (#582).
 - The Overview checklist says "Setup complete, still observe" once the session is up, a prefix is learned, every provider answered, egress not failing; `setup_complete` in `/api/overview` (#582).
+- `firstrun-gui` lab job: headless Chrome walks a stock image to "Setup complete, still observe" in under 15 minutes with no YAML edit (`lab/e2e-firstrun.sh`, #587).
 
 ### Changed
 
