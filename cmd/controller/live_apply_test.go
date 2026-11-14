@@ -20,6 +20,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/config"
 	"github.com/GrandArcher/Packeteer/internal/mitigation"
 	"github.com/GrandArcher/Packeteer/internal/pluginhost"
+	"github.com/GrandArcher/Packeteer/internal/policy"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -333,7 +334,7 @@ func TestReloadMitigationInjectRefusals(t *testing.T) {
 	if err := mit.SetRIB(ribGate{}); err != nil {
 		t.Fatal(err)
 	}
-	pc, err := policyConfig(next)
+	pc, err := policy.FromConfig(next)
 	if err != nil {
 		t.Fatal(err)
 	}

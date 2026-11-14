@@ -151,6 +151,35 @@ func TestEncodeDecodeKeepsTheDecision(t *testing.T) {
 	}
 }
 
+// Observe sees every round of its side after Decide, with the state the
+// next round starts from.
+func TestObserveSeesEachRoundsStateAndOutput(t *testing.T) {
+	s := openStore(t)
+	record(t, s, cfg(), 12)
+	var rounds, steered int
+	side := Side{Name: "running", Cfg: cfg(), Scorer: scorer(t), Observe: func(st policy.State, out policy.Output) {
+		rounds++
+		if len(out.Decisions) != 3 {
+			t.Fatalf("round %d: %d decisions, want 3", rounds, len(out.Decisions))
+		}
+		if imp, ok := st.Improvements[pA]; ok && imp.Provider == "b" {
+			steered++
+		}
+	}}
+	res, err := Run(context.Background(), s, t0.Add(-time.Hour), t0.Add(time.Hour), []Side{side})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rounds != res.Rounds || rounds != 12 {
+		t.Fatalf("observed %d rounds of %d", rounds, res.Rounds)
+	}
+	// pA is lossy on a from round 0 and moved to b by that round's Decide,
+	// which an empty starting state shows only after Decide; it stays.
+	if steered != rounds {
+		t.Fatalf("pA on b in %d of %d rounds, summary %+v", steered, rounds, res.Sides[0].Summary)
+	}
+}
+
 // The same config over the stored rounds makes the decisions the live
 // engine made, in order (acceptance: a recorded run is reproduced).
 func TestSameConfigReproducesTheLiveDecisions(t *testing.T) {

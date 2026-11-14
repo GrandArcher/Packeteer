@@ -587,7 +587,7 @@ func (r *reloader) applyOnline(ctx context.Context, next *config.Config, online 
 	if len(online) == 0 {
 		return nil
 	}
-	pc, err := policyConfig(next)
+	pc, err := policy.FromConfig(next)
 	if err != nil {
 		return err
 	}
@@ -662,7 +662,7 @@ func (r *reloader) applyOnline(ctx context.Context, next *config.Config, online 
 		r.engine.SetTiming(probe.Timing{
 			Interval: next.Probe.Interval, Timeout: next.Probe.Timeout, Packets: next.Probe.Packets,
 			RetryLossPct: next.Probe.RetryLossPct, RetryPackets: next.Probe.RetryPackets,
-			RoundTimeout: maxResultAge(next),
+			RoundTimeout: next.MaxResultAge(),
 		})
 	}
 	if r.decider != nil {
@@ -679,7 +679,7 @@ func (r *reloader) applyOnline(ctx context.Context, next *config.Config, online 
 		if next.MaxImprovements != nil {
 			max = *next.MaxImprovements
 		}
-		r.fed.setRuntime(next.Mode, max, maxResultAge(next))
+		r.fed.setRuntime(next.Mode, max, next.MaxResultAge())
 	}
 	if r.col != nil {
 		r.col.SetMode(next.Mode)

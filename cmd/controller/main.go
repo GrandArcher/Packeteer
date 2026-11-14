@@ -1080,7 +1080,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			in.Synthesize = ctl.Synthesizable(in.Results)
 			fillOverloadInputs(loopCtx, &in, snap, plugins)
 			if reorderMon != nil {
-				in.Reorder = reorderMon.Scored(now, maxResultAge(cfg))
+				in.Reorder = reorderMon.Scored(now, cfg.MaxResultAge())
 			}
 			verified, backedOut, revertedIn := verifier.check(loopCtx, now, ctl.Injected, in.Results)
 			changes, err := runDecision(now, decider, in, ctl, log, snap.Mode, engine)

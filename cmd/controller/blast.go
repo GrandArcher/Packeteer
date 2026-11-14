@@ -57,7 +57,7 @@ func (b blastSource) PreviewConfig(next *config.Config, online []string) (blast.
 }
 
 func (b blastSource) report(cfg *config.Config, changed []string) (blast.Report, error) {
-	pc, err := policyConfig(cfg)
+	pc, err := policy.FromConfig(cfg)
 	if err != nil {
 		return blast.Report{}, err
 	}

@@ -15,7 +15,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/GrandArcher/Packeteer/internal/config"
 	"github.com/GrandArcher/Packeteer/internal/pluginhost"
 	"github.com/GrandArcher/Packeteer/internal/plugins/source/span"
 	"github.com/GrandArcher/Packeteer/internal/plugins/source/vip"
@@ -493,37 +492,6 @@ func TestSnapsRateLimitRebuildsOnAChurningTable(t *testing.T) {
 	at = at.Add(snapRebuildGap)
 	if got := out.get(o); len(got) != 1 {
 		t.Fatalf("outage copy not rebuilt after the gap: %d routes", len(got))
-	}
-}
-
-func TestDispersionRetryExtendsStalenessWindow(t *testing.T) {
-	base := `mode: observe
-asn: 64512
-router_id: 192.0.2.10
-providers:
-  - {name: a, source_ip: 192.0.2.11, next_hop: 192.0.2.1}
-`
-	parse := func(extra string) *config.Config {
-		t.Helper()
-		cfg, err := config.Parse([]byte(base + extra))
-		if err != nil {
-			t.Fatal(err)
-		}
-		return cfg
-	}
-	plain := 3*30*time.Second + 10*2*time.Second
-	if got := maxResultAge(parse("")); got != plain {
-		t.Fatalf("plain window %s, want %s", got, plain)
-	}
-	if got := maxResultAge(parse("probe: {min_replies: 4}\n")); got != plain {
-		t.Fatalf("min_replies window %s, want %s (replies alone do not extend it)", got, plain)
-	}
-	want := 3*30*time.Second + (10+30)*2*time.Second
-	if got := maxResultAge(parse("probe: {dispersion_ms: 20}\n")); got != want {
-		t.Fatalf("dispersion window %s, want %s", got, want)
-	}
-	if got := maxResultAge(parse("probe: {retry_loss_pct: 20}\n")); got != want {
-		t.Fatalf("loss retry window %s, want %s", got, want)
 	}
 }
 
