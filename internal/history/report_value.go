@@ -26,12 +26,13 @@ const (
 
 // ValueRow is the loss and latency a set of moves avoided: the native
 // path's figure minus the chosen path's, both taken when each move started.
-// Weighting is "flow" (the scorecard's word) when every measured move
-// carried a prefix volume, so the means are weighted by it, and "equal" for
-// an unweighted mean. A positive value is better; a move onto a path that measured worse
+// A positive value is better; a move onto a path that measured worse
 // subtracts. The avoided and before/after fields are absent when no move in
 // the row had both measurements, so a row never shows a gain it did not
-// measure. Announced and estimate rows are never mixed.
+// measure. The RTT figures leave out a move where either path had no reply
+// (loss 100). Weighting is "flow" (the scorecard's word) when every measured
+// move carried a prefix volume, so the means are weighted by it, and "equal"
+// for an unweighted mean. Announced and estimate rows are never mixed.
 type ValueRow struct {
 	Scope    string `json:"scope"`
 	Provider string `json:"provider,omitempty"`
@@ -134,7 +135,10 @@ func valueRow(k valueKey, c *valueCell) ValueRow {
 	if byVolume {
 		row.Weighting = WeightFlow
 	}
-	var w, bl, al, br, ar float64
+	// A path with no reply has loss 100 and no RTT (the recorder stores it
+	// as 0), so a move needs two answering paths to count toward RTT;
+	// otherwise a dead chosen path would read as latency avoided.
+	var w, rw, bl, al, br, ar float64
 	for _, r := range c.measured {
 		x := 1.0
 		if byVolume {
@@ -144,11 +148,16 @@ func valueRow(k valueKey, c *valueCell) ValueRow {
 		w += x
 		bl += x * r.BeforeLoss
 		al += x * r.AfterLoss
-		br += x * r.BeforeRTT
-		ar += x * r.AfterRTT
+		if r.BeforeLoss < 100 && r.AfterLoss < 100 {
+			rw += x
+			br += x * r.BeforeRTT
+			ar += x * r.AfterRTT
+		}
 	}
 	row.VolumeMbps = round(row.VolumeMbps)
 	row.BeforeLossPct, row.AfterLossPct, row.LossAvoided = ptr(round(bl/w)), ptr(round(al/w)), ptr(round((bl-al)/w))
-	row.BeforeRTTMs, row.AfterRTTMs, row.RTTAvoidedMs = ptr(round(br/w)), ptr(round(ar/w)), ptr(round((br-ar)/w))
+	if rw > 0 {
+		row.BeforeRTTMs, row.AfterRTTMs, row.RTTAvoidedMs = ptr(round(br/rw)), ptr(round(ar/rw)), ptr(round((br-ar)/rw))
+	}
 	return row
 }

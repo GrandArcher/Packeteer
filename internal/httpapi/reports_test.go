@@ -500,7 +500,7 @@ func TestValueReportFormats(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &got); err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Rows) != 3 || got.Rows[0].Scope != history.ValueTotal || got.Rows[0].Basis != history.BasisEstimate || *got.Rows[0].LossAvoided != 5 {
+	if len(got.Rows) != 3 || got.Rows[0].Scope != history.ValueTotal || got.Rows[0].Basis != history.BasisEstimate || got.Rows[0].LossAvoided == nil || *got.Rows[0].LossAvoided != 5 {
 		t.Fatalf("rows = %+v", got.Rows)
 	}
 	code, hdr, csvBody := do(t, http.MethodGet, ts.URL+"/api/reports/value?days=1&format=csv", "", "")

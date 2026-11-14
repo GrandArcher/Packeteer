@@ -17,7 +17,7 @@ import (
 //	m3 transit-b observe d2 +1h, open  200 Mbps  loss 20 -> 2,  rtt 70 -> 40
 //	m4 transit-b (no mode) d2 +2h..+4h, no volume loss 4 -> 1,  rtt 100 -> 90
 //	m5 transit-a observe d2 +3h, open: no measurement of either path
-//	m6 transit-d inject  d2 +1h..+2h: the chosen path never answered
+//	m6 transit-d inject  d2 +1h..+2h: no stored measurement of the chosen path
 //
 // transit-c was never chosen and must have no row.
 func valueSeed() plugin.History {
@@ -97,16 +97,61 @@ func TestValueMatchesHandCalculation(t *testing.T) {
 	}
 }
 
-func TestValueNeverMixesAnnouncedAndEstimate(t *testing.T) {
-	// Only inject records are announced; observe, suggest, and a record
-	// with no mode (made before the column existed) are estimates.
-	for _, r := range buildValue(t) {
-		if r.Basis != BasisAnnounced && r.Basis != BasisEstimate {
-			t.Errorf("basis %q", r.Basis)
+// Only inject records are announced; observe, suggest, and a record with no
+// mode (made before the column existed) are estimates.
+func TestValueLabelsEveryModeAsRecordedTraffic(t *testing.T) {
+	for mode, want := range map[string]string{
+		"inject": BasisAnnounced, "observe": BasisEstimate, "suggest": BasisEstimate, "": BasisEstimate,
+	} {
+		h := valueSeed()
+		h.Improvements = []plugin.ImprovementRecord{{ID: "x", Prefix: pfxA, Provider: "transit-b", Native: "transit-a", Mode: mode,
+			Start: from.Add(time.Hour), HasBefore: true, BeforeLoss: 3, HasAfter: true, AfterLoss: 1}}
+		rep, err := Build(h, Query{Name: ReportValue, From: from, To: to, Now: now})
+		if err != nil {
+			t.Fatal(err)
 		}
-		if r.Scope == ValueProvider && r.Provider == "transit-a" && r.Basis != BasisEstimate {
-			t.Errorf("an observe move is labeled %s", r.Basis)
+		for _, r := range rep.Rows.([]ValueRow) {
+			if r.Basis != want {
+				t.Errorf("mode %q: %s row is %s, want %s", mode, r.Scope, r.Basis, want)
+			}
 		}
+	}
+}
+
+// The recorder stores a path with no reply as loss 100 and RTT 0 (not as a
+// missing figure), so neither a dead chosen path nor a dead native path may
+// produce an RTT figure.
+func TestValueDeadPathGivesNoRTTGain(t *testing.T) {
+	move := func(id string, bl, br, al, ar float64) plugin.ImprovementRecord {
+		return plugin.ImprovementRecord{ID: id, Prefix: pfxA, Provider: "transit-b", Native: "transit-a", Mode: "inject", Start: from.Add(time.Hour),
+			HasBefore: true, BeforeLoss: bl, BeforeRTT: br, HasAfter: true, AfterLoss: al, AfterRTT: ar}
+	}
+	for name, r := range map[string]plugin.ImprovementRecord{
+		"chosen path dead": move("a", 2, 40, 100, 0),
+		"native path dead": move("b", 100, 0, 1, 30),
+	} {
+		h := plugin.History{Improvements: []plugin.ImprovementRecord{r}}
+		rep, err := Build(h, Query{Name: ReportValue, From: from, To: to, Now: now})
+		if err != nil {
+			t.Fatal(err)
+		}
+		row := rep.Rows.([]ValueRow)[0]
+		if row.Measured != 1 || row.RTTAvoidedMs != nil || row.BeforeRTTMs != nil || row.AfterRTTMs != nil {
+			t.Errorf("%s: RTT figures from a path with no reply: %+v", name, row)
+		}
+	}
+	// Loss still counts: a dead chosen path is 98 points worse, not a gain.
+	h := plugin.History{Improvements: []plugin.ImprovementRecord{move("a", 2, 40, 100, 0)}}
+	rep, _ := Build(h, Query{Name: ReportValue, From: from, To: to, Now: now})
+	if got := *rep.Rows.([]ValueRow)[0].LossAvoided; got != -98 {
+		t.Errorf("loss avoided onto a dead path = %v, want -98", got)
+	}
+	// With a second move whose paths both answered, the RTT mean uses that
+	// move alone.
+	h = plugin.History{Improvements: []plugin.ImprovementRecord{move("a", 2, 40, 100, 0), move("c", 5, 90, 1, 50)}}
+	rep, _ = Build(h, Query{Name: ReportValue, From: from, To: to, Now: now})
+	if got := *rep.Rows.([]ValueRow)[0].RTTAvoidedMs; got != 40 {
+		t.Errorf("rtt avoided = %v, want 40 from the one move with two live paths", got)
 	}
 }
 
@@ -121,8 +166,8 @@ func TestValueCreditsOnlyTheChosenProvider(t *testing.T) {
 			t.Errorf("total for transit-b: %+v", r)
 		}
 	}
-	// transit-a is only ever the native path of the moves onto transit-b,
-	// so filtering by it credits it with m5 alone.
+	// transit-a is the native path of the other moves, so filtering by it
+	// credits it with m5 alone.
 	for _, r := range buildValue(t, func(q *Query) { q.Provider = "transit-a" }) {
 		if r.Scope == ValueTotal && (r.Improvements != 1 || r.Measured != 0 || r.LossAvoided != nil) {
 			t.Errorf("total for transit-a: %+v", r)
@@ -161,10 +206,13 @@ func TestValueNegativeWhenTheChosenPathIsWorse(t *testing.T) {
 }
 
 func TestValueFiltersAndLimit(t *testing.T) {
-	if rows := buildValue(t, func(q *Query) { q.Cause = plugin.CauseCost }); len(rows) != 3 || rows[0].Improvements != 1 || *rows[0].LossAvoided != 1 {
+	if rows := buildValue(t, func(q *Query) { q.Cause = plugin.CauseCost }); len(rows) != 3 || rows[0].Improvements != 1 || rows[0].LossAvoided == nil || *rows[0].LossAvoided != 1 {
 		t.Errorf("cause=cost: %+v", rows)
 	}
-	if rows := buildValue(t, func(q *Query) { q.Prefix = pfxC }); len(rows) == 0 || rows[0].Scope != ValueTotal {
+	// pfxC holds m3 (observe) and m6 (inject, never measured).
+	rows := buildValue(t, func(q *Query) { q.Prefix = pfxC })
+	if len(rows) < 2 || rows[0].Basis != BasisAnnounced || rows[0].Improvements != 1 || rows[1].Basis != BasisEstimate || rows[1].Improvements != 1 ||
+		rows[0].Scope != ValueTotal || rows[1].Scope != ValueTotal {
 		t.Errorf("prefix filter: %+v", rows)
 	}
 	if err := (Query{Name: ReportValue, Limit: 5}).Validate(); err == nil {
