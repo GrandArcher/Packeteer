@@ -130,7 +130,7 @@ func newEngine(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, on
 		Workers:              cfg.Probe.Workers,
 		ProviderInflight:     cfg.Probe.ProviderInflight,
 		PerTargetConcurrency: cfg.Probe.PerTargetConcurrency,
-		RoundTimeout:         maxResultAge(cfg),
+		RoundTimeout:         cfg.MaxResultAge(),
 		RetryLossPct:         cfg.Probe.RetryLossPct,
 		RetryPackets:         cfg.Probe.RetryPackets,
 		MinReplies:           cfg.Probe.MinReplies,
@@ -258,20 +258,6 @@ func retainImprovedPrefixes(engine *probe.Engine, imps []policy.Improvement) {
 		}
 	}
 	engine.SetRetained(ps)
-}
-
-// maxResultAge is how old a measurement may be before Decide treats it as
-// stale. It is also the overall probe-round deadline, so a stuck round
-// cannot outlive the freshness window.
-func maxResultAge(cfg *config.Config) time.Duration {
-	pkts := cfg.Probe.Packets
-	// Same condition as the probe engine: a second probe can run when
-	// loss retry or dispersion escalation is on, and then the window is
-	// 3*interval + (packets + retry_packets)*timeout.
-	if cfg.Probe.RetryPackets > 0 && (cfg.Probe.RetryLossPct > 0 || cfg.Probe.DispersionMS > 0) {
-		pkts += cfg.Probe.RetryPackets
-	}
-	return 3*cfg.Probe.Interval + time.Duration(pkts)*cfg.Probe.Timeout
 }
 
 func logResult(log *slog.Logger, r probe.Result) {

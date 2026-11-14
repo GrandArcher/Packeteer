@@ -870,3 +870,17 @@ func Parse(data []byte) (*Config, error) {
 	}
 	return &cfg, nil
 }
+
+// MaxResultAge is how old a measurement may be before Decide treats it as
+// stale. It is also the overall probe-round deadline, so a stuck round
+// cannot outlive the freshness window.
+func (cfg *Config) MaxResultAge() time.Duration {
+	pkts := cfg.Probe.Packets
+	// Same condition as the probe engine: a second probe can run when
+	// loss retry or dispersion escalation is on, and then the window is
+	// 3*interval + (packets + retry_packets)*timeout.
+	if cfg.Probe.RetryPackets > 0 && (cfg.Probe.RetryLossPct > 0 || cfg.Probe.DispersionMS > 0) {
+		pkts += cfg.Probe.RetryPackets
+	}
+	return 3*cfg.Probe.Interval + time.Duration(pkts)*cfg.Probe.Timeout
+}

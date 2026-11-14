@@ -202,3 +202,7 @@ Surfaces are the files in `lab/failure-matrix/`. A new surface adds its file, wh
 ## Running demo
 
 The running demo is a separate checkout, not a compose file in this repo. It has two transit providers, one customer, and one IX peer. Telling those sessions apart (peer vs customer vs transit) and suggesting the role is still open (#103). A suggestion must not write itself into the running config.
+
+## Path-scoring harness (#584)
+
+`lab/evolve` is experimental and lab only: it scores config variants against recorded decision history by loss, RTT, and flaps, and never changes a default. See [evolve/README.md](evolve/README.md).

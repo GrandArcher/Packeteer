@@ -21,32 +21,19 @@ import (
 // whatIfTimeout bounds one replay run from the API.
 const whatIfTimeout = 2 * time.Minute
 
-// replaySide builds one side of a replay: the decision config of cfg and a
-// scorer of its own. Nothing is started and no announcer is built.
-func replaySide(name string, cfg *config.Config, log *slog.Logger, getenv func(string) string) (replay.Side, error) {
-	pc, err := policyConfig(cfg)
-	if err != nil {
-		return replay.Side{}, err
-	}
-	sc, err := pluginhost.BuildScorer(cfg, pluginhost.Options{Logger: log, Getenv: getenv})
-	if err != nil {
-		return replay.Side{}, err
-	}
-	return replay.Side{Name: name, Cfg: pc, Scorer: sc}, nil
-}
-
 // replayConfigs decides the stored rounds in [from, to) under the running
 // config and, when next is set, under next as well, so the result carries a
 // diff. It reads the store and nothing else.
 func replayConfigs(ctx context.Context, store plugin.RoundStore, running, next *config.Config, from, to time.Time, log *slog.Logger, getenv func(string) string) (replay.Result, error) {
 	sides := make([]replay.Side, 0, 2)
-	base, err := replaySide("running config", running, log, getenv)
+	opts := pluginhost.Options{Logger: log, Getenv: getenv}
+	base, err := replay.NewSide("running config", running, opts)
 	if err != nil {
 		return replay.Result{}, fmt.Errorf("running config: %w", err)
 	}
 	sides = append(sides, base)
 	if next != nil {
-		cand, err := replaySide("candidate config", next, log, getenv)
+		cand, err := replay.NewSide("candidate config", next, opts)
 		if err != nil {
 			return replay.Result{}, fmt.Errorf("candidate config: %w", err)
 		}

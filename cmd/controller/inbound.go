@@ -54,7 +54,7 @@ func newInbound(cfg *config.Config, plugins *pluginhost.Set, view *rib.View, oth
 		TTL:             cfg.ImprovementTTL,
 		ReleasePct:      in.ReleasePct,
 		MaxAge:          inbound.DefaultMaxAge,
-		PerfMaxAge:      maxResultAge(cfg),
+		PerfMaxAge:      cfg.MaxResultAge(),
 		Damping: inbound.Damping{
 			Disabled: in.Damping.Disabled, Confirm: in.Damping.Confirm,
 			Backoff: in.Damping.Backoff, MaxHold: in.Damping.MaxHold,

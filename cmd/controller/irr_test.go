@@ -95,7 +95,7 @@ func TestIRRFixtureThroughDecide(t *testing.T) {
 			t.Fatalf("labels = %+v", labels)
 		}
 
-		pc, err := policyConfig(cfg)
+		pc, err := policy.FromConfig(cfg)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -153,7 +153,7 @@ func TestIRROff(t *testing.T) {
 	if in.IRR != nil {
 		t.Fatalf("irr off labelled: %+v", in.IRR)
 	}
-	if pc, _ := policyConfig(cfg); pc.IRRPreferRegistered {
+	if pc, _ := policy.FromConfig(cfg); pc.IRRPreferRegistered {
 		t.Fatal("prefer_registered on by default")
 	}
 }

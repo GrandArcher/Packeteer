@@ -345,7 +345,7 @@ func checkOutageSourceIntervals(cfg *config.Config, sources []pluginhost.Instanc
 	if cfg == nil {
 		return nil
 	}
-	window := maxResultAge(cfg)
+	window := cfg.MaxResultAge()
 	var errs []error
 	for _, src := range sources {
 		s, ok := src.Plugin.(*outage.Source)
@@ -382,7 +382,7 @@ func checkFlowTailSourceIntervals(cfg *config.Config, sources []pluginhost.Insta
 	if cfg == nil {
 		return nil
 	}
-	window := maxResultAge(cfg)
+	window := cfg.MaxResultAge()
 	var errs []error
 	for _, src := range sources {
 		s, ok := src.Plugin.(*flow.Source)
@@ -420,7 +420,7 @@ func checkVIPSourceIntervals(cfg *config.Config, sources []pluginhost.Instance[p
 	if cfg == nil {
 		return nil
 	}
-	window := maxResultAge(cfg)
+	window := cfg.MaxResultAge()
 	var errs []error
 	for _, src := range sources {
 		v, ok := src.Plugin.(*vip.Source)
