@@ -78,17 +78,17 @@ The image is `ghcr.io/grandarcher/packeteer`, linux/amd64 and linux/arm64. It ru
 
 | Tag | What it is |
 |---|---|
-| `1.3.0` | The last release. Pin this one. |
+| `1.4.0` | The last release. Pin this one. |
 | `latest` | The same release, updated when a release tag is published. |
 | `edge` | The build from `main`. |
 
 **Step by step: [docs/quickstart.md](docs/quickstart.md).** It goes from an empty directory to a running instance in observe, with a first run on loopback, `docker run` and Compose, and the stop. CI runs every command on that page against the image built from the same commit.
 
-The short version, pinned to 1.3.0, the last release. Take the example config from the same tag as the image: the file on `main` can carry keys a release does not know yet, and unknown keys refuse startup. For `:edge`, use `main` in both places.
+The short version, pinned to 1.4.0, the last release. Take the example config from the same tag as the image: the file on `main` can carry keys a release does not know yet, and unknown keys refuse startup. For `:edge`, use `main` in both places.
 
 ```sh
-IMAGE=ghcr.io/grandarcher/packeteer:1.3.0
-curl -fsSLo config.yaml https://raw.githubusercontent.com/GrandArcher/Packeteer/v1.3.0/config.example.yaml
+IMAGE=ghcr.io/grandarcher/packeteer:1.4.0
+curl -fsSLo config.yaml https://raw.githubusercontent.com/GrandArcher/Packeteer/v1.4.0/config.example.yaml
 # Edit providers and source IPs. Leave mode: observe.
 mkdir -p plugins
 
@@ -109,7 +109,7 @@ docker run -d --name packeteer --network host \
 
 ```sh
 docker run --rm -e PACKETEER_CONFIG=/etc/packeteer/config.example.yaml \
-  ghcr.io/grandarcher/packeteer:1.3.0 -check
+  ghcr.io/grandarcher/packeteer:1.4.0 -check
 ```
 
 The default config path inside the container is `/etc/packeteer/config.yaml` (`PACKETEER_CONFIG`, or `-config`).
@@ -120,7 +120,7 @@ Without `NET_RAW`, or where ICMP is filtered, the probe falls back to TCP port 4
 
 The `packeteer-data` volume keeps report history (`storage: {type: sqlite}`, file `/var/lib/packeteer/packeteer.db`) across container restarts and upgrades, and the open billing period of SNMP 95th-percentile samples when telemetry is configured. Without the volume, reports and that window start empty after the container is recreated. Leave out `storage` to turn history off; the probe and decision loop does not depend on it, and the 95th window then lives in memory only. Sign-in on by default (no `auth.enabled`, no `PACKETEER_HTTP_USER`) adds `sqlite` when `storage` is left out.
 
-[docker-compose.yml](docker-compose.yml) runs the same container with Compose: host networking, the two capabilities, the mounts, and `restart: unless-stopped` ([quickstart, step 5](docs/quickstart.md#5-or-run-it-with-compose)). Its `image` line pins `ghcr.io/grandarcher/packeteer:1.3.0`; use `:edge` for the build from `main`. There is no `ports:` map: with host networking, `http.listen` is already an address on the host. Stop with `docker compose stop -t 30` (see [Rollback](#rollback)).
+[docker-compose.yml](docker-compose.yml) runs the same container with Compose: host networking, the two capabilities, the mounts, and `restart: unless-stopped` ([quickstart, step 5](docs/quickstart.md#5-or-run-it-with-compose)). Its `image` line pins `ghcr.io/grandarcher/packeteer:1.4.0`; use `:edge` for the build from `main`. There is no `ports:` map: with host networking, `http.listen` is already an address on the host. Stop with `docker compose stop -t 30` (see [Rollback](#rollback)).
 
 ## Minimum config
 
@@ -340,7 +340,7 @@ Symptoms, log lines, and fixes: [docs/troubleshooting.md](docs/troubleshooting.m
 
 ## Features
 
-Status on main after the 1.3.0 release, capability rows per milestone and how many are done, from the summary in [docs/FEATURES.md](docs/FEATURES.md#summary):
+Status on main after the 1.4.0 release, capability rows per milestone and how many are done, from the summary in [docs/FEATURES.md](docs/FEATURES.md#summary):
 
 | Milestone | Rows | Done |
 |---|---|---|
@@ -369,15 +369,21 @@ v1.0.1 was a patch with no new capability rows and no new config keys: hardening
 
 v1.1.0 added three capability rows, all opt-in and all partial at that release: an MCP server for AI assistants ([docs/mcp.md](docs/mcp.md), #302), RPKI-invalid only paths with evidence and admin-approved SLURM exceptions ([docs/only-invalid.md](docs/only-invalid.md), #401, with an opt-in Qrator Radar link-out, #402), and a non-BGP mode that installs flow-driven static routes on a router with no BGP session ([docs/nonbgp.md](docs/nonbgp.md), #300). The non-BGP routes are not from a learned RIB view: an owner-approved exception for that mode only, off by default, lab-proven with the `linux` steerer only. The counts above include the three rows ([CHANGELOG](CHANGELOG.md#110---2026-11-10)). Nothing is field-proven (#54). The shipped config stays `mode: observe`, and injection stays off by default.
 
-v1.2.0 added no new capability rows and no config keys. It added steering calls for an operator: pin a prefix to a provider (`/api/pins`), pause and resume optimization (`/api/optimization/pause`), and acknowledge an alert (`/api/alerts/ack`). The same calls, plus two read tools (`pins`, `optimization_status`), are MCP tools; the write ones stay off unless `mcp.write_tools` is set and the token has the `mcp:write` scope ([docs/mcp.md](docs/mcp.md#steering-through-the-api), #558). A pin is refused unless its prefix is in the learned RIB view and `allowlist.prefixes`, and is announced only in `mode: inject`, under a static rule's rails. This completes the MCP row: the counts above are 131 done, up from 130 at 1.1.0 ([CHANGELOG](CHANGELOG.md#120---2026-11-11)). Nothing is field-proven (#54). The shipped config stays `mode: observe`, and injection stays off by default.
+v1.2.0 added no new capability rows and no config keys. It added steering calls for an operator: pin a prefix to a provider (`/api/pins`), pause and resume optimization (`/api/optimization/pause`), and acknowledge an alert (`/api/alerts/ack`). The same calls, plus two read tools (`pins`, `optimization_status`), are MCP tools; the write ones stay off unless `mcp.write_tools` is set and the token has the `mcp:write` scope ([docs/mcp.md](docs/mcp.md#steering-through-the-api), #558). A pin is refused unless its prefix is in the learned RIB view and `allowlist.prefixes`, and is announced only in `mode: inject`, under a static rule's rails. This completed the MCP row: 131 done at 1.2.0, up from 130 at 1.1.0 ([CHANGELOG](CHANGELOG.md#120---2026-11-11)). Nothing is field-proven (#54). The shipped config stays `mode: observe`, and injection stays off by default.
 
-v1.3.0 (this release) adds no capability rows and no config keys, so the counts above are unchanged. Pins, the optimization pause, and alert acknowledgements are now saved, with `ha` or `storage: {type: sqlite}`, and restored on restart and HA takeover, and a start that loses them sends `steering.lost` ([docs/mcp.md](docs/mcp.md#steering-through-the-api), #565, #566). The Overview and Settings pages changed: on the example install the first sign-in opens the setup wizard with the running values filled in (#575, [docs/ui.md](docs/ui.md#setup-wizard)), the guided inject step adds the gobgp announcer (#568), the Router config panel follows unsaved wizard answers (#569, [docs/onboarding.md](docs/onboarding.md)), and a Save of a gated change such as Hold time opens one review dialog (#576). A provider whose `source_ip` is not on the host is now marked down on the System page, as preflight reports (#581, [docs/CONFIG.md](docs/CONFIG.md#probepath_check)). Nothing is field-proven (#54). The shipped config stays `mode: observe`, and injection stays off by default ([CHANGELOG](CHANGELOG.md#130---2026-11-13)).
+v1.3.0 added no capability rows and no config keys, so the counts did not change at 1.3.0. Pins, the optimization pause, and alert acknowledgements are now saved, with `ha` or `storage: {type: sqlite}`, and restored on restart and HA takeover, and a start that loses them sends `steering.lost` ([docs/mcp.md](docs/mcp.md#steering-through-the-api), #565, #566). The Overview and Settings pages changed: on the example install the first sign-in opens the setup wizard with the running values filled in (#575, [docs/ui.md](docs/ui.md#setup-wizard)), the guided inject step adds the gobgp announcer (#568), the Router config panel follows unsaved wizard answers (#569, [docs/onboarding.md](docs/onboarding.md)), and a Save of a gated change such as Hold time opens one review dialog (#576). A provider whose `source_ip` is not on the host is now marked down on the System page, as preflight reports (#581, [docs/CONFIG.md](docs/CONFIG.md#probepath_check)). Nothing is field-proven (#54). The shipped config stays `mode: observe`, and injection stays off by default ([CHANGELOG](CHANGELOG.md#130---2026-11-13)).
+
+v1.4.0 (this release) adds one capability row, the lab-only path-scoring harness, and no config keys: the counts above include it (132 done, up from 131 at 1.3.0). You can finish observe setup from the GUI: the Settings Host policy routing panel plans, applies, and verifies the `ip rule` and `ip route` for each probe source, and the Overview checklist reads "Setup complete, still observe" once the session is up, a prefix is learned, and every provider has answered; the `firstrun-gui` CI job walks a stock image there in under 15 minutes with no YAML edit ([docs/onboarding.md](docs/onboarding.md#setup-complete), #582, #587). `/value.html` shows a manager what Packeteer did for them from the new `value` report, loss and latency avoided per provider and per day; it needs sqlite storage, and observe figures are recommended and estimated, not announced ([docs/ui.md](docs/ui.md#the-value-page), #583, #588). `scripts/demo.sh` starts a one-command observe-only demo lab, with a five-minute script in [docs/demo.md](docs/demo.md) (#586, #590). A chaos soak on the HA lab checks the safety invariants on the edge through a session flap, a probe-source failure, SIGTERM, and SIGKILL; CI runs a short profile; the weekly 5h run and a multi-day run are documented in [lab/chaos/README.md](lab/chaos/README.md) (#585, #589). `lab/evolve` is experimental and lab only: it replays recorded rounds under config variants and scores them, writes no config, and never changes a default ([lab/evolve/README.md](lab/evolve/README.md), #584). Nothing is field-proven (#54). The shipped config stays `mode: observe`, and injection stays off by default ([CHANGELOG](CHANGELOG.md#140---2026-11-14)).
 
 ## Upgrades
 
 Pulling a newer image and recreating the container is the plain upgrade. Your config and the `packeteer-data` volume carry over.
 
 The Settings page can also upgrade in place (#196). It is off by default. It needs `upgrade.enabled: true`, the release public key in `upgrade.public_key` ([CONFIG.md](docs/CONFIG.md#upgrade)), an admin login (auth or basic auth), and the `packeteer-data` volume to keep the new version across restarts. The public key is printed in the [v0.6.0 release notes](https://github.com/GrandArcher/Packeteer/releases/tag/v0.6.0). Every route is withdrawn before the switch, and a release whose signature or checksum does not match is refused. Details: [docs/ui.md](docs/ui.md#upgrade-from-the-ui).
+
+### From 1.3.0 to 1.4.0
+
+- No config key changed and no existing config behaves differently. The setup wizard now writes `storage: {type: sqlite}` history under `/var/lib/packeteer` unless it is told not to, so keep the `packeteer-data` volume. Policy routing is applied only when an administrator confirms it in Settings or runs `-pbr linux -apply -yes`. A downgrade to 1.3.0 needs no config change: it loses `/value.html`, `/api/reports/value`, and the Settings policy routing panel, and routes the panel applied stay until removed ([docs/onboarding.md](docs/onboarding.md#host-policy-routing)).
 
 ### From 1.2.0 to 1.3.0
 
