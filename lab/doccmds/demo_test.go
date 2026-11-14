@@ -140,3 +140,23 @@ func TestReadmePointsAtDemo(t *testing.T) {
 		t.Error("README demo section shows inject")
 	}
 }
+
+// The quickstart (#612) names the admin password variable the controller
+// and docker-compose.yml read, needs no openssl, and pins the Compose file to
+// the same release as the image.
+func TestQuickstartIsConsistent(t *testing.T) {
+	qs := repoFile(t, "docs/quickstart.md")
+	if strings.Contains(qs, "PACKETEER_PASSWORD") || strings.Contains(qs, "openssl") {
+		t.Error("quickstart uses PACKETEER_PASSWORD or openssl")
+	}
+	if !strings.Contains(repoFile(t, "docker-compose.yml"), "PACKETEER_ADMIN_PASSWORD: ${PACKETEER_ADMIN_PASSWORD:-}") {
+		t.Fatal("docker-compose.yml no longer reads PACKETEER_ADMIN_PASSWORD")
+	}
+	if strings.Contains(qs, "Packeteer/main/") {
+		t.Error("quickstart downloads from main, not the release tag")
+	}
+	image := regexp.MustCompile(`grandarcher/packeteer:(\d+\.\d+\.\d+)`).FindStringSubmatch(qs)
+	if image == nil || !strings.Contains(qs, "Packeteer/v"+image[1]+"/docker-compose.yml") {
+		t.Errorf("quickstart image pin %v does not match its docker-compose.yml download", image)
+	}
+}

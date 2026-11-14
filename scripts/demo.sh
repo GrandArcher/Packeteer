@@ -7,6 +7,10 @@
 #
 # PACKETEER_DEMO_PASSWORD picks the admin password (12 to 256 characters);
 # without it one is generated for this run and printed once.
+#
+# Before it builds anything, "up" checks the host and stops with a one-line
+# fix when Docker is not Docker Engine on Linux, when 127.0.0.1:18080 is
+# taken, or when another Docker network already uses 192.0.2.0/24.
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -24,6 +28,39 @@ up) ;;
 	exit 2
 	;;
 esac
+
+fail() {
+	echo "demo.sh: $1" >&2
+	exit 1
+}
+
+preflight() {
+	[ "$(uname -s)" = Linux ] || fail "Linux is required; the lab needs Docker Engine on Linux. Fix: run it on a Linux host."
+	command -v docker >/dev/null 2>&1 || fail "docker is not installed. Fix: install Docker Engine, https://docs.docker.com/engine/install/"
+	docker info >/dev/null 2>&1 || fail "cannot talk to the Docker daemon. Fix: start Docker and add your user to the docker group, or use sudo."
+	case "$(docker info --format '{{.OperatingSystem}}' 2>/dev/null)" in
+	*"Docker Desktop"*) fail "this is Docker Desktop, not Docker Engine on Linux. Fix: run it on a Linux host with Docker Engine." ;;
+	esac
+	docker compose version >/dev/null 2>&1 || fail "the Docker Compose plugin is missing. Fix: install docker-compose-plugin, so that 'docker compose version' works."
+	# A lab that is already up is a no-op for compose; do not call it a clash.
+	if [ -n "$(docker ps -q --filter name='^pkd-packeteer$')" ]; then
+		return 0
+	fi
+	if (exec 3<>/dev/tcp/127.0.0.1/18080) 2>/dev/null; then
+		fail "127.0.0.1:18080 is already in use. Fix: stop what listens there (ss -ltnp 'sport = :18080'), then rerun."
+	fi
+	local ids net
+	ids=$(docker network ls -q)
+	if [ -n "$ids" ]; then
+		# shellcheck disable=SC2086
+		net=$(docker network inspect --format '{{.Name}} {{range .IPAM.Config}}{{.Subnet}} {{end}}' $ids | awk '/(^| )192\.0\.2\.0\/24( |$)/ {print $1; exit}')
+		if [ -n "$net" ]; then
+			fail "the Docker network $net already uses 192.0.2.0/24. Fix: stop the lab that owns it (the walkthrough: docker compose -f lab/docker-compose-walkthrough.yml down -v), or docker network rm $net."
+		fi
+	fi
+}
+
+preflight
 
 generated=no
 if [ -z "${PACKETEER_DEMO_PASSWORD:-}" ]; then
