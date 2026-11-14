@@ -49,7 +49,7 @@ retry() {
 }
 
 established() {
-	docker exec pkd-edge vtysh -c 'show bgp neighbors 192.0.2.10' | grep -q 'BGP state = Established'
+	out=$(docker exec pkd-edge vtysh -c 'show bgp neighbors 192.0.2.10') && grep -q 'BGP state = Established' <<<"$out"
 }
 echo "waiting for the iBGP session"
 retry 60 established

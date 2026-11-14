@@ -49,7 +49,9 @@ grep -q '^mode: observe' "$work/pk/config.yaml"
 # install.sh already waits for bootstrap; one more /api/me check before overview.
 api "$base/api/me" | jq -e '.user == "admin"'
 api "$base/api/overview" | jq -e '.mode == "observe"'
-docker logs packeteer 2>&1 | grep -qF 'announce=disabled'
+# grep -q exits early; piping docker logs into it dies of SIGPIPE under pipefail.
+docker logs packeteer >"$work/packeteer.log" 2>&1
+grep -qF 'announce=disabled' "$work/packeteer.log"
 
 echo "== 2. the checks block, with their fixes"
 api "$base/api/preflight" | jq -e '.available == true and (.report == null)'
