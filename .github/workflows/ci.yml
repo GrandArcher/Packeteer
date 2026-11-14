@@ -328,6 +328,9 @@ jobs:
           # Graphs (#129) with history on but nothing recorded: an empty state, no chart.
           bash lab/ui-smoke.sh "$base/graphs.html" 'No before/after data in this range' 'It announces nothing.' \
             'id="graph-bucket"' --absent 'class="ts-chart"' 'Cannot reach'
+          # Value view (#588) with history on and nothing recorded: an empty state, no figure.
+          bash lab/ui-smoke.sh "$base/value.html" 'What Packeteer did for you' 'No improvements started in this range' 'It announces nothing.' \
+            'id="value-days"' --absent 'class="ts-chart"' 'Packeteer announced' 'points lower' 'Cannot reach'
           # Commit & Cost (#174) with history on and no telemetry binding: the empty state.
           bash lab/ui-smoke.sh "$base/commit.html" 'No provider has a telemetry binding' 'href="/settings.html#commit-setup"' \
             'id="commit-days"' 'It announces nothing.' --absent 'class="ts-chart' 'Cannot reach' '#174'
@@ -773,6 +776,15 @@ jobs:
           bash lab/ui-smoke.sh http://127.0.0.1:18098/graphs.html 'class="ts-chart"' 'ts-line ts-before' 'ts-line ts-after' \
             'Data (5 days)' 'Dashed: before' 'mode-observe' 'It announces nothing.' \
             --absent 'No before/after data' 'Cannot reach' 'mode-inject'
+          # Value view (#588) on the seed: three observe moves lab-a to lab-b. They
+          # are recommended, not announced, and the seed stores no measurement
+          # of either path, so no gain is shown and none is invented.
+          curl -fsS "${auth[@]}" "$base/api/reports/value?days=7" | tee /tmp/value588.json
+          jq -e '[.rows[] | select(.scope == "total")] | length == 1 and .[0].basis == "estimate" and .[0].improvements == 3 and .[0].measured == 0 and (.[0] | has("loss_avoided_pct") | not)' /tmp/value588.json
+          bash lab/ui-smoke.sh http://127.0.0.1:18098/value.html 'What Packeteer did for you' 'Recommended (estimate)' \
+            'Packeteer recommended 3 moves and announced none of them.' 'Traffic did not change path' \
+            'None of them has a measurement of both paths, so no gain is shown.' 'not measured' '>lab-b<' 'mode-observe' 'It announces nothing.' \
+            --absent 'Packeteer announced' '>Announced<' 'points lower' 'No improvements started' 'Cannot reach' 'mode-inject'
           bash lab/ui-smoke.sh http://127.0.0.1:18098/dashboards.html 'class="ts-chart"' 'Before/after graphs: 50% or more better' \
             'Data (5 days)' 'It announces nothing.' --absent 'No before/after data' 'Cannot reach'
           # The prefix page (#179) reads the same seeded history: rollups and
@@ -1269,6 +1281,9 @@ jobs:
             'Queued 198.51.100.0/24 for probing until' 'the prefix page' \
             'Whois AS64496' 'probe, traceroute, whois, and probe and optimize require auth (auth.enabled)' \
             --absent 'rate limited; try again shortly' 'Cannot reach' 'mode-inject'
+          # Value view (#588) with history off: it says so and shows no figure.
+          bash lab/ui-smoke.sh http://127.0.0.1:18181/value.html 'What Packeteer did for you' 'History is off, so there is nothing to show and no figure is estimated.' \
+            'mode-observe' 'It announces nothing.' --absent 'Cannot reach' 'Packeteer announced' 'Recommended (estimate)' 'points lower'
       - name: UI NLNOG RING panel smoke (#283; opt-in panel from canned answers, no request to RING)
         run: |
           set -euo pipefail

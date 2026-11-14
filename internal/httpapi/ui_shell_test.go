@@ -80,6 +80,7 @@ func TestUIShell(t *testing.T) {
 		`href="/" data-page="overview"`,
 		`href="/dashboards.html" data-page="dashboards"`,
 		`href="/improvements.html" data-page="improvements"`,
+		`href="/value.html" data-page="value"`,
 		`href="/prefixes.html" data-page="prefixes">Prefixes &amp; ASNs`,
 		`href="/graphs.html" data-page="graphs"`,
 		`href="/reports.html" data-page="reports"`,
@@ -103,6 +104,7 @@ func TestUIShell(t *testing.T) {
 	want := map[string][]string{
 		"index.html":           {`<body data-page="overview" data-live="app">`, `id="tiles"`, `id="chart-latency"`, `id="chart-improvements"`, `src="/charts.js"`, `src="/overview.js"`, `id="setup"`, `id="federation-section" hidden`, "POPs"},
 		"improvements.html":    {`<body data-page="improvements" data-live="app">`, `id="improvements"`, `id="improvements-title">Recommended improvements`},
+		"value.html":           {`<body data-page="value" data-live="app">`, `<h1>What Packeteer did for you</h1>`, `id="value"`, `id="value-days"`, `id="value-csv"`, `id="value-down"`, `src="/charts.js"`, `src="/value.js"`, "Only inject mode announces"},
 		"prefixes.html":        {`<body data-page="prefixes" data-live="app">`, `id="prefixes"`, `id="asn-map"`, "ASN map", "Expected gain"},
 		"providers.html":       {`<body data-page="providers" data-live="app">`, `id="providers"`, `id="exchanges"`, `id="exchange-report"`, `src="/charts.js"`, `src="/exchanges.js"`, "Per exchange"},
 		"reports.html":         {`<body data-page="reports" data-live="app">`, `id="report-catalog"`, `id="report-range"`, `id="report-csv"`, `id="report-xlsx"`, `id="report-add"`, `src="/reports.js"`},
@@ -141,7 +143,7 @@ func TestUIShell(t *testing.T) {
 
 	e := newUI(t)
 	for _, path := range []string{
-		"/", "/improvements.html", "/prefixes.html", "/prefix/192.0.2.0/24", "/graphs.html", "/reports.html",
+		"/", "/improvements.html", "/value.html", "/prefixes.html", "/prefix/192.0.2.0/24", "/graphs.html", "/reports.html",
 		"/providers.html", "/commit.html", "/policies.html", "/protection.html",
 		"/troubleshooting.html", "/events.html", "/search.html?q=AS64510", "/system.html", "/tokens.html", "/settings.html", "/admin.html", "/dashboards.html",
 	} {
@@ -222,8 +224,8 @@ func TestUINarrowLayout(t *testing.T) {
 		if bi < 0 || li < bi || first < li {
 			t.Errorf("%s: the Menu button must come before the link list that holds the first link", e.Name())
 		}
-		if strings.Count(body[strings.Index(body, list):strings.Index(body, "</nav>")], "<a ") != 18 {
-			t.Errorf("%s: the link list does not hold the 18 page links", e.Name())
+		if strings.Count(body[strings.Index(body, list):strings.Index(body, "</nav>")], "<a ") != 19 {
+			t.Errorf("%s: the link list does not hold the 19 page links", e.Name())
 		}
 	}
 	if pages == 0 {

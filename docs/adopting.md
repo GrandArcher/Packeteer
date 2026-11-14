@@ -1,6 +1,6 @@
 # Adopting Packeteer alongside or in place of a route optimizer
 
-This page is for a network that already runs a route optimizer, or buys one, and wants to try Packeteer without a risky switch. It maps the common optimizer concepts to Packeteer config and gives a cut-over plan that starts in observe. To estimate what the move is worth, use the [ROI worksheet](roi.md).
+This page is for a network that already runs a route optimizer, or buys one, and wants to try Packeteer without a risky switch. It maps the common optimizer concepts to Packeteer config and gives a cut-over plan that starts in observe. To estimate what the move is worth, use the [ROI worksheet](roi.md). Once Packeteer has history, the [value page](ui.md#the-value-page) shows the loss and latency it avoided or, in observe, would have avoided.
 
 Packeteer does not read another product's configuration. You copy the intent by hand, using the table below.
 
