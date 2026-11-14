@@ -25,10 +25,13 @@ const (
 )
 
 // Side is one configuration to replay. Its Decide state starts empty.
+// Observe, when set, sees the state and output of every round after
+// Decide, for a caller that scores more than Summary holds.
 type Side struct {
-	Name   string
-	Cfg    policy.Config
-	Scorer plugin.Scorer
+	Name    string
+	Cfg     policy.Config
+	Scorer  plugin.Scorer
+	Observe func(st policy.State, out policy.Output)
 }
 
 // Move is one change Decide made in the replay. From and To are the
@@ -141,6 +144,9 @@ func newTracker(s Side) *tracker {
 func (t *tracker) round(now time.Time, in policy.Input) {
 	st, out := policy.Decide(t.state, in, t.side.Cfg, t.side.Scorer, now)
 	t.state = st
+	if t.side.Observe != nil {
+		t.side.Observe(st, out)
+	}
 	byPrefix := make(map[netip.Prefix]*policy.Decision, len(out.Decisions))
 	cappedNow := false
 	for i := range out.Decisions {
@@ -256,11 +262,17 @@ func (t *tracker) report() Report {
 	return Report{Name: t.side.Name, Summary: s, Moves: t.moves, MovesOmitted: t.omitted}
 }
 
+// Source is what Run reads: at most limit rounds whose time is in
+// [from, to), oldest first. Every plugin.RoundStore is one.
+type Source interface {
+	Rounds(ctx context.Context, from, to time.Time, limit int) ([]plugin.RoundRecord, error)
+}
+
 // Run replays the stored rounds in [from, to) through every side. The sides
 // see the same rounds in order, each from an empty state, so the first
 // hold time of the window is decided without what was standing before it.
 // It stops with ctx.
-func Run(ctx context.Context, store plugin.RoundStore, from, to time.Time, sides []Side) (Result, error) {
+func Run(ctx context.Context, store Source, from, to time.Time, sides []Side) (Result, error) {
 	if len(sides) == 0 {
 		return Result{}, errors.New("no settings to replay")
 	}

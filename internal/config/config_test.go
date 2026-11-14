@@ -964,3 +964,34 @@ func TestAllowlistRejectsDefaultRoute(t *testing.T) {
 		t.Fatalf("warnings for /24 and /48 entries: %q", w)
 	}
 }
+
+func TestDispersionRetryExtendsStalenessWindow(t *testing.T) {
+	base := `mode: observe
+asn: 64512
+router_id: 192.0.2.10
+providers:
+  - {name: a, source_ip: 192.0.2.11, next_hop: 192.0.2.1}
+`
+	parse := func(extra string) *Config {
+		t.Helper()
+		cfg, err := Parse([]byte(base + extra))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return cfg
+	}
+	plain := 3*30*time.Second + 10*2*time.Second
+	if got := parse("").MaxResultAge(); got != plain {
+		t.Fatalf("plain window %s, want %s", got, plain)
+	}
+	if got := parse("probe: {min_replies: 4}\n").MaxResultAge(); got != plain {
+		t.Fatalf("min_replies window %s, want %s (replies alone do not extend it)", got, plain)
+	}
+	want := 3*30*time.Second + (10+30)*2*time.Second
+	if got := parse("probe: {dispersion_ms: 20}\n").MaxResultAge(); got != want {
+		t.Fatalf("dispersion window %s, want %s", got, want)
+	}
+	if got := parse("probe: {retry_loss_pct: 20}\n").MaxResultAge(); got != want {
+		t.Fatalf("loss retry window %s, want %s", got, want)
+	}
+}

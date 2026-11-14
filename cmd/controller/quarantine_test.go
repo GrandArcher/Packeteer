@@ -15,7 +15,7 @@ import (
 )
 
 func TestPolicyConfigFlapQuarantine(t *testing.T) {
-	on, err := policyConfig(mustParse(t, liveApplyConfig(179, "observe", "5m", "1h")+"flap_quarantine: {max_flips: 4, window: 30m, cooldown: 5m, max_cooldown: 1h}\n"))
+	on, err := policy.FromConfig(mustParse(t, liveApplyConfig(179, "observe", "5m", "1h")+"flap_quarantine: {max_flips: 4, window: 30m, cooldown: 5m, max_cooldown: 1h}\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -23,11 +23,11 @@ func TestPolicyConfigFlapQuarantine(t *testing.T) {
 	if on.Flap != want {
 		t.Fatalf("flap = %+v, want %+v", on.Flap, want)
 	}
-	def, err := policyConfig(mustParse(t, liveApplyConfig(179, "observe", "5m", "1h")))
+	def, err := policy.FromConfig(mustParse(t, liveApplyConfig(179, "observe", "5m", "1h")))
 	if err != nil || def.Flap.MaxFlips == 0 {
 		t.Fatalf("quarantine is on by default: %+v %v", def.Flap, err)
 	}
-	off, err := policyConfig(mustParse(t, liveApplyConfig(179, "observe", "5m", "1h")+"flap_quarantine: {disabled: true}\n"))
+	off, err := policy.FromConfig(mustParse(t, liveApplyConfig(179, "observe", "5m", "1h")+"flap_quarantine: {disabled: true}\n"))
 	if err != nil || off.Flap != (policy.FlapConfig{}) {
 		t.Fatalf("disabled flap = %+v %v", off.Flap, err)
 	}

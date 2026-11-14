@@ -72,7 +72,7 @@ func newFedState(cfg *config.Config, plugins *pluginhost.Set) *fedState {
 	}
 	return &fedState{
 		cfg: federationConfig(cfg), fed: plugins.Federation.Plugin, version: version, mode: cfg.Mode,
-		maxAge: maxResultAge(cfg), maxImps: *cfg.MaxImprovements,
+		maxAge: cfg.MaxResultAge(), maxImps: *cfg.MaxImprovements,
 	}
 }
 

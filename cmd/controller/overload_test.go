@@ -30,7 +30,7 @@ telemetry:
 `
 
 func TestPolicyConfigCarriesInterfaceCapacityThreshold(t *testing.T) {
-	pc, err := policyConfig(mustParse(t, overloadConfig))
+	pc, err := policy.FromConfig(mustParse(t, overloadConfig))
 	if err != nil {
 		t.Fatal(err)
 	}

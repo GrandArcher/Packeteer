@@ -28,6 +28,8 @@ jobs:
           fi
       - name: test
         run: go test ./...
+      - name: path-scoring harness fixture replay (#584; experimental, lab only; baseline vs a worse and a better variant)
+        run: go run ./lab/evolve -history lab/evolve/testdata/history.jsonl -base lab/evolve/testdata/baseline.yaml -variant lab/evolve/testdata/worse.yaml -variant lab/evolve/testdata/better.yaml
       - name: fuzz the NetFlow v9 and IPFIX decoders (#502)
         run: |
           go test -run '^$' -fuzz '^FuzzDecodeIPFIX$' -fuzztime 15s ./internal/plugins/source/flow/

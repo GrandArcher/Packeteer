@@ -65,14 +65,14 @@ func TestFillMEDAndPolicyConfig(t *testing.T) {
 		t.Fatalf("no MED = %+v", empty.MED)
 	}
 
-	pc, err := policyConfig(mustParse(t, liveApplyConfig(179, "observe", "5m", "1h")))
+	pc, err := policy.FromConfig(mustParse(t, liveApplyConfig(179, "observe", "5m", "1h")))
 	if err != nil || !pc.MEDTieBreak || pc.MEDMargin != 20 {
 		t.Fatalf("default: tie break %v margin %v (%v)", pc.MEDTieBreak, pc.MEDMargin, err)
 	}
 	off := strings.Replace(liveApplyConfig(179, "observe", "5m", "1h"),
 		"thresholds: {min_loss_delta_pct: 90, min_rtt_delta_ms: 5000}",
 		"thresholds: {min_loss_delta_pct: 90, min_rtt_delta_ms: 5000, med_tie_break: false, med_margin: 5}", 1)
-	if pc, _ := policyConfig(mustParse(t, off)); pc.MEDTieBreak || pc.MEDMargin != 5 {
+	if pc, _ := policy.FromConfig(mustParse(t, off)); pc.MEDTieBreak || pc.MEDMargin != 5 {
 		t.Fatalf("set: tie break %v margin %v", pc.MEDTieBreak, pc.MEDMargin)
 	}
 }

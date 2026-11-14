@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/GrandArcher/Packeteer/internal/pluginhost"
+	"github.com/GrandArcher/Packeteer/internal/policy"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -42,14 +43,14 @@ func TestCollectPassive(t *testing.T) {
 }
 
 func TestPolicyConfigRequireEvidence(t *testing.T) {
-	pc, err := policyConfig(mustParse(t, liveApplyConfig(179, "observe", "5m", "1h")))
+	pc, err := policy.FromConfig(mustParse(t, liveApplyConfig(179, "observe", "5m", "1h")))
 	if err != nil || pc.RequireEvidence {
 		t.Fatalf("default require_evidence = %v (%v)", pc.RequireEvidence, err)
 	}
 	on := strings.Replace(liveApplyConfig(179, "observe", "5m", "1h"),
 		"thresholds: {min_loss_delta_pct: 90, min_rtt_delta_ms: 5000}",
 		"thresholds: {min_loss_delta_pct: 90, min_rtt_delta_ms: 5000, require_evidence: true}", 1)
-	if pc, _ := policyConfig(mustParse(t, on)); !pc.RequireEvidence {
+	if pc, _ := policy.FromConfig(mustParse(t, on)); !pc.RequireEvidence {
 		t.Fatal("require_evidence not passed to the decision config")
 	}
 }

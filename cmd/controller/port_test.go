@@ -32,7 +32,7 @@ bgp:
 `
 
 func TestPolicyConfigPorts(t *testing.T) {
-	pc, err := policyConfig(mustParse(t, portConfigYAML))
+	pc, err := policy.FromConfig(mustParse(t, portConfigYAML))
 	if err != nil {
 		t.Fatal(err)
 	}
