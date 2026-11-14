@@ -184,7 +184,7 @@
   <section>
     <details id="pbr" class="fold">
     <summary><h2>Host policy routing</h2></summary>
-    <p class="tag">Packeteer measures each provider by probing from that provider's <code>source_ip</code>. Unless this host sends each source out through its provider's <code>next_hop</code>, every provider measures the same path. This is the same check as <code>packeteer -pbr linux -apply</code>. Show plan lists the <code>ip rule</code> and <code>ip route</code> commands and asks the kernel which way each source leaves now; it changes nothing. Applying needs your confirmation, runs only those commands, and then checks each source again. It touches only rules with priority 2001 to 2999 pointing at tables 1001 to 1999, never other rules, and never a router. It needs the <code>NET_ADMIN</code> capability, which the install grants.</p>
+    <p class="tag">Each provider is measured from its <code>source_ip</code>, so this host must send that source out through the provider's <code>next_hop</code>. Show plan lists the <code>ip rule</code> and <code>ip route</code> commands and how the kernel routes each source now. Apply runs only those commands after you confirm, then checks each source again. Only Packeteer's own rules (priority 2001 to 2999, tables 1001 to 1999) are touched. Needs <code>NET_ADMIN</code>.</p>
     <div class="controls">
       <button type="button" id="pbr-show">Show plan</button>
       <span id="pbr-status" class="tag" role="status"></span>
