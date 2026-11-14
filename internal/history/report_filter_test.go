@@ -101,6 +101,7 @@ func TestCSVHeadersKeepTheirNames(t *testing.T) {
 		ReportASNs:         "origin_asn,prefixes,volume_mbps,probes,avg_loss_pct,avg_rtt_ms,improvements,steered_hours",
 		ReportCountries:    "country,prefixes,volume_mbps,probes,avg_loss_pct,avg_rtt_ms,improvements,steered_hours",
 		ReportCauses:       "day,performance,commit,cost,static,total",
+		ReportValue:        "scope,provider,day,basis,improvements,measured,steered_hours,weighting,volume_mbps,before_loss_pct,after_loss_pct,loss_avoided_pct,before_rtt_ms,after_rtt_ms,rtt_avoided_ms",
 		ReportTimeSeries:   "day,bucket,prefixes,before_loss_pct,after_loss_pct,before_rtt_ms,after_rtt_ms",
 		ReportMitigations:  "id,prefix,action,target,match,source_countries,rate_mbps,routes,reason,mode,created,expires,announced,end,end_reason,announced_hours",
 		ReportImprovements: "prefix,provider,native,cause,reason,mode,start,end,end_reason,hours,before_loss_pct,after_loss_pct,before_rtt_ms,after_rtt_ms,origin_asn,country,volume_mbps,cost_delta,est_savings",

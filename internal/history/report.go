@@ -34,6 +34,7 @@ const (
 	ReportAnomalies    = "anomalies"
 	ReportExchanges    = "exchanges"
 	ReportScorecard    = "scorecard"
+	ReportValue        = "value"
 )
 
 // HoursPerMonth converts a monthly price per Mbps into an hourly accrual.
@@ -178,6 +179,8 @@ func Build(h plugin.History, q Query) (Report, error) {
 		a.scorecard(&rep)
 	case ReportSavings:
 		a.savings(&rep)
+	case ReportValue:
+		a.value(&rep)
 	case ReportExchanges:
 		a.exchanges(&rep)
 	case ReportMitigations:
