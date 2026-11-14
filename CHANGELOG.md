@@ -4,6 +4,10 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ## [Unreleased]
 
+### Added
+
+- `lab/evolve`, an experimental lab-only harness: replays recorded decision rounds under config variants and scores loss, RTT, and flaps against a baseline; writes no config, never enables inject (#584).
+
 ## [1.3.0] - 2026-11-13
 
 The v1.3 release makes the steering state from v1.2 durable and tightens first-run setup and the Settings and System pages, with no new config key; the shipped config stays `mode: observe` and injection stays off by default.
