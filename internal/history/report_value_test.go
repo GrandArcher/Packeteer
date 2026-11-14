@@ -142,14 +142,20 @@ func TestValueDeadPathGivesNoRTTGain(t *testing.T) {
 	}
 	// Loss still counts: a dead chosen path is 98 points worse, not a gain.
 	h := plugin.History{Improvements: []plugin.ImprovementRecord{move("a", 2, 40, 100, 0)}}
-	rep, _ := Build(h, Query{Name: ReportValue, From: from, To: to, Now: now})
+	rep, err := Build(h, Query{Name: ReportValue, From: from, To: to, Now: now})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if got := *rep.Rows.([]ValueRow)[0].LossAvoided; got != -98 {
 		t.Errorf("loss avoided onto a dead path = %v, want -98", got)
 	}
 	// With a second move whose paths both answered, the RTT mean uses that
 	// move alone.
 	h = plugin.History{Improvements: []plugin.ImprovementRecord{move("a", 2, 40, 100, 0), move("c", 5, 90, 1, 50)}}
-	rep, _ = Build(h, Query{Name: ReportValue, From: from, To: to, Now: now})
+	rep, err = Build(h, Query{Name: ReportValue, From: from, To: to, Now: now})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if got := *rep.Rows.([]ValueRow)[0].RTTAvoidedMs; got != 40 {
 		t.Errorf("rtt avoided = %v, want 40 from the one move with two live paths", got)
 	}

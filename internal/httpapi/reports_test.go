@@ -497,7 +497,7 @@ func TestValueReportFormats(t *testing.T) {
 	var got struct {
 		Rows []history.ValueRow `json:"rows"`
 	}
-	if err := json.Unmarshal([]byte(body), &got); err != nil {
+	if err := json.Unmarshal(body, &got); err != nil {
 		t.Fatal(err)
 	}
 	if len(got.Rows) != 3 || got.Rows[0].Scope != history.ValueTotal || got.Rows[0].Basis != history.BasisEstimate || got.Rows[0].LossAvoided == nil || *got.Rows[0].LossAvoided != 5 {
