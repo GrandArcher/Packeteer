@@ -100,13 +100,24 @@ It checks: (1) every member pulls both peers without failures and the edge holds
 
 `lab/checklease` watches the lease file from inside the standby, armed before the signal, and fails if pk-a does not release it within 20s (a release that never arrives fails; the 10s takeover bound is unchanged). pk-b announces within 10s. (8) pk-a restarts as standby and answers a pause with 409; a pause on the active pk-b withdraws its route; after SIGTERM of pk-b, pk-a takes over still paused (#565), announces nothing for 15s, and announces once resumed. The script reaches each instance's API from the host with the lab's basic auth. (9) SIGTERM of pk-a leaves nothing on the edge. (10) `packeteer -restore` of the backup with the stock image into a stopped instance's volume, and the restored config passes `-check`.
 
+## One-command demo (#586)
+
+```sh
+./scripts/demo.sh        # build, start, print the dashboard URL and sign-in
+./scripts/demo.sh stop   # remove the containers
+```
+
+It starts the walkthrough's topology in `lab/docker-compose-demo.yml`: the FRR edge from `lab/frr-walkthrough`, the BMP lab's two transits, and Packeteer reading `lab/packeteer-demo.yaml` (`mode: observe`, the `fixed` prober, so no probe packet leaves the bridge). The dashboard is on <http://127.0.0.1:18080/>, published on loopback only. Sign in as `admin` with the password the script prints: it generates one per run, or uses `PACKETEER_DEMO_PASSWORD` when you set it. Without the script, `docker compose -f lab/docker-compose-demo.yml up --build` makes Packeteer generate a first-run password (`docker exec pkd-packeteer cat /var/lib/packeteer/first-run-admin-password`, [docs/auth.md](../docs/auth.md)). About 30 seconds after the start, Overview and `/api/improvements` recommend transit-b for `198.51.100.0/24` while the edge keeps transit-a, and the edge holds no route from Packeteer. The lab uses the same 192.0.2.0/24 bridge as the walkthrough, so stop one before starting the other; the walkthrough ([docs/walkthrough.md](../docs/walkthrough.md)) goes on to suggest and inject.
+
+`lab/e2e-demo.sh` (CI, `e2e` job) runs that command and checks the iBGP session, the learned prefix and recommendation, `mode` observe, no route from Packeteer on the edge, a `401` without credentials, the dashboard published on loopback only, and that `stop` removes every container.
+
 `lab/e2e-docs.sh` runs a guide's shell blocks, in order, as CI steps (#50). `lab/doccmds` turns the blocks and the hidden `<!-- ci-expect: ... -->`, `ci-absent`, `ci-retry`, `ci-fails`, and `ci-skip` comments after them into a bash script. The docker job runs [docs/quickstart.md](../docs/quickstart.md) and [docs/troubleshooting.md](../docs/troubleshooting.md) against the image it built (tagged as `:edge` and as every release version the guide or `docker-compose.yml` pins, with `raw.githubusercontent.com` downloads of `main` or a `v<version>` tag read from the checkout and `docker pull` refused).
 
 The `e2e` job runs [docs/walkthrough.md](../docs/walkthrough.md) on its own topology (`lab/docker-compose-walkthrough.yml`): the FRR edge in `lab/frr-walkthrough`, which is the configuration [docs/frr.md](../docs/frr.md) shows (a unit test keeps them identical), the BMP lab's two transits, and Packeteer reading `lab/walkthrough/config.yaml`, a copy of `lab/packeteer-walkthrough.yaml` the guide edits. The guide checks: (1) the session and the native path through transit-a. (2) Observe: the prefix is learned with `rib_provider` transit-a and recommended onto transit-b, and nothing is announced.
 
 (3) Suggest: the same recommendation, logged with `mode=suggest`, still nothing on the edge. (4) Inject: `-check` of the edited file, then the edge's best path is Packeteer's with next hop `192.0.2.22`, local-pref 250, `64512:666`, and `no-export`, and neither transit is sent the prefix. (5) SIGTERM (`docker stop -t 30`) withdraws it and the edge is back on transit-a. (6) Back to observe, nothing returns.
 
-GitHub Actions runs all twelve scripts and the walkthrough as the `e2e` job. Docker and Go are required (the scripts build `lab/checkroute`, `lab/checkpath`, `lab/checkms`, `lab/checkpop`, `lab/checklease`, and `lab/mkcerts`); they do not run in the unit-test job. `go test ./lab/checkroute ./lab/checkpath ./lab/checkms ./lab/checkpop ./lab/checklease ./lab/doccmds` covers the checks themselves.
+GitHub Actions runs the scripts above, the walkthrough, and the demo as the `e2e` job. Docker and Go are required (the scripts build `lab/checkroute`, `lab/checkpath`, `lab/checkms`, `lab/checkpop`, `lab/checklease`, and `lab/mkcerts`); they do not run in the unit-test job. `go test ./lab/checkroute ./lab/checkpath ./lab/checkms ./lab/checkpop ./lab/checklease ./lab/doccmds` covers the checks themselves.
 
 ```sh
 bash lab/e2e.sh
