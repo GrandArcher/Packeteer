@@ -86,11 +86,11 @@ Failed sign-ins count toward the same lockout as basic auth: ten failures for on
 The Admin page (`/admin.html`) and the Tokens page (`/tokens.html`) make these calls from the browser ([ui.md](ui.md#users-and-api-tokens)).
 
 ```sh
-curl -u "admin:$PACKETEER_PASSWORD" -H 'Content-Type: application/json' http://127.0.0.1:8080/api/users \
+curl -u "admin:$PACKETEER_ADMIN_PASSWORD" -H 'Content-Type: application/json' http://127.0.0.1:8080/api/users \
   -d '{"name":"noc1","role":"operator","password":"another-long-password"}'
-curl -u "admin:$PACKETEER_PASSWORD" -X PATCH -H 'Content-Type: application/json' http://127.0.0.1:8080/api/users/noc1 -d '{"role":"viewer"}'
-curl -u "admin:$PACKETEER_PASSWORD" -X PATCH -H 'Content-Type: application/json' http://127.0.0.1:8080/api/users/noc1 -d '{"disabled":true}'
-curl -u "admin:$PACKETEER_PASSWORD" -X DELETE http://127.0.0.1:8080/api/users/noc1
+curl -u "admin:$PACKETEER_ADMIN_PASSWORD" -X PATCH -H 'Content-Type: application/json' http://127.0.0.1:8080/api/users/noc1 -d '{"role":"viewer"}'
+curl -u "admin:$PACKETEER_ADMIN_PASSWORD" -X PATCH -H 'Content-Type: application/json' http://127.0.0.1:8080/api/users/noc1 -d '{"disabled":true}'
+curl -u "admin:$PACKETEER_ADMIN_PASSWORD" -X DELETE http://127.0.0.1:8080/api/users/noc1
 ```
 
 `PATCH` takes any of `role`, `password`, `disabled`. A change that would leave no enabled admin is refused (`409`). Deleting a user deletes its tokens. Disabling, demoting, or a new password takes effect on the next request and ends the user's SSO sessions.

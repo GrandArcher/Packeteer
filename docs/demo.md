@@ -4,7 +4,7 @@ A short script to follow on screen, about five minutes. It starts the one-comman
 
 Nothing here touches a real network. The routers are containers on a Docker bridge, the addresses are documentation ranges (RFC 5737), and the ASNs are the private-use 64512 and the documentation values 64496 and 64497. The mode stays `observe` from start to stop. Every command block after the clone runs in CI, in order, in the `e2e` job (`lab/e2e-docs.sh docs/demo.md`).
 
-You need Linux with Docker Engine, the Compose plugin, `git`, `curl`, and nothing else on `127.0.0.1:18080` or the `192.0.2.0/24` bridge (stop the walkthrough lab first).
+You need Linux with Docker Engine, the Compose plugin, `git`, `curl`, and nothing else on `127.0.0.1:18080` or the `192.0.2.0/24` bridge (stop the walkthrough lab first). `./scripts/demo.sh` checks this before it builds anything and stops with a one-line fix when Docker is Docker Desktop or the Compose plugin is missing, when `127.0.0.1:18080` is taken, or when another Docker network already uses `192.0.2.0/24`.
 
 | Lab | Address | AS | Role |
 |---|---|---|---|

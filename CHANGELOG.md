@@ -4,6 +4,10 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ## [Unreleased]
 
+### Fixed
+
+- Quickstart: one password variable, no `openssl`, Compose file pinned to the release; `scripts/demo.sh` checks Docker, port 18080, and the 192.0.2.0/24 bridge first (#612).
+
 ## [1.4.0] - 2026-11-14
 
 The v1.4 release lets an operator finish observe setup from the GUI, shows a manager what Packeteer did, and adds a one-command demo lab, a chaos soak, and a lab-only path-scoring harness, with no new config key; the shipped config stays `mode: observe` and injection stays off by default.

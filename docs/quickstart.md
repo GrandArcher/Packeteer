@@ -45,10 +45,10 @@ sources:
     config:
       targets: [{prefix: 127.0.0.1/32}]
 YAML
-export PACKETEER_PASSWORD="$(openssl rand -base64 18)"   # keep it; this is the admin password
+export PACKETEER_ADMIN_PASSWORD="$(head -c 18 /dev/urandom | od -An -tx1 | tr -d ' \n')"   # keep it; this is the admin password
 docker run -d --name packeteer --network host \
   --cap-add NET_RAW --cap-add NET_ADMIN \
-  -e PACKETEER_ADMIN_PASSWORD="$PACKETEER_PASSWORD" \
+  -e PACKETEER_ADMIN_PASSWORD \
   -v "$PWD/hello.yaml:/etc/packeteer/config.yaml:ro" \
   "$IMAGE"
 ```
@@ -57,7 +57,7 @@ Wait for the first probe round (one interval, 5 seconds here), then read the API
 
 ```sh
 curl -fsS http://127.0.0.1:8080/readyz
-curl -fsS -u "admin:$PACKETEER_PASSWORD" http://127.0.0.1:8080/api/probes
+curl -fsS -u "admin:$PACKETEER_ADMIN_PASSWORD" http://127.0.0.1:8080/api/probes
 ```
 <!-- ci-retry: 60 -->
 <!-- ci-expect: "provider":"loopback" -->
@@ -69,7 +69,7 @@ Sign-in is on by default (#328): `/readyz` and `/healthz` are public and everyth
 
 ```sh
 docker logs packeteer 2>&1 | grep 'msg=probe '
-curl -fsS -u "admin:$PACKETEER_PASSWORD" http://127.0.0.1:8080/metrics | grep '^packeteer_probe_rtt_seconds'
+curl -fsS -u "admin:$PACKETEER_ADMIN_PASSWORD" http://127.0.0.1:8080/metrics | grep '^packeteer_probe_rtt_seconds'
 ```
 <!-- ci-expect: prober=icmp -->
 <!-- ci-expect: loss_pct=0 -->
@@ -113,11 +113,11 @@ Every key is in [CONFIG.md](CONFIG.md). The example file comments each one.
 
 ```sh
 mkdir -p plugins
-export PACKETEER_PASSWORD="$(openssl rand -base64 18)"   # keep it; this is the admin password
+export PACKETEER_ADMIN_PASSWORD="$(head -c 18 /dev/urandom | od -An -tx1 | tr -d ' \n')"   # keep it; this is the admin password
 docker run --rm -v "$PWD/config.yaml:/etc/packeteer/config.yaml:ro" "$IMAGE" -check
 docker run -d --name packeteer --network host \
   --cap-add NET_RAW --cap-add NET_ADMIN \
-  -e PACKETEER_ADMIN_PASSWORD="$PACKETEER_PASSWORD" \
+  -e PACKETEER_ADMIN_PASSWORD \
   --restart unless-stopped \
   -v "$PWD/config.yaml:/etc/packeteer/config.yaml:ro" \
   -v "$PWD/plugins:/etc/packeteer/plugins:ro" \
@@ -136,7 +136,7 @@ Check that it is up and in observe:
 
 ```sh
 curl -fsS http://127.0.0.1:8080/healthz
-curl -fsS -u "admin:$PACKETEER_PASSWORD" http://127.0.0.1:8080/api/overview
+curl -fsS -u "admin:$PACKETEER_ADMIN_PASSWORD" http://127.0.0.1:8080/api/overview
 ```
 <!-- ci-retry: 60 -->
 <!-- ci-expect: "status":"ok" -->
@@ -164,8 +164,7 @@ The same container as a Compose service. Use one or the other, not both: they sh
 
 ```sh
 docker stop -t 30 packeteer && docker rm packeteer
-export PACKETEER_ADMIN_PASSWORD="$(openssl rand -base64 18)"   # keep it; this is the admin password
-curl -fsSLo docker-compose.yml https://raw.githubusercontent.com/GrandArcher/Packeteer/main/docker-compose.yml
+curl -fsSLo docker-compose.yml https://raw.githubusercontent.com/GrandArcher/Packeteer/v1.4.0/docker-compose.yml
 docker compose up -d
 docker compose ps
 ```
@@ -179,7 +178,7 @@ docker compose logs packeteer
 <!-- ci-expect: "mode":"observe" -->
 <!-- ci-expect: packeteer running -->
 
-The Compose file pins the same flags: host networking, the two capabilities, the config and plugin mounts, a data volume, and `restart: unless-stopped`. It passes `PACKETEER_ADMIN_PASSWORD` from your shell when set; leave it unset to get a generated password, which is in `/var/lib/packeteer/first-run-admin-password` (read it with `docker compose exec packeteer cat /var/lib/packeteer/first-run-admin-password`); the log names that file but never shows the password. Its `image` line pins the release, 1.4.0, like step 1.
+The Compose file pins the same flags: host networking, the two capabilities, the config and plugin mounts, a data volume, and `restart: unless-stopped`. It passes `PACKETEER_ADMIN_PASSWORD` from your shell to the container. Compose starts with a new data volume of its own, so the admin is created again from that password. Export it first (as in Step 4) if this is a new shell, or the `curl` above is refused. Leave it unset to get a generated password, which is in `/var/lib/packeteer/first-run-admin-password` (read it with `docker compose exec packeteer cat /var/lib/packeteer/first-run-admin-password`); the log names that file but never shows the password. Its `image` line pins the release, 1.4.0, like step 1.
 
 ## 6. Stop
 

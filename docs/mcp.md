@@ -18,7 +18,7 @@ Keys: [CONFIG.md](CONFIG.md#mcp). The endpoint is `POST /mcp` on `http.listen`, 
 Create an API token with the `mcp` scope ([auth.md](auth.md#api-tokens)):
 
 ```sh
-curl -u "noc1:$PACKETEER_PASSWORD" -H 'Content-Type: application/json' http://127.0.0.1:8080/api/tokens \
+curl -u "noc1:$NOC1_PASSWORD" -H 'Content-Type: application/json' http://127.0.0.1:8080/api/tokens \
   -d '{"name":"assistant","role":"viewer","scope":"mcp","ttl":"720h"}'
 ```
 
