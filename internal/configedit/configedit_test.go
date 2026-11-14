@@ -202,7 +202,7 @@ func TestWizard(t *testing.T) {
 		ASN: 64512, RouterID: "192.0.2.10", Edge: "192.0.2.254",
 		Providers: []WizardProvider{{Name: "transit-a", SourceIP: "192.0.2.11", NextHop: "192.0.2.1"}, {Name: "transit-b", SourceIP: "192.0.2.12", NextHop: "192.0.2.2"}},
 		Prefix:    "198.51.100.0/24", Host: "198.51.100.10",
-		Storage: true,
+		Storage: boolPtr(true),
 	}
 	out, err := Wizard(in)
 	if err != nil {
@@ -511,5 +511,37 @@ func TestWriteFileAtomicReportsDirectorySync(t *testing.T) {
 	}
 	if err := WriteFile(path, []byte("mode: observe\n"), []byte("mode: suggest\n")); !errors.Is(err, dirsync.ErrSync) {
 		t.Fatalf("WriteFile err = %v, want the directory sync error", err)
+	}
+}
+
+func boolPtr(b bool) *bool { return &b }
+
+// A wizard result keeps history on unless the answer says no: omitting the
+// field gives the example file's sqlite path under /var/lib/packeteer, and
+// false leaves it out (#582). Neither turns on anything that announces.
+func TestWizardStorageDefaultsOn(t *testing.T) {
+	base := WizardInput{ASN: 64512, RouterID: "192.0.2.10", Edge: "192.0.2.254",
+		Providers: []WizardProvider{{Name: "transit-a", SourceIP: "192.0.2.11", NextHop: "192.0.2.1"}}}
+	for _, tc := range []struct {
+		name    string
+		storage *bool
+		on      bool
+	}{{"omitted", nil, true}, {"true", boolPtr(true), true}, {"false", boolPtr(false), false}} {
+		in := base
+		in.Storage = tc.storage
+		out, err := Wizard(in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := config.Parse(out)
+		if err != nil {
+			t.Fatalf("%s: %v\n%s", tc.name, err, out)
+		}
+		if (cfg.Storage != nil) != tc.on || cfg.Mode != config.ModeObserve {
+			t.Fatalf("%s: storage = %+v mode = %s\n%s", tc.name, cfg.Storage, cfg.Mode, out)
+		}
+		if tc.on && !strings.Contains(string(out), "path: /var/lib/packeteer/packeteer.db") {
+			t.Fatalf("%s: default path missing:\n%s", tc.name, out)
+		}
 	}
 }

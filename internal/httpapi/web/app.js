@@ -811,9 +811,26 @@ function renderSetup(o) {
   if (!root) return;
   clear(root);
   var hints = o.setup || [];
-  if (!hints.length) return;
+  var bgp = o.bgp || {};
+  if (!hints.length && !o.setup_complete && !bgp.configured) return;
   var box = el("div", "setup");
   box.appendChild(el("h3", "", "Setup checklist"));
+  var state = el("p", o.setup_complete ? "setup-state setup-complete" : "setup-state tag");
+  state.setAttribute("data-setup", o.setup_complete ? "complete" : "incomplete");
+  if (o.setup_complete) {
+    state.appendChild(el("strong", "", o.mode === "observe" ? "Setup complete, still observe." : "Setup complete."));
+    state.appendChild(document.createTextNode(" The router session is up, prefixes are learned, and each provider's probes leave through its next hop." +
+      (o.mode === "observe" ? " Nothing is announced." : "")));
+  } else {
+    state.appendChild(document.createTextNode("Setup is not complete: it needs every router session established, a learned prefix, and a working probe source for each provider. "));
+    if (shellAdmin) {
+      var pbrLink = el("a", "", "Host policy routing");
+      pbrLink.href = "/settings.html#pbr";
+      state.appendChild(pbrLink);
+      state.appendChild(document.createTextNode(" makes each provider's probes leave through its next hop."));
+    }
+  }
+  box.appendChild(state);
   var editor = (o.features || []).some(function (f) { return f.name === "config_editor" && f.on; });
   if (!editor) box.appendChild(el("p", "tag", "Edit the mounted config file, then restart the container."));
   var ul = el("ul", "hints");

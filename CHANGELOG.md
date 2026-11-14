@@ -4,6 +4,15 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ## [Unreleased]
 
+### Added
+
+- Settings Host policy routing panel: shows the `ip rule`/`ip route` plan, applies it after a confirm and verifies each source leaves via its next hop; `GET /api/pbr`, `POST /api/pbr/apply` (#582).
+- The Overview checklist says "Setup complete, still observe" once the session is up, a prefix is learned and probes egress correctly; `setup_complete` in `/api/overview` (#582).
+
+### Changed
+
+- The setup wizard writes sqlite history under `/var/lib/packeteer` unless `"storage": false` is sent (#582).
+
 ## [1.3.0] - 2026-11-13
 
 The v1.3 release makes the steering state from v1.2 durable and tightens first-run setup and the Settings and System pages, with no new config key; the shipped config stays `mode: observe` and injection stays off by default.

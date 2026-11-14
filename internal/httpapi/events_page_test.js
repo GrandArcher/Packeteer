@@ -132,7 +132,7 @@ assert(root.textContent === "No active improvements.", "inject: " + root.textCon
 ids["setup"] = new Node("div");
 context.renderSetup({setup: [{id: "providers-down", level: "warn", title: "Every provider is down", detail: "d",
   doc: "docs/policy-routing.md", doc_url: DOC + "docs/policy-routing.md"}]});
-var doc = find(ids["setup"], "a")[0];
+var doc = find(ids["setup"], "a").filter(function (n) { return n.textContent === "docs/policy-routing.md"; })[0];
 assert(doc && doc.textContent === "docs/policy-routing.md" && doc.href === DOC + "docs/policy-routing.md" && doc.target === "_blank",
   "checklist doc link");
 // A session in Active is connecting (amber), not down; Idle is down; the

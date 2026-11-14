@@ -2471,6 +2471,78 @@ function confirmCheck(id, btn) {
   });
 }
 
+// Host policy routing (#582). pbrToken names the plan on the page; the apply
+// sends it back, and the server refuses it when the plan has changed.
+var pbrToken = "";
+
+function renderPbrPaths(paths) {
+  var ul = byId("pbr-paths");
+  clear(ul);
+  (paths || []).forEach(function (p) {
+    var li = el("li", "pf-item pf-" + (p.ok ? "pass" : "fail"));
+    li.dataset.provider = p.provider;
+    var head = el("div", "pf-head");
+    head.appendChild(el("span", "badge " + (p.ok ? "sys-ok" : "sys-down"), p.ok ? "Leaves via next hop" : "Wrong path"));
+    head.appendChild(el("strong", "", p.provider));
+    li.appendChild(head);
+    li.appendChild(el("p", "pf-detail", p.ok ? "Probes from " + p.source_ip + " leave through " + p.next_hop + "." :
+      "Probes from " + p.source_ip + " should leave through " + p.next_hop + ". " + (p.detail || "")));
+    ul.appendChild(li);
+  });
+}
+
+function renderPbrPlan(plan) {
+  pbrToken = plan.token;
+  renderPbrPaths(plan.paths);
+  var lines = plan.lines || [];
+  var pre = byId("pbr-lines");
+  pre.hidden = !lines.length;
+  pre.textContent = lines.map(function (l) { return (l.remove ? "- " : "+ ") + l.command; }).join("\n");
+  byId("pbr-confirm").checked = false;
+  byId("pbr-apply").disabled = true;
+  byId("pbr-confirm-row").hidden = !lines.length;
+  byId("pbr-status").textContent = lines.length ?
+    "Nothing was changed. " + lines.length + (lines.length === 1 ? " command" : " commands") + " would run." :
+    "Nothing was changed. The host already has the policy routing for every provider.";
+}
+
+function showPbr() {
+  byId("pbr-status").textContent = "Reading the host's rules...";
+  return api("GET", "/api/pbr").then(renderPbrPlan, function (err) {
+    byId("pbr-confirm-row").hidden = true;
+    byId("pbr-lines").hidden = true;
+    byId("pbr-status").textContent = explain(err);
+  });
+}
+
+function applyPbr() {
+  if (!byId("pbr-confirm").checked || !pbrToken) return Promise.resolve();
+  var btn = byId("pbr-apply");
+  btn.disabled = true;
+  byId("pbr-status").textContent = "Applying...";
+  return api("POST", "/api/pbr/apply", {confirm: true, token: pbrToken}).then(function (res) {
+    renderPbrPaths(res.paths);
+    byId("pbr-lines").hidden = true;
+    byId("pbr-confirm-row").hidden = true;
+    pbrToken = "";
+    byId("pbr-status").textContent = res.verified ?
+      "Applied " + res.applied + " commands. Every provider's probes leave through its next hop." :
+      "Applied " + res.applied + " commands, but a provider does not leave through its next hop. See below.";
+    // The Overview reads the last preflight run for probe_egress.
+    return runPreflight();
+  }, function (err) {
+    if (err.data && err.data.code === "plan_changed") {
+      return showPbr().then(function () { byId("pbr-status").textContent = "The host or the config changed. Nothing was run; review the new plan."; });
+    }
+    byId("pbr-status").textContent = explain(err);
+    byId("pbr-confirm").checked = false;
+  });
+}
+
+function pbrConfirmChanged() {
+  byId("pbr-apply").disabled = !byId("pbr-confirm").checked;
+}
+
 // snippetCandidate is what is on the page now: the wizard's step 1 and flow
 // answers while the wizard is open, over the text in the editor, saved or
 // not. used is false on an empty page, which reads the running config.
@@ -2912,6 +2984,9 @@ byId("fm-mode").addEventListener("change", refreshInjectBox);
 byId("pv-run").addEventListener("click", previewConfig);
 byId("bar-preview").addEventListener("click", previewConfig);
 byId("pf-run").addEventListener("click", runPreflight);
+byId("pbr-show").addEventListener("click", showPbr);
+byId("pbr-apply").addEventListener("click", applyPbr);
+byId("pbr-confirm").addEventListener("change", pbrConfirmChanged);
 byId("pf-snippet-show").addEventListener("click", showSnippet);
 byId("pf-snippet-copy").addEventListener("click", copySnippet);
 ["pf-vendor", "wz-asn", "wz-router", "wz-edge", "wz-flow", "wz-flow-addr", "wz-flow-port", "ed-yaml"].forEach(function (id) {

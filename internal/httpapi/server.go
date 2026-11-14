@@ -202,6 +202,9 @@ type Server struct {
 	// preflight is the onboarding checks (#221). Nil until SetPreflight.
 	// Running them sends TTL-limited probes only; they never announce.
 	preflight atomic.Pointer[PreflightControl]
+	// pbr is the host policy routing of the probe sources (#582). Nil until
+	// SetPolicyRouting. Apply changes the host's ip rules, never a router.
+	pbr atomic.Pointer[PolicyRouting]
 	// blast is the blast-radius preview (#227). Nil until SetBlast.
 	blast atomic.Pointer[BlastControl]
 	// blastKey signs preview tokens; a restart invalidates them.
