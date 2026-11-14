@@ -41,8 +41,10 @@ type WizardInput struct {
 	// Flow is the optional flow collector step (#130). Nil leaves the flow
 	// source out. It only listens for exporter records; it never announces.
 	Flow *WizardFlow `json:"flow,omitempty"`
-	// Storage turns on report history (sqlite in /var/lib/packeteer).
-	Storage bool `json:"storage"`
+	// Storage turns on report history (sqlite in /var/lib/packeteer). Nil
+	// means on, so a generated file keeps history after the first run, as
+	// config.example.yaml does; send false to leave it out.
+	Storage *bool `json:"storage,omitempty"`
 	// HTTPListen is the ops server address (default 127.0.0.1:8080).
 	HTTPListen string `json:"http_listen,omitempty"`
 	// Mode must be empty or observe. Any other value is refused. The
@@ -277,7 +279,7 @@ func Wizard(in WizardInput) ([]byte, error) {
 		out.Sources = append(out.Sources, wizPlugin{Type: "flow", Config: map[string]any{"listen": flowListen}})
 	}
 	out.PacketeerCommunity = WizardCommunity(in.ASN)
-	if in.Storage {
+	if in.Storage == nil || *in.Storage {
 		out.Storage = &wizPlugin{Type: "sqlite", Config: map[string]string{"path": "/var/lib/packeteer/packeteer.db"}}
 	}
 	if l := strings.TrimSpace(in.HTTPListen); l != "" {

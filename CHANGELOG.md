@@ -7,6 +7,12 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 ### Added
 
 - `scripts/demo.sh`: one command starts an FRR edge, two simulated transits, and Packeteer in observe with sign-in on and the dashboard on loopback; CI runs it (#586).
+- Settings Host policy routing panel: shows the `ip rule`/`ip route` plan, applies it after a confirm and verifies each source leaves via its next hop; `GET /api/pbr`, `POST /api/pbr/apply` (#582).
+- The Overview checklist says "Setup complete, still observe" once the session is up, a prefix is learned, every provider answered, egress not failing; `setup_complete` in `/api/overview` (#582).
+
+### Changed
+
+- The setup wizard writes sqlite history under `/var/lib/packeteer` unless `"storage": false` is sent (#582).
 - `lab/evolve` (experimental, lab only) replays recorded rounds under config variants and scores loss, RTT, and flaps against a baseline; writes no config, never enables inject (#584).
 - `value` report: loss and latency avoided (native minus chosen path) in total, per provider and per day from stored history; announced and estimated moves stay separate rows (#583).
 

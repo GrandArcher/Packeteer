@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/GrandArcher/Packeteer/internal/preflight"
 	"github.com/GrandArcher/Packeteer/internal/probe"
 )
 
@@ -137,6 +138,11 @@ type Overview struct {
 	BGP      OverviewBGP    `json:"bgp"`
 	Features []Feature      `json:"features"`
 	Setup    []Hint         `json:"setup"`
+	// SetupComplete is true when the iBGP sessions are all established, the
+	// learned RIB holds a prefix, no provider is down, and the preflight
+	// egress check is not failing (#582). It says nothing about the mode:
+	// with Mode "observe" the instance is set up and still announces nothing.
+	SetupComplete bool `json:"setup_complete"`
 	// System counts the System page's components by state (#184).
 	System SystemSummary `json:"system"`
 	// Auth is "rbac", "basic", or "off". The UI warns on off (#328).
@@ -175,6 +181,8 @@ type OverviewBGP struct {
 	Ready       bool `json:"ready"`
 	Established int  `json:"established"`
 	Peers       int  `json:"peers"`
+	// Learned is the number of prefixes in the learned RIB view.
+	Learned int `json:"learned"`
 }
 
 func (s *Server) handleOverview(w http.ResponseWriter, _ *http.Request) {
@@ -195,6 +203,13 @@ func (s *Server) overview() Overview {
 		{"ha", s.ha != nil},
 	}
 	out := BuildOverview(snap, *s.setup.Load(), features)
+	egressFailing := false
+	if p := s.preflightControl(); p != nil {
+		if rep, ok := p.Latest(); ok {
+			egressFailing = egressCheckFails(rep)
+		}
+	}
+	out.SetupComplete = setupComplete(out, egressFailing)
 	out.System = s.system(snap).Summary
 	out.Auth = s.authMode()
 	return out
@@ -209,7 +224,7 @@ func BuildOverview(snap Snapshot, setup Setup, features []Feature) Overview {
 		Started:  snap.Started,
 		Sources:  nz(append([]string(nil), setup.Sources...)),
 		Features: nz(features),
-		BGP:      OverviewBGP{Configured: snap.BGPConfigured, Ready: snap.RIBReady, Peers: len(snap.Peers)},
+		BGP:      OverviewBGP{Configured: snap.BGPConfigured, Ready: snap.RIBReady, Peers: len(snap.Peers), Learned: snap.RIBPrefixes},
 
 		SynthesizeWarning: setup.SynthesizeWarning,
 		SimulatedProbes:   setup.SimulatedProbes,
@@ -270,6 +285,44 @@ func BuildOverview(snap Snapshot, setup Setup, features []Feature) Overview {
 		}
 	}
 	return out
+}
+
+// egressCheckFails reports whether the report's probe_egress check failed:
+// a provider's probe leaves through an address other than its next hop, or
+// gets no answer.
+func egressCheckFails(rep preflight.Report) bool {
+	for _, r := range rep.Results {
+		if r.ID == preflight.CheckEgress && r.Status == preflight.Fail {
+			return true
+		}
+	}
+	return false
+}
+
+// setupComplete is the checklist's end state (#582): every iBGP neighbor is
+// established, the learned RIB holds a prefix, every provider probed here has
+// answered (none is down or still without a result, and at least one is
+// measured), and the last preflight run did not fail probe_egress. A session
+// or probe source that goes down makes it false again.
+func setupComplete(o Overview, egressFailing bool) bool {
+	if !o.Started || !o.BGP.Configured || o.BGP.Peers == 0 || o.BGP.Established < o.BGP.Peers || o.BGP.Learned == 0 || egressFailing {
+		return false
+	}
+	for _, p := range o.Problems {
+		if p.State == HealthDown {
+			return false
+		}
+	}
+	measured := 0
+	for _, h := range o.Providers {
+		switch {
+		case h.State == HealthUp || h.State == HealthDegraded:
+			measured++
+		case h.State == HealthUnknown && !h.Excluded && !strings.HasPrefix(h.reason, ReasonMeasuredByPeer):
+			return false
+		}
+	}
+	return measured > 0
 }
 
 // tally adds one probe result to the provider's counts. A probe that errored or got no reply counts as full loss.

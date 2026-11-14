@@ -161,6 +161,8 @@ ip route get 203.0.113.1 from 192.0.2.11
 ip route get 203.0.113.1 from 198.51.100.11
 ```
 
+`packeteer -pbr linux -apply` and the Settings page (Host policy routing) set these up from the config: they show the plan first and change nothing until you confirm ([docs/onboarding.md](docs/onboarding.md#host-policy-routing)).
+
 Use the `source_ip` and `next_hop` values from your config. Make the rules persistent with the host's network config. On the probe interfaces, loose reverse-path filtering avoids dropping replies that arrive on a different interface than the default route:
 
 ```sh

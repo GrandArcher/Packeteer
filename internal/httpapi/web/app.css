@@ -250,6 +250,8 @@ body.stale main { opacity: 0.6; }
 .tile.muted .tile-v { color: var(--muted); }
 .setup { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin-bottom: 10px; }
 .setup .tag { margin: 4px 0 8px; }
+.setup-state { margin: 4px 0 8px; }
+.setup-complete { color: var(--up); }
 .hints { list-style: none; margin: 0; padding: 0; }
 .hint { padding: 6px 0; border-top: 1px solid var(--line); }
 .hint .hint-level { margin-right: 8px; text-transform: uppercase; font-size: 0.7rem; }
