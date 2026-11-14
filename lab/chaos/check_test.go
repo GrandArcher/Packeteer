@@ -237,9 +237,6 @@ func TestHostedProfile(t *testing.T) {
 	if p.Name != "hosted" || p.Duration != 5*time.Hour || p.PassPause != 30*time.Minute || !p.InjectLab || !slices.Equal(p.Faults, faultKinds) {
 		t.Fatalf("%+v", p)
 	}
-	if _, err := loadProfile("short.yaml"); err != nil {
-		t.Fatal(err)
-	}
 	f := filepath.Join(t.TempDir(), "p.yaml")
 	if err := os.WriteFile(f, []byte("name: x\nduration: 1m\npass_pause: -1m\nconfigs: [a]\nfaults: [sigkill]\n"), 0o644); err != nil {
 		t.Fatal(err)

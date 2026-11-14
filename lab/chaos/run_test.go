@@ -168,9 +168,8 @@ func TestStandbyAnnouncingAfterSessionFlapFails(t *testing.T) {
 }
 
 // A hosted-length run repeats the fault list, runs no pause past the
-// window, and keeps the flap
-// quarantine of the configs out of play: a link flap is two changes of
-// the prefix and the default is 6 an hour.
+// window, and keeps the flap quarantine of the configs out of play: a
+// link flap is two changes of the prefix and the default is 6 an hour.
 func TestHostedProfileSpacesPasses(t *testing.T) {
 	rep, _ := shortRun(t, func(_ *fakeLab, p *Profile) {
 		hosted, err := loadProfile("lab/chaos/hosted.yaml")
