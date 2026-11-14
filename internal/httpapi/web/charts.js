@@ -94,7 +94,7 @@ function tsChart(title, unit, rows, beforeKey, afterKey, first, last) {
         var d = tsDay(r.day);
         if (d == null) return;
         var c = svgEl("circle", {"class": "ts-dot " + s.cls, cx: x(d), cy: y(r[s.key] || 0), r: 3});
-        c.appendChild(svgEl("title", {}, r.day + " " + s.name + ": " + (Math.round((r[s.key] || 0) * 1000) / 1000) + " " + unit + " (" + r.prefixes + " prefixes)"));
+        c.appendChild(svgEl("title", {}, r.day + " " + s.name + ": " + (Math.round((r[s.key] || 0) * 1000) / 1000) + " " + unit + (r.prefixes == null ? "" : " (" + r.prefixes + " prefixes)")));
         svg.appendChild(c);
       });
     }

@@ -6,6 +6,7 @@ The remaining UI conveniences (#34). All of them work in the stock image with a 
 |---|---|---|---|
 | Commit & Cost (#174) | `/commit.html`, `GET /api/commit`; setup in `/settings.html#commit-setup` | viewer to read, admin to set up | `telemetry` (`snmp`) + `storage: {type: sqlite}` for the graph |
 | Reports page (#178) | `/reports.html`, `GET /api/reports`, `GET /api/reports/{name}` (JSON, CSV, XLSX) | viewer | `storage: {type: sqlite}` |
+| What Packeteer did for you (#588) | `/value.html`, `/api/reports/value` | viewer | `storage: {type: sqlite}` |
 | Before/after graphs (#129) | `/graphs.html`, `/api/reports/timeseries`, the `timeseries` dashboard widget | viewer | `storage: {type: sqlite}` |
 | Troubleshooting results (#180) | `/troubleshooting.html`, `/api/troubleshoot/...` | viewer for the looking glass, operator for probe, traceroute, and whois | `troubleshoot.enabled` for the active tools |
 | Prefix list (#183) | `/prefixes.html`, `/api/prefixes` | viewer | none |
@@ -224,6 +225,18 @@ The `value` report (#583, Performance on `/reports.html`) answers "what did Pack
 - **Export.** CSV and XLSX of the same query, with the column keys as the CSV header.
 
 `internal/history` tests check the figures against a hand calculation from the improvement rows (the weighted and the unweighted case, a path with no reply on either side, a worse path, and the two bases); `internal/httpapi` tests cover JSON, CSV, and the refused `limit`. Rollback: the report adds no config key and no stored data; revert the change.
+
+### The value page
+
+`/value.html` (#588, Value in the side menu) shows the `value` report for a manager: what Packeteer did for you, in plain words. It reads `/api/reports/value` for 7, 30, 90, or 365 days and recomputes nothing, so its per-provider loss and latency figures are the report's own. It is read-only and announces nothing, and the mode banner is on top in every mode.
+
+- **Wording.** `announced` rows are shown under "Announced": inject put the routes on the wire. `estimate` rows (observe, suggest, and records from before the mode was kept) are shown under "Recommended (estimate)" and say that traffic did not change path. The two are never added together; a range with both shows both sections, announced first. Each section has the totals, a table per chosen provider, and a before and after chart per UTC day.
+- **Figures.** "Loss 3.25 points lower" and "Latency 20 ms lower" are the native path minus the chosen path; a move onto a path that measured worse reads "higher". A row with no measurement of both paths reads "not measured", never 0, and the day chart leaves that day out. Latency is not compared for a move where a path gave no reply.
+- **Down provider.** A provider that the Overview shows as down now keeps its row, marked "down now" with its figures labelled "earlier moves", and a line above the page names it, so it does not read as helping now (#577).
+- **Cost.** When the `summary` report has an estimated savings figure for the range, it is shown as an estimate, in the range and per month. The summary sums every move active in the range, announced or recommended, so the page does not call it accrued. The page adds no dollar arithmetic; see [roi.md](roi.md) and the `savings` report.
+- **Empty and off.** With no `storage`, the page says history is off and shows no number. With storage on and no improvement started in the range, it says so.
+
+Tests: `value_page_test.js` (run by `TestValuePage` when `node` is on PATH, required in CI) renders the page from the report of a seeded history on documentation prefixes and checks the per-provider figures against a hand calculation, the observe and inject wording, a down provider, and the empty and unmeasured cases. The docker job loads `/value.html` with history off, with history on and nothing recorded, and on the `lab/mkhistory` seed. Rollback: the page adds no config key and no stored data; revert the change.
 
 ## Link-outs
 

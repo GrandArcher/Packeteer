@@ -15,6 +15,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 - The setup wizard writes sqlite history under `/var/lib/packeteer` unless `"storage": false` is sent (#582).
 - `lab/evolve` (experimental, lab only) replays recorded rounds under config variants and scores loss, RTT, and flaps against a baseline; writes no config, never enables inject (#584).
 - `value` report: loss and latency avoided (native minus chosen path) in total, per provider and per day from stored history; announced and estimated moves stay separate rows (#583).
+- `/value.html` "What Packeteer did for you": the value report as totals, per provider and per day; observe is recommended and estimated, only inject is announced (#588).
 
 ## [1.3.0] - 2026-11-13
 

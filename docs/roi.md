@@ -60,7 +60,7 @@ Example: transit-a has a commit of 1000 Mbps and a billable 95th of 1150 Mbps. T
 
 ### C. Measured gain
 
-Loss and latency gains have no price in Packeteer. Take the before and after figures from the `value` report (loss and latency avoided per provider and per day, with `announced` and `estimate` rows apart) or the `summary` report for performance moves and put your own value on them. Two ways that stay close to the data:
+Loss and latency gains have no price in Packeteer. Take the before and after figures from the [value page](ui.md#the-value-page) (`/value.html`, the `value` report: loss and latency avoided per provider and per day, with `announced` and `estimate` rows apart) or the `summary` report for performance moves and put your own value on them. Two ways that stay close to the data:
 
 - Capacity you did not buy. If the alternative to fixing a congested path was more commit on one transit, C = Mbps you would have bought x its price per Mbps.
 - Loss you would otherwise have to credit or explain. Take the prefixes whose loss fell after a move (the `improvements` report lists loss before and after per prefix) and value each at what that loss costs you, for example support time or service credits.
