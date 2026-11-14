@@ -12,6 +12,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 ### Changed
 
 - The setup wizard writes sqlite history under `/var/lib/packeteer` unless `"storage": false` is sent (#582).
+- `value` report: loss and latency avoided (native minus chosen path) in total, per provider and per day from stored history; announced and estimated moves stay separate rows (#583).
 
 ## [1.3.0] - 2026-11-13
 

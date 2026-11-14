@@ -95,7 +95,7 @@ func TestReportTitlesCoverEveryReport(t *testing.T) {
 		history.ReportSummary, history.ReportImprovements, history.ReportCauses, history.ReportPerformance,
 		history.ReportTimeSeries, history.ReportProviders, history.ReportPrefixes, history.ReportASNs,
 		history.ReportCountries, history.ReportProbes, history.ReportSavings, history.ReportMitigations,
-		history.ReportAnomalies, history.ReportExchanges,
+		history.ReportAnomalies, history.ReportExchanges, history.ReportValue,
 	} {
 		m := regexp.MustCompile(`\b` + name + `: "([^"]+)"`).FindStringSubmatch(block[1])
 		if m == nil {

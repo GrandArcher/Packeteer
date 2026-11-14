@@ -137,6 +137,15 @@ var Reports = []Def{
 			num("before_loss_pct", "Loss before", "%"), num("after_loss_pct", "Loss after", "%"),
 			num("before_rtt_ms", "RTT before", "ms"), num("after_rtt_ms", "RTT after", "ms"),
 		}},
+	{Name: ReportValue, Category: CategoryPerformance, Filters: Filters,
+		Summary: "Loss and latency avoided (native path minus chosen path) in total, per chosen provider, and per UTC day, weighted by volume when known. Announced (inject) and estimated (observe, suggest) moves are separate rows. Not cut by limit.",
+		Columns: []Column{
+			txt("scope", "Scope"), txt("provider", "Provider"), txt("day", "Day (UTC)"), txt("basis", "Basis"),
+			num("improvements", "Improvements", ""), num("measured", "Measured", ""), num("steered_hours", "Steered", "h"), txt("weighting", "Weighting"),
+			num("volume_mbps", "Volume", "Mbps"), num("before_loss_pct", "Loss before", "%"), num("after_loss_pct", "Loss after", "%"),
+			num("loss_avoided_pct", "Loss avoided", "%"), num("before_rtt_ms", "RTT before", "ms"), num("after_rtt_ms", "RTT after", "ms"),
+			num("rtt_avoided_ms", "RTT avoided", "ms"),
+		}},
 	{Name: ReportProviders, Category: CategoryPerformance, Filters: noCause,
 		Summary: "Provider efficiency: measured loss, latency, failures, and improvements onto and off each provider.",
 		Columns: []Column{
