@@ -75,11 +75,17 @@ func TestValuePage(t *testing.T) {
 		switch r.Basis {
 		case history.BasisAnnounced:
 			announced++
+			if r.LossAvoided == nil || r.RTTAvoidedMs == nil || r.BeforeRTTMs == nil || r.AfterRTTMs == nil {
+				t.Fatalf("announced lab-b is missing a figure: %+v", r)
+			}
 			if *r.LossAvoided != 3.25 || *r.RTTAvoidedMs != 20 || *r.BeforeRTTMs != 72.5 || *r.AfterRTTMs != 52.5 {
 				t.Fatalf("announced lab-b = %+v", r)
 			}
 		case history.BasisEstimate:
 			estimate++
+			if r.LossAvoided == nil || r.RTTAvoidedMs == nil {
+				t.Fatalf("estimate lab-b is missing a figure: %+v", r)
+			}
 			if *r.LossAvoided != 18 || *r.RTTAvoidedMs != 30 {
 				t.Fatalf("estimate lab-b = %+v", r)
 			}

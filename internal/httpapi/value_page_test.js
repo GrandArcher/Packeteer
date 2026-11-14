@@ -138,6 +138,7 @@ var worse = render({rows: [tot("estimate", {before_loss_pct: 1, after_loss_pct: 
 assert(worse.textContent.indexOf("loss 2 points higher and latency 10 ms higher") >= 0, "worse path says higher: " + worse.textContent);
 var noRTT = render({rows: [tot("estimate", {before_loss_pct: 4, after_loss_pct: 100, loss_avoided_pct: -96}), prov("estimate", "lab-b", {before_loss_pct: 4, after_loss_pct: 100, loss_avoided_pct: -96})]});
 assert(noRTT.textContent.indexOf("Latency is not compared because a path gave no reply.") >= 0, "no reply is not latency avoided: " + noRTT.textContent);
+assert(withClass(noRTT, "tile-v").map(function (n) { return n.textContent; }).indexOf("not compared") >= 0, "latency tile agrees with the lead: " + noRTT.textContent);
 
 // ---- a provider that is down now ----
 var downRows = [tot("estimate", gain), prov("estimate", "lab-a", gain), prov("estimate", "lab-b", gain)];
@@ -153,8 +154,10 @@ assert(context.valueDownText({}) === "", "no banner without a down provider");
 
 // ---- estimated cost, as the summary reports it ----
 var saved = render({rows: [tot("estimate", gain)]}, {savings: {est_savings_accrued: 12.5, est_savings_rate: 30}});
-assert(saved.textContent.indexOf("Estimated cost: savings of 12.5 accrued in this range, and 30 per month") >= 0 && saved.textContent.indexOf("not billing") >= 0, "savings: " + saved.textContent);
-assert(render({rows: [tot("estimate", gain)]}, {savings: {est_savings_accrued: -4, est_savings_rate: 0}}).textContent.indexOf("extra spend of 4 accrued") >= 0, "negative savings is extra spend");
+assert(saved.textContent.indexOf("Estimated cost: savings of 12.5 in this range if the recommendations were followed, and 30 per month") >= 0 && saved.textContent.indexOf("accrued") < 0 && saved.textContent.indexOf("not billing") >= 0, "savings: " + saved.textContent);
+assert(render({rows: [tot("estimate", gain)]}, {savings: {est_savings_accrued: -4, est_savings_rate: 0}}).textContent.indexOf("extra spend of 4 in this range") >= 0, "negative savings is extra spend");
+var acc = render({rows: [tot("announced", gain)]}, {savings: {est_savings_accrued: 12.5, est_savings_rate: 30}});
+assert(acc.textContent.indexOf("Estimated cost: savings of 12.5 accrued in this range, and 30 per month") >= 0, "announced savings accrue: " + acc.textContent);
 assert(render({rows: [tot("estimate", gain)]}, {savings: {est_savings_accrued: 0, est_savings_rate: 0}}).textContent.indexOf("Estimated cost") < 0, "no savings figure, no cost line");
 
 // ---- nothing in the range ----
