@@ -1,0 +1,9 @@
+# Chaos soak link flap (#585): transit-b's probe source fails, so the
+# provider is excluded (fail closed) and its improvement is withdrawn.
+# transit-a is unchanged from prefer-b.yaml.
+sent: 4
+paths:
+  - provider: transit-a
+    rtt_ms: 80
+  - provider: transit-b
+    source_down: true

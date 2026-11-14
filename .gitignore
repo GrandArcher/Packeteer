@@ -4,5 +4,8 @@
 realtable-result.json
 *.mrt
 *bview*
+# Chaos soak report (lab/e2e-chaos.sh)
+/chaos-out/
+
 # Browser driver dependencies of lab/e2e-firstrun.sh (#587)
 /lab/e2e-gui/node_modules/
