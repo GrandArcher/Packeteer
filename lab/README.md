@@ -212,7 +212,7 @@ Surfaces are the files in `lab/failure-matrix/`. A new surface adds its file, wh
 
 ## Chaos soak (#585)
 
-`lab/e2e-chaos.sh [PROFILE]` runs `lab/chaos` on the HA lab: it flaps the active instance's session, fails transit-b's probe source, and stops the active instance with SIGTERM and SIGKILL until the profile's window is over, checking the safety invariants on the edge on every sample, and writes `chaos-result.json` and `chaos-summary.md`. The `chaos` CI job runs `lab/chaos/short.yaml`. Profiles, invariants, and the report: [lab/chaos/README.md](chaos/README.md).
+`lab/e2e-chaos.sh [PROFILE]` runs `lab/chaos` on the HA lab: it flaps the active instance's session, fails transit-b's probe source, and stops the active instance with SIGTERM and SIGKILL until the profile's window is over, checking the safety invariants on the edge on every sample, and writes `chaos-result.json` and `chaos-summary.md`. The `chaos` CI job runs `lab/chaos/short.yaml`; `.github/workflows/chaos.yml` runs the 5h `hosted.yaml` weekly (Thursday) and uploads the report artifact, and `CHAOS_DURATION` sets a multi-day window on a self-hosted runner or lab host (#589). Profiles, invariants, and the report: [lab/chaos/README.md](chaos/README.md).
 
 ## Running demo
 

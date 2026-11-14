@@ -151,6 +151,11 @@ func (r *runner) cycle(ctx context.Context, end time.Time) error {
 				return fmt.Errorf("%s on %s: %w", kind, act.ID, err)
 			}
 		}
+		if left := end.Sub(r.clk.Now()); left > 0 && r.prof.PassPause > 0 {
+			if err := r.stay(ctx, min(r.prof.PassPause, left), "pause between passes", func(Sample) bool { return true }); err != nil {
+				return fmt.Errorf("pause after pass %d: %w", pass+1, err)
+			}
+		}
 	}
 }
 

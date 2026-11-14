@@ -228,3 +228,30 @@ func TestLoadProfile(t *testing.T) {
 		}
 	}
 }
+
+func TestHostedProfile(t *testing.T) {
+	p, err := loadProfile("hosted.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Name != "hosted" || p.Duration != 5*time.Hour || p.PassPause != 30*time.Minute || !p.InjectLab || !slices.Equal(p.Faults, faultKinds) {
+		t.Fatalf("%+v", p)
+	}
+	f := filepath.Join(t.TempDir(), "p.yaml")
+	if err := os.WriteFile(f, []byte("name: x\nduration: 1m\npass_pause: -1m\nconfigs: [a]\nfaults: [sigkill]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadProfile(f); err == nil || !strings.Contains(err.Error(), "pass_pause") {
+		t.Errorf("negative pass_pause: %v", err)
+	}
+}
+
+func TestWithDuration(t *testing.T) {
+	p := Profile{Name: "x", Duration: time.Hour}
+	if got := withDuration(p, 72*time.Hour).Duration; got != 72*time.Hour {
+		t.Errorf("override: %v", got)
+	}
+	if got := withDuration(p, 0).Duration; got != time.Hour {
+		t.Errorf("zero keeps the profile's window: %v", got)
+	}
+}
