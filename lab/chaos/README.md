@@ -62,7 +62,7 @@ CHAOS_DURATION=72h CHAOS_OUT=/var/lib/chaos/run1 bash lab/e2e-chaos.sh lab/chaos
 gh workflow run chaos.yml -f profile=hosted -f duration=72h -f runner=chaos-lab
 ```
 
-Set `timeout-minutes` in the workflow above the window for the Actions form (it is 345 for the hosted run). Run it under `tmux` or a service on a lab host, because the script runs in the foreground; Ctrl-C stops the harness, which writes the report of what ran as a failed run (the interrupt is an error), and the script tears the lab down.
+The workflow times out after 345 minutes on `ubuntu-latest` and after 3 days on any other `runner`; edit `timeout-minutes` for a longer window. Run it under `tmux` or a service on a lab host, because the script runs in the foreground; Ctrl-C stops the harness, which writes the report of what ran as a failed run (the interrupt is an error), and the script tears the lab down.
 
 - Disk: the compose file rotates every container's log at 5 files of 20 MB, so the lab keeps at most about 100 MB per container whatever the length. The report grows with events only: a repeated violation is one entry with a `count`, and each fault adds one entry, about 190 a day at one pass every 30 minutes. Keep a few GB free for Docker's image and volume layers.
 - Where the report is written: `$CHAOS_OUT` (default `chaos-out` in the checkout), written once at the end. A run that is killed before the end writes none, and the Actions artifact comes from the same directory; a lab host reads the files there.

@@ -237,10 +237,6 @@ func TestHostedProfile(t *testing.T) {
 	if p.Name != "hosted" || p.Duration != 5*time.Hour || p.PassPause != 30*time.Minute || !p.InjectLab || !slices.Equal(p.Faults, faultKinds) {
 		t.Fatalf("%+v", p)
 	}
-	// The hosted job allows 6h in all and the workflow times out at 345m.
-	if p.Duration > 5*time.Hour+30*time.Minute {
-		t.Errorf("window %v leaves no room for the build under the 6h hosted limit", p.Duration)
-	}
 	if _, err := loadProfile("short.yaml"); err != nil {
 		t.Fatal(err)
 	}

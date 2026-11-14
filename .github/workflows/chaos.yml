@@ -29,7 +29,9 @@ permissions:
 jobs:
   chaos:
     runs-on: ${{ inputs.runner || 'ubuntu-latest' }}
-    timeout-minutes: 345
+    # 345 keeps the hosted run inside GitHub's 6h kill so the upload step
+    # still runs; another runner label gets 3 days (raise it for longer).
+    timeout-minutes: ${{ (inputs.runner && inputs.runner != 'ubuntu-latest') && 4320 || 345 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7

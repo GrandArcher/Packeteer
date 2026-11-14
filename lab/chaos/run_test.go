@@ -167,8 +167,8 @@ func TestStandbyAnnouncingAfterSessionFlapFails(t *testing.T) {
 	}
 }
 
-// A hosted-length run repeats the fault list, never starts a pass sooner
-// than pass_pause after the last one ended, and keeps the flap
+// A hosted-length run repeats the fault list, runs no pause past the
+// window, and keeps the flap
 // quarantine of the configs out of play: a link flap is two changes of
 // the prefix and the default is 6 an hour.
 func TestHostedProfileSpacesPasses(t *testing.T) {
