@@ -1,0 +1,19 @@
+# Short chaos profile (#585): one pass of every fault against the HA lab,
+# a few minutes. lab/e2e-chaos.sh runs it in CI. The window is shorter
+# than one pass, so the first pass is the whole run: a second pass of link
+# flaps could reach the default flap_quarantine (6 changes an hour) of the
+# configs under test.
+name: short
+duration: 1m
+# lab/packeteer-ha-*.yaml announce 198.51.100.0/24 (mode inject, that
+# documentation prefix as the allowlist). The shipped example is checked
+# to stay observe.
+inject_lab: true
+configs:
+  - lab/packeteer-ha-a.yaml
+  - lab/packeteer-ha-b.yaml
+faults:
+  - session-flap
+  - link-flap
+  - sigterm
+  - sigkill

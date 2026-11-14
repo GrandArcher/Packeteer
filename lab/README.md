@@ -210,6 +210,10 @@ Surfaces are the files in `lab/failure-matrix/`. A new surface adds its file, wh
 
 `lab/e2e-netbox.sh` is the NetBox inventory (#208, `lab/docker-compose-netbox.yml`): a NetBox container with PostgreSQL and Redis, seeded over its REST API with two tagged providers and one untagged. The script runs `packeteer config plan`, `diff`, and `apply -plan ID -git` against it, and checks that the plan names the tagged providers only, that the git commit holds the same changed lines as `diff`, that `packeteer -check` accepts the written file, and that a second plan is empty. Observe mode; nothing announces.
 
+## Chaos soak (#585)
+
+`lab/e2e-chaos.sh [PROFILE]` runs `lab/chaos` on the HA lab: it flaps the active instance's session, fails transit-b's probe source, and stops the active instance with SIGTERM and SIGKILL until the profile's window is over, checking the safety invariants on the edge on every sample, and writes `chaos-result.json` and `chaos-summary.md`. The `chaos` CI job runs `lab/chaos/short.yaml`. Profiles, invariants, and the report: [lab/chaos/README.md](chaos/README.md).
+
 ## Running demo
 
 The running demo is a separate checkout, not a compose file in this repo. It has two transit providers, one customer, and one IX peer. Telling those sessions apart (peer vs customer vs transit) and suggesting the role is still open (#103). A suggestion must not write itself into the running config.

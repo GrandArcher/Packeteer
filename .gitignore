@@ -4,3 +4,5 @@
 realtable-result.json
 *.mrt
 *bview*
+# Chaos soak report (lab/e2e-chaos.sh)
+/chaos-out/

@@ -3039,6 +3039,29 @@ jobs:
           PACKETEER_DOCS_CLEANUP: ./scripts/demo.sh stop
         run: bash lab/e2e-docs.sh docs/demo.md
 
+  chaos:
+    # Chaos soak (#585), short profile: one pass of a session flap, a
+    # transit-b probe-source failure, SIGTERM, and SIGKILL on the HA lab,
+    # with the safety invariants checked on the FRR edge on every sample.
+    # The report is the chaos-result artifact.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+      - name: chaos soak, short profile (no unlearned prefix, SIGTERM withdraws while the session is up, SIGKILL routes gone within the hold time, no graceful restart, never both HA instances, documentation numbers only)
+        env:
+          CHAOS_OUT: chaos-out
+        run: bash lab/e2e-chaos.sh lab/chaos/short.yaml
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: always()
+        with:
+          name: chaos-result
+          path: chaos-out/
+          if-no-files-found: ignore
+
   failure-matrix:
     # Failure-mode matrix (#234): each injection surface against SIGKILL,
     # BGP session loss, missing measurements, a source going away, a reload
