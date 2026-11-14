@@ -819,7 +819,7 @@ function renderSetup(o) {
   state.setAttribute("data-setup", o.setup_complete ? "complete" : "incomplete");
   if (o.setup_complete) {
     state.appendChild(el("strong", "", o.mode === "observe" ? "Setup complete, still observe." : "Setup complete."));
-    state.appendChild(document.createTextNode(" The router session is up, prefixes are learned, and each provider's probes leave through its next hop." +
+    state.appendChild(document.createTextNode(" The router session is up, prefixes are learned, every provider has answered, and no check reports a probe leaving the wrong way." +
       (o.mode === "observe" ? " Nothing is announced." : "")));
   } else {
     state.appendChild(document.createTextNode("Setup is not complete: it needs every router session established, a learned prefix, and a working probe source for each provider. "));
