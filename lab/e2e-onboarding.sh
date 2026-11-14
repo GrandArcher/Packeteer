@@ -65,8 +65,9 @@ jq -e '.results[] | select(.id == "bgp_session") | .status == "fail" and (.fix |
 jq -e '.results[] | select(.id == "import_filter") | .status == "unverified" and .confirmable == true and (.fix | test("rejects everything else"))' "$work/report.json"
 jq -e '.results[] | select(.id == "timers") | .status == "fail" and (.fix | test("Bring the BGP session up"))' "$work/report.json"
 jq -e '.results[] | select(.id == "withdrawal") | .status == "fail"' "$work/report.json"
-api "$base/metrics" | grep -qF 'packeteer_preflight_check{check="bgp_session",status="fail"} 1'
-api "$base/metrics" | grep -qF 'packeteer_preflight_ready 0'
+api "$base/metrics" >"$work/metrics.txt"
+grep -qF 'packeteer_preflight_check{check="bgp_session",status="fail"} 1' "$work/metrics.txt"
+grep -qF 'packeteer_preflight_ready 0' "$work/metrics.txt"
 # The wizard refuses to turn injection on, and says what holds it back. The
 # fresh config has no BGP neighbor, so the plan cannot build; the 412 from the
 # preflight gate needs a config that parses as inject (httpapi tests).
