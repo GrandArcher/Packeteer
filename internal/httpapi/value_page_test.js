@@ -74,7 +74,7 @@ var value = fs.readFileSync(path.join(web, "value.js"), "utf8");
 ["SVG_NS", "DAY_MS"].forEach(function (n) { vm.runInContext(varLine(charts, n), context); });
 ["VALUE_BASES", "VALUE_TITLES"].forEach(function (n) { vm.runInContext(varLine(value, n), context); });
 [[app, "el"], [app, "clear"], [charts, "svgEl"], [charts, "tsDay"], [charts, "tsLabel"], [charts, "tsTicks"], [charts, "tsChart"], [charts, "plural"],
-  [value, "valueRows"], [value, "valueNum"], [value, "valueChange"], [value, "valueBeforeAfter"], [value, "valueLead"], [value, "valueTile"],
+  [value, "valueRows"], [value, "valueNum"], [value, "valueChange"], [value, "valueLatency"], [value, "valueBeforeAfter"], [value, "valueLead"], [value, "valueTile"],
   [value, "valueTotals"], [value, "valueProviders"], [value, "valueDays"], [value, "valueSavings"], [value, "renderValue"],
   [value, "valueDownText"], [value, "valueDownMap"]
 ].forEach(function (p) { vm.runInContext(fn(p[0], p[1]), context); });
@@ -139,6 +139,7 @@ assert(worse.textContent.indexOf("loss 2 points higher and latency 10 ms higher"
 var noRTT = render({rows: [tot("estimate", {before_loss_pct: 4, after_loss_pct: 100, loss_avoided_pct: -96}), prov("estimate", "lab-b", {before_loss_pct: 4, after_loss_pct: 100, loss_avoided_pct: -96})]});
 assert(noRTT.textContent.indexOf("Latency is not compared because a path gave no reply.") >= 0, "no reply is not latency avoided: " + noRTT.textContent);
 assert(withClass(noRTT, "tile-v").map(function (n) { return n.textContent; }).indexOf("not compared") >= 0, "latency tile agrees with the lead: " + noRTT.textContent);
+assert(cells(providerRow(noRTT, "estimate", "lab-b"))[6] === "not compared", "latency cell agrees with the lead: " + cells(providerRow(noRTT, "estimate", "lab-b")));
 
 // ---- a provider that is down now ----
 var downRows = [tot("estimate", gain), prov("estimate", "lab-a", gain), prov("estimate", "lab-b", gain)];
@@ -158,6 +159,8 @@ assert(saved.textContent.indexOf("Estimated cost: savings of 12.5 in this range 
 assert(render({rows: [tot("estimate", gain)]}, {savings: {est_savings_accrued: -4, est_savings_rate: 0}}).textContent.indexOf("extra spend of 4 in this range") >= 0, "negative savings is extra spend");
 var acc = render({rows: [tot("announced", gain)]}, {savings: {est_savings_accrued: 12.5, est_savings_rate: 30}});
 assert(acc.textContent.indexOf("Estimated cost: savings of 12.5 accrued in this range, and 30 per month") >= 0, "announced savings accrue: " + acc.textContent);
+var mixed = render({rows: [tot("announced", gain), tot("estimate", gain)]}, {savings: {est_savings_accrued: 12.5, est_savings_rate: 30}});
+assert(mixed.textContent.indexOf("savings of 12.5 in this range from announced and recommended moves together") >= 0 && mixed.textContent.indexOf("accrued") < 0, "mixed range is not all accrued: " + mixed.textContent);
 assert(render({rows: [tot("estimate", gain)]}, {savings: {est_savings_accrued: 0, est_savings_rate: 0}}).textContent.indexOf("Estimated cost") < 0, "no savings figure, no cost line");
 
 // ---- nothing in the range ----

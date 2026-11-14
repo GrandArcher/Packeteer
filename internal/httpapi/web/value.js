@@ -26,6 +26,12 @@ function valueChange(v, unit) {
   return valueNum(Math.abs(v)) + " " + unit + (v > 0 ? " lower" : " higher");
 }
 
+// valueLatency is valueChange for latency: a measured row without a figure had
+// a path that gave no reply, which is not the same as no measurement.
+function valueLatency(r) {
+  return r.rtt_avoided_ms == null && r.measured ? "not compared" : valueChange(r.rtt_avoided_ms, "ms");
+}
+
 // valueBeforeAfter keeps the report's three decimals; fmtNum would round 0.75
 // to 0.8 and the page would no longer match the report.
 function valueBeforeAfter(before, after, unit) {
@@ -61,7 +67,7 @@ function valueTotals(basis, t) {
   var steered = basis === "announced" ? "Steered" : "Recommended for";
   wrap.appendChild(valueTile("Moves", String(t.improvements), t.measured + " with both paths measured"));
   wrap.appendChild(valueTile("Loss", t.measured ? valueChange(t.loss_avoided_pct, "points") : "not measured", valueBeforeAfter(t.before_loss_pct, t.after_loss_pct, "%")));
-  wrap.appendChild(valueTile("Latency", t.rtt_avoided_ms == null && t.measured ? "not compared" : valueChange(t.rtt_avoided_ms, "ms"), valueBeforeAfter(t.before_rtt_ms, t.after_rtt_ms, "ms")));
+  wrap.appendChild(valueTile("Latency", valueLatency(t), valueBeforeAfter(t.before_rtt_ms, t.after_rtt_ms, "ms")));
   wrap.appendChild(valueTile(steered, valueNum(t.steered_hours) + " h", basis === "announced" ? "routes on the wire" : "advice only"));
   return wrap;
 }
@@ -88,7 +94,7 @@ function valueProviders(basis, rows, down) {
     var later = isDown ? " (earlier moves)" : "";
     [String(r.improvements), String(r.measured), valueBeforeAfter(r.before_loss_pct, r.after_loss_pct, "%"),
       valueChange(r.loss_avoided_pct, "points") + (r.measured ? later : ""), valueBeforeAfter(r.before_rtt_ms, r.after_rtt_ms, "ms"),
-      valueChange(r.rtt_avoided_ms, "ms") + (r.rtt_avoided_ms == null ? "" : later), valueNum(r.steered_hours)].forEach(function (v) {
+      valueLatency(r) + (r.rtt_avoided_ms == null ? "" : later), valueNum(r.steered_hours)].forEach(function (v) {
       tr.appendChild(el("td", "", v));
     });
     tb.appendChild(tr);
@@ -126,15 +132,15 @@ function valueDays(basis, rows, data) {
 }
 
 // valueSavings words the summary report's estimated savings. Shown only when
-// there is a figure; it adds no arithmetic of its own. Nothing accrues unless
-// a route was announced, so without announced moves the figure is what the
-// recommendations would have saved.
-function valueSavings(s, announced) {
+// there is a figure; it adds no arithmetic of its own. The report sums every
+// move whatever its mode, so "accrued" is claimed only when every move in the
+// range was announced.
+function valueSavings(s, bases) {
   if (!s || (!s.est_savings_accrued && !s.est_savings_rate)) return null;
   var p = el("p", "tag value-savings");
   var accrued = s.est_savings_accrued;
   p.textContent = "Estimated cost: " + (accrued < 0 ? "extra spend of " + valueNum(-accrued) : "savings of " + valueNum(accrued)) +
-    (announced ? " accrued in this range" : " in this range if the recommendations were followed") + ", and " + valueNum(s.est_savings_rate) + " per month from the improvements active now. " +
+    (bases.announced && !bases.estimate ? " accrued in this range" : bases.announced ? " in this range from announced and recommended moves together" : " in this range if the recommendations were followed") + ", and " + valueNum(s.est_savings_rate) + " per month from the improvements active now. " +
     "These are estimates from your provider prices and prefix volumes, not billing. The Savings report has the detail.";
   return p;
 }
@@ -162,7 +168,7 @@ function renderValue(root, data, ctx) {
     sec.appendChild(valueDays(basis, valueRows(rows, "day", basis), data));
     root.appendChild(sec);
   });
-  var cost = valueSavings(ctx && ctx.savings, valueRows(rows, "total", "announced").length > 0);
+  var cost = valueSavings(ctx && ctx.savings, {announced: valueRows(rows, "total", "announced").length > 0, estimate: valueRows(rows, "total", "estimate").length > 0});
   if (cost) root.appendChild(cost);
 }
 
