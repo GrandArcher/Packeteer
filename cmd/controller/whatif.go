@@ -26,13 +26,14 @@ const whatIfTimeout = 2 * time.Minute
 // diff. It reads the store and nothing else.
 func replayConfigs(ctx context.Context, store plugin.RoundStore, running, next *config.Config, from, to time.Time, log *slog.Logger, getenv func(string) string) (replay.Result, error) {
 	sides := make([]replay.Side, 0, 2)
-	base, err := replay.NewSide("running config", running, pluginhost.Options{Logger: log, Getenv: getenv})
+	opts := pluginhost.Options{Logger: log, Getenv: getenv}
+	base, err := replay.NewSide("running config", running, opts)
 	if err != nil {
 		return replay.Result{}, fmt.Errorf("running config: %w", err)
 	}
 	sides = append(sides, base)
 	if next != nil {
-		cand, err := replay.NewSide("candidate config", next, pluginhost.Options{Logger: log, Getenv: getenv})
+		cand, err := replay.NewSide("candidate config", next, opts)
 		if err != nil {
 			return replay.Result{}, fmt.Errorf("candidate config: %w", err)
 		}

@@ -72,12 +72,7 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		fmt.Fprintf(stderr, "evolve: %v\n", err)
 		return 1
 	}
-	watched := []string{controllerConfigPath, *base}
-	if p := getenv(controllerConfigEnv); p != "" {
-		watched = append(watched, p)
-	}
-	watched = append(watched, variants...)
-	before, err := takeSnapshot(watched)
+	before, err := takeSnapshot(watchedConfigs(*base, variants, getenv))
 	if err != nil {
 		return fail(err)
 	}
@@ -133,6 +128,16 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 	}
 	rep.format(stdout)
 	return 0
+}
+
+// watchedConfigs is every config file a run must leave as it found it:
+// the controller's, the base, and the variants.
+func watchedConfigs(base string, variants []string, getenv func(string) string) []string {
+	out := []string{controllerConfigPath, base}
+	if p := getenv(controllerConfigEnv); p != "" {
+		out = append(out, p)
+	}
+	return append(out, variants...)
 }
 
 // sameMode refuses a variant whose mode differs from the base's. Mode is

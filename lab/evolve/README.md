@@ -7,7 +7,7 @@ Experimental and lab only: this harness never changes Packeteer's shipped defaul
 ## The contract
 
 - Shipped defaults (`config.example.yaml`, the image, the thresholds and weights in code) change only when a human opens a normal pull request with the score report attached. A winning variant is evidence for that pull request, nothing more.
-- Nothing is auto-merged or auto-applied. The harness writes no config, never writes `/etc/packeteer/config.yaml`, signals no process, and builds no announcer: it links the scorers and the history store only, which `TestNoAnnouncerIsLinked` checks.
+- Nothing is auto-merged or auto-applied. The harness writes no config, never writes `/etc/packeteer/config.yaml`, signals no process, and builds no announcer: it links no announcer or steerer package (`internal/announce`, `internal/plugins/announcer/*`, `internal/plugins/steerer/*`, `internal/plugins/all`), which `TestNoAnnouncerIsLinked` checks.
 - It exits 1 when a variant's `mode` differs from the base's (so a variant can never turn inject on), and when the base, a variant, `/etc/packeteer/config.yaml`, or the file `PACKETEER_CONFIG` names changed during the run. It exits 2 on bad usage.
 - Lab history only. No production or operator-supplied RIB or prefix goes in this directory. The checked-in fixture uses documentation prefixes only: 192.0.2.0/24, 198.51.100.0/24, and 203.0.113.0/24 (2001:db8::/32 is the IPv6 range to use), with providers `lab-a` and `lab-b` and private ASN 64512.
 

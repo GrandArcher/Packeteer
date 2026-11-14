@@ -141,6 +141,17 @@ func TestTextReportListsEverySide(t *testing.T) {
 	}
 }
 
+func setMode(t *testing.T, path, mode string) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, bytes.Replace(data, []byte("mode: observe"), []byte("mode: "+mode), 1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func writeConfig(t *testing.T, dir, name, extra string) string {
 	t.Helper()
 	data, err := os.ReadFile(baseline)
@@ -164,15 +175,9 @@ allowlist: {prefixes: [198.51.100.0/24]}
 bgp: {neighbors: [{address: 192.0.2.254}]}
 announcer: {type: gobgp}
 `)
-	data, _ := os.ReadFile(inject)
-	if err := os.WriteFile(inject, bytes.Replace(data, []byte("mode: observe"), []byte("mode: inject"), 1), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	suggest := filepath.Join(dir, "suggest.yaml")
-	data, _ = os.ReadFile(baseline)
-	if err := os.WriteFile(suggest, bytes.Replace(data, []byte("mode: observe"), []byte("mode: suggest"), 1), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	setMode(t, inject, "inject")
+	suggest := writeConfig(t, dir, "suggest.yaml", "")
+	setMode(t, suggest, "suggest")
 	for v, want := range map[string]string{inject: "a variant may not enable inject", suggest: "a variant may not change the mode"} {
 		var out, errb bytes.Buffer
 		rc := run(context.Background(), []string{"-history", fixture, "-base", baseline, "-variant", better, "-variant", v}, noEnv, &out, &errb)
@@ -225,23 +230,20 @@ func TestSnapshotReportsWrittenCreatedAndRemovedConfigs(t *testing.T) {
 	}
 }
 
-// The run watches the controller's config path from the environment, and
-// a clean run leaves it as it was.
-func TestRunLeavesTheControllerConfigAlone(t *testing.T) {
-	ctrl := writeConfig(t, t.TempDir(), "config.yaml", "")
-	before, _ := os.ReadFile(ctrl)
+func TestWatchedConfigsCoverTheControllerBaseAndVariants(t *testing.T) {
 	getenv := func(k string) string {
 		if k == controllerConfigEnv {
-			return ctrl
+			return "/run/packeteer/config.yaml"
 		}
 		return ""
 	}
-	var out, errb bytes.Buffer
-	if rc := run(context.Background(), []string{"-history", fixture, "-base", ctrl, "-variant", better}, getenv, &out, &errb); rc != 0 {
-		t.Fatalf("exit %d: %s", rc, errb.String())
+	got := watchedConfigs("base.yaml", []string{"a.yaml", "b.yaml"}, getenv)
+	want := []string{controllerConfigPath, "base.yaml", "/run/packeteer/config.yaml", "a.yaml", "b.yaml"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("watched %v, want %v", got, want)
 	}
-	if after, _ := os.ReadFile(ctrl); !bytes.Equal(before, after) {
-		t.Fatal("controller config changed")
+	if got := watchedConfigs("base.yaml", nil, noEnv); !reflect.DeepEqual(got, []string{controllerConfigPath, "base.yaml"}) {
+		t.Fatalf("without the env: %v", got)
 	}
 }
 
