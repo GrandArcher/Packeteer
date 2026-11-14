@@ -314,3 +314,20 @@ func TestNoAnnouncerIsLinked(t *testing.T) {
 		t.Fatalf("the weighted scorer is not linked:\n%s", out)
 	}
 }
+
+func TestVerdictWeighsNoMetricAgainstAnother(t *testing.T) {
+	base := Score{LossPct: 1, RTTMs: 50, Flaps: 2}
+	for _, c := range []struct {
+		v    Score
+		want string
+	}{
+		{Score{LossPct: 1, RTTMs: 50, Flaps: 2}, verdictSame},
+		{Score{LossPct: 0.5, RTTMs: 50, Flaps: 2}, verdictBetter},
+		{Score{LossPct: 1, RTTMs: 50, Flaps: 3}, verdictWorse},
+		{Score{LossPct: 0, RTTMs: 70, Flaps: 0}, verdictMixed},
+	} {
+		if got := verdict(base, c.v); got != c.want {
+			t.Fatalf("%+v: %s, want %s", c.v, got, c.want)
+		}
+	}
+}
