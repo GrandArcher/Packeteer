@@ -30,6 +30,10 @@ if [ -z "${PACKETEER_DEMO_PASSWORD:-}" ]; then
 	PACKETEER_DEMO_PASSWORD=$(head -c 18 /dev/urandom | od -An -tx1 | tr -d ' \n')
 	generated=yes
 fi
+if [ "${#PACKETEER_DEMO_PASSWORD}" -lt 12 ] || [ "${#PACKETEER_DEMO_PASSWORD}" -gt 256 ]; then
+	echo "PACKETEER_DEMO_PASSWORD must be 12 to 256 characters" >&2
+	exit 2
+fi
 export PACKETEER_DEMO_PASSWORD
 
 "${compose[@]}" up -d --build

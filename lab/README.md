@@ -117,7 +117,7 @@ The `e2e` job runs [docs/walkthrough.md](../docs/walkthrough.md) on its own topo
 
 (3) Suggest: the same recommendation, logged with `mode=suggest`, still nothing on the edge. (4) Inject: `-check` of the edited file, then the edge's best path is Packeteer's with next hop `192.0.2.22`, local-pref 250, `64512:666`, and `no-export`, and neither transit is sent the prefix. (5) SIGTERM (`docker stop -t 30`) withdraws it and the edge is back on transit-a. (6) Back to observe, nothing returns.
 
-GitHub Actions runs all twelve scripts, the walkthrough, and the demo as the `e2e` job. Docker and Go are required (the scripts build `lab/checkroute`, `lab/checkpath`, `lab/checkms`, `lab/checkpop`, `lab/checklease`, and `lab/mkcerts`); they do not run in the unit-test job. `go test ./lab/checkroute ./lab/checkpath ./lab/checkms ./lab/checkpop ./lab/checklease ./lab/doccmds` covers the checks themselves.
+GitHub Actions runs the scripts above, the walkthrough, and the demo as the `e2e` job. Docker and Go are required (the scripts build `lab/checkroute`, `lab/checkpath`, `lab/checkms`, `lab/checkpop`, `lab/checklease`, and `lab/mkcerts`); they do not run in the unit-test job. `go test ./lab/checkroute ./lab/checkpath ./lab/checkms ./lab/checkpop ./lab/checklease ./lab/doccmds` covers the checks themselves.
 
 ```sh
 bash lab/e2e.sh

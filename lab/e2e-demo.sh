@@ -19,7 +19,6 @@ compose=(docker compose -f lab/docker-compose-demo.yml)
 base=http://127.0.0.1:18080
 prefix=198.51.100.0/24
 
-out=""
 trap 'rc=$?; if [ "$rc" -ne 0 ]; then echo "---- lab logs ----"; "${compose[@]}" logs --no-color || true; docker exec pkd-edge vtysh -c "show bgp summary" -c "show bgp ipv4 unicast" || true; fi; ./scripts/demo.sh stop >/dev/null 2>&1 || true; exit "$rc"' EXIT
 
 # The demo prints the generated password; keep it out of the CI log.
@@ -68,16 +67,23 @@ recommended() {
 retry 30 recommended
 api /api/overview | jq -e '.mode == "observe"' >/dev/null
 
-# Observe announces nothing: the edge has no route from Packeteer.
-if docker exec pkd-edge vtysh -c 'show bgp ipv4 unicast neighbors 192.0.2.10 routes' | grep -qF "$prefix"; then
+# Observe announces nothing: the edge has no route from Packeteer. The
+# output is captured first so a failed vtysh fails the script instead of
+# passing the absence check.
+routes=$(docker exec pkd-edge vtysh -c 'show bgp ipv4 unicast neighbors 192.0.2.10 routes')
+if grep -qF "$prefix" <<<"$routes"; then
 	echo "the edge holds a route from Packeteer in observe" >&2
 	exit 1
 fi
-if docker exec pkd-edge vtysh -c "show bgp ipv4 unicast $prefix" | grep -qF 64512:666; then
+path=$(docker exec pkd-edge vtysh -c "show bgp ipv4 unicast $prefix")
+if grep -qF 64512:666 <<<"$path"; then
 	echo "the prefix carries the Packeteer community in observe" >&2
 	exit 1
 fi
-docker exec pkd-edge vtysh -c "show bgp ipv4 unicast $prefix" | grep -qF '192.0.2.21 from 192.0.2.21'
+grep -qF '192.0.2.21 from 192.0.2.21' <<<"$path"
+
+# The dashboard is published on loopback only.
+[ "$(docker port pkd-packeteer 8080/tcp | head -n1)" = "127.0.0.1:18080" ]
 
 code=$(curl -sS -o /dev/null -w '%{http_code}' "$base/api/prefixes")
 if [ "$code" != 401 ]; then
