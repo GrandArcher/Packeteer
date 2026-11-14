@@ -26,6 +26,8 @@ function valueChange(v, unit, word) {
   return valueNum(Math.abs(v)) + " " + unit + (v > 0 ? " lower" : " higher") + (word ? " " + word : "");
 }
 
+// valueBeforeAfter keeps the report's three decimals; fmtNum would round 0.75
+// to 0.8 and the page would no longer match the report.
 function valueBeforeAfter(before, after, unit) {
   if (before == null || after == null) return "\u2014";
   return valueNum(before) + " \u2192 " + valueNum(after) + " " + unit;
