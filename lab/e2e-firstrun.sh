@@ -155,10 +155,13 @@ for p in "192.0.2.11 192.0.2.21" "192.0.2.12 192.0.2.22"; do
 done
 docker exec pkfr-netns ip rule show | grep -c 'lookup 100[12]' | grep -qx 2 || fail "expected the two Packeteer rules"
 api "$base/api/preflight" | jq -e '.report.results[] | select(.id == "probe_egress") | .status == "pass"' >/dev/null || fail "preflight probe_egress is not passing"
-if docker logs "$pk" 2>&1 | grep -q 'mode=inject'; then fail "Packeteer logged mode=inject"; fi
-docker logs "$pk" 2>&1 | grep -q 'announce=disabled' || fail "Packeteer does not say announce=disabled"
+# Read the log once: grep -q on a pipe can end it early under pipefail.
+docker logs "$pk" >"$work/pk.log" 2>&1
+if grep -q 'mode=inject' "$work/pk.log"; then fail "Packeteer logged mode=inject"; fi
+grep -q 'announce=disabled' "$work/pk.log" || fail "Packeteer does not say announce=disabled"
 # Nothing came back from Packeteer: no route carries its community, and the
 # edge received no prefix over the session.
-if [ -n "$(vty -c 'show bgp ipv4 unicast community 64512:666 json' | jq -r '.routes // {} | keys[]')" ]; then fail "a route with the Packeteer community is on the edge"; fi
+tagged=$(vty -c 'show bgp ipv4 unicast community 64512:666') || fail "cannot read the edge's routes by community"
+if grep -Eq '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+' <<<"$tagged"; then echo "$tagged" >&2; fail "a route with the Packeteer community is on the edge"; fi
 vty -c 'show bgp ipv4 unicast summary json' | jq -e '(.ipv4Unicast.peers // .peers)["192.0.2.10"].pfxRcd == 0' >/dev/null || fail "the edge received a prefix from Packeteer"
 echo "first-run lab: ok (${elapsed}s)"

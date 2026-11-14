@@ -8,14 +8,14 @@
 //                               checklist incomplete, apply host policy routing
 //                               from Settings, wait for "Setup complete"
 //
-// It only clicks and types in the pages. It never touches the YAML editor:
-// every selector goes through put(), which refuses #ed-yaml, so a step that
-// needs a YAML edit fails the walk instead of passing it.
+// It only clicks and types in the pages. It never types into the YAML editor:
+// put() wraps every field it fills and refuses #ed-yaml, so a step that needs
+// a YAML edit fails the walk. It reads the generated YAML once, to check it.
 //
 // Environment: PK_URL, PK_USER, PK_FIRST_PASSWORD (setup), PK_NEW_PASSWORD,
 // PK_OUT (directory for the results and failure screenshots), CHROME (browser
-// binary, default google-chrome), PK_STORAGE_PATH, PK_COMPLETE_MS (how long finish waits for
-// "Setup complete", default 600000). Passwords are never printed.
+// binary, default /usr/bin/google-chrome), PK_COMPLETE_MS (how long finish
+// waits for "Setup complete", default 600000). Passwords are never printed.
 import { chromium } from "playwright-core";
 import fs from "node:fs";
 import path from "node:path";
@@ -24,9 +24,7 @@ const phase = process.argv[2];
 const url = process.env.PK_URL || "http://127.0.0.1:18587";
 const user = process.env.PK_USER || "admin";
 const out = process.env.PK_OUT || ".";
-// The stock image keeps its history under /var/lib/packeteer; a run outside a
-// container may point the check at its own directory.
-const storagePath = process.env.PK_STORAGE_PATH || "/var/lib/packeteer/packeteer.db";
+const storagePath = "/var/lib/packeteer/packeteer.db";
 const completeMs = Number(process.env.PK_COMPLETE_MS || 600000);
 
 function need(name) {
@@ -217,11 +215,19 @@ async function policyRouting(page) {
   log("policy routing plan shown, nothing applied");
 
   await page.check("#pbr-confirm");
+  // The page runs the preflight checks after the apply. Wait for that run to
+  // finish: leaving the page cancels it, and a cut-short run is what the
+  // Overview would then read as the last result.
+  const preflight = page.waitForResponse((r) => r.url().endsWith("/api/preflight/run") && r.request().method() === "POST", { timeout: 120000 });
+  preflight.catch(() => {});
   await page.click("#pbr-apply");
   await page.waitForFunction(() => !/^(Nothing was changed|Applying)/.test(document.getElementById("pbr-status").textContent), null, { timeout: 60000 });
   const status = await page.textContent("#pbr-status");
   if (!/Every provider's probes leave through its next hop/.test(status)) throw new Error("walk: policy routing did not verify: " + status);
   if ((await page.locator("#pbr-paths li.pf-pass").count()) !== lab.providers.length) throw new Error("walk: not every provider passes after the apply");
+  const run = await preflight;
+  if (!run.ok()) throw new Error("walk: the preflight run after the apply answered " + run.status());
+  await run.finished();
   log("policy routing applied and verified: " + status);
 }
 
