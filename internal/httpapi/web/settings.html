@@ -103,7 +103,7 @@
       <div class="form">
         <label>Prefix <input id="wz-prefix" type="text" spellcheck="false"><span class="field-help">For example 198.51.100.0/24.</span></label>
         <label>Pinned host <input id="wz-host" type="text" spellcheck="false"><span class="field-help">For example 198.51.100.10.</span></label>
-        <label><input id="wz-storage" type="checkbox" checked> Report history (sqlite)</label>
+        <label><input id="wz-storage" type="checkbox" checked> Report history (sqlite in /var/lib/packeteer/packeteer.db)</label>
       </div>
       <div class="controls">
         <button type="button" id="wz-back-3">Back</button>
@@ -179,6 +179,22 @@
     </div>
     <ul id="pf-snippet-missing" class="errors" hidden></ul>
     <pre id="pf-snippet" class="mono" aria-label="Router config" hidden></pre>
+    </details>
+  </section>
+  <section>
+    <details id="pbr" class="fold">
+    <summary><h2>Host policy routing</h2></summary>
+    <p class="tag">Each provider is measured from its <code>source_ip</code>, so this host must send that source out through the provider's <code>next_hop</code>. Show plan lists the <code>ip rule</code> and <code>ip route</code> commands and how the kernel routes each source now. Apply runs only those commands after you confirm, then checks each source again. Only Packeteer's own rules (priority 2001 to 2999, tables 1001 to 1999) are touched. Needs <code>NET_ADMIN</code>.</p>
+    <div class="controls">
+      <button type="button" id="pbr-show">Show plan</button>
+      <span id="pbr-status" class="tag" role="status"></span>
+    </div>
+    <ul id="pbr-paths" class="pf-list"></ul>
+    <pre id="pbr-lines" class="mono" aria-label="Planned commands" hidden></pre>
+    <div id="pbr-confirm-row" hidden>
+      <label><input type="checkbox" id="pbr-confirm"> I reviewed these commands. Run them on this host.</label>
+      <div class="controls"><button type="button" id="pbr-apply" disabled>Apply and verify</button></div>
+    </div>
     </details>
   </section>
   <section>

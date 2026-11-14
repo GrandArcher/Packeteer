@@ -46,6 +46,8 @@ ip route get 203.0.113.1 from 198.51.100.11   # -> via 198.51.100.1 dev eth2
 
 `packeteer -pbr linux -apply` shows a diff against the host's rules and routes and changes nothing; add `-yes` to apply them, after which it checks that each source leaves through its `next_hop`. New rules are added before the old ones are removed. If a step fails, the steps already run are undone in reverse order, so the host is back as it was (a failed undo is reported); run the apply again after fixing the cause. Rules for a provider you removed are cleaned up on the next apply ([onboarding.md](onboarding.md#host-policy-routing)).
 
+The Settings page has the same plan, confirm, apply, and verify steps for an administrator (Host policy routing, [onboarding.md](onboarding.md#host-policy-routing)). Neither touches a rule outside priorities 2001 to 2999 pointing at tables 1001 to 1999.
+
 IPv6 works the same way with `ip -6 addr`, `ip -6 route ... table`, and `ip -6 rule add from <src>`.
 
 Make the setup persistent with your distribution's network configuration (netplan `routing-policy`, systemd-networkd `[RoutingPolicyRule]`, or NetworkManager `ipv4.routing-rules`).

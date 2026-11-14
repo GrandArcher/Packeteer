@@ -988,6 +988,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	if httpSrv != nil && cfg.IXP == nil {
 		httpSrv.SetPreflight(newPreflight(live, view, lw, plugins, pktLimiter, log))
 		httpSrv.SetBlast(preview)
+		httpSrv.SetPolicyRouting(&pbr.Manager{Run: hostIP, Entries: func() []pbr.Entry { return pbr.Entries(live.snapshot()) }})
 		pc := pinControl{store: pins, cfg: live.snapshot, log: log, poke: poke, save: steer.save}
 		if view != nil {
 			pc.learned = func(p netip.Prefix) bool { _, ok := view.Exact(p); return ok }
