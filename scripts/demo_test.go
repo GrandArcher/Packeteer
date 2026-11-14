@@ -157,9 +157,9 @@ func TestDemoPreflightPassesOnACleanHost(t *testing.T) {
 // A lab that is already up owns the port and the bridge; rerunning "up" is
 // a no-op for compose and must not be reported as a clash.
 func TestDemoPreflightAllowsARunningLab(t *testing.T) {
-	run, _ := demoEnv(t)
+	run, log := demoEnv(t)
 	out, err := run("FAKE_RUNNING=1", "FAKE_NETWORKS=lab_lab 192.0.2.0/24 ")
-	if err != nil {
-		t.Fatalf("demo.sh: %v\n%s", err, out)
+	if err != nil || !strings.Contains(log(), "up -d --build") {
+		t.Fatalf("demo.sh: %v\n%s\n%s", err, out, log())
 	}
 }
