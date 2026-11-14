@@ -3032,6 +3032,12 @@ jobs:
         run: bash lab/e2e-docs.sh docs/walkthrough.md
       - name: One-command demo lab (#586; scripts/demo.sh brings up the FRR edge, two transits, and Packeteer in observe with sign-in, learned prefix, recommendation, no Packeteer route on the edge, stop removes it)
         run: bash lab/e2e-demo.sh
+      - name: Demo script guide, every command (#590; docs/demo.md against scripts/demo.sh, observe)
+        env:
+          PACKETEER_DOCS_DIR: .
+          PACKETEER_DOCS_ON_FAIL: docker compose -f lab/docker-compose-demo.yml logs --no-color; docker exec pkd-edge vtysh -c 'show bgp summary' -c 'show bgp ipv4 unicast'
+          PACKETEER_DOCS_CLEANUP: ./scripts/demo.sh stop
+        run: bash lab/e2e-docs.sh docs/demo.md
 
   failure-matrix:
     # Failure-mode matrix (#234): each injection surface against SIGKILL,

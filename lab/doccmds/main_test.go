@@ -129,7 +129,7 @@ func repoFile(t *testing.T, rel string) string {
 }
 
 // guides are the pages CI runs, and where (workflow job) it runs them.
-var guides = []string{"docs/quickstart.md", "docs/walkthrough.md", "docs/troubleshooting.md"}
+var guides = []string{"docs/quickstart.md", "docs/walkthrough.md", "docs/troubleshooting.md", "docs/demo.md"}
 
 func TestGuidesParseAndRunInCI(t *testing.T) {
 	ci := repoFile(t, ".github/workflows/ci.yml")
@@ -259,7 +259,7 @@ func docASN(n uint64) bool {
 // and documentation or private ASNs only.
 func TestGuidesUseDocumentationNumbers(t *testing.T) {
 	files := []string{
-		"docs/quickstart.md", "docs/walkthrough.md", "docs/troubleshooting.md",
+		"docs/quickstart.md", "docs/walkthrough.md", "docs/troubleshooting.md", "docs/demo.md",
 		"docs/frr.md", "docs/junos.md", "docs/cisco.md", "docs/routers.md", "docs/mikrotik.md",
 		"lab/frr-walkthrough/frr.conf", "lab/packeteer-walkthrough.yaml", "lab/docker-compose-walkthrough.yml",
 		"lab/chr/edge.rsc", "lab/chr/packeteer.yaml", "lab/e2e-chr.sh",
