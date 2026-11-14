@@ -175,7 +175,7 @@ if (process.argv[2]) {
   });
   assert(seen === 3, "provider rows in the report: " + seen);
   var lab = cells(providerRow(page, "announced", "lab-b"));
-  assert(lab[3] === "4 → 0.75 %" && lab[4] === "3.25 points lower" && lab[5] === "72.5 → 52.5 ms" && lab[6] === "20 ms lower", "announced lab-b by hand: " + lab);
+  assert(lab[3] === "4 \u2192 0.75 %" && lab[4] === "3.25 points lower" && lab[5] === "72.5 \u2192 52.5 ms" && lab[6] === "20 ms lower", "announced lab-b by hand: " + lab);
   var est = cells(providerRow(page, "estimate", "lab-b"));
   assert(est[4] === "18 points lower" && est[6] === "30 ms lower", "estimate lab-b by hand: " + est);
   assert(headings(page).join("|") === "Announced|Recommended (estimate)", "report headings: " + headings(page));

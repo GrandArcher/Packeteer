@@ -194,16 +194,17 @@ function valueMessage(text) {
 function loadValue() {
   var days = document.getElementById("value-days").value || "7";
   document.getElementById("value-csv").setAttribute("href", valueURL("csv"));
-  var settle = function (p) { return p.then(function (v) { return v; }, function () { return null; }); };
-  Promise.all([getJSON(valueURL("")), settle(getJSON("/api/overview")), settle(getJSON("/api/reports/summary?days=" + encodeURIComponent(days)))]).then(function (res) {
-    var down = valueDownMap(res[1]);
+  Promise.allSettled([getJSON(valueURL("")), getJSON("/api/overview"), getJSON("/api/reports/summary?days=" + encodeURIComponent(days))]).then(function (res) {
+    if (res[0].status !== "fulfilled") {
+      valueMessage(res[0].reason.message);
+      return;
+    }
+    var down = valueDownMap(res[1].status === "fulfilled" ? res[1].value : null);
     var banner = document.getElementById("value-down");
     banner.textContent = valueDownText(down);
     banner.hidden = !banner.textContent;
-    var summary = res[2] && res[2].rows && res[2].rows[0];
-    renderValue(document.getElementById("value"), res[0], {down: down, savings: summary});
-  }, function (err) {
-    valueMessage(err.message);
+    var summary = res[2].status === "fulfilled" && res[2].value && res[2].value.rows && res[2].value.rows[0];
+    renderValue(document.getElementById("value"), res[0].value, {down: down, savings: summary});
   });
 }
 

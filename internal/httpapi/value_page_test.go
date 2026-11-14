@@ -67,14 +67,26 @@ func TestValuePage(t *testing.T) {
 	}
 	// The hand calculation the page test relies on: lab-b announced is
 	// weighted 100 and 300 Mbps, lab-b estimated is one move.
+	var announced, estimate int
 	for _, r := range got.Rows {
-		if r.Scope == history.ValueProvider && r.Provider == "lab-b" && r.Basis == history.BasisAnnounced &&
-			(*r.LossAvoided != 3.25 || *r.RTTAvoidedMs != 20 || *r.BeforeRTTMs != 72.5 || *r.AfterRTTMs != 52.5) {
-			t.Fatalf("announced lab-b = %+v", r)
+		if r.Scope != history.ValueProvider || r.Provider != "lab-b" {
+			continue
 		}
-		if r.Scope == history.ValueProvider && r.Provider == "lab-b" && r.Basis == history.BasisEstimate && (*r.LossAvoided != 18 || *r.RTTAvoidedMs != 30) {
-			t.Fatalf("estimate lab-b = %+v", r)
+		switch r.Basis {
+		case history.BasisAnnounced:
+			announced++
+			if *r.LossAvoided != 3.25 || *r.RTTAvoidedMs != 20 || *r.BeforeRTTMs != 72.5 || *r.AfterRTTMs != 52.5 {
+				t.Fatalf("announced lab-b = %+v", r)
+			}
+		case history.BasisEstimate:
+			estimate++
+			if *r.LossAvoided != 18 || *r.RTTAvoidedMs != 30 {
+				t.Fatalf("estimate lab-b = %+v", r)
+			}
 		}
+	}
+	if announced != 1 || estimate != 1 {
+		t.Fatalf("lab-b rows: %d announced, %d estimate in %+v", announced, estimate, got.Rows)
 	}
 	file := filepath.Join(t.TempDir(), "value.json")
 	if err := os.WriteFile(file, body, 0o600); err != nil {
