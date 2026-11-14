@@ -1,0 +1,85 @@
+# One-command demo lab (#586; scripts/demo.sh): the walkthrough's topology
+# (the FRR edge from docs/frr.md and the BMP lab's two transits) with
+# Packeteer in observe and sign-in on. Documentation addresses (RFC 5737)
+# and documentation/private ASNs only. It uses the same 192.0.2.0/24 bridge
+# as the walkthrough lab, so stop one before starting the other.
+#
+# Sign-in: PACKETEER_DEMO_PASSWORD becomes the admin password (scripts/demo.sh
+# generates one per run). Unset, Packeteer generates a first-run password
+# instead; read it with
+#   docker exec pkd-packeteer cat /var/lib/packeteer/first-run-admin-password
+name: packeteer-demo
+x-frr: &frr
+  image: quay.io/frrouting/frr:10.2.4
+  privileged: true
+  entrypoint: ["/bin/sh", "/lab/frr-start.sh"]
+services:
+  edge:
+    <<: *frr
+    container_name: pkd-edge
+    hostname: edge
+    environment:
+      FRR_EXPECT: "network 203.0.113.0/24;route-map packeteer-in in;route-map ebgp-out out;graceful-restart-disable"
+    volumes:
+      - ./frr-walkthrough:/etc/frr
+      - ./frr-start.sh:/lab/frr-start.sh:ro
+    networks:
+      lab:
+        ipv4_address: 192.0.2.254
+  # Both transits send 198.51.100.0/24, transit-b prepended, so the edge's
+  # native exit is transit-a while the fixed prober makes transit-b faster.
+  transit-a:
+    <<: *frr
+    container_name: pkd-transit-a
+    hostname: transit-a
+    environment:
+      FRR_EXPECT: "router bgp 64496;network 198.51.100.0/24"
+    volumes:
+      - ./frr-bmp-transit-a:/etc/frr
+      - ./frr-start.sh:/lab/frr-start.sh:ro
+    networks:
+      lab:
+        ipv4_address: 192.0.2.21
+  transit-b:
+    <<: *frr
+    container_name: pkd-transit-b
+    hostname: transit-b
+    environment:
+      FRR_EXPECT: "router bgp 64497;network 198.51.100.0/24;route-map to-edge out"
+    volumes:
+      - ./frr-bmp-transit-b:/etc/frr
+      - ./frr-start.sh:/lab/frr-start.sh:ro
+    networks:
+      lab:
+        ipv4_address: 192.0.2.22
+  packeteer:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      args:
+        VERSION: demo
+    image: packeteer:demo
+    container_name: pkd-packeteer
+    depends_on:
+      - edge
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
+    environment:
+      PACKETEER_CONFIG: /etc/packeteer/config.yaml
+      PACKETEER_ADMIN_PASSWORD: ${PACKETEER_DEMO_PASSWORD:-}
+    volumes:
+      - ./packeteer-demo.yaml:/etc/packeteer/config.yaml:ro
+    # The lab runs on a bridge, so the dashboard is published on loopback.
+    ports:
+      - "127.0.0.1:18080:8080"
+    networks:
+      lab:
+        ipv4_address: 192.0.2.10
+networks:
+  lab:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 192.0.2.0/24
+          gateway: 192.0.2.3

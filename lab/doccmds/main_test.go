@@ -265,6 +265,7 @@ func TestGuidesUseDocumentationNumbers(t *testing.T) {
 		"lab/chr/edge.rsc", "lab/chr/packeteer.yaml", "lab/e2e-chr.sh",
 		"docs/vrf.md", "lab/frr-vrf/frr.conf", "lab/frr-vrf-transit-a/frr.conf", "lab/frr-vrf-transit-b/frr.conf",
 		"lab/packeteer-vrf.yaml", "lab/docker-compose-vrf.yml", "lab/e2e-vrf.sh", "lab/frr-vrf-start.sh",
+		"lab/packeteer-demo.yaml", "lab/docker-compose-demo.yml", "lab/e2e-demo.sh", "scripts/demo.sh",
 	}
 	for _, f := range files {
 		sc := bufio.NewScanner(strings.NewReader(repoFile(t, f)))

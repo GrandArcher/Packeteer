@@ -1,0 +1,43 @@
+# Demo lab (scripts/demo.sh, lab/docker-compose-demo.yml, #586). The
+# walkthrough's observe config with sign-in left on: the first admin comes
+# from PACKETEER_ADMIN_PASSWORD or a generated first-run password file.
+# Documentation addresses (RFC 5737) and the private ASN 64512 only. Never
+# inject here: docs/walkthrough.md takes a copy through suggest and inject.
+mode: observe
+asn: 64512
+router_id: 192.0.2.10
+hold_time: 1m
+thresholds:
+  min_loss_delta_pct: 1
+  min_rtt_delta_ms: 15
+providers:
+  - name: transit-a
+    source_ip: 192.0.2.11
+    next_hop: 192.0.2.21
+  - name: transit-b
+    source_ip: 192.0.2.12
+    next_hop: 192.0.2.22
+bgp:
+  neighbors:
+    - address: 192.0.2.254
+      description: edge
+probe:
+  path_check: {enabled: false}
+  interval: 2s
+  timeout: 500ms
+  packets: 4
+sources:
+  - type: static
+    config:
+      targets:
+        - {prefix: 198.51.100.0/24, host: 198.51.100.1}
+# The lab has no real transits to measure. The fixed prober returns these
+# numbers and sends no packets; a real edge uses icmp and tcp.
+probers:
+  - type: fixed
+    config:
+      paths:
+        - {provider: transit-a, rtt_ms: 60}
+        - {provider: transit-b, rtt_ms: 20}
+http:
+  listen: "0.0.0.0:8080"
