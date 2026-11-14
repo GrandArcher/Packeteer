@@ -3278,6 +3278,36 @@ jobs:
             'Setup checklist' 'It announces nothing.' \
             --absent 'mode-inject' 'Cannot reach'
 
+  firstrun-gui:
+    # First-run GUI walk (#587). Lab only: documentation prefixes and ASNs,
+    # simulated FRR, the image built from this commit. Headless Chrome clicks
+    # a stock image from the first sign-in to "Setup complete, still observe"
+    # in under 15 minutes, with no YAML edit (lab/e2e-firstrun.sh).
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22
+      - name: build image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          context: .
+          load: true
+          tags: packeteer:ci
+          build-args: VERSION=ci-${{ github.sha }}
+      - name: first-run GUI walk (#587; sign-in, password change, wizard, router config on the FRR edge, host policy routing, setup complete, observe, no announcement, under 15 minutes)
+        run: FIRSTRUN_OUT="$RUNNER_TEMP/firstrun" bash lab/e2e-firstrun.sh packeteer:ci
+      - name: first-run walk screenshots
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: firstrun-walk
+          path: ${{ runner.temp }}/firstrun/fail-*
+          if-no-files-found: ignore
+
   snmp:
     # SNMP agent, traps, informs, and syslog output against net-snmp
     # (#212). Observe mode; nothing announces.
