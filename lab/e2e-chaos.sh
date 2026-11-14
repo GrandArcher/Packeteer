@@ -9,6 +9,8 @@
 # private ASN only.
 #
 #   lab/e2e-chaos.sh [PROFILE]     default lab/chaos/short.yaml
+#   CHAOS_DURATION=72h lab/e2e-chaos.sh lab/chaos/hosted.yaml
+#                                  soak window overriding the profile's
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -33,4 +35,4 @@ echo "building lab"
 "${compose[@]}" build
 "${compose[@]}" up -d edge packeteer-a packeteer-b
 
-"$chaos_bin" -profile "$profile" -lab-dir "$lab_dir" -out "$out"
+"$chaos_bin" -profile "$profile" -lab-dir "$lab_dir" -out "$out" -duration "${CHAOS_DURATION:-0}"

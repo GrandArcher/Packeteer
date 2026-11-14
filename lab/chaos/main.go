@@ -7,7 +7,7 @@
 // Packeteer's view. It writes chaos-result.json and chaos-summary.md to
 // -out and exits 1 when an invariant broke or the lab did not recover.
 //
-//	chaos -profile lab/chaos/short.yaml -lab-dir DIR -out chaos-out
+//	chaos -profile lab/chaos/short.yaml -lab-dir DIR -out chaos-out [-duration 72h]
 //
 // lab/e2e-chaos.sh brings the lab up and runs it from the repository
 // root; DIR is the probe directory the lab mounts.
@@ -39,6 +39,7 @@ func main() {
 	profile := flag.String("profile", "lab/chaos/short.yaml", "chaos profile")
 	labDir := flag.String("lab-dir", "", "probe directory the lab mounts (PACKETEER_LAB_DIR)")
 	out := flag.String("out", "chaos-out", "directory for chaos-result.json and chaos-summary.md")
+	duration := flag.Duration("duration", 0, "soak window; overrides the profile's duration when positive")
 	flag.Parse()
 	if *labDir == "" {
 		log.Fatal("-lab-dir is required")
@@ -47,6 +48,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	prof = withDuration(prof, *duration)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	log.Printf("profile %s: %v, faults %v", prof.Name, prof.Duration, prof.Faults)

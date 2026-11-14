@@ -1,0 +1,49 @@
+name: chaos
+
+# Weekly chaos soak (#589) on the HA lab: the hosted-length profile of
+# lab/chaos (#585), a session flap, a probe-source failure, SIGTERM, and
+# SIGKILL on a loop with the safety invariants checked on the FRR edge on
+# every sample. Lab only: documentation prefixes and ASNs. GitHub-hosted
+# jobs stop at 6 hours, so the scheduled window is 5h; a multi-day run
+# needs a self-hosted runner or a lab host, the duration input, and the
+# runner input (lab/chaos/README.md). A broken invariant fails the job; the
+# report is uploaded either way.
+on:
+  schedule:
+    - cron: "47 3 * * 4" # weekly, Thursday 03:47 UTC
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: Profile under lab/chaos (hosted for the weekly window, short for a few minutes)
+        default: hosted
+      duration:
+        description: Soak window (Go duration), overriding the profile. Empty keeps the profile's. Hosted runners allow about 5h.
+        default: ""
+      runner:
+        description: Runner label (self-hosted for a window past 5h)
+        default: ubuntu-latest
+
+permissions:
+  contents: read
+
+jobs:
+  chaos:
+    runs-on: ${{ inputs.runner || 'ubuntu-latest' }}
+    timeout-minutes: 345
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+      - name: chaos soak (invariants in lab/chaos/README.md; a broken one fails the job)
+        env:
+          CHAOS_OUT: chaos-out
+          CHAOS_PROFILE: ${{ inputs.profile || 'hosted' }}
+          CHAOS_DURATION: ${{ inputs.duration }}
+        run: bash lab/e2e-chaos.sh "lab/chaos/${CHAOS_PROFILE}.yaml"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: always()
+        with:
+          name: chaos-result
+          path: chaos-out/
+          if-no-files-found: ignore

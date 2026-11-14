@@ -1,0 +1,20 @@
+# Hosted-length chaos profile (#589): the weekly job in
+# .github/workflows/chaos.yml. The window leaves room under the 6h limit of
+# a GitHub-hosted job for the image build and lab start. A multi-day run
+# reuses this file with CHAOS_DURATION (lab/chaos/README.md).
+#
+# pass_pause: a link flap is two changes of the prefix, and the configs'
+# default flap_quarantine parks it after 6 changes in 1h. One pass every
+# 30m makes at most 4 changes an hour.
+name: hosted
+duration: 5h
+pass_pause: 30m
+inject_lab: true
+configs:
+  - lab/packeteer-ha-a.yaml
+  - lab/packeteer-ha-b.yaml
+faults:
+  - session-flap
+  - link-flap
+  - sigterm
+  - sigkill

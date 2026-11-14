@@ -27,6 +27,12 @@ type Profile struct {
 	// Duration is the soak window. Faults run in order and the list
 	// repeats until the window is over; the first pass always completes.
 	Duration time.Duration `yaml:"duration"`
+	// PassPause is the quiet time, sampled and checked, between one pass
+	// of the fault list and the next. Each link flap is two changes of
+	// the prefix (flip-back, then a new improvement) for the configs'
+	// default flap_quarantine (6 changes in 1h), so back-to-back passes
+	// would park the prefix and the faults after that would test nothing.
+	PassPause time.Duration `yaml:"pass_pause"`
 	// InjectLab declares the configs under test an inject lab: they may
 	// run mode inject, with an allowlist of documentation prefixes only.
 	InjectLab bool `yaml:"inject_lab"`
@@ -54,6 +60,9 @@ func loadProfile(path string) (Profile, error) {
 	if p.Duration <= 0 {
 		errs = append(errs, errors.New("duration must be positive"))
 	}
+	if p.PassPause < 0 {
+		errs = append(errs, errors.New("pass_pause must not be negative"))
+	}
 	if len(p.Configs) == 0 {
 		errs = append(errs, errors.New("configs is empty"))
 	}
@@ -69,4 +78,12 @@ func loadProfile(path string) (Profile, error) {
 		return Profile{}, fmt.Errorf("%s: %w", path, err)
 	}
 	return p, nil
+}
+
+// withDuration returns p with its soak window set to d when d is positive.
+func withDuration(p Profile, d time.Duration) Profile {
+	if d > 0 {
+		p.Duration = d
+	}
+	return p
 }

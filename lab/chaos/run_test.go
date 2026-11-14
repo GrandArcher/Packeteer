@@ -166,3 +166,76 @@ func TestStandbyAnnouncingAfterSessionFlapFails(t *testing.T) {
 		t.Fatalf("err %v", err)
 	}
 }
+
+// A hosted-length run repeats the fault list, never starts a pass sooner
+// than pass_pause after the last one ended, and keeps the flap
+// quarantine of the configs out of play: a link flap is two changes of
+// the prefix and the default is 6 an hour.
+func TestHostedProfileSpacesPasses(t *testing.T) {
+	rep, _ := shortRun(t, func(_ *fakeLab, p *Profile) {
+		hosted, err := loadProfile("lab/chaos/hosted.yaml")
+		if err != nil {
+			t.Fatal(err)
+		}
+		*p = withDuration(hosted, 2*time.Hour)
+	})
+	if !rep.Pass || len(rep.Violations) != 0 || len(rep.Errors) != 0 {
+		t.Fatalf("pass %v, violations %+v, errors %v", rep.Pass, rep.Violations, rep.Errors)
+	}
+	var flaps []time.Time
+	for _, f := range rep.Faults {
+		if f.Kind == faultLinkFlap {
+			flaps = append(flaps, f.At)
+		}
+	}
+	if len(flaps) < 4 {
+		t.Fatalf("%d link flaps in 2h, want at least 4 (one per 30m pause): %v", len(flaps), rep.FaultCounts)
+	}
+	const changesPerFlap, maxFlips = 2, 6
+	for i := range flaps {
+		n := 0
+		for _, at := range flaps[i:] {
+			if at.Sub(flaps[i]) < time.Hour {
+				n++
+			}
+		}
+		if n*changesPerFlap > maxFlips {
+			t.Errorf("%d link flaps within 1h of %v: %d changes, quarantine at more than %d", n, flaps[i], n*changesPerFlap, maxFlips)
+		}
+	}
+	if rep.Ended.Sub(rep.Started) < 2*time.Hour {
+		t.Errorf("run ended after %v, before the 2h window", rep.Ended.Sub(rep.Started))
+	}
+	if rep.Ended.Sub(rep.Started) > 2*time.Hour+30*time.Minute {
+		t.Errorf("run ended after %v, a pause ran past the window", rep.Ended.Sub(rep.Started))
+	}
+}
+
+// The pause is sampled like a fault: the edge is read every tick through
+// it, so a broken invariant would show in it.
+func TestPassPauseIsSampled(t *testing.T) {
+	const pause = 10 * time.Minute
+	rep, _ := shortRun(t, func(_ *fakeLab, p *Profile) {
+		p.PassPause = pause
+		p.Duration = 15 * time.Minute
+	})
+	if !rep.Pass {
+		t.Fatalf("%+v %v", rep.Violations, rep.Errors)
+	}
+	var flaps []time.Time
+	for _, f := range rep.Faults {
+		if f.Kind == faultSessionFlap {
+			flaps = append(flaps, f.At)
+		}
+	}
+	if len(flaps) != 2 {
+		t.Fatalf("session flaps %v, want two passes", flaps)
+	}
+	if gap := flaps[1].Sub(flaps[0]); gap < pause {
+		t.Errorf("second pass %v after the first began, pause is %v", gap, pause)
+	}
+	elapsed := rep.Ended.Sub(rep.Started)
+	if got := time.Duration(rep.Samples) * tick; got < elapsed*9/10 {
+		t.Errorf("%d samples cover %v of a %v run: the pause went unsampled", rep.Samples, got, elapsed)
+	}
+}
