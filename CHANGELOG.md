@@ -4,8 +4,15 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-11-14
+
+The v1.4 release lets an operator finish observe setup from the GUI, shows a manager what Packeteer did, and adds a one-command demo lab, a chaos soak, and a lab-only path-scoring harness, with no new config key; the shipped config stays `mode: observe` and injection stays off by default.
+
 ### Added
 
+- `lab/evolve` (experimental, lab only) replays recorded rounds under config variants and scores loss, RTT, and flaps against a baseline; writes no config, never enables inject (#584).
+- `value` report: loss and latency avoided (native minus chosen path) in total, per provider and per day from stored history; announced and estimated moves stay separate rows (#583).
+- `/value.html` "What Packeteer did for you": the value report as totals, per provider and per day; observe is recommended and estimated, only inject is announced (#588).
 - `docs/demo.md`: a five-minute observe-only script for the demo lab, run in CI, and a README "Try the demo" section (#590).
 - `chaos` workflow: weekly 5h chaos soak on the HA lab (`lab/chaos/hosted.yaml`), report artifact kept on failure, `CHAOS_DURATION` and `pass_pause` for multi-day runs (#589).
 - `lab/e2e-chaos.sh`: chaos soak on the HA lab (session flap, probe-source failure, SIGTERM, SIGKILL), invariants checked on the edge, JSON and markdown report; CI runs the short profile (#585).
@@ -17,9 +24,6 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 ### Changed
 
 - The setup wizard writes sqlite history under `/var/lib/packeteer` unless `"storage": false` is sent (#582).
-- `lab/evolve` (experimental, lab only) replays recorded rounds under config variants and scores loss, RTT, and flaps against a baseline; writes no config, never enables inject (#584).
-- `value` report: loss and latency avoided (native minus chosen path) in total, per provider and per day from stored history; announced and estimated moves stay separate rows (#583).
-- `/value.html` "What Packeteer did for you": the value report as totals, per provider and per day; observe is recommended and estimated, only inject is announced (#588).
 
 ## [1.3.0] - 2026-11-13
 
