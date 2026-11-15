@@ -3,7 +3,7 @@
 # ---- build stage: cross-compiles for the target platform without QEMU ----
 # The digest pins the Go patch release and its standard-library fixes. Dependabot
 # (docker ecosystem, .github/dependabot.yml) bumps it weekly.
-FROM --platform=$BUILDPLATFORM golang:1.26-alpine@sha256:87c65a688975c0b1d4585d204874c45ca78354670e3a5f11368c5a492303d696 AS build
+FROM --platform=$BUILDPLATFORM golang:1.27-alpine@sha256:eb61c3873c97416fff0116553fff65d67a3549f72e11d9758849a689cdd8b523 AS build
 ARG TARGETOS
 ARG TARGETARCH
 ARG VERSION=dev
