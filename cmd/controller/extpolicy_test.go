@@ -171,7 +171,8 @@ func TestExternalPolicyBesideInject(t *testing.T) {
 			d.fatalf("the stream ended without the empty set: %v", err)
 		}
 		// The withdraw publishes an empty set with time left before Close
-		// expires it; a slow reader sees both, a fast one only the last.
+		// expires it; the stream sends both if it wakes between them, else
+		// only the last.
 		if len(doc.Routes) == 0 && doc.ExpiresInMS == 0 {
 			break
 		}
