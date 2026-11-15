@@ -385,7 +385,7 @@ The Settings page can also upgrade in place (#196). It is off by default. It nee
 
 ### From 1.4.0 to 1.4.1
 
-- No config key changed and no existing config behaves differently. Only the quickstart, `scripts/demo.sh`, and the version pins changed, so a downgrade to 1.4.0 needs no config change.
+- No config key changed and no existing config behaves differently. Only docs, `scripts/demo.sh`, and the version pins changed, so a downgrade to 1.4.0 needs no config change.
 
 ### From 1.3.0 to 1.4.0
 
