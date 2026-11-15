@@ -4,6 +4,10 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ## [Unreleased]
 
+### Changed
+
+- Go toolchain moves to 1.27: `go.mod` and the Dockerfile builder digest, which supersedes the Dependabot bump (#623).
+
 ## [1.4.1] - 2026-11-14
 
 The v1.4.1 patch fixes the quickstart and the demo preflight from v1.4.0, with no controller code or config key changed; the shipped config stays `mode: observe` and injection stays off by default.
