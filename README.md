@@ -468,7 +468,7 @@ Bug reports and field reports from observe-mode deployments (#54) are the most u
 
 ## Build from source
 
-Go 1.26.
+Go 1.27.
 
 ```sh
 go build -o packeteer ./cmd/controller
