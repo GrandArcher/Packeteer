@@ -170,11 +170,13 @@ func TestExternalPolicyBesideInject(t *testing.T) {
 		if err != nil {
 			d.fatalf("the stream ended without the empty set: %v", err)
 		}
-		if len(doc.Routes) == 0 {
-			if doc.ExpiresInMS != 0 {
-				d.fatalf("shutdown document has time left: %+v", doc)
-			}
+		// The withdraw publishes an empty set with time left before Close
+		// expires it; a slow reader sees both, a fast one only the last.
+		if len(doc.Routes) == 0 && doc.ExpiresInMS == 0 {
 			break
+		}
+		if len(doc.Routes) != 0 && doc.ExpiresInMS == 0 {
+			d.fatalf("expired shutdown document still lists routes: %+v", doc)
 		}
 	}
 	if _, err := recv(); !errors.Is(err, io.EOF) {
