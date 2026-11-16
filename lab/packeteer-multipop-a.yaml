@@ -85,6 +85,11 @@ telemetry:
 announcer:
   type: gobgp
 
-# Lab only: no sign-in, so the e2e scripts can read the API (#328).
+# Lab only: no sign-in accounts (#328). The basic-auth account in the
+# compose file guards the API, which lab/e2e-multipop.sh reaches from the
+# host. A settings push (#628) writes this file.
 auth:
   enabled: false
+http:
+  listen: 0.0.0.0:8080
+  config_editor: true

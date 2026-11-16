@@ -32,7 +32,7 @@ Milestones:
 | v0.1 | 24 | 23 |
 | v0.2 | 25 | 25 |
 | v0.3 | 17 | 17 |
-| v0.4 | 13 | 11 |
+| v0.4 | 13 | 12 |
 | v0.6 | 7 | 7 |
 | v0.7 | 3 | 3 |
 | v0.8 | 20 | 16 |
@@ -40,12 +40,12 @@ Milestones:
 | v1.1 | 3 | 1 |
 | v1.4 | 1 | 1 |
 | won't do | 2 | - |
-| **total** | 146 | 132 |
+| **total** | 146 | 133 |
 
 | Status | Count |
 |---|---|
-| done | 132 |
-| partial | 12 |
+| done | 133 |
+| partial | 11 |
 | in progress | 0 |
 | planned | 0 |
 | won't do | 2 |
@@ -298,7 +298,7 @@ Rollback: remove `exchanges` and `bgp.as_path` and restart; online reconfigurati
 | Feature | Status | Milestone | Plugin kind | Issue | Field-proven |
 |---|---|---|---|---|---|
 | Multiple routing domains with inter-DC RTT | done (lab-proven) | v0.4 | federation (`mtls`) + core (`internal/federation`) | #30 | no (lab-proven) |
-| Central management of many instances | partial (central view lab-proven): an admin pushes `thresholds` and `policies` to every instance, tested with two in-process instances; the push is not in the multi-POP lab yet (#137) | v0.4 | federation (`mtls`) + API/UI (`/api/federation`) | #30, #137 | no (lab-proven) |
+| Central management of many instances | done (lab-proven): the central view, and an admin push of `thresholds` and `policies` to every instance (#137), run between the multi-POP lab's POPs in observe (#628) | v0.4 | federation (`mtls`) + API/UI (`/api/federation`) | #30, #137, #628 | no (lab-proven) |
 | Distributed probe agents inside the operator's own network (`packeteer-agent`: probing only, outbound-only mutual TLS with per-agent identity and CRL revocation; each agent declares its site and the source address and tag per provider; `providers[].site` binds a provider to a site; probes spread across a site's agents under a per-agent `max_pps`; results tagged by `site` and `agent`; a stale, hung-up, or revoked agent is not used and its provider fails closed) | done (#230: tested in process over real mutual TLS with two agents at two sites, and in a Docker lab job with the controller and two agent containers (#478); `probe.reorder`, `probe.indirect`, and the path check do not apply to a provider with a site; #492: each listed agent has a required `site` and a poll that declares another is refused) | v0.9 | prober (`agent`) + core (`internal/agent`, `cmd/agent`) ([agents.md](agents.md)) | #230, #478, #492 | no |
 | External policy feed: the outbound routes inject would announce, published read-only for the operator's own BGP daemon (JSON and a gRPC stream over TLS with a bearer token; TTL and heartbeat; a toggle beside the announcer, so feed only, announcer only, or both) | done (#232: `external_policy`, off by default, routes only in `mode: inject`; the announce controller drives the feed like an announcer, so it carries the same routes under the same rails; `enabled` and `ttl` reload online and turning it off publishes an empty, expired set; reference consumer `packeteer-policy` renders BIRD or OpenBGPD config and reloads, or speaks the ExaBGP process API; lab `lab/e2e-interop.sh bird2\|bird3 external`: BIRD applies the feed, matches the inject route, and drops it at the TTL after SIGKILL; OpenBGPD and ExaBGP are not in the lab. Since #488 the consumer requires https, checks each route (`-community`, NO_EXPORT, community grammar, `-allow`), and the examples keep graceful restart off. Since #237 feed only can learn the RIB view over BMP alone. Not built: the guided-inject preflight still asks for an announcer) | v0.9 | core (`internal/extpolicy`, `cmd/policy`) ([external-policy.md](external-policy.md)) | #232 | no (lab-proven) |
 | Herd: opt-in shared measurements between operators (phase 1: local store, signed pull API with mutual TLS pinned to per-node keys, static peers, per-vantage view, preview and served-response audit, local resource limits; hub list of signed member entries as seeds, with `herd entry` and `herd hub-check`; dashboard page with world view, mesh, map, monitors, search, and opt-in outside sources) | partial: phase 1 of docs/design/herd.md (lab-proven) plus the hub (#261) and the dashboard (#296), unit and integration tests only, not lab-proven; no peer exchange, RPKI validation of identities, hints, or crowd threshold yet; advisory only, never read by `Decide` and never announces; off by default | v0.8, v0.9 | core (`internal/herd`, `internal/outside`) + storage (`sqlite`) + API + UI | #87, #260, #261, #296, #506, #493 | no (lab-proven: phase 1 only; hub and dashboard: no) |
@@ -311,7 +311,7 @@ Settings push (#137, [design](design/federation-push.md)): an admin sends `thres
 
 Peer staleness (`max_age`), a peer's RIB or provider going down, or a peer shutting down (it publishes its providers down first) retires the steer and withdraws the route. `global_commit` shares one commit across providers in several POPs: with the `commit` scorer, each local member's commit is the global commit less every other member's fresh usage; a missing member falls back to each provider's own commit. `/api/federation` and the dashboard's POPs section are the central view (every instance's mode, freshness, providers, improvements, inter-DC RTT, and global commit totals).
 
-The FRR lab (`lab/e2e-multipop.sh`: two POPs, each an FRR edge and a Packeteer instance, certificates generated per run) proves the central view, a steer through the other POP's carrier because of the inter-DC RTT (next hop, local-pref, community, NO_EXPORT), withdraw on peer loss and re-steer, a commit move driven by the other POP's usage and its release, that a prefix only the other POP learned is never announced, that the other instance never steers back, a cut federation link (#308: stale peer pruned, no steer or flap while cut off, one re-steer after the heal), SIGTERM, and SIGKILL. Not on a public edge; the settings push (#137) has no lab phase yet. Rollback: remove `federation`, `global_commit`, and remote-domain providers and restart; each instance runs standalone.
+The FRR lab (`lab/e2e-multipop.sh`: two POPs, each an FRR edge and a Packeteer instance, certificates generated per run) proves the central view, a steer through the other POP's carrier because of the inter-DC RTT (next hop, local-pref, community, NO_EXPORT), withdraw on peer loss and re-steer, a commit move driven by the other POP's usage and its release, that a prefix only the other POP learned is never announced, that the other instance never steers back, a cut federation link (#308: stale peer pruned, no steer or flap while cut off, one re-steer after the heal), SIGTERM, and SIGKILL. With both POPs then in observe (#628), pop-a pushes `thresholds` and `policies` and pop-b applies them online; pop-b refuses `mode`, the allowlist, the announcer, invalid thresholds, and a certificate outside `accept_settings_from`, changes nothing, and both sides audit. Not on a public edge. Rollback: remove `federation`, `global_commit`, and remote-domain providers and restart; each instance runs standalone.
 
 ## Security
 

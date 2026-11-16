@@ -1,6 +1,6 @@
 # Federation: push settings to every instance (#137)
 
-Status: implemented under #137 and tested with two in-process instances; not yet run in the multi-POP lab, and not on a public edge. Off by default: an instance accepts nothing until `accept_settings_from` names a sender.
+Status: implemented under #137, tested with two in-process instances and in the multi-POP lab (`lab/e2e-multipop.sh`, #628); not on a public edge. Off by default: an instance accepts nothing until `accept_settings_from` names a sender.
 
 Multi-POP federation ([multi-pop.md](../multi-pop.md)) was a read-only view. This adds one write: an admin on one instance sends a config section to the other instances, so a threshold or a policy is the same in every POP without editing each file.
 
