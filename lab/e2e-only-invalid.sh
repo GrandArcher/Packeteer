@@ -5,11 +5,11 @@
 # local SLURM file (lab/only-invalid/roas.json) plus the exceptions file
 # Packeteer writes. Packeteer runs in observe mode.
 #
-# transit-a sends the edge 198.51.100.0/24 from AS64500 (the ROA
-# 198.51.100.0/22 maxLength 22 makes it invalid; nothing covers it) and
+# transit-a sends the edge 198.51.100.0/25 from AS64500 (the ROA
+# 198.51.100.0/24 maxLength 24 makes it invalid; nothing covers it) and
 # 203.0.113.0/24 (valid) and 203.0.113.128/25 (invalid) from AS64501. The
 # edge passes them to Packeteer. Checked:
-#  - 198.51.100.0/24 raises rpki.only_invalid, classed stale_roa from the
+#  - 198.51.100.0/25 raises rpki.only_invalid, classed stale_roa from the
 #    IRR route object and the same-origin ROA, with the evidence; the
 #    invalid 203.0.113.128/25, which the valid /24 covers, raises nothing;
 #  - proposing writes nothing; after the admin approves, the SLURM file
@@ -44,7 +44,7 @@ echo "building lab"
 "${compose[@]}" build
 "${compose[@]}" up -d
 
-stale=198.51.100.0/24
+stale=198.51.100.0/25
 covered=203.0.113.128/25
 base=http://192.0.2.10:8080/api
 routinator=http://192.0.2.40:8323
@@ -166,7 +166,7 @@ wait_for 60 "packeteer learned $covered" learned "$covered" 64501
 stale_case() {
 	api "rpki/only-invalid?prefix=$stale" | jq -e --arg p "$stale" '.cases | length == 1 and
 		(.[0] | .prefix == $p and .origin == 64500 and .class == "stale_roa" and .rpki_source == "routinator" and
-		(.vrps | any(.prefix == "198.51.100.0/22" and .max_length == 22 and .asn == 64500)) and
+		(.vrps | any(.prefix == "198.51.100.0/24" and .max_length == 24 and .asn == 64500)) and
 		(.signals | any(.name == "irr_route" and .points == 2)) and
 		(.signals | any(.name == "roa_same_origin" and .points == 1)) and
 		(.paths | length == 1 and .[0].provider == "transit-a" and .[0].as_path == [64496, 64500]))' >/dev/null
@@ -180,7 +180,7 @@ cases=$(api rpki/only-invalid | jq -c '[.cases[].prefix]')
 events() { api "events?limit=1000" | jq -c --arg k "$1" '[.events[] | select(.kind == $k)]'; }
 raised=$(events rpki.only_invalid)
 jq -e --arg p "$stale" 'any(.fields.prefix == $p and .fields.origin == "64500" and .fields.class == "stale_roa" and
-	(.fields.evidence | contains("rpki_source=routinator") and contains("vrp 198.51.100.0/22-22 AS64500") and contains("irr_route +2")))' <<<"$raised" >/dev/null ||
+	(.fields.evidence | contains("rpki_source=routinator") and contains("vrp 198.51.100.0/24-24 AS64500") and contains("irr_route +2")))' <<<"$raised" >/dev/null ||
 	fail "no rpki.only_invalid event for $stale classed stale_roa with the evidence: $raised"
 jq -e 'all(.fields.prefix | startswith("203.0.113.") | not)' <<<"$raised" >/dev/null ||
 	fail "rpki.only_invalid raised for a prefix a valid route covers: $raised"
@@ -192,7 +192,7 @@ prop=$(sed '$d' <<<"$resp")
 [ "$code" = 200 ] || fail "propose answered $code: $prop"
 jq -e --arg p "$stale" '.prefix == $p and .origin == 64500 and .kind == "prefix_assertion" and
 	.state_before == "invalid" and .state_after == "valid" and .path == "/var/lib/packeteer/slurm/slurm.json" and
-	([.entries.locallyAddedAssertions.prefixAssertions[] | {prefix, asn, maxPrefixLength}] == [{prefix: $p, asn: 64500, maxPrefixLength: 24}]) and
+	([.entries.locallyAddedAssertions.prefixAssertions[] | {prefix, asn, maxPrefixLength}] == [{prefix: $p, asn: 64500, maxPrefixLength: 25}]) and
 	.entries.validationOutputFilters.prefixFilters == []' <<<"$prop" >/dev/null || fail "unexpected proposal: $prop"
 id=$(jq -r .id <<<"$prop")
 digest=$(jq -r .digest <<<"$prop")
@@ -206,7 +206,7 @@ resp=$(post rpki/exceptions "{\"id\":\"$id\",\"digest\":\"$digest\"}")
 code=$(tail -n1 <<<"$resp")
 [ "$code" = 200 ] || fail "approve answered $code: $(sed '$d' <<<"$resp")"
 jq -e --arg p "$stale" --arg id "$id" '[.locallyAddedAssertions.prefixAssertions[] | select(.prefix == $p)] |
-	length == 1 and .[0].asn == 64500 and .[0].maxPrefixLength == 24 and (.[0].comment | startswith("packeteer audit=" + $id + " "))' \
+	length == 1 and .[0].asn == 64500 and .[0].maxPrefixLength == 25 and (.[0].comment | startswith("packeteer audit=" + $id + " "))' \
 	"$SLURM_DIR/slurm.json" >/dev/null || fail "the SLURM file does not hold the approved entry: $(cat "$SLURM_DIR/slurm.json")"
 wait_for 60 "routinator serving $stale from AS64500 as valid" state_is AS64500 "$stale" valid
 state_is AS64501 "$covered" invalid || fail "the exception changed $covered"
@@ -218,7 +218,7 @@ cleared() {
 }
 wait_for 420 "$stale cleared" cleared
 api rpki/only-invalid | jq -e --arg p "$stale" --arg id "$id" \
-	'.slurm.exceptions | any(.prefix == $p and .asn == 64500 and .max_length == 24 and .audit_id == $id)' >/dev/null ||
+	'.slurm.exceptions | any(.prefix == $p and .asn == 64500 and .max_length == 25 and .audit_id == $id)' >/dev/null ||
 	fail "the API does not list the written exception"
 
 echo "audit log: proposal, approval, write"

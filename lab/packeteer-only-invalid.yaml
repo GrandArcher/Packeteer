@@ -3,7 +3,7 @@
 # from the edge and validates it against the lab's Routinator, which
 # serves only the ROAs in lab/only-invalid/roas.json and the exceptions
 # Packeteer writes to the shared slurm directory. The irr file source has
-# a route object for 198.51.100.0/24 from AS64500.
+# a route object for 198.51.100.0/25 from AS64500.
 mode: observe
 asn: 64512
 router_id: 192.0.2.10

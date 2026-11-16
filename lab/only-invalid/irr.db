@@ -2,7 +2,7 @@
 # irr file source. Documentation prefix and ASN only. It names the origin
 # the edge sees, which is what makes the case a likely stale ROA.
 
-route:          198.51.100.0/24
+route:          198.51.100.0/25
 descr:          lab route object
 origin:         AS64500
 mnt-by:         MAINT-LAB

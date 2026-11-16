@@ -7,10 +7,10 @@
   "locallyAddedAssertions": {
     "prefixAssertions": [
       {
-        "prefix": "198.51.100.0/22",
+        "prefix": "198.51.100.0/24",
         "asn": 64500,
-        "maxPrefixLength": 22,
-        "comment": "lab ROA (#627): 198.51.100.0/24 from AS64500 is longer than the maxLength, so it is invalid"
+        "maxPrefixLength": 24,
+        "comment": "lab ROA (#627): 198.51.100.0/25 from AS64500 is longer than the maxLength, so it is invalid"
       },
       {
         "prefix": "203.0.113.0/24",
