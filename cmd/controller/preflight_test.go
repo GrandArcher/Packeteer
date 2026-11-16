@@ -309,7 +309,7 @@ func TestPreflightReadsTheRouterWhenConfigured(t *testing.T) {
 		return checks.Result{}
 	}
 
-	if r := filters(); r.Status != checks.Pass || !strings.Contains(r.Detail, "Read from the router (frr, show commands only)") {
+	if r := filters(); r.Status != checks.Pass || !strings.Contains(r.Detail, "Read from the router (frr, read-only commands)") {
 		t.Fatalf("import_filter = %+v", r)
 	}
 	want := plugin.FilterQuery{Community: "64512:666", Packeteer: netip.MustParseAddr("192.0.2.10")}

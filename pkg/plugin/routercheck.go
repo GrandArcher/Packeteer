@@ -43,7 +43,7 @@ type FilterFinding struct {
 }
 
 // RouterCheck reads one router's BGP policy. It must only read: every
-// command it sends is on a fixed allowlist of show commands, and it never
+// command it sends is on a fixed allowlist of read-only commands, and it never
 // changes, saves, or announces anything. Credentials and socket paths come
 // from the environment and never appear in an error or a finding. It is
 // in-process only.

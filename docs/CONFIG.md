@@ -24,7 +24,7 @@ The image entrypoint is the same binary. Flags go after the image name.
 | Key | Default | Required | Meaning |
 |---|---|---|---|
 | `mode` | `observe` | no | `observe`, `suggest`, or `inject`. A file without `mode` (or with an empty one) observes. `inject` is never a default: it needs `mode: inject` and the [inject checklist](#inject-checklist). An [`ixp`](#ixp) block refuses `inject`. |
-| `preflight` | absent | no | Onboarding checks (#221). Optional `router_check` reads the router's BGP policy with show commands only and backs the `import_filter` check (#626). Announces nothing. See [`preflight`](#preflight). |
+| `preflight` | absent | no | Onboarding checks (#221). Optional `router_check` reads the router's BGP policy with allowlisted read-only commands and backs the `import_filter` check (#626). Announces nothing. See [`preflight`](#preflight). |
 | `lookup` | absent | no | Read-only PeeringDB / IX-F directory (#153). One plugin, `type: peeringdb`. Announces nothing. See [`lookup`](#lookup). |
 | `inventory` | absent | no | Read-only NetBox or Peering Manager source that `packeteer config plan`, `diff`, and `apply` read providers from (#208). Announces nothing and is not read by the running controller. See [`inventory`](#inventory). |
 | `nonbgp` | absent | no | Flow-driven static routes for a dual-ISP site whose router has no BGP (#300). The routes are not from a learned RIB view; installed only with `mode: inject` and `nonbgp.install_routes: true`. Refuses the BGP blocks. See [`nonbgp`](#nonbgp). |

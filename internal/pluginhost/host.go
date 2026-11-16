@@ -106,7 +106,7 @@ type Set struct {
 	// and apply a change a person confirmed. None announces.
 	RegistryCheckers []Instance[plugin.RegistryChecker]
 	// RouterCheck reads the router's BGP policy for the import_filter
-	// preflight check (preflight.router_check, #626). Show commands only;
+	// preflight check (preflight.router_check, #626). Read-only commands;
 	// it never writes to the router or announces.
 	RouterCheck *Instance[plugin.RouterCheck]
 

@@ -264,7 +264,7 @@ func filters(f Facts) Result {
 	}
 	note := ""
 	if rr := f.Router; rr != nil {
-		head := "Read from the router (" + rr.Type + ", show commands only):\n"
+		head := "Read from the router (" + rr.Type + ", read-only commands):\n"
 		switch rr.verdict() {
 		case plugin.VerdictFail:
 			details, fixes := rr.lines(plugin.VerdictFail)

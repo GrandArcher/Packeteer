@@ -683,7 +683,7 @@ storage:
 #     max_bytes: 8388608
 
 # Read-only router check (#626, docs/onboarding.md): reads the router's BGP
-# policy with show commands only and backs the import_filter preflight check
+# policy with allowlisted read-only commands and backs the import_filter check
 # with what it runs. Off by default. Point it only at a lab router or one you
 # chose; it never writes to the router. The socket path (and for bird the
 # bird.conf path) comes from the environment, never this file.

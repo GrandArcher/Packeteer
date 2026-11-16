@@ -121,7 +121,7 @@ func TestFiltersFromTheRouterCheck(t *testing.T) {
 	f.Confirmed = nil
 	f.Router = &RouterRead{Type: "frr", Findings: []plugin.FilterFinding{pass, pass}}
 	r := result(t, f, CheckFilters)
-	if r.Status != Pass || r.Confirmable || r.Fix != "" || !strings.Contains(r.Detail, "Read from the router (frr, show commands only)") || !strings.Contains(r.Detail, "packeteer-in permits only") {
+	if r.Status != Pass || r.Confirmable || r.Fix != "" || !strings.Contains(r.Detail, "Read from the router (frr, read-only commands)") || !strings.Contains(r.Detail, "packeteer-in permits only") {
 		t.Fatalf("pass = %+v", r)
 	}
 

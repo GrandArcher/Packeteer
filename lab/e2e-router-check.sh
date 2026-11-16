@@ -122,7 +122,7 @@ frr_conf frr-good ebgp-out $'route-map ebgp-out permit 100\n!\n'
 frr_conf frr-broken ebgp-open $'route-map ebgp-open permit 100\n!\n'
 
 router_args=(-v "pk-rc-frr-good:$sock_dir" -e "PACKETEER_FRR_SOCKET=$sock_dir/bgpd.vty")
-check frr-good frr pass 'Read from the router (frr, show commands only)' \
+check frr-good frr pass 'Read from the router (frr, read-only commands)' \
 	'Import from Packeteer 192.0.2.10 (ipv4 unicast): route-map packeteer-in permits only routes with 64512:666' \
 	'Export to eBGP neighbor 192.0.2.20 (ipv4 unicast): route-map ebgp-out denies 64512:666 at entry 10'
 router_args=(-v "pk-rc-frr-broken:$sock_dir" -e "PACKETEER_FRR_SOCKET=$sock_dir/bgpd.vty")
@@ -165,7 +165,7 @@ for bird in bird2 bird3; do
 		router_args=(-v "pk-rc-bird:$sock_dir" -e "PACKETEER_BIRD_SOCKET=$sock_dir/bird.ctl"
 			-v "$work/bird-$kind.conf:/etc/router/bird.conf:ro" -e PACKETEER_BIRD_CONFIG=/etc/router/bird.conf)
 		if [ "$kind" = good ]; then
-			check "$bird-good" bird pass 'Read from the router (bird, show commands only)' \
+			check "$bird-good" bird pass 'Read from the router (bird, read-only commands)' \
 				'Import from Packeteer (protocol packeteer, ipv4): filter packeteer_in accepts only routes with 64512:666' \
 				'Export to eBGP protocol transit (ipv4): filter ebgp_out rejects 64512:666 at statement 1'
 		else

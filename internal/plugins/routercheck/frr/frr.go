@@ -147,6 +147,7 @@ type rule struct {
 	Seq    int      `json:"sequenceNumber"`
 	Type   string   `json:"type"`
 	Match  []string `json:"matchClauses"`
+	Set    []string `json:"setClauses"`
 	Call   string   `json:"callClause"`
 	Action string   `json:"action"`
 }
@@ -286,6 +287,9 @@ func (c *checker) importMap(where, name string) (plugin.FilterFinding, error) {
 			}
 			continue
 		}
+		if set := rewrites(r); set != "" {
+			return plugin.FilterFinding{Verdict: plugin.VerdictUnknown, Detail: fmt.Sprintf("%s: route-map %s entry %d sets %s, which can remove %s before the eBGP filters look for it; read it by hand.", where, name, r.Seq, set, c.q.Community)}, nil
+		}
 		ok, never, why, err := c.requiresOurs(r)
 		if err != nil {
 			return plugin.FilterFinding{}, err
@@ -389,6 +393,22 @@ func unsupported(r rule) string {
 	return ""
 }
 
+// rewrites returns the first set clause of r that can take the community
+// off a route: a community set that is not additive, or a list delete.
+func rewrites(r rule) string {
+	for _, set := range r.Set {
+		f := strings.Fields(set)
+		switch {
+		case len(f) == 0:
+		case f[0] == "comm-list" || f[0] == "large-comm-list":
+			return set
+		case (f[0] == "community" || f[0] == "large-community") && f[len(f)-1] != "additive":
+			return set
+		}
+	}
+	return ""
+}
+
 // requiresOurs reports whether a permit entry matches only routes that
 // carry the community. never is set when it matches no route at all: it
 // names a community list the router does not have. why is set when the
@@ -399,14 +419,25 @@ func (c *checker) requiresOurs(r rule) (ok, never bool, why string, err error) {
 		if err != nil || why != "" {
 			return false, false, why, err
 		}
-		switch {
-		case l == nil && strings.HasPrefix(m, c.kw+" "):
-			return false, true, "", nil
-		case l != nil && l.matchesOurs(c.q.Community) && l.requires(c.q.Community):
+		if l == nil {
+			if strings.HasPrefix(m, c.kw+" ") {
+				return false, true, "", nil
+			}
+			continue
+		}
+		match, uncertain := l.matchesOurs(c.q.Community)
+		if uncertain {
+			return false, false, uncertainWhy(m), nil
+		}
+		if match && l.requires(c.q.Community) {
 			return true, false, "", nil
 		}
 	}
 	return false, false, "", nil
+}
+
+func uncertainWhy(clause string) string {
+	return "the list in match " + clause + " denies some communities before it decides on the Packeteer community, and a Packeteer route can carry more than that one; read it by hand"
 }
 
 // deniesOurs reports whether a deny entry matches every Packeteer route:
@@ -417,7 +448,14 @@ func (c *checker) deniesOurs(r rule) (ok bool, why string, err error) {
 		if err != nil || why != "" {
 			return false, why, err
 		}
-		if l == nil || !l.matchesOurs(c.q.Community) {
+		if l == nil {
+			return false, "", nil
+		}
+		match, uncertain := l.matchesOurs(c.q.Community)
+		if uncertain {
+			return false, uncertainWhy(m), nil
+		}
+		if !match {
 			return false, "", nil
 		}
 	}
@@ -462,18 +500,41 @@ func (c *checker) routeMap(name string) ([]rule, string, error) {
 	if st != 0 {
 		return nil, fmt.Sprintf("bgpd answered %d to show route-map %s.", st, name), nil
 	}
-	var m map[string]struct {
-		Rules []rule `json:"rules"`
-	}
-	if err := json.Unmarshal([]byte(out), &m); err != nil {
+	rules, ok, err := findMap(out, name)
+	if err != nil {
 		return nil, "", fmt.Errorf("show route-map %s json: %w", name, err)
 	}
-	rm, ok := m[name]
 	if !ok {
 		return nil, fmt.Sprintf("route-map %s is applied but not defined.", name), nil
 	}
-	c.maps[name] = rm.Rules
-	return rm.Rules, "", nil
+	c.maps[name] = rules
+	return rules, "", nil
+}
+
+type mapJSON struct {
+	Rules *[]rule `json:"rules"`
+}
+
+// findMap reads route-map name from bgpd's JSON, which has it at the top
+// level; vtysh merges daemons by nesting each under its name ("BGP").
+func findMap(out, name string) ([]rule, bool, error) {
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(out), &top); err != nil {
+		return nil, false, err
+	}
+	if raw, ok := top[name]; ok {
+		var m mapJSON
+		if err := json.Unmarshal(raw, &m); err == nil && m.Rules != nil {
+			return *m.Rules, true, nil
+		}
+	}
+	for _, raw := range top {
+		var nested map[string]mapJSON
+		if json.Unmarshal(raw, &nested) == nil && nested[name].Rules != nil {
+			return *nested[name].Rules, true, nil
+		}
+	}
+	return nil, false, nil
 }
 
 // list reads a community list; nil when the router has none by that name.
@@ -508,21 +569,27 @@ func parseList(out string) *commList {
 	return l
 }
 
-// routeHas is what a Packeteer route carries: its community, and for a
-// standard community NO_EXPORT too.
+// routeHas reports whether v is one of the values every Packeteer route
+// carries: its community, and NO_EXPORT with a standard community.
 func routeHas(community, v string) bool {
 	return v == community || strings.Count(community, ":") == 1 && v == "no-export"
 }
 
-// matchesOurs reports whether the first entry that matches a Packeteer
-// route permits it.
-func (l *commList) matchesOurs(community string) bool {
+// matchesOurs reports whether the list matches a route with only the values
+// every Packeteer route carries. A route can carry more (communities_cause,
+// a marker), so a deny entry that names other values before the deciding
+// entry makes the answer uncertain.
+func (l *commList) matchesOurs(community string) (match, uncertain bool) {
 	for _, e := range l.entries {
-		if !slices.ContainsFunc(e.values, func(v string) bool { return !routeHas(community, v) }) {
-			return e.permit
+		other := slices.ContainsFunc(e.values, func(v string) bool { return !routeHas(community, v) })
+		switch {
+		case !other:
+			return e.permit, false
+		case !e.permit:
+			return false, true
 		}
 	}
-	return false
+	return false, false
 }
 
 // requires reports whether every permit entry needs the community.

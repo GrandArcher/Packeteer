@@ -510,7 +510,7 @@ func (n BGPNeighbor) Routed() bool { return len(n.Providers) > 0 || len(n.NextHo
 
 // Preflight configures the onboarding checks.
 type Preflight struct {
-	// RouterCheck reads the router's BGP policy with show commands only
+	// RouterCheck reads the router's BGP policy with read-only commands
 	// and backs the import_filter check with it (#626). Nil is off: the
 	// check asks an administrator to confirm.
 	RouterCheck *PluginSpec `yaml:"router_check"`

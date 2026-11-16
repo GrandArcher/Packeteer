@@ -369,6 +369,9 @@ func statement(toks []string, i int) (stmt, int) {
 		}
 		then, next := statement(toks, j+1)
 		if next < len(toks) && toks[next] == "else" {
+			if next+1 >= len(toks) {
+				return stmt{kind: "other"}, len(toks)
+			}
 			_, next = statement(toks, next+1)
 			return stmt{kind: "other"}, next
 		}

@@ -113,9 +113,9 @@ The result is one of three:
 
 - **pass**: `import_filter` passes, and its detail lists what was read (session, address family, route-map or filter, entry).
 - **fail**: `import_filter` fails with the specific fix (for example the deny entry to add before entry 100 of `ebgp-out`), whatever an administrator confirmed. It cannot be confirmed away.
-- **not checked**: the router could not be read, or a policy uses something the check does not follow (route-map `call` or `continue`, expanded community lists, `exact-match`, BIRD statements other than `if ... then accept|reject`, `accept`, and `reject`). The detail says why, and the check falls back to the administrator's confirmation.
+- **not checked**: the router could not be read, or a policy uses something the check does not follow (route-map `call` or `continue`, expanded community lists, `exact-match`, an import entry that sets communities other than `additive`, a community list that denies other values before it decides on `packeteer_community`, BIRD statements other than `if ... then accept|reject`, `accept`, and `reject`). The detail says why, and the check falls back to the administrator's confirmation.
 
-It reads one router: with more than one `bgp.neighbors` entry it reads none and says so. A leak held by the leak watch still fails `import_filter`. The other checks do not read it, and it never turns inject on.
+It reads one router: with more than one `bgp.neighbors` entry it reads none and says so. On FRR it reads the default VRF's sessions only. A leak held by the leak watch still fails `import_filter`. The other checks do not read it, and it never turns inject on.
 
 The socket path, and the `bird.conf` path, come from environment variables that the config names (`socket_env`, `config_env`); they never appear in the config file, logs, API answers, or the UI ([CONFIG.md](CONFIG.md#preflight)). In the container, mount the socket's directory and the file read-only, for example `-v /run/frr:/run/frr -e PACKETEER_FRR_SOCKET=/run/frr/bgpd.vty`. The socket must be one the container's user can open.
 

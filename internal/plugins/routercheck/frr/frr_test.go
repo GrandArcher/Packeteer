@@ -15,9 +15,10 @@ import (
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
-// The replies below follow what FRR 10 bgpd prints for these commands
+// The replies below are written from FRR 10.2's source for these commands
 // (bgp_show_peer, vty_show_route_map_entry, community_list_show), cut to
-// the fields the check reads plus a few it ignores.
+// the fields the check reads plus a few it ignores. The router-check lab job
+// reads a real bgpd.
 
 const neighborsGood = `{
   "192.0.2.10": {"remoteAs": 64512, "localAs": 64512, "nbrInternalLink": true, "bgpState": "Active",
@@ -197,6 +198,24 @@ func TestPolicyCases(t *testing.T) {
 		{"a name the allowlist refuses is not sent", func(r map[string]reply) {
 			r["show bgp neighbors json"] = reply{out: strings.Replace(neighborsGood, `"ebgp-out"`, `"ebgp out\u0000configure terminal"`, 1)}
 		}, "pass,unknown", "is not read"},
+		{"import strips the community", func(r map[string]reply) {
+			r["show route-map packeteer-in json"] = reply{out: strings.Replace(packeteerIn, `"setClauses": []`, `"setClauses": ["community none"]`, 1)}
+		}, "unknown,pass", "sets community none, which can remove 64512:666"},
+		{"import deletes through a list", func(r map[string]reply) {
+			r["show route-map packeteer-in json"] = reply{out: strings.Replace(packeteerIn, `"setClauses": []`, `"setClauses": ["comm-list packeteer delete"]`, 1)}
+		}, "unknown,pass", "sets comm-list packeteer delete"},
+		{"import adds a community", func(r map[string]reply) {
+			r["show route-map packeteer-in json"] = reply{out: strings.Replace(packeteerIn, `"setClauses": []`, `"setClauses": ["local-preference 300", "community 64496:1 additive"]`, 1)}
+		}, "pass,pass", ""},
+		{"list denies the community with another value first", func(r map[string]reply) {
+			r["show bgp community-list packeteer detail"] = reply{out: "Named Community standard list packeteer\n    deny 64512:666 64512:999\n    permit 64512:666\n"}
+		}, "unknown,unknown", "a Packeteer route can carry more than that one"},
+		{"list permits with another value first", func(r map[string]reply) {
+			r["show bgp community-list packeteer detail"] = reply{out: "Named Community standard list packeteer\n    permit 64512:666 64512:999\n    permit 64512:666\n"}
+		}, "pass,pass", ""},
+		{"route-map nested under the daemon", func(r map[string]reply) {
+			r["show route-map ebgp-out json"] = reply{out: `{"BGP": ` + ebgpOut + `}`}
+		}, "pass,pass", ""},
 		{"no eBGP neighbor", func(r map[string]reply) {
 			r["show bgp neighbors json"] = reply{out: `{"192.0.2.10": {"nbrInternalLink": true, "addressFamilyInfo": {"ipv4Unicast": {"routeMapForIncomingAdvertisements": "packeteer-in"}}}, "vrfName": "default"}`}
 		}, "pass,pass", ""},

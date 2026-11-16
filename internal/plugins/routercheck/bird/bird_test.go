@@ -180,6 +180,24 @@ filter pk_in {
 	}
 }
 
+// A file BIRD does not run may be half edited: no prefix of a config, cut at
+// any byte, panics the parser.
+func TestParseConfigCutAnywhere(t *testing.T) {
+	text := snippetConf(t, "64512:666") + `
+filter pk { if a then accept; else { if b then reject; } else
+	/* open comment
+`
+	protos := parseProtocols(lines(t, protocolsReply("packeteer_in", "pk")))
+	for i := range len(text) + 1 {
+		cf := parseConfig(text[:i])
+		_ = check(protos, cf, q)
+	}
+	for _, body := range []string{"if a then accept; else", "if", "if a then", "if a then accept; else if", "{", "accept", "reject \"x"} {
+		_ = parseConfig("filter f { " + body)
+		_ = parseConfig("filter f { " + body + " }")
+	}
+}
+
 func TestProtocolCases(t *testing.T) {
 	conf := parseConfig(snippetConf(t, "64512:666"))
 	noPK := strings.Replace(protocolsReply("packeteer_in", "ebgp_out"), "192.0.2.10", "192.0.2.11", 1)
