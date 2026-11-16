@@ -16,7 +16,7 @@ prefix 100.64.0.0/10 and 198.18.33.0/24 learned from AS64600 via as 64601 (asn=4
 v6 peer fd00:1234:5678::1111 and prefix fd12:3456::/32, mapped ::ffff:100.64.7.8
 dial tcp edge1.transit.example.net: lookup failed; rr-1.corp.isp.test answered
 mail ops@noc.bigisp.test. Ends with fd00:abcd::8888.
-time 12:30:45 and config.yaml stay as they are; gw.isp.md is a host`
+time 12:30:45 and config.yaml stay as they are; docs/CONFIG.md is redacted like a host`
 
 var (
 	anyV4   = regexp.MustCompile(`\b(?:\d{1,3}\.){3}\d{1,3}\b`)
@@ -59,7 +59,7 @@ func onlyDocumentation(t *testing.T, s string) {
 func TestRedactLeavesOnlyDocumentationValues(t *testing.T) {
 	got := NewRedactor().Redact(realLooking)
 	onlyDocumentation(t, got)
-	for _, real := range []string{"10.20.30.40", "172.16.5.6", "100.64.0.0", "198.18.33", "100.64.7.8", "fd00:1234", "fd12:3456", "fd00:abcd", "64600", "64601", "4200000002", "transit", "corp.isp", "bigisp", "noc.", "isp.md"} {
+	for _, real := range []string{"10.20.30.40", "172.16.5.6", "100.64.0.0", "198.18.33", "100.64.7.8", "fd00:1234", "fd12:3456", "fd00:abcd", "64600", "64601", "4200000002", "transit", "corp.isp", "bigisp", "noc.", "CONFIG.md"} {
 		if strings.Contains(got, real) {
 			t.Errorf("%q survived:\n%s", real, got)
 		}
