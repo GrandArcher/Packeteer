@@ -236,7 +236,7 @@ func TestExchangeFixturesMatchAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(out.Exchanges) != 2 || out.Exchanges[0].Name != "ix-lab" || len(out.Exchanges[0].Discovered) != 2 ||
-		out.Exchanges[0].Discovered[0].NextHop != "203.0.113.13" || out.Exchanges[0].Discovered[0].ASN != 64503 || out.Exchanges[0].Discovered[1].ASN != 0 {
+		out.Exchanges[0].Discovered[0].NextHop != "203.0.113.13" || out.Exchanges[0].Discovered[0].ASN != 64503 || out.Exchanges[0].Discovered[0].Name != "Lab Network C" || out.Exchanges[0].Discovered[1].ASN != 0 || out.Exchanges[0].Discovered[1].Name != "" {
 		t.Fatalf("exchanges = %+v", out.Exchanges)
 	}
 }
@@ -294,7 +294,7 @@ func TestExchangePageFixturesMatchAPI(t *testing.T) {
 	strict(f.Stubs[2].body, &rs)
 	strict(f.Stubs[3].body, &bi)
 	if rs.ASNs != len(rs.Rows) || rs.Rows[0].Class != exchange.ClassRouteServer || rs.Rows[0].LANPrefixes >= rs.Rows[0].Prefixes ||
-		bi.Rows[0].Class != exchange.ClassBilateral || bi.Rows[0].Members[0].Peer != "ix-peer-c" || rs.Classes[exchange.ClassAbsent].ASNs != 3 {
+		rs.Rows[0].Name != "Lab Network C" || bi.Rows[0].Name != "" || bi.Rows[0].Class != exchange.ClassBilateral || bi.Rows[0].Members[0].Peer != "ix-peer-c" || rs.Classes[exchange.ClassAbsent].ASNs != 3 {
 		t.Fatalf("potential peers = %+v %+v", rs, bi)
 	}
 	var rep struct {

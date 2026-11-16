@@ -66,7 +66,10 @@ type MemberRef struct {
 
 // PotentialRow is one destination origin AS.
 type PotentialRow struct {
-	ASN   uint32  `json:"asn"`
+	ASN uint32 `json:"asn"`
+	// Name is the PeeringDB network name from the cached lookup (#629). It
+	// is empty, and omitted, when the lookup has none for the ASN.
+	Name  string  `json:"name,omitempty"`
 	Class string  `json:"class"`
 	Bytes uint64  `json:"bytes"`
 	Mbps  float64 `json:"mbps"`
@@ -199,11 +202,11 @@ func classOf(members []MemberRef) string {
 	return class
 }
 
-// WriteCSV writes the rows, with the members joined by a space as
-// exchange/peer-or-next-hop.
+// WriteCSV writes the rows, with the name column empty when no name is
+// cached and the members joined by a space as exchange/peer-or-next-hop.
 func (r PotentialPeers) WriteCSV(w io.Writer) error {
 	cw := csv.NewWriter(w)
-	_ = cw.Write([]string{"asn", "class", "bytes", "mbps", "prefixes", "lan_prefixes", "lan_bytes", "members"})
+	_ = cw.Write([]string{"asn", "name", "class", "bytes", "mbps", "prefixes", "lan_prefixes", "lan_bytes", "members"})
 	for _, row := range r.Rows {
 		ms := make([]string, len(row.Members))
 		for i, m := range row.Members {
@@ -214,7 +217,7 @@ func (r PotentialPeers) WriteCSV(w io.Writer) error {
 			ms[i] = m.Exchange + "/" + who
 		}
 		_ = cw.Write([]string{
-			"AS" + strconv.FormatUint(uint64(row.ASN), 10), row.Class,
+			"AS" + strconv.FormatUint(uint64(row.ASN), 10), row.Name, row.Class,
 			strconv.FormatUint(row.Bytes, 10), strconv.FormatFloat(row.Mbps, 'f', 2, 64),
 			strconv.Itoa(row.Prefixes), strconv.Itoa(row.LANPrefixes), strconv.FormatUint(row.LANBytes, 10),
 			strings.Join(ms, " "),

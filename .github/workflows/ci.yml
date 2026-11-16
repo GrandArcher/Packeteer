@@ -2062,7 +2062,7 @@ jobs:
           done
           curl -fsS http://127.0.0.1:18136/healthz >/dev/null
           bash lab/ui-smoke.sh http://127.0.0.1:18136/settings.html 'mode-observe' 'It announces nothing.' \
-            'before: 2 members ix-lab203.0.113.13AS 645033 prefixesAccept | ix-lab203.0.113.14AS unknown1 prefixesAccept' \
+            'before: 2 members ix-lab203.0.113.13AS 64503Lab Network C3 prefixesAccept | ix-lab203.0.113.14AS unknown1 prefixesAccept' \
             'after: peers 3 members 1 draft true name [] as [64503] hop [203.0.113.13] source [] cost [] writes 0' \
             --absent '198.51.100.77' 'mode-inject'
           # The exchange view on /providers.html (#148) needs an exchange
@@ -2093,8 +2093,8 @@ jobs:
             'data-degraded="ix-lab"' '<td class="bad">2.5 ms, 60% loss</td>' '<td class="bad">unreachable</td>' \
             '<th>Bilateral only</th>' '>RS partial</span>' '>RS missing</span>' 'data-member="ix-lab/203.0.113.11"' '>Compare</button>' \
             'Total 2 prefixes, 200.0 Mbps, estimated saving 160' '<td>transit-b</td>' '<td>ix-lab/ix-peer-a, ix-lab/ix-peer-b</td>' '<td>120.0 Mbps</td>' \
-            'On the route server: check our route server session or filters (1 ASNs)' '<td class="mono">AS64503</td>' '<td>1 of 4</td>' \
-            'Bilateral only: candidate for a peering request (1 ASNs)' '<td class="mono">AS64504</td>' '<td>ix-lab/ix-peer-c (bilateral)</td>' \
+            'On the route server: check our route server session or filters (1 ASNs)' '<td class="mono">AS64503</td><td>Lab Network C</td>' '<td>1 of 4</td>' \
+            'Bilateral only: candidate for a peering request (1 ASNs)' '<td class="mono">AS64504</td><td></td>' '<td>ix-lab/ix-peer-c (bilateral)</td>' \
             'Also: 1 on a LAN with an unknown session type, 3 not seen at an exchange.' \
             --absent 'not built yet' 'mode-inject'
           # The IXP member pages (#166) read the member, fabric, and
