@@ -288,6 +288,7 @@ scorer:
 #     config:                   # Does not announce; problem prefixes are probed first.
 #       interface: eth1         # mirror NIC; or pcap_file: /etc/packeteer/span.pcap (lab replay)
 #       # ebpf: false           # true: capture through an eBPF ring buffer (Linux 6.6, BPF + NET_ADMIN); falls back to AF_PACKET. docs/ebpf.md
+#       # ebpf_track: false     # true (needs ebpf): follow the TCP connections in the kernel; falls back to the userspace tracker. docs/ebpf.md
 #       local:
 #         - 192.0.2.0/24        # your own networks (required)
 #       window: 5m

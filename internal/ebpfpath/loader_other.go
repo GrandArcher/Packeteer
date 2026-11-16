@@ -4,6 +4,7 @@ package ebpfpath
 
 import (
 	"errors"
+	"net/netip"
 	"time"
 )
 
@@ -36,3 +37,34 @@ func (*Flows) Snapshot() (map[FlowKey]Totals, error) { return nil, ErrUnsupporte
 
 // Close is never reached: OpenFlows fails.
 func (*Flows) Close() error { return nil }
+
+// TrackOptions configure OpenTracker.
+type TrackOptions struct {
+	Interface  string
+	Promisc    bool
+	Local      []netip.Prefix
+	SYNTimeout time.Duration
+	MaxFlows   int
+	Timeout    time.Duration
+}
+
+// Tracker is not available off Linux.
+type Tracker struct{}
+
+// OpenTracker always fails off Linux.
+func OpenTracker(TrackOptions) (*Tracker, error) { return nil, ErrUnsupported }
+
+// Next is never reached: OpenTracker fails.
+func (*Tracker) Next() (Summary, error) { return Summary{}, ErrUnsupported }
+
+// Flows is never reached: OpenTracker fails.
+func (*Tracker) Flows() ([]TrackState, error) { return nil, ErrUnsupported }
+
+// Forget is never reached: OpenTracker fails.
+func (*Tracker) Forget(TrackKey) error { return ErrUnsupported }
+
+// Drops is never reached: OpenTracker fails.
+func (*Tracker) Drops() (uint64, uint64, error) { return 0, 0, ErrUnsupported }
+
+// Close is never reached: OpenTracker fails.
+func (*Tracker) Close() error { return nil }

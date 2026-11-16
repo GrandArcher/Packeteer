@@ -27,6 +27,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/ebpfpath"
 	"github.com/GrandArcher/Packeteer/internal/exchange"
 	"github.com/GrandArcher/Packeteer/internal/passive"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
@@ -81,7 +82,12 @@ type Config struct {
 	// EBPF captures with the eBPF data path instead of an AF_PACKET
 	// socket (#229). Off by default. When the kernel or the container
 	// cannot load it, the source logs a warning and uses AF_PACKET.
-	EBPF        bool          `yaml:"ebpf"`
+	EBPF bool `yaml:"ebpf"`
+	// EBPFTrack also follows the TCP connections in the kernel (#631):
+	// retransmissions, resets, and handshake RTT are counted by the eBPF
+	// program and reach the source as summaries. It needs ebpf: true, is
+	// off by default, and falls back to the userspace tracker.
+	EBPFTrack   bool          `yaml:"ebpf_track"`
 	Local       []string      `yaml:"local"`
 	Exclude     []string      `yaml:"exclude"`
 	Window      time.Duration `yaml:"window"`
@@ -109,6 +115,7 @@ type Source struct {
 	pcapFile   string
 	promisc    bool
 	useEBPF    bool
+	useTrack   bool
 	exclude    []netip.Prefix
 	agg4, agg6 int
 	th         passive.Thresholds
@@ -116,6 +123,7 @@ type Source struct {
 	now        func() time.Time
 	openEBPF   func(string, bool, time.Duration) (capture, error)
 	openRaw    func(string, bool, time.Duration) (capture, error)
+	openKernel func(ebpfpath.TrackOptions) (kernelTracker, error)
 
 	win   *passive.Window
 	trk   *tracker
@@ -128,8 +136,12 @@ type Source struct {
 	dropMu  sync.Mutex
 	dropped map[netip.Prefix]struct{}
 
+	kmu   sync.Mutex
+	conns map[ebpfpath.TrackKey]*connState
+
 	capMu    sync.Mutex
 	cap      capture
+	kt       kernelTracker
 	stop     chan struct{}
 	stopOnce sync.Once
 	wg       sync.WaitGroup
@@ -155,6 +167,9 @@ func New(c plugin.Config, env plugin.Env) (plugin.TargetSource, error) {
 	}
 	if cfg.PcapFile != "" && cfg.EBPF {
 		return nil, fmt.Errorf("ebpf applies only to interface capture")
+	}
+	if cfg.EBPFTrack && !cfg.EBPF {
+		return nil, fmt.Errorf("ebpf_track requires ebpf: true")
 	}
 	if cfg.PcapFile != "" && !filepath.IsAbs(cfg.PcapFile) {
 		return nil, fmt.Errorf("pcap_file %q must be an absolute path inside the container", cfg.PcapFile)
@@ -264,6 +279,7 @@ func New(c plugin.Config, env plugin.Env) (plugin.TargetSource, error) {
 		pcapFile:   cfg.PcapFile,
 		promisc:    promisc,
 		useEBPF:    cfg.EBPF,
+		useTrack:   cfg.EBPFTrack,
 		exclude:    exclude,
 		agg4:       cfg.AggregateV4,
 		agg6:       cfg.AggregateV6,
@@ -272,8 +288,10 @@ func New(c plugin.Config, env plugin.Env) (plugin.TargetSource, error) {
 		now:        time.Now,
 		openEBPF:   openEBPF,
 		openRaw:    openCapture,
+		openKernel: openKernelTracker,
 		win:        passive.NewWindow(cfg.Window, cfg.MaxPrefixes),
 		stop:       make(chan struct{}),
+		conns:      map[ebpfpath.TrackKey]*connState{},
 	}
 	s.trk = &tracker{
 		local:      local,
@@ -295,6 +313,11 @@ func (s *Source) Truncated() map[string]uint64 {
 	s.capMu.Lock()
 	if e, ok := s.cap.(ebpfCapture); ok {
 		out["ebpf_ring_full"] = e.drops()
+	}
+	if s.kt != nil {
+		ring, flows := s.kt.drops()
+		out["ebpf_ring_full"] = ring
+		out["max_flows"] += flows
 	}
 	s.capMu.Unlock()
 	return out
@@ -377,6 +400,19 @@ func (s *Source) Start(ctx context.Context) error {
 			s.log.Info("span pcap replay done", "file", s.pcapFile, "packets", n)
 		}()
 		return nil
+	}
+	if s.useTrack {
+		kt, err := s.openKernel(s.trackOptions())
+		if err == nil {
+			s.log.Info("span capturing", "interface", s.iface, "path", "ebpf-track", "promiscuous", s.promisc)
+			s.capMu.Lock()
+			s.kt = kt
+			s.capMu.Unlock()
+			s.wg.Add(1)
+			go s.kernelRun(ctx, kt)
+			return nil
+		}
+		s.log.Warn("span eBPF tracker unavailable, tracking in userspace", "interface", s.iface, "err", err)
 	}
 	c, err := s.openLive()
 	if err != nil {
@@ -527,10 +563,22 @@ func (s *Source) prefixFor(a netip.Addr) netip.Prefix {
 	return p
 }
 
+// sweep counts timed-out handshakes in whichever tracker is running.
+func (s *Source) sweep(now time.Time) {
+	s.capMu.Lock()
+	kt := s.kt
+	s.capMu.Unlock()
+	if kt != nil {
+		s.kernelSweep(now, kt)
+		return
+	}
+	s.trk.sweep(now)
+}
+
 // Problems returns the current problem prefixes, worst first.
 func (s *Source) Problems() []passive.Problem {
 	now := s.now()
-	s.trk.sweep(now)
+	s.sweep(now)
 	return s.win.Problems(now, s.th, s.maxTargets)
 }
 
@@ -538,7 +586,7 @@ func (s *Source) Problems() []passive.Problem {
 // confidence of probe samples. It announces nothing.
 func (s *Source) PassiveSignals() map[netip.Prefix]bool {
 	now := s.now()
-	s.trk.sweep(now)
+	s.sweep(now)
 	return s.win.Signals(now, s.th)
 }
 
