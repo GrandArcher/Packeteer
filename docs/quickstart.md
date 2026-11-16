@@ -6,7 +6,7 @@ Every command block on this page runs in CI, in order, against the image built f
 
 You need:
 
-- Linux with Docker Engine and the Compose plugin (`docker compose`). Packeteer uses host networking, which Docker Desktop on macOS and Windows does not give you.
+- Linux with Docker Engine and the Compose plugin (`docker compose`). This quickstart is Linux only: Packeteer uses host networking, which Docker Desktop on macOS and Windows does not give you. To try Packeteer on macOS or Windows, use the bridge-network [demo](demo.md#platforms).
 - `curl`.
 - Nothing else on the host listening on `127.0.0.1:8080`.
 

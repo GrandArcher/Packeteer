@@ -1,0 +1,5 @@
+# The demo lab bind-mounts these into Linux containers; CRLF from a Windows
+# checkout breaks the shell scripts and the FRR config.
+lab/** eol=lf
+scripts/** eol=lf
+*.bz2 binary

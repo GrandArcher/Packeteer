@@ -2,9 +2,9 @@
 
 A short script to follow on screen, about five minutes. It starts the one-command lab ([lab/README.md](../lab/README.md#one-command-demo-586)), shows what Packeteer recommends in `observe`, shows that the edge router has accepted nothing from Packeteer, previews what inject would do without making any change, and stops the lab. For the long version that goes on to suggest and inject, read [walkthrough.md](walkthrough.md). For a host install, read [quickstart.md](quickstart.md).
 
-Nothing here touches a real network. The routers are containers on a Docker bridge, the addresses are documentation ranges (RFC 5737), and the ASNs are the private-use 64512 and the documentation values 64496 and 64497. The mode stays `observe` from start to stop. Every command block after the clone runs in CI, in order, in the `e2e` job (`lab/e2e-docs.sh docs/demo.md`).
+Nothing here touches a real network. The routers are containers on a Docker bridge, the addresses are documentation ranges (RFC 5737), and the ASNs are the private-use 64512 and the documentation values 64496 and 64497. The mode stays `observe` from start to stop. Every command block after the clone, except the manual check under [Platforms](#platforms), runs in CI, in order, in the `e2e` job (`lab/e2e-docs.sh docs/demo.md`).
 
-You need Linux with Docker Engine, the Compose plugin, `git`, `curl`, and nothing else on `127.0.0.1:18080` or the `192.0.2.0/24` bridge (stop the walkthrough lab first). `./scripts/demo.sh` checks this before it builds anything and stops with a one-line fix when Docker is Docker Desktop or the Compose plugin is missing, when `127.0.0.1:18080` is taken, or when another Docker network already uses `192.0.2.0/24`.
+You need Docker with the Compose plugin and Linux containers, `git`, `curl`, `bash`, and nothing else on `127.0.0.1:18080` or the `192.0.2.0/24` bridge (stop the walkthrough lab first). Platforms are listed under [Platforms](#platforms). `./scripts/demo.sh` checks the host before it builds anything and stops with a one-line fix when the shell is a native Windows one, Docker is missing, down, or in Windows containers mode, the Compose plugin is missing, `127.0.0.1:18080` is taken, or another Docker network already uses `192.0.2.0/24`.
 
 | Lab | Address | AS | Role |
 |---|---|---|---|
@@ -137,6 +137,31 @@ docker ps -a --filter name=pkd- --format '{{.Names}}'
 <!-- ci-absent: pkd- -->
 
 Every container and the lab network are gone. Nothing was ever announced, so there is nothing to withdraw.
+
+## Platforms
+
+| Platform | Status |
+|---|---|
+| Linux with Docker Engine and the Compose plugin | Supported. CI runs `scripts/demo.sh` and this guide on it. |
+| Docker Desktop on Linux | Allowed, not run in CI, not verified. |
+| Docker Desktop on macOS | Allowed, not run in CI (GitHub macOS runners have no Docker), not verified. Docker on macOS without Docker Desktop (for example Colima) gets the same note. |
+| Docker Desktop on Windows, from a WSL2 terminal | Allowed, not run in CI, not verified. |
+| Windows Git Bash, MSYS, Cygwin, PowerShell, cmd | Refused by the script. Use a WSL2 terminal. |
+| Docker Desktop in Windows containers mode | Refused by the script. Switch to Linux containers. |
+
+On Docker Desktop the script prints one note and goes on. The containers run in Docker Desktop's Linux VM, the lab network `192.0.2.0/24` exists only there, and the dashboard is published on the host's `127.0.0.1:18080`, so the lab needs no host networking. This is why the demo can work where the host [quickstart](quickstart.md), which needs host networking and is Linux only, cannot. That is the reasoning; no one has yet run it on Docker Desktop and recorded the result.
+
+Manual check on macOS or Windows (WSL2). On Windows, run everything in a WSL2 terminal with Docker Desktop's WSL integration on for that distro, and clone inside the WSL filesystem, not under `/mnt/c`. The repository's `.gitattributes` keeps the lab files on LF line endings. None of this is run in CI.
+
+Run `docker info --format '{{.OperatingSystem}} {{.OSType}}'`; expect `Docker Desktop linux`. Then run the guide above from step 1 and check each of these:
+
+1. `./scripts/demo.sh` prints the Docker Desktop note and then `Packeteer demo is up (mode: observe; nothing is announced).`
+2. The iBGP wait command in step 1 reaches `BGP state = Established` within about two minutes. If the edge never comes up, `docker compose -f lab/docker-compose-demo.yml logs edge` shows why; FRR reading its config from a bind mount is the part most likely to differ on Docker Desktop.
+3. <http://127.0.0.1:18080/> opens in a browser on the host, and you can sign in as `admin`.
+4. The `api` calls in steps 2 to 4 give the expected output: mode `observe`, `198.51.100.0/24` in the RIB on `transit-a` with `transit-b` recommended, and no route from `192.0.2.10` on the edge.
+5. `./scripts/demo.sh stop` leaves no `pkd-` container.
+
+Record the operating system and version, the Docker Desktop version, the CPU (Intel or Apple silicon), and which of the five checks passed, and file it as a GitHub issue. A failed step with its log is as useful as a pass. Until such a result is recorded here, treat Docker Desktop as unverified.
 
 ## Where next
 

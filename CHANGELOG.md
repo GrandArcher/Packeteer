@@ -7,6 +7,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 ### Changed
 
 - Go toolchain moves to 1.27: `go.mod` and the Dockerfile builder digest, which supersedes the Dependabot bump (#623).
+- `scripts/demo.sh` allows Docker Desktop (macOS, Windows via WSL2) with a note, refuses native Windows shells and Windows containers; `.gitattributes` keeps lab files on LF (#630).
 
 ## [1.4.1] - 2026-11-14
 
