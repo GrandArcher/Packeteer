@@ -2,8 +2,9 @@
 # Packeteer instance, federated over mutual TLS. Documentation addresses
 # (RFC 5737) and a private ASN only. Brought up by lab/e2e-multipop.sh,
 # which sets PACKETEER_LAB_DIR: a/ and b/ hold each instance's probe and
-# usage files (re-read by the fixed plugins), certs/ the per-run
-# certificates from lab/mkcerts.
+# usage files (re-read by the fixed plugins), conf-a/ and conf-b/ a
+# writable copy of each config (a settings push, #628, writes it), certs/
+# the per-run certificates from lab/mkcerts.
 name: packeteer-e2e-multipop
 x-frr: &frr
   image: quay.io/frrouting/frr:10.2.4
@@ -48,10 +49,14 @@ services:
     depends_on:
       - edge-a
     environment:
-      PACKETEER_CONFIG: /etc/packeteer/config.yaml
+      PACKETEER_CONFIG: /etc/packeteer/conf/config.yaml
       PACKETEER_LOG_LEVEL: debug
+      # Lab-only credentials: the config editor and the settings push
+      # refuse writes without basic auth.
+      PACKETEER_HTTP_USER: lab
+      PACKETEER_HTTP_PASSWORD: lab-only
     volumes:
-      - ./packeteer-multipop-a.yaml:/etc/packeteer/config.yaml:ro
+      - ${PACKETEER_LAB_DIR}/conf-a:/etc/packeteer/conf
       - ${PACKETEER_LAB_DIR}/a:/etc/packeteer/lab:ro
       - ${PACKETEER_LAB_DIR}/certs:/etc/packeteer/certs:ro
     networks:
@@ -62,10 +67,14 @@ services:
     depends_on:
       - edge-b
     environment:
-      PACKETEER_CONFIG: /etc/packeteer/config.yaml
+      PACKETEER_CONFIG: /etc/packeteer/conf/config.yaml
       PACKETEER_LOG_LEVEL: debug
+      # Lab-only credentials: the config editor and the settings push
+      # refuse writes without basic auth.
+      PACKETEER_HTTP_USER: lab
+      PACKETEER_HTTP_PASSWORD: lab-only
     volumes:
-      - ./packeteer-multipop-b.yaml:/etc/packeteer/config.yaml:ro
+      - ${PACKETEER_LAB_DIR}/conf-b:/etc/packeteer/conf
       - ${PACKETEER_LAB_DIR}/b:/etc/packeteer/lab:ro
       - ${PACKETEER_LAB_DIR}/certs:/etc/packeteer/certs:ro
     networks:
