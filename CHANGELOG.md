@@ -8,6 +8,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 - `packeteer report --share`, `GET /api/report/share`, a Settings panel, and `field-report.yml` and `bug.yml` issue forms: a preview-first summary with documentation-range redaction (#625).
 - `only-invalid` CI job: `lab/e2e-only-invalid.sh` runs `rpki.only_invalid` and an approved SLURM exception against Routinator fed only local SLURM data, in observe (#627).
+- Opt-in `preflight.router_check` (`frr`, `bird`) reads the router's import and eBGP export policy with allowlisted show commands only and backs `import_filter`; `router-check` CI job (#626).
 - `lab/e2e-multipop.sh` pushes `thresholds` and `policies` between the two POPs in observe; the peer refuses `mode`, allowlist, announcer, and invalid sections, and both sides audit (#628).
 
 ### Changed

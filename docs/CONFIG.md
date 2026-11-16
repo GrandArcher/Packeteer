@@ -24,6 +24,7 @@ The image entrypoint is the same binary. Flags go after the image name.
 | Key | Default | Required | Meaning |
 |---|---|---|---|
 | `mode` | `observe` | no | `observe`, `suggest`, or `inject`. A file without `mode` (or with an empty one) observes. `inject` is never a default: it needs `mode: inject` and the [inject checklist](#inject-checklist). An [`ixp`](#ixp) block refuses `inject`. |
+| `preflight` | absent | no | Onboarding checks (#221). Optional `router_check` reads the router's BGP policy with show commands only and backs the `import_filter` check (#626). Announces nothing. See [`preflight`](#preflight). |
 | `lookup` | absent | no | Read-only PeeringDB / IX-F directory (#153). One plugin, `type: peeringdb`. Announces nothing. See [`lookup`](#lookup). |
 | `inventory` | absent | no | Read-only NetBox or Peering Manager source that `packeteer config plan`, `diff`, and `apply` read providers from (#208). Announces nothing and is not read by the running controller. See [`inventory`](#inventory). |
 | `nonbgp` | absent | no | Flow-driven static routes for a dual-ISP site whose router has no BGP (#300). The routes are not from a learned RIB view; installed only with `mode: inject` and `nonbgp.install_routes: true`. Refuses the BGP blocks. See [`nonbgp`](#nonbgp). |
@@ -547,6 +548,20 @@ lookup:
 Each refresh reads `ix` for the configured ids, `netixlan` for those exchanges, then `net` and `org` for the networks on them, and each IX-F document. The requests are at least 3 seconds apart (2 seconds with a key). PeeringDB rows are capped at 20000 networks and 20000 attachments; a refresh over a cap or with a malformed response is refused as a whole and the last good cache stays. An IX-F connection counts when its state is `active`, `connected`, or `operational`, or when it has none. A failed IX-F document is recorded on its exchange (`ixf_error`) and does not clear the PeeringDB rows. After three refresh intervals without a success the served lists are empty and `stale` is true. `GET /api/lookup` reads the cache (`?asn=` keeps one network and its attachments). The metrics are `packeteer_lookup_networks`, `packeteer_lookup_memberships`, `packeteer_lookup_up`, and `packeteer_lookup_age_seconds`.
 
 Adding, changing, or removing `lookup` needs a restart. Rollback: remove `lookup` and restart. Nothing was announced.
+
+### `preflight`
+
+`preflight.router_check` is the read-only router check (#626): one plugin, `type: frr` or `type: bird`. It is off by default; without it `import_filter` waits for an administrator's confirmation as before. Point it only at a lab router or a router you chose; it never writes to it. Details and limits: [onboarding.md](onboarding.md#read-only-router-check).
+
+```yaml
+preflight:
+  router_check:
+    type: frr
+    config:
+      socket_env: PACKETEER_FRR_SOCKET   # the variable's name, not the path
+```
+
+`socket_env` (required) names the environment variable that holds the absolute path of the router's socket: bgpd's vty socket (`bgpd.vty`) for `frr`, the control socket (`bird.ctl`) for `bird`. `type: bird` also needs `config_env`, the variable that holds the absolute path of the `bird.conf` BIRD runs, mounted read-only. The paths are not written in the config file and are not shown in logs, the API, or the UI. With the config editor's check (`-check` keeps it) an unset variable is not an error; at start it is. Adding, changing, or removing `preflight` needs a restart. Rollback: remove `preflight` and restart.
 
 ### `herd`
 

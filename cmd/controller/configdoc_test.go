@@ -43,6 +43,8 @@ import (
 	regpeeringdb "github.com/GrandArcher/Packeteer/internal/plugins/registry/peeringdb"
 	regripe "github.com/GrandArcher/Packeteer/internal/plugins/registry/ripe"
 	"github.com/GrandArcher/Packeteer/internal/plugins/ribsource/bmp"
+	birdcheck "github.com/GrandArcher/Packeteer/internal/plugins/routercheck/bird"
+	frrcheck "github.com/GrandArcher/Packeteer/internal/plugins/routercheck/frr"
 	"github.com/GrandArcher/Packeteer/internal/plugins/rpki/rtr"
 	"github.com/GrandArcher/Packeteer/internal/plugins/scorer/commit"
 	"github.com/GrandArcher/Packeteer/internal/plugins/scorer/cost"
@@ -139,6 +141,8 @@ func TestConfigDocCoversStructs(t *testing.T) {
 		config.CoreLink{},
 		peeringdb.Config{},
 		regpeeringdb.Config{},
+		frrcheck.Config{},
+		birdcheck.Config{},
 		regripe.Config{},
 		config.Registry{},
 		config.RegistryIRR{},

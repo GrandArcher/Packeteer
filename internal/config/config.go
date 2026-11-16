@@ -246,6 +246,8 @@ type Config struct {
 	// Lookup is the read-only PeeringDB / IX-F directory (#153). Nil
 	// disables it. It never announces.
 	Lookup *PluginSpec `yaml:"lookup"`
+	// Preflight configures the onboarding checks (#221).
+	Preflight Preflight `yaml:"preflight"`
 	// Inventory is the read-only NetBox / Peering Manager source that
 	// `packeteer config plan`, `diff`, and `apply` read providers from
 	// (#208). Nil disables it. The running controller never reads it and it
@@ -505,6 +507,14 @@ type BGPNeighbor struct {
 
 // Routed reports whether the neighbor restricts which providers it reaches.
 func (n BGPNeighbor) Routed() bool { return len(n.Providers) > 0 || len(n.NextHops) > 0 }
+
+// Preflight configures the onboarding checks.
+type Preflight struct {
+	// RouterCheck reads the router's BGP policy with show commands only
+	// and backs the import_filter check with it (#626). Nil is off: the
+	// check asks an administrator to confirm.
+	RouterCheck *PluginSpec `yaml:"router_check"`
+}
 
 // PluginSpec selects one plugin instance.
 type PluginSpec struct {

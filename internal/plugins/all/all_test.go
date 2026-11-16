@@ -46,6 +46,7 @@ func TestProgramTypesAreOnlyProbersSourcesNotifiers(t *testing.T) {
 		"ixp route servers":     plugin.RouteServerWatches.Types(),
 		"ixp correlators":       plugin.FabricCorrelators.Types(),
 		"ixp core":              plugin.CoreProbes.Types(),
+		"router checks":         plugin.RouterChecks.Types(),
 	}
 	for name, types := range registries {
 		for _, typ := range []string{oop.ExecType, oop.GRPCType} {
