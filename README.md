@@ -25,7 +25,7 @@ The feature matrix is [docs/FEATURES.md](docs/FEATURES.md).
 - **Outputs (v0.9).** `exporters` push events, decisions, and flows to Kafka, NATS, OTLP, InfluxDB, or IPFIX (#207, #287). A read-only SNMP agent with a MIB, SNMP informs, and a `syslog` notifier serve an existing NMS (#212). The `external_policy` feed publishes the routes inject would announce for your own BIRD, OpenBGPD, or ExaBGP (#232; only BIRD is lab-tested). A `timeseries` report email carries before and after charts (#136). BMP alone can be the whole RIB view (#237). `grpc` plugins keep a prober, source, or notifier running (#286, [guide](docs/PLUGIN_AUTHORING.md)).
 - **Opt-in outside data (v0.9).** The herd page (#296), RIPE Atlas measurements (#213), the NLNOG RING looking-glass panel (#283), and threat-intelligence feeds that become mitigation rules only through explicit rules (#134). All are off by default and display only, except a threat rule you write.
 
-Everything in v0.9 and v1.0 is lab-proven (simulated routers or sink containers, documentation prefixes) or tested on fixtures only; [docs/FEATURES.md](docs/FEATURES.md) says which for each row. Registry hygiene, onboarding, herd, and the eBPF data path are partial. Nothing is field-proven (#54).
+Everything in v0.9 and v1.0 is lab-proven (simulated routers or sink containers, documentation prefixes) or tested on fixtures only; [docs/FEATURES.md](docs/FEATURES.md) says which for each row. Registry hygiene, onboarding, herd, and the eBPF data path are partial. Nothing is field-proven (#54); `packeteer report --share` writes a redacted summary to paste into a field-report issue ([docs/field-report.md](docs/field-report.md)).
 
 ![Overview](docs/assets/ui-overview.png)
 
@@ -354,8 +354,9 @@ Status on main after the 1.4.1 release, capability rows per milestone and how ma
 | v0.9 | 31 | 28 |
 | v1.1 | 3 | 1 |
 | v1.4 | 1 | 1 |
+| v1.5 | 1 | 1 |
 | won't do | 2 | - |
-| **Total** | 146 | 133 |
+| **Total** | 147 | 134 |
 
 v0.1 is the outbound loop: probes, static and flow targets, an iBGP RIB, scoring with hysteresis, optional injection, the read-only UI and API, the container, and the FRR lab. v0.2 adds cost and commit control, SNMP, policies, alerts, and reports. v0.3 adds inbound optimization, BMP and add-path, multiple routers and IX, RTBH/FlowSpec mitigation, transit classification, and capped more-specific injection, all lab-proven. v0.4 adds multi-POP federation, active/standby HA and backup, RBAC/SSO/audit, flow-baseline anomaly detection that mitigates only on explicit rules, and the remaining UI rows. v0.5 is hardening on that matrix: dashboard clarity and a first-run checklist, CI-tested install and walkthrough docs, load and soak budgets, a MikroTik CHR lab in CI, and a scheduled router interop matrix. Field feedback from real observe-mode deployments (#54) is still open. v0.6 closes the gaps from the 2026-10-07 review of prefix selection, measurement, and the UI, adds flap quarantine, live apply, scale budgets up to multi-million path tables, upgrade from the UI, and a failure-mode e2e matrix. v0.7 adds exchange (IX) visibility for an edge network: an exchange view, IX LAN health probes, route-server vs bilateral prefix views, offload and potential-peers reports, dashboard widgets, Commit & Cost, Reports, search, System, and maintenance pages, and link-outs.
 

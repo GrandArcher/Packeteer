@@ -12,6 +12,7 @@ import (
 
 	"github.com/GrandArcher/Packeteer/internal/config"
 	"github.com/GrandArcher/Packeteer/internal/configedit"
+	"github.com/GrandArcher/Packeteer/internal/fieldreport"
 	"github.com/GrandArcher/Packeteer/internal/geoip"
 	"github.com/GrandArcher/Packeteer/internal/httpapi"
 	"github.com/GrandArcher/Packeteer/internal/pluginhost"
@@ -287,7 +288,7 @@ func checkEnvNames(running, next *config.Config) error {
 // setupInfo is what the dashboard's first-run checklist reads from the
 // loaded config (#49): the target source types and the cap.
 func setupInfo(cfg *config.Config, plugins *pluginhost.Set, geo *geoip.Fetcher) httpapi.Setup {
-	st := httpapi.Setup{DegradedLossPct: cfg.Probe.DegradedLossPct, DownLossPct: cfg.Probe.DownLossPct, GeoIP: geoipSetup(cfg, geo)}
+	st := httpapi.Setup{DegradedLossPct: cfg.Probe.DegradedLossPct, DownLossPct: cfg.Probe.DownLossPct, GeoIP: geoipSetup(cfg, geo), Report: reportFacts(cfg)}
 	if cfg.MaxImprovements != nil {
 		st.MaxImprovements = *cfg.MaxImprovements
 	}
@@ -304,4 +305,23 @@ func setupInfo(cfg *config.Config, plugins *pluginhost.Set, geo *geoip.Fetcher) 
 		st.NonBGPWarning = config.NonBGPWarning
 	}
 	return st
+}
+
+// reportFacts is what the field report (#625) reads from the config: counts
+// and plugin types. No name, address, or credential leaves the config.
+func reportFacts(cfg *config.Config) fieldreport.Facts {
+	f := fieldreport.Facts{Providers: len(cfg.Providers), BGPNeighbors: len(cfg.BGP.Neighbors), BMP: len(cfg.RIBSources) > 0}
+	for _, n := range cfg.BGP.Neighbors {
+		f.AddPath = f.AddPath || n.AddPath
+	}
+	for _, p := range cfg.Providers {
+		f.BMP = f.BMP || p.BMP != "" && p.BMP != config.BMPOff
+	}
+	for _, p := range cfg.Probers {
+		f.ProbeTypes = append(f.ProbeTypes, p.Type)
+	}
+	for _, p := range cfg.Sources {
+		f.SourceTypes = append(f.SourceTypes, p.Type)
+	}
+	return f
 }

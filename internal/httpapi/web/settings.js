@@ -2987,6 +2987,8 @@ byId("pf-run").addEventListener("click", runPreflight);
 byId("pbr-show").addEventListener("click", showPbr);
 byId("pbr-apply").addEventListener("click", applyPbr);
 byId("pbr-confirm").addEventListener("change", pbrConfirmChanged);
+byId("fr-preview").addEventListener("click", previewFieldReport);
+byId("fr-download").addEventListener("click", downloadFieldReport);
 byId("pf-snippet-show").addEventListener("click", showSnippet);
 byId("pf-snippet-copy").addEventListener("click", copySnippet);
 ["pf-vendor", "wz-asn", "wz-router", "wz-edge", "wz-flow", "wz-flow-addr", "wz-flow-port", "ed-yaml"].forEach(function (id) {
@@ -3071,4 +3073,37 @@ function checkOffNum(v, max) {
   if (!/^[-+]?(\d+(\.\d+)?|\.\d+)$/.test(v)) return "Enter a number.";
   if (Number(v) > max) return "Enter a number up to " + max + ".";
   return "";
+}
+
+// previewFieldReport shows the redacted summary (#625). The download button
+// appears only after the text is on the page, so nothing is saved unseen.
+var fieldReportName = "packeteer-field-report.txt";
+function previewFieldReport() {
+  var status = byId("fr-status");
+  status.textContent = "Reading...";
+  return api("GET", "/api/report/share").then(function (out) {
+    fieldReportName = out.filename || fieldReportName;
+    var pre = byId("fr-text");
+    pre.textContent = out.report;
+    pre.hidden = false;
+    byId("fr-download").hidden = false;
+    status.textContent = "Read it once more, then download it and paste it into the issue form.";
+  }, function (err) {
+    byId("fr-text").hidden = true;
+    byId("fr-download").hidden = true;
+    status.textContent = explain(err);
+  });
+}
+
+// downloadFieldReport saves the text that is on the page, not a new read.
+function downloadFieldReport() {
+  var blob = new Blob([byId("fr-text").textContent], {type: "text/plain"});
+  var a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = fieldReportName;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(a.href);
+  byId("fr-status").textContent = "Downloaded " + fieldReportName + ".";
 }

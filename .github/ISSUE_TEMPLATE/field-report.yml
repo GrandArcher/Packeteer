@@ -1,0 +1,51 @@
+name: Field report
+description: Tell us how Packeteer ran on your network in observe mode
+title: "Field report: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for trying Packeteer. Reports are collected in #54.
+
+        Generate the summary below with `docker exec -it packeteer packeteer report --share`, or use Settings, Field report in the dashboard. It replaces every address, prefix, AS number, and host name with a documentation placeholder, shows you a preview, and sends nothing. See [docs/field-report.md](https://github.com/GrandArcher/Packeteer/blob/main/docs/field-report.md).
+
+        **Do not paste real prefixes, AS numbers, host names, IP addresses, or credentials (passwords, tokens, SNMP communities, API keys) anywhere in this issue.** Read the summary once more before you submit it.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Redacted summary
+      description: Paste the output of `packeteer report --share`.
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: router
+    attributes:
+      label: Router vendor and software version
+      description: Packeteer does not read this. For example FRR 10, Junos 24.2, RouterOS 7.16.
+    validations:
+      required: true
+  - type: textarea
+    id: observed
+    attributes:
+      label: What did you see in observe mode?
+      description: Did the recommendations look right? Did anything look wrong or confusing? Use placeholders, not real values.
+    validations:
+      required: true
+  - type: dropdown
+    id: duration
+    attributes:
+      label: How long did it run?
+      options:
+        - Less than a day
+        - A few days
+        - A week or more
+    validations:
+      required: true
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: Before you submit
+      options:
+        - label: I read the summary and this issue, and they contain no real prefix, AS number, host name, IP address, or credential.
+          required: true

@@ -6,6 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Added
 
+- `packeteer report --share`, `GET /api/report/share`, a Settings panel, and `field-report.yml` and `bug.yml` issue forms: a preview-first summary with documentation-range redaction (#625).
 - `only-invalid` CI job: `lab/e2e-only-invalid.sh` runs `rpki.only_invalid` and an approved SLURM exception against Routinator fed only local SLURM data, in observe (#627).
 - `lab/e2e-multipop.sh` pushes `thresholds` and `policies` between the two POPs in observe; the peer refuses `mode`, allowlist, announcer, and invalid sections, and both sides audit (#628).
 
