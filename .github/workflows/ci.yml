@@ -3039,6 +3039,21 @@ jobs:
           PACKETEER_DOCS_CLEANUP: ./scripts/demo.sh stop
         run: bash lab/e2e-docs.sh docs/demo.md
 
+  only-invalid:
+    # RPKI-invalid only paths (#401) against a real Routinator (#627).
+    # Routinator has no trust anchor and fetches nothing: its data are local
+    # SLURM files only. Observe mode; the edge must receive nothing. Two to
+    # three five-minute scans, so the job has its own runner.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+      - name: Routinator lab (#627; invalid only path classed stale_roa with evidence, covered invalid route not raised, approved SLURM exception served as valid and the case clears, audit log, nothing announced, SIGTERM)
+        run: bash lab/e2e-only-invalid.sh
+
   chaos:
     # Chaos soak (#585), short profile: one pass of a session flap, a
     # transit-b probe-source failure, SIGTERM, and SIGKILL on the HA lab,

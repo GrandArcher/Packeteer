@@ -117,7 +117,9 @@ The `e2e` job runs [docs/walkthrough.md](../docs/walkthrough.md) on its own topo
 
 (3) Suggest: the same recommendation, logged with `mode=suggest`, still nothing on the edge. (4) Inject: `-check` of the edited file, then the edge's best path is Packeteer's with next hop `192.0.2.22`, local-pref 250, `64512:666`, and `no-export`, and neither transit is sent the prefix. (5) SIGTERM (`docker stop -t 30`) withdraws it and the edge is back on transit-a. (6) Back to observe, nothing returns.
 
-GitHub Actions runs the scripts above, the walkthrough, and the demo as the `e2e` job. Docker and Go are required (the scripts build `lab/checkroute`, `lab/checkpath`, `lab/checkms`, `lab/checkpop`, `lab/checklease`, and `lab/mkcerts`); they do not run in the unit-test job. `go test ./lab/checkroute ./lab/checkpath ./lab/checkms ./lab/checkpop ./lab/checklease ./lab/doccmds` covers the checks themselves.
+`lab/e2e-only-invalid.sh` is RPKI-invalid only paths (#401) against a real Routinator (#627) on its own topology (`lab/docker-compose-only-invalid.yml`): Routinator (192.0.2.40) with no trust anchor and no repository fetch, serving only the ROAs in `lab/only-invalid/roas.json` (SLURM assertions) and the exceptions file the script shares with Packeteer; an FRR edge (`lab/frr-oi-edge`); transit-a (`lab/frr-oi-transit-a`), which sends `198.51.100.0/25` from AS64500 and `203.0.113.0/24` and `203.0.113.128/25` from AS64501; and Packeteer in observe (`lab/packeteer-only-invalid.yaml`, with an `irr` `file` route object in `lab/only-invalid/irr.db`). It checks: (1) `198.51.100.0/25` raises `rpki.only_invalid` classed `stale_roa` with the evidence, and the invalid `203.0.113.128/25` under the valid /24 raises nothing. (2) A proposal writes nothing. (3) After approval the file holds the entry, Routinator serves the route as valid, and the case clears. (4) The audit log has the proposal, approval, and write. (5) The edge receives no route from Packeteer on any sample, and SIGTERM stops it cleanly. It runs as the `only-invalid` CI job.
+
+GitHub Actions runs the scripts above (except the Routinator lab, which is the `only-invalid` job), the walkthrough, and the demo as the `e2e` job. Docker and Go are required (the scripts build `lab/checkroute`, `lab/checkpath`, `lab/checkms`, `lab/checkpop`, `lab/checklease`, and `lab/mkcerts`); they do not run in the unit-test job. `go test ./lab/checkroute ./lab/checkpath ./lab/checkms ./lab/checkpop ./lab/checklease ./lab/doccmds` covers the checks themselves.
 
 ```sh
 bash lab/e2e.sh
@@ -138,6 +140,7 @@ bash lab/e2e-synthesize.sh
 bash lab/e2e-nonbgp.sh
 bash lab/e2e-vrf.sh
 bash lab/e2e-leak-watch.sh
+bash lab/e2e-only-invalid.sh
 bash lab/e2e-multipop.sh
 bash lab/e2e-herd.sh
 bash lab/e2e-agents.sh
