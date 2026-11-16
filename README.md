@@ -78,17 +78,17 @@ The image is `ghcr.io/grandarcher/packeteer`, linux/amd64 and linux/arm64. It ru
 
 | Tag | What it is |
 |---|---|
-| `1.4.1` | The last release. Pin this one. |
+| `1.5.0` | The last release. Pin this one. |
 | `latest` | The same release, updated when a release tag is published. |
 | `edge` | The build from `main`. |
 
 **Step by step: [docs/quickstart.md](docs/quickstart.md).** It goes from an empty directory to a running instance in observe, with a first run on loopback, `docker run` and Compose, and the stop. CI runs every command on that page against the image built from the same commit.
 
-The short version, pinned to 1.4.1, the last release. Take the example config from the same tag as the image: the file on `main` can carry keys a release does not know yet, and unknown keys refuse startup. For `:edge`, use `main` in both places.
+The short version, pinned to 1.5.0, the last release. Take the example config from the same tag as the image: the file on `main` can carry keys a release does not know yet, and unknown keys refuse startup. For `:edge`, use `main` in both places.
 
 ```sh
-IMAGE=ghcr.io/grandarcher/packeteer:1.4.1
-curl -fsSLo config.yaml https://raw.githubusercontent.com/GrandArcher/Packeteer/v1.4.1/config.example.yaml
+IMAGE=ghcr.io/grandarcher/packeteer:1.5.0
+curl -fsSLo config.yaml https://raw.githubusercontent.com/GrandArcher/Packeteer/v1.5.0/config.example.yaml
 # Edit providers and source IPs. Leave mode: observe.
 mkdir -p plugins
 
@@ -109,7 +109,7 @@ docker run -d --name packeteer --network host \
 
 ```sh
 docker run --rm -e PACKETEER_CONFIG=/etc/packeteer/config.example.yaml \
-  ghcr.io/grandarcher/packeteer:1.4.1 -check
+  ghcr.io/grandarcher/packeteer:1.5.0 -check
 ```
 
 The default config path inside the container is `/etc/packeteer/config.yaml` (`PACKETEER_CONFIG`, or `-config`).
@@ -120,7 +120,7 @@ Without `NET_RAW`, or where ICMP is filtered, the probe falls back to TCP port 4
 
 The `packeteer-data` volume keeps report history (`storage: {type: sqlite}`, file `/var/lib/packeteer/packeteer.db`) across container restarts and upgrades, and the open billing period of SNMP 95th-percentile samples when telemetry is configured. Without the volume, reports and that window start empty after the container is recreated. Leave out `storage` to turn history off; the probe and decision loop does not depend on it, and the 95th window then lives in memory only. Sign-in on by default (no `auth.enabled`, no `PACKETEER_HTTP_USER`) adds `sqlite` when `storage` is left out.
 
-[docker-compose.yml](docker-compose.yml) runs the same container with Compose: host networking, the two capabilities, the mounts, and `restart: unless-stopped` ([quickstart, step 5](docs/quickstart.md#5-or-run-it-with-compose)). Its `image` line pins `ghcr.io/grandarcher/packeteer:1.4.1`; use `:edge` for the build from `main`. There is no `ports:` map: with host networking, `http.listen` is already an address on the host. Stop with `docker compose stop -t 30` (see [Rollback](#rollback)).
+[docker-compose.yml](docker-compose.yml) runs the same container with Compose: host networking, the two capabilities, the mounts, and `restart: unless-stopped` ([quickstart, step 5](docs/quickstart.md#5-or-run-it-with-compose)). Its `image` line pins `ghcr.io/grandarcher/packeteer:1.5.0`; use `:edge` for the build from `main`. There is no `ports:` map: with host networking, `http.listen` is already an address on the host. Stop with `docker compose stop -t 30` (see [Rollback](#rollback)).
 
 ## Minimum config
 
@@ -340,7 +340,7 @@ Symptoms, log lines, and fixes: [docs/troubleshooting.md](docs/troubleshooting.m
 
 ## Features
 
-Status on main after the 1.4.1 release, capability rows per milestone and how many are done, from the summary in [docs/FEATURES.md](docs/FEATURES.md#summary):
+Status on main after the 1.5.0 release, capability rows per milestone and how many are done, from the summary in [docs/FEATURES.md](docs/FEATURES.md#summary):
 
 | Milestone | Rows | Done |
 |---|---|---|
@@ -376,13 +376,30 @@ v1.3.0 added no capability rows and no config keys, so the counts did not change
 
 v1.4.0 added one capability row, the lab-only path-scoring harness, and no config keys: the counts above include it (132 done at 1.4.0, up from 131 at 1.3.0). You can finish observe setup from the GUI: the Settings Host policy routing panel plans, applies, and verifies the `ip rule` and `ip route` for each probe source, and the Overview checklist reads "Setup complete, still observe" once the session is up, a prefix is learned, and every provider has answered; the `firstrun-gui` CI job walks a stock image there in under 15 minutes with no YAML edit ([docs/onboarding.md](docs/onboarding.md#setup-complete), #582, #587). `/value.html` shows a manager what Packeteer did for them from the new `value` report, loss and latency avoided per provider and per day; it needs sqlite storage, and observe figures are recommended and estimated, not announced ([docs/ui.md](docs/ui.md#the-value-page), #583, #588). `scripts/demo.sh` starts a one-command observe-only demo lab, with a five-minute script in [docs/demo.md](docs/demo.md) (#586, #590). A chaos soak on the HA lab checks the safety invariants on the edge through a session flap, a probe-source failure, SIGTERM, and SIGKILL; CI runs a short profile; the weekly 5h run and a multi-day run are documented in [lab/chaos/README.md](lab/chaos/README.md) (#585, #589). `lab/evolve` is experimental and lab only: it replays recorded rounds under config variants and scores them, writes no config, and never changes a default ([lab/evolve/README.md](lab/evolve/README.md), #584). Nothing is field-proven (#54). The shipped config stays `mode: observe`, and injection stays off by default ([CHANGELOG](CHANGELOG.md#140---2026-11-14)).
 
-v1.4.1 (this release) is a patch with no new capability rows and no config keys, so the counts above are unchanged. It fixes the quickstart (one password variable, no `openssl`, the Compose file pinned to the release) and makes `scripts/demo.sh` check Docker, port 18080, and the 192.0.2.0/24 bridge before it starts (#612). Nothing is field-proven (#54). The shipped config stays `mode: observe`, and injection stays off by default ([CHANGELOG](CHANGELOG.md#141---2026-11-14)).
+v1.4.1 was a patch with no new capability rows and no config keys, so the counts above are unchanged. It fixes the quickstart (one password variable, no `openssl`, the Compose file pinned to the release) and makes `scripts/demo.sh` check Docker, port 18080, and the 192.0.2.0/24 bridge before it starts (#612). Nothing is field-proven (#54). The shipped config stays `mode: observe`, and injection stays off by default ([CHANGELOG](CHANGELOG.md#141---2026-11-14)).
+
+v1.5.0 (this release) adds one capability row, the field-report kit, and two opt-in config keys, `preflight.router_check` and `span` `ebpf_track`; the counts above include the row and two v0.8 rows that moved from partial to done (136 done, up from 132 at 1.4.0). What an operator will look for:
+
+- `packeteer report --share` and a Settings panel write a redacted summary of an observe install to paste into a field-report or bug issue, preview first, with every address, prefix, and AS number replaced by a documentation placeholder and nothing uploaded ([docs/field-report.md](docs/field-report.md), #625).
+- The opt-in `preflight.router_check` (`frr` or `bird`) reads the router's import and eBGP export policy with allowlisted read-only commands and backs the `import_filter` onboarding check. It changes nothing on the router and is off by default ([docs/onboarding.md](docs/onboarding.md), #626).
+- The `only-invalid` CI job runs RPKI-invalid only paths and an approved SLURM exception against Routinator fed only local data, in observe ([docs/only-invalid.md](docs/only-invalid.md), #627).
+- The multi-POP lab pushes `thresholds` and `policies` between the two POPs in observe; the peer refuses `mode`, the allowlist, announcers, and invalid sections ([docs/multi-pop.md](docs/multi-pop.md), #628).
+- The potential-peers report and the exchange autoconfig member list show the cached PeeringDB network name next to each ASN, without a fetch (#629).
+- `scripts/demo.sh` runs on Docker Desktop with a note and refuses native Windows shells and Windows containers; it is not run in CI there and not verified ([docs/demo.md](docs/demo.md), #630).
+- `span` `ebpf_track: true` follows TCP connections, retransmissions, and handshake RTT in the kernel, and falls back to the userspace tracker ([docs/ebpf.md](docs/ebpf.md), #631).
+- The Go toolchain is 1.27 (#623).
+
+Nothing is field-proven (#54). The shipped config stays `mode: observe`, and injection stays off by default ([CHANGELOG](CHANGELOG.md#150---2026-11-16)).
 
 ## Upgrades
 
 Pulling a newer image and recreating the container is the plain upgrade. Your config and the `packeteer-data` volume carry over.
 
 The Settings page can also upgrade in place (#196). It is off by default. It needs `upgrade.enabled: true`, the release public key in `upgrade.public_key` ([CONFIG.md](docs/CONFIG.md#upgrade)), an admin login (auth or basic auth), and the `packeteer-data` volume to keep the new version across restarts. The public key is printed in the [v0.6.0 release notes](https://github.com/GrandArcher/Packeteer/releases/tag/v0.6.0). Every route is withdrawn before the switch, and a release whose signature or checksum does not match is refused. Details: [docs/ui.md](docs/ui.md#upgrade-from-the-ui).
+
+### From 1.4.1 to 1.5.0
+
+- No existing config key changed and no existing config behaves differently. `preflight.router_check` and `span` `ebpf_track` are new and off by default. A downgrade to 1.4.1 needs no config change unless you set either key: remove it first, because 1.4.1 refuses unknown keys.
 
 ### From 1.4.0 to 1.4.1
 

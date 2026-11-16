@@ -1,8 +1,12 @@
 # Changelog
 
-All notable changes to Packeteer are documented here. Versions are Git tags on `main`. The image tags `ghcr.io/grandarcher/packeteer:<version>` (for example `:1.4.1`) and `:latest` are published from each `v<version>` tag. `:edge` tracks `main`.
+All notable changes to Packeteer are documented here. Versions are Git tags on `main`. The image tags `ghcr.io/grandarcher/packeteer:<version>` (for example `:1.5.0`) and `:latest` are published from each `v<version>` tag. `:edge` tracks `main`.
 
 ## [Unreleased]
+
+## [1.5.0] - 2026-11-16
+
+The v1.5 release adds a field-report kit, an opt-in read-only router check, and kernel-side tracking in the eBPF span path, and proves RPKI-invalid only paths and federation push in lab jobs; the two new config keys, `preflight.router_check` and `span` `ebpf_track`, are off by default, and the shipped config stays `mode: observe` with injection off by default.
 
 ### Added
 
@@ -545,7 +549,8 @@ First release. An observe-first BGP path performance controller in one container
 - Communities are RFC 1997 (two 16-bit integers). `router_id` is IPv4.
 - RouterOS, Junos, and IOS snippets are documentation. The automated BGP test is the FRR lab.
 
-[Unreleased]: https://github.com/GrandArcher/Packeteer/compare/v1.4.1...HEAD
+[Unreleased]: https://github.com/GrandArcher/Packeteer/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/GrandArcher/Packeteer/compare/v1.4.1...v1.5.0
 [1.4.1]: https://github.com/GrandArcher/Packeteer/compare/v1.4.0...v1.4.1
 [1.4.0]: https://github.com/GrandArcher/Packeteer/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/GrandArcher/Packeteer/compare/v1.2.0...v1.3.0
