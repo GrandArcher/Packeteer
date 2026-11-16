@@ -54,6 +54,7 @@ func (s *Server) routeTable() []route {
 		{"GET /metrics", viewer, s.handleMetrics},
 		{"GET /api/overview", viewer, s.handleOverview},
 		{"GET /api/system", viewer, s.handleSystem},
+		{"GET /api/report/share", viewer, s.handleShareReport},
 		{"GET /api/search", viewer, s.handleSearch},
 		{"GET /api/providers", viewer, s.handleProviders},
 		{"GET /api/providers/stats", viewer, s.handleProviderStats},

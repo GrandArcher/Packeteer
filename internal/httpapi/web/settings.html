@@ -183,6 +183,18 @@
     </details>
   </section>
   <section>
+    <details id="field-report" class="fold">
+    <summary><h2>Field report</h2></summary>
+    <p class="tag">A short summary you can paste into a field-report or bug issue: version, mode, counts, the setup checklist, event counts, and the value report totals. Every address, prefix, AS number, and host name is replaced with a documentation placeholder; no password, token, or community is in it. Read the preview first. Nothing is sent anywhere and nothing is saved until you download it.</p>
+    <div class="controls">
+      <button type="button" id="fr-preview">Preview field report</button>
+      <button type="button" id="fr-download" hidden>Download</button>
+      <span id="fr-status" class="tag" role="status"></span>
+    </div>
+    <pre id="fr-text" class="mono" aria-label="Field report preview" hidden></pre>
+    </details>
+  </section>
+  <section>
     <details id="pbr" class="fold">
     <summary><h2>Host policy routing</h2></summary>
     <p class="tag">Each provider is measured from its <code>source_ip</code>, so this host must send that source out through the provider's <code>next_hop</code>. Show plan lists the <code>ip rule</code> and <code>ip route</code> commands and how the kernel routes each source now. Apply runs only those commands after you confirm, then checks each source again. Only Packeteer's own rules (priority 2001 to 2999, tables 1001 to 1999) are touched. Needs <code>NET_ADMIN</code>.</p>

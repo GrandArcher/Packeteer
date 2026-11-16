@@ -745,6 +745,10 @@ Issue #196. The Settings page has a Version and upgrade section (admin). It alwa
 
 Settings has a Replay history panel (#204). Pick a window and press Replay with the editor YAML: it posts the editor text to `POST /api/whatif` and lists, for the running config and the editor config, the moves, the expected loss and RTT change, traffic moved, commit relief, flaps, and cap pressure, then the prefixes the two steer differently. It reads stored rounds only and needs `round_retention` on `storage` ([onboarding.md](onboarding.md#replay-history)). Without it the panel shows the API's message.
 
+## Field report
+
+Settings has a Field report panel (#625). Preview reads `GET /api/report/share` and shows the redacted summary; Download saves the text that is on the page, and its button appears only after the preview. The panel reads state only and sends nothing ([field-report.md](field-report.md)).
+
 ## Rollback
 
 The upgrade section (#196) is rolled back by removing the `upgrade` block (or `enabled: false`) and restarting; the installed binary then runs. To leave a staged version: use the Roll back button, or stop the controller and delete `state.json` in `upgrade.dir`. It adds no write to the config file.
