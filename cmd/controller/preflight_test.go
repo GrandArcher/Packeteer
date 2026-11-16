@@ -16,6 +16,7 @@ import (
 
 	"github.com/GrandArcher/Packeteer/internal/config"
 	"github.com/GrandArcher/Packeteer/internal/configedit"
+	"github.com/GrandArcher/Packeteer/internal/pluginhost"
 	checks "github.com/GrandArcher/Packeteer/internal/preflight"
 	"github.com/GrandArcher/Packeteer/internal/rib"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
@@ -276,5 +277,94 @@ func TestPreflightFactsReadARealSession(t *testing.T) {
 	}
 	if res := checks.Run(f, time.Now()).Results[0]; res.Status != checks.Fail || !strings.Contains(res.Detail, "127.0.0.1") {
 		t.Fatalf("session after the edge stopped = %+v", res)
+	}
+}
+
+// stubRouterCheck answers CheckFilters with fixed findings and records the
+// queries.
+type stubRouterCheck struct {
+	plugin.Base
+	findings []plugin.FilterFinding
+	err      error
+	queries  []plugin.FilterQuery
+}
+
+func (s *stubRouterCheck) CheckFilters(_ context.Context, q plugin.FilterQuery) ([]plugin.FilterFinding, error) {
+	s.queries = append(s.queries, q)
+	return s.findings, s.err
+}
+
+func TestPreflightReadsTheRouterWhenConfigured(t *testing.T) {
+	cfg := preflightConfig(t, "  - {name: a, source_ip: 192.0.2.11, next_hop: 192.0.2.1, path_check: false}")
+	stub := &stubRouterCheck{findings: []plugin.FilterFinding{{Verdict: plugin.VerdictPass, Detail: "route-map packeteer-in permits only routes with 64512:666."}}}
+	set := &pluginhost.Set{RouterCheck: &pluginhost.Instance[plugin.RouterCheck]{Name: "frr", Type: "frr", Plugin: stub}}
+	src := &preflightSource{live: &liveConfig{cfg: cfg}, plugins: set, log: discardLog(), hop: hopFrom(nil, nil)}
+	filters := func() checks.Result {
+		for _, r := range checks.Run(src.facts(context.Background()), time.Now()).Results {
+			if r.ID == checks.CheckFilters {
+				return r
+			}
+		}
+		t.Fatal("no import_filter result")
+		return checks.Result{}
+	}
+
+	if r := filters(); r.Status != checks.Pass || !strings.Contains(r.Detail, "Read from the router (frr, read-only commands)") {
+		t.Fatalf("import_filter = %+v", r)
+	}
+	want := plugin.FilterQuery{Community: "64512:666", Packeteer: netip.MustParseAddr("192.0.2.10")}
+	if len(stub.queries) != 1 || stub.queries[0] != want {
+		t.Fatalf("queries = %+v, want %+v", stub.queries, want)
+	}
+
+	stub.findings, stub.err = nil, errors.New("connect to the router socket: connection refused")
+	if r := filters(); r.Status != checks.Unverified || !r.Confirmable || !strings.Contains(r.Detail, "could not verify the filters: connect to the router socket: connection refused.") {
+		t.Fatalf("read error = %+v", r)
+	}
+
+	// With two routers the check reads neither.
+	cfg.BGP.Neighbors = append(cfg.BGP.Neighbors, config.BGPNeighbor{Address: "192.0.2.253"})
+	stub.queries = nil
+	if r := filters(); r.Status != checks.Unverified || !strings.Contains(r.Detail, "it reads one router and bgp.neighbors has 2") || len(stub.queries) != 0 {
+		t.Fatalf("two routers = %+v, queries %v", r, stub.queries)
+	}
+
+	// Off: the facts carry nothing from a router.
+	src.plugins = &pluginhost.Set{}
+	if f := src.facts(context.Background()); f.Router != nil {
+		t.Fatalf("router facts with the check off: %+v", f.Router)
+	}
+}
+
+func TestPreflightRouterCheckBuildsFromConfig(t *testing.T) {
+	cfg, err := config.Parse([]byte(`mode: observe
+asn: 64512
+router_id: 192.0.2.10
+packeteer_community: "64512:666"
+providers:
+  - {name: a, source_ip: 192.0.2.11, next_hop: 192.0.2.1}
+preflight:
+  router_check:
+    type: frr
+    config:
+      socket_env: PK_LAB_FRR_SOCKET
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Mode != "observe" {
+		t.Fatalf("mode = %q", cfg.Mode)
+	}
+	env := func(k string) string { return map[string]string{"PK_LAB_FRR_SOCKET": "/run/frr/bgpd.vty"}[k] }
+	set, err := pluginhost.Build(cfg, pluginhost.Options{Logger: discardLog(), Getenv: env})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if set.RouterCheck == nil || set.RouterCheck.Type != "frr" {
+		t.Fatalf("router check = %+v", set.RouterCheck)
+	}
+	cfg.Preflight.RouterCheck.Type = "routeros"
+	if _, err := pluginhost.Build(cfg, pluginhost.Options{Logger: discardLog(), Getenv: env}); err == nil || !strings.Contains(err.Error(), "preflight.router_check") || !strings.Contains(err.Error(), "available: bird, frr") {
+		t.Fatalf("unknown type = %v", err)
 	}
 }

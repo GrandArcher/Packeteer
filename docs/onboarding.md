@@ -20,7 +20,7 @@ Settings has a Preflight checks panel with a Run checks button. `GET /api/prefli
 | Check | Fails when |
 |---|---|
 | `bgp_session` | no neighbor is configured, a session is not established, or no routes are learned. Fewer than 10 learned prefixes is a warning. |
-| `import_filter` | the leak watch holds a prefix. Otherwise it is unverified until an administrator confirms (see below). |
+| `import_filter` | the leak watch holds a prefix, or the [read-only router check](#read-only-router-check), when configured, reads a policy that lets Packeteer's routes through. Otherwise it passes on the router check's evidence, or is unverified until an administrator confirms (see below). |
 | `probe_egress` | a provider's probe leaves through an address other than its `next_hop`, or gets no answer. A provider that cannot be checked (loopback source, `path_check: false`) is a warning. |
 | `timers` | the negotiated hold time is zero or graceful restart is on for the Packeteer session. A hold time over 180 s is a warning. |
 | `withdrawal` | no announcer is configured (and the config being saved adds none), or a session would keep Packeteer's routes after a crash: hold time zero or over 180 s, or graceful restart on. |
@@ -93,12 +93,40 @@ The job fails when the walk takes 15 minutes or more, when the file on disk is n
 
 `/metrics` has `packeteer_preflight_ready`, `packeteer_preflight_check{check,status}` (1 on the current status), and `packeteer_preflight_last_run_timestamp_seconds` once the checks have run.
 
+## Read-only router check
+
+`preflight.router_check` (#626, off by default) reads the router's BGP policy and backs `import_filter` with it. Point it only at a lab router or a router you chose. It never writes to the router: it pushes no config, commits or saves nothing, clears no session, and announces nothing. Each command is checked against a fixed allowlist before it is sent, and anything else is refused in code.
+
+| Type | Reads | Commands sent |
+|---|---|---|
+| `frr` | bgpd's vty socket, as vtysh does | `show bgp neighbors json`, `enable`, `show route-map NAME json`, `show bgp community-list NAME detail` (`large-community-list` for a large community) |
+| `bird` | BIRD 2 or 3's control socket, and the `bird.conf` file | `restrict`, then `show protocols all` |
+
+FRR shows route-maps only in its privileged node; on the daemon socket `enable` takes no password and only switches the node, as vtysh does on connect. BIRD's `restrict` makes BIRD refuse every state-changing command for the session. birdc does not print a filter's body, so `bird` reads the named filters from the config file: run `birdc configure` after an edit, or the check reads a file BIRD does not run. Filters in included files and unnamed (inline) filters are not read.
+
+The check finds Packeteer's session (its neighbor is Packeteer's `router_id`, or the neighbor's `local_address`) and every eBGP session (remote AS other than the local AS), in IPv4 and IPv6 unicast. It passes when:
+
+- the import policy from Packeteer permits only routes with `packeteer_community`: every permit entry of the FRR route-map matches a community list that permits only that value, or the BIRD filter accepts only on `(asn, value) ~ bgp_community` (or `bgp_community ~ [(asn, value)]`) and rejects the rest;
+- each eBGP session's export policy rejects the community before anything is permitted: a deny entry matching it comes before every permit, the route-map or filter permits nothing, or (FRR) there is no outbound policy and `ebgp-requires-policy` holds every route back.
+
+The result is one of three:
+
+- **pass**: `import_filter` passes, and its detail lists what was read (session, address family, route-map or filter, entry).
+- **fail**: `import_filter` fails with the specific fix (for example the deny entry to add before entry 100 of `ebgp-out`), whatever an administrator confirmed. It cannot be confirmed away.
+- **not checked**: the router could not be read, or a policy uses something the check does not follow (route-map `call` or `continue`, expanded community lists, `exact-match`, an import entry that sets communities other than `additive`, a community list that denies other values before it decides on `packeteer_community`, BIRD statements other than `if ... then accept|reject`, `accept`, and `reject`). The detail says why, and the check falls back to the administrator's confirmation.
+
+It reads one router: with more than one `bgp.neighbors` entry it reads none and says so. On FRR it reads the default VRF's sessions only. A leak held by the leak watch still fails `import_filter`. The other checks do not read it, and it never turns inject on.
+
+The socket path, and the `bird.conf` path, come from environment variables that the config names (`socket_env`, `config_env`); they never appear in the config file, logs, API answers, or the UI ([CONFIG.md](CONFIG.md#preflight)). In the container, mount the socket's directory and the file read-only, for example `-v /run/frr:/run/frr -e PACKETEER_FRR_SOCKET=/run/frr/bgpd.vty`. The socket must be one the container's user can open.
+
+The `router-check` CI job (`lab/e2e-router-check.sh`) runs the stock image against FRR 10.2 and BIRD 2 and 3 daemons on documentation addresses and ASNs: the snippet's filters pass with the evidence in the detail, and an eBGP session without the reject fails with the fix. It checks that FRR's running config and BIRD's `show status` (no reconfiguration) are the same before and after, and that the socket path is in no API answer or log line.
+
 ## Not in this release
 
-Reading the router's filters and timers over its own management API (RouterOS, NETCONF, vtysh, birdc) is not built. The checks above read Packeteer's own view and one administrator confirmation.
+Reading the router over RouterOS's API or NETCONF, and its timers, is not built. A live test-route withdrawal is not built: it would announce.
 
 ## Rollback
 
 Replay history (#204) changes no announcement. Set `round_retention` back to `0` and restart to stop storing rounds. Rounds already stored stay in the database file until you delete the database or set a non-zero `round_retention` short enough for them to age out. Revert the change to drop `whatif`, `/api/whatif`, and the Settings panel.
 
-The install script, `-snippet`, `POST /api/snippets`, `-pbr -apply`, and the preflight add no config key and change no router. Revert #582 to drop the Settings policy routing panel, `/api/pbr`, the "Setup complete" line, and the wizard's default history (the command line `-pbr -apply` stays; routes it applied stay until removed as described here). Revert #569 to bring back the panel that reads only the running file. Revert #568 to make the inject step need an announcer in the config again; a config saved through it is reverted like any config edit (remove `announcer` and set `mode: observe`, then restart). Remove the container (`docker stop -t 30 packeteer && docker rm packeteer`) to undo the install. Undo an applied host policy routing with `ip rule del` and `ip route flush table <n>` for the lines `-apply` printed, or remove the provider from the config while another provider stays measured from this instance, and run `-pbr linux -apply -yes` again: it removes the rules and routes of the provider that is gone.
+The read-only router check (#626) changes no router: remove `preflight.router_check` and restart, and `import_filter` asks for the confirmation as before. The install script, `-snippet`, `POST /api/snippets`, `-pbr -apply`, and the preflight checks change no router. Revert #582 to drop the Settings policy routing panel, `/api/pbr`, the "Setup complete" line, and the wizard's default history (the command line `-pbr -apply` stays; routes it applied stay until removed as described here). Revert #569 to bring back the panel that reads only the running file. Revert #568 to make the inject step need an announcer in the config again; a config saved through it is reverted like any config edit (remove `announcer` and set `mode: observe`, then restart). Remove the container (`docker stop -t 30 packeteer && docker rm packeteer`) to undo the install. Undo an applied host policy routing with `ip rule del` and `ip route flush table <n>` for the lines `-apply` printed, or remove the provider from the config while another provider stays measured from this instance, and run `-pbr linux -apply -yes` again: it removes the rules and routes of the provider that is gone.

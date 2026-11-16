@@ -682,6 +682,18 @@ storage:
 #     timeout: 30s
 #     max_bytes: 8388608
 
+# Read-only router check (#626, docs/onboarding.md): reads the router's BGP
+# policy with allowlisted read-only commands and backs the import_filter check
+# with what it runs. Off by default. Point it only at a lab router or one you
+# chose; it never writes to the router. The socket path (and for bird the
+# bird.conf path) comes from the environment, never this file.
+# preflight:
+#   router_check:
+#     type: frr                          # or bird
+#     config:
+#       socket_env: PACKETEER_FRR_SOCKET   # bird: PACKETEER_BIRD_SOCKET
+#       # config_env: PACKETEER_BIRD_CONFIG  # bird only
+
 # Providers, next hops, and provider communities from NetBox or Peering
 # Manager (docs/inventory.md). Read only by `packeteer config plan`, `diff`,
 # and `apply`, never by the running controller; nothing is announced. Only

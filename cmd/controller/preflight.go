@@ -21,6 +21,7 @@ import (
 	checks "github.com/GrandArcher/Packeteer/internal/preflight"
 	"github.com/GrandArcher/Packeteer/internal/rib"
 	"github.com/GrandArcher/Packeteer/internal/snippet"
+	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
 // preflightFile keeps the administrator's confirmations next to the storage
@@ -30,6 +31,9 @@ const preflightFile = "preflight.json"
 // preflightTimeout bounds one run: the speaker read and one first-hop probe
 // per provider.
 const preflightTimeout = 30 * time.Second
+
+// routerCheckTimeout bounds the read of the router's policy within a run.
+const routerCheckTimeout = 10 * time.Second
 
 // preflightSource gathers the facts the preflight checks read (#221). It
 // only reads: the sessions, the learned RIB, the leak watch, and one
@@ -72,8 +76,38 @@ func (p *preflightSource) facts(ctx context.Context) checks.Facts {
 		addr, _ := netip.ParseAddr(n.Address)
 		f.Neighbors = append(f.Neighbors, checks.Neighbor{Address: n.Address, Established: up[addr.Unmap()]})
 	}
+	f.Router = p.readRouter(ctx, cfg)
 	f.Providers = p.providers(ctx, cfg)
 	return f
+}
+
+// readRouter runs the read-only router check (#626), or returns nil when
+// none is configured. A check reads one router, so with more than one BGP
+// neighbor it reads none rather than vouch for routers it did not read.
+func (p *preflightSource) readRouter(ctx context.Context, cfg *config.Config) *checks.RouterRead {
+	if p.plugins == nil || p.plugins.RouterCheck == nil {
+		return nil
+	}
+	rc := p.plugins.RouterCheck
+	read := &checks.RouterRead{Type: rc.Type}
+	params, err := snippet.ForConfig(cfg)
+	switch {
+	case err != nil:
+		read.Err = strings.ReplaceAll(err.Error(), "\n", " ")
+	case len(params) != 1:
+		read.Err = fmt.Sprintf("it reads one router and bgp.neighbors has %d.", len(params))
+	default:
+		pk, _ := netip.ParseAddr(params[0].Packeteer)
+		ctx, cancel := context.WithTimeout(ctx, routerCheckTimeout)
+		defer cancel()
+		findings, err := rc.Plugin.CheckFilters(ctx, plugin.FilterQuery{Community: params[0].Community, Packeteer: pk})
+		if err != nil {
+			p.log.Warn("router check: the router was not read", "type", rc.Type, "err", err)
+			read.Err = err.Error() + "."
+		}
+		read.Findings = findings
+	}
+	return read
 }
 
 // providers checks, for each provider measured here, which way a probe from

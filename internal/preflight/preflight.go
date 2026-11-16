@@ -4,13 +4,16 @@
 // the leak watch) and returns a plain-language result with a fix. Nothing
 // here announces, probes, or writes config: Packeteer in observe mode
 // announces nothing, so the checks that need the router's own filters are
-// confirmed by an administrator after they read the router.
+// confirmed by an administrator after they read the router, or backed by
+// the opt-in read-only router check (#626).
 package preflight
 
 import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
 // Status is the outcome of one check.
@@ -150,6 +153,50 @@ type Facts struct {
 	Fingerprint string
 	// Confirmed holds the confirmations that still apply to this config.
 	Confirmed map[string]Confirmation
+	// Router is what the read-only router check read (#626). Nil when
+	// preflight.router_check is not configured.
+	Router *RouterRead
+}
+
+// RouterRead is one read of the router's BGP policy.
+type RouterRead struct {
+	// Type is the router_check type that read it.
+	Type     string
+	Findings []plugin.FilterFinding
+	// Err says why the router was not read; Findings is then empty.
+	Err string
+}
+
+// verdict is fail when any finding fails, pass when every finding passes,
+// and unknown otherwise.
+func (r RouterRead) verdict() plugin.Verdict {
+	if r.Err != "" || len(r.Findings) == 0 {
+		return plugin.VerdictUnknown
+	}
+	v := plugin.VerdictPass
+	for _, f := range r.Findings {
+		switch f.Verdict {
+		case plugin.VerdictFail:
+			return plugin.VerdictFail
+		case plugin.VerdictPass:
+		default:
+			v = plugin.VerdictUnknown
+		}
+	}
+	return v
+}
+
+// lines returns the details, and the fixes, of the findings with verdict v.
+func (r RouterRead) lines(v plugin.Verdict) (details, fixes []string) {
+	for _, f := range r.Findings {
+		if f.Verdict == v {
+			details = append(details, f.Detail)
+			if f.Fix != "" {
+				fixes = append(fixes, f.Fix)
+			}
+		}
+	}
+	return details, fixes
 }
 
 // Run evaluates every check against f.
@@ -215,14 +262,36 @@ func filters(f Facts) Result {
 		r.Fix = "Reject " + community + " in the outbound policy of every eBGP neighbor, then clear the held prefixes on the Leaks page."
 		return r
 	}
+	note := ""
+	if rr := f.Router; rr != nil {
+		head := "Read from the router (" + rr.Type + ", read-only commands):\n"
+		switch rr.verdict() {
+		case plugin.VerdictFail:
+			details, fixes := rr.lines(plugin.VerdictFail)
+			r.Status = Fail
+			r.Detail = head + strings.Join(details, "\n")
+			r.Fix = strings.Join(fixes, "\n")
+			return r
+		case plugin.VerdictPass:
+			details, _ := rr.lines(plugin.VerdictPass)
+			r.Status = Pass
+			r.Detail = head + strings.Join(details, "\n")
+			return r
+		}
+		why, _ := rr.lines(plugin.VerdictUnknown)
+		if rr.Err != "" {
+			why = []string{rr.Err}
+		}
+		note = "The router check (" + rr.Type + ") could not verify the filters: " + strings.Join(why, " ") + "\n"
+	}
 	if c, ok := f.Confirmed[CheckFilters]; ok {
 		r.Status = Pass
-		r.Detail = fmt.Sprintf("Confirmed by %s at %s. Packeteer cannot read the router's filters in observe mode.", c.By, c.At.UTC().Format(time.RFC3339))
+		r.Detail = note + fmt.Sprintf("Confirmed by %s at %s. Packeteer cannot read the router's filters in observe mode.", c.By, c.At.UTC().Format(time.RFC3339))
 		return r
 	}
 	r.Status = Unverified
 	r.Confirmable = true
-	r.Detail = "Packeteer announces nothing in observe mode, so it cannot test the router's filters itself."
+	r.Detail = note + "Packeteer announces nothing in observe mode, so it cannot test the router's filters itself."
 	r.Fix = "On the router, check that (1) the import policy from Packeteer accepts only routes carrying " + community + " and rejects everything else, and (2) the outbound policy of every eBGP neighbor, customers included, rejects " + community + ". Router snippets has both for your vendor. Then press Confirm."
 	return r
 }

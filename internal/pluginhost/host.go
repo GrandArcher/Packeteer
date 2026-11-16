@@ -105,6 +105,10 @@ type Set struct {
 	// RegistryCheckers are the registry.sources (#289): they read PeeringDB
 	// and apply a change a person confirmed. None announces.
 	RegistryCheckers []Instance[plugin.RegistryChecker]
+	// RouterCheck reads the router's BGP policy for the import_filter
+	// preflight check (preflight.router_check, #626). Read-only commands;
+	// it never writes to the router or announces.
+	RouterCheck *Instance[plugin.RouterCheck]
 
 	mu      sync.RWMutex
 	started []namedLifecycle
@@ -244,6 +248,11 @@ func Build(cfg *config.Config, opts Options) (*Set, error) {
 	if cfg.RegistryOn() {
 		s.RegistryCheckers = build(plugin.RegistryCheckers, "registry.sources", cfg.Registry.Sources, base, &errs)
 	}
+	if cfg.Preflight.RouterCheck != nil {
+		if b := build(plugin.RouterChecks, "preflight.router_check", []config.PluginSpec{*cfg.Preflight.RouterCheck}, base, &errs); len(b) == 1 {
+			s.RouterCheck = &b[0]
+		}
+	}
 	if cfg.Troubleshoot.Whois != nil {
 		if b := build(plugin.Whoises, "troubleshoot.whois", []config.PluginSpec{*cfg.Troubleshoot.Whois}, base, &errs); len(b) == 1 {
 			s.Whois = &b[0]
@@ -380,6 +389,9 @@ func (s *Set) all() []namedLifecycle {
 	}
 	if s.Lookup != nil {
 		add(plugin.KindLookup, s.Lookup.Name, s.Lookup.Plugin)
+	}
+	if s.RouterCheck != nil {
+		add(plugin.KindRouterCheck, s.RouterCheck.Name, s.RouterCheck.Plugin)
 	}
 	if s.IXPMembers != nil {
 		add(plugin.KindMemberSource, s.IXPMembers.Name, s.IXPMembers.Plugin)

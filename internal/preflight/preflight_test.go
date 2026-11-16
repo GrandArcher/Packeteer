@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
 var t0 = time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
@@ -102,6 +104,85 @@ func TestFiltersNeedConfirmationAndLeaksFail(t *testing.T) {
 	f.Confirmed = good().Confirmed
 	if r := result(t, f, CheckFilters); r.Status != Fail {
 		t.Fatalf("a confirmation must not hide a leak: %+v", r)
+	}
+}
+
+func TestFiltersFromTheRouterCheck(t *testing.T) {
+	pass := plugin.FilterFinding{Verdict: plugin.VerdictPass, Detail: "Import from Packeteer 192.0.2.10 (ipv4 unicast): route-map packeteer-in permits only routes with 64512:666."}
+	fail := plugin.FilterFinding{Verdict: plugin.VerdictFail, Detail: "Export to eBGP neighbor 192.0.2.20 (ipv4 unicast): no outbound route-map.", Fix: "neighbor 192.0.2.20 route-map ebgp-out out"}
+	unknown := plugin.FilterFinding{Verdict: plugin.VerdictUnknown, Detail: "route-map x calls route-map y; read it by hand."}
+
+	// Off: the result is exactly the one without a reader.
+	off := good()
+	off.Confirmed = nil
+	before := result(t, off, CheckFilters)
+
+	f := good()
+	f.Confirmed = nil
+	f.Router = &RouterRead{Type: "frr", Findings: []plugin.FilterFinding{pass, pass}}
+	r := result(t, f, CheckFilters)
+	if r.Status != Pass || r.Confirmable || r.Fix != "" || !strings.Contains(r.Detail, "Read from the router (frr, read-only commands)") || !strings.Contains(r.Detail, "packeteer-in permits only") {
+		t.Fatalf("pass = %+v", r)
+	}
+
+	// A failing finding fails the check whatever was confirmed, with its fix.
+	f = good()
+	f.Router = &RouterRead{Type: "bird", Findings: []plugin.FilterFinding{pass, fail, unknown}}
+	r = result(t, f, CheckFilters)
+	if r.Status != Fail || r.Confirmable || r.Fix != fail.Fix || !strings.Contains(r.Detail, "192.0.2.20") || strings.Contains(r.Detail, "packeteer-in") {
+		t.Fatalf("fail = %+v", r)
+	}
+
+	// Unknown and errors fall back to the confirmation, saying why.
+	for _, rr := range []*RouterRead{
+		{Type: "frr", Findings: []plugin.FilterFinding{pass, unknown}},
+		{Type: "frr", Err: "connect to the router socket: connection refused."},
+		{Type: "frr"},
+	} {
+		f = good()
+		f.Confirmed = nil
+		f.Router = rr
+		r = result(t, f, CheckFilters)
+		if r.Status != Unverified || !r.Confirmable || r.Fix != before.Fix || !strings.HasPrefix(r.Detail, "The router check (frr) could not verify the filters") || !strings.HasSuffix(r.Detail, before.Detail) {
+			t.Errorf("%+v: %+v", rr, r)
+		}
+		f.Confirmed = good().Confirmed
+		if r = result(t, f, CheckFilters); r.Status != Pass || !strings.Contains(r.Detail, "Confirmed by admin") {
+			t.Errorf("%+v confirmed: %+v", rr, r)
+		}
+	}
+	if !strings.Contains(result(t, Facts{Router: &RouterRead{Type: "frr", Err: "boom."}}, CheckFilters).Detail, "boom.") {
+		t.Error("the read error is not shown")
+	}
+
+	// A leak beats the router's word.
+	f = good()
+	f.Leaks = 1
+	f.Router = &RouterRead{Type: "frr", Findings: []plugin.FilterFinding{pass}}
+	if r := result(t, f, CheckFilters); r.Status != Fail || !strings.Contains(r.Detail, "leak watch") {
+		t.Fatalf("leak with a passing router = %+v", r)
+	}
+
+	// The other checks read nothing from the router.
+	a, b := Run(off, t0), Run(func() Facts {
+		g := off
+		g.Router = &RouterRead{Type: "frr", Findings: []plugin.FilterFinding{fail}}
+		return g
+	}(), t0)
+	for i := range a.Results {
+		if a.Results[i].ID != CheckFilters && a.Results[i] != b.Results[i] {
+			t.Errorf("%s changed with the router check: %+v vs %+v", a.Results[i].ID, a.Results[i], b.Results[i])
+		}
+	}
+}
+
+func TestConfirmRefusedWhileTheRouterCheckFails(t *testing.T) {
+	f := good()
+	f.Confirmed = nil
+	f.Router = &RouterRead{Type: "frr", Findings: []plugin.FilterFinding{{Verdict: plugin.VerdictFail, Detail: "no outbound route-map", Fix: "add one"}}}
+	store, _ := OpenStore("")
+	if _, err := NewRunner(source(&f), store, func() time.Time { return t0 }).Confirm(context.Background(), CheckFilters, "admin"); !errors.Is(err, ErrFailing) {
+		t.Fatalf("confirm over a failing router check = %v, want ErrFailing", err)
 	}
 }
 
