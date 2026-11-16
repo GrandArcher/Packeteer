@@ -220,11 +220,18 @@ func TestKernelSweepForgetsIdleConnections(t *testing.T) {
 	if got := prefixTotals(s, "203.0.113.0/24"); got.Segments != 7 || got.Flows != 2 {
 		t.Fatalf("totals = %+v, want 7 segments in 2 flows", got)
 	}
+	// A second sweep that read the table before the first forgot the
+	// connection scores nothing again, and its pending handshake is not a
+	// second timeout.
+	stale := ebpfpath.TrackState{Key: a, Counters: ebpfpath.Counters{Created: 1, Segments: 3}, Idle: 3 * time.Minute, SynAt: 50, SynAge: time.Minute}
 	s.kmu.Lock()
-	_, kept := s.conns[a]
+	s.account(s.now(), stale.Key, stale.Counters, false)
+	if cs := s.conns[stale.Key]; cs != nil && !cs.final {
+		s.timeouts(s.now(), stale, cs)
+	}
 	s.kmu.Unlock()
-	if kept {
-		t.Fatal("userspace state of the forgotten connection kept")
+	if got := prefixTotals(s, "203.0.113.0/24"); got.Segments != 7 || got.Flows != 2 || got.Timeouts != 0 {
+		t.Fatalf("after the stale read: %+v, want 7 segments, 2 flows, no timeout", got)
 	}
 }
 

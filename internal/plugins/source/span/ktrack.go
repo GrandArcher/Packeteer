@@ -50,9 +50,10 @@ func openKernelTracker(o ebpfpath.TrackOptions) (kernelTracker, error) {
 
 // connState is what userspace remembers of a connection the kernel tracks:
 // the counters already scored, and the handshake timeouts already counted
-// (by the kernel timestamp of the SYN or SYN-ACK). A final connection is
-// kept as a tombstone for finalHold: a table read taken before the kernel
-// forgot it can still arrive, and must not score it again.
+// (by the kernel timestamp of the SYN or SYN-ACK). A final connection, one
+// the kernel or the sweep forgot, is kept as a tombstone for finalHold: a
+// table read taken before it was forgotten can still arrive, and must not
+// score it again.
 type connState struct {
 	ebpfpath.Counters
 	synAt, synAckAt uint64
@@ -158,7 +159,11 @@ func (s *Source) kernelSweep(now time.Time, kt kernelTracker) {
 		}
 		if st.Idle >= s.trk.idle {
 			_ = kt.forget(st.Key)
-			delete(s.conns, st.Key)
+			// Two sweeps can hold the same table read; the second must
+			// not score the forgotten connection again.
+			if cs := s.conns[st.Key]; cs != nil {
+				cs.final, cs.touched = true, now
+			}
 		}
 	}
 	// Entries of connections that left the table without a summary, and
