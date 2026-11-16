@@ -64,7 +64,7 @@ func TestRedactLeavesOnlyDocumentationValues(t *testing.T) {
 			t.Errorf("%q survived:\n%s", real, got)
 		}
 	}
-	for _, kept := range []string{"12:30:45", "config.yaml", "/10", "/24", "/32", "ops@", "Ends with"} {
+	for _, kept := range []string{"12:30:45", "config.yaml", "/24", "/32", "ops@", "Ends with"} {
 		if !strings.Contains(got, kept) {
 			t.Errorf("%q was changed:\n%s", kept, got)
 		}
@@ -84,6 +84,14 @@ func TestRedactIsStableAndDeterministic(t *testing.T) {
 	want := "a 192.0.2.1 b 192.0.2.1/24 c 192.0.2.2 d AS64496 e as64496 f AS64497 g router-1.example router-2.example router-1.example i 2001:db8::1 j 2001:db8::1"
 	if first != want {
 		t.Errorf("got  %s\nwant %s", first, want)
+	}
+}
+
+func TestRedactRaisesShortPrefixLengthsToTheDocumentationBlock(t *testing.T) {
+	got := NewRedactor().Redact("a 100.64.0.0/10 b 10.0.0.0/8 c 198.18.33.0/25 d fd12::/16 e fd12:3456::/48 f 100.64.0.0/32")
+	want := "a 192.0.2.1/24 b 192.0.2.2/24 c 192.0.2.3/25 d 2001:db8::1/32 e 2001:db8::2/48 f 192.0.2.1/32"
+	if got != want {
+		t.Errorf("got  %s\nwant %s", got, want)
 	}
 }
 
@@ -116,7 +124,7 @@ func TestRenderRedactsAFieldThatCarriesRealValues(t *testing.T) {
 	got := Render(in)
 	onlyDocumentation(t, got)
 	for _, want := range []string{
-		"mode: observe", "providers: 2", "ibgp sessions: 1 (add-path: yes)", "bmp: yes", "probers: icmp, tcp", "target sources: flow",
+		"mode: observe", "providers: 2", "ibgp neighbors: 1 (add-path: yes)", "bmp: yes", "probers: icmp, tcp", "target sources: flow",
 		"- warn: bgp-down", "events (newest 1000 at most): 40 total, 3 warning, 1 critical", "- bgp.session_down: 1", "- other kinds: 3",
 		"value report, last 30 days:", "estimate: 4 improvements, 3 measured, 12.3 steered hours, loss avoided 1.250%, rtt avoided 12.500 ms",
 		"announced: 0 improvements, 0 measured, 0.0 steered hours, loss avoided not measured, rtt avoided not measured",

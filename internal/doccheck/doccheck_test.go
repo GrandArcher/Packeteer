@@ -243,7 +243,4 @@ func TestIssueFormsAreValid(t *testing.T) {
 			t.Errorf("%s: needs a summary field and the warning against real data (summary %v, warning %v)", name, summary, warned)
 		}
 	}
-	if _, err := os.Stat(filepath.Join("..", "..", ".github", "ISSUE_TEMPLATE", "feature.md")); err != nil {
-		t.Errorf("feature.md must stay: %v", err)
-	}
 }

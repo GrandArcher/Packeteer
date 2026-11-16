@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/netip"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -71,7 +72,8 @@ func (r *Redactor) Keep(names ...string) {
 }
 
 // Redact returns s with every address, prefix, AS number, and host name
-// replaced. A prefix keeps its length and gets a placeholder address.
+// replaced. A prefix gets a placeholder address and keeps its length, except
+// that a length shorter than /24 (IPv4) or /32 (IPv6) is raised to that.
 func (r *Redactor) Redact(s string) string {
 	s = v6Re.ReplaceAllStringFunc(s, r.redactV6)
 	s = v4Re.ReplaceAllStringFunc(s, r.redactV4)
@@ -85,6 +87,17 @@ func splitLen(s string) (addr, length string) {
 		return s[:i], s[i:]
 	}
 	return s, ""
+}
+
+// floorLen raises a prefix length shorter than the documentation block's own
+// (/24 for IPv4, /32 for IPv6), so a placeholder never claims more than that
+// block.
+func floorLen(length string, min int) string {
+	n, err := strconv.Atoi(strings.TrimPrefix(length, "/"))
+	if length == "" || err != nil || n >= min {
+		return length
+	}
+	return "/" + strconv.Itoa(min)
 }
 
 func (r *Redactor) redactV6(m string) string {
@@ -111,7 +124,7 @@ func (r *Redactor) redactV6(m string) string {
 		p = fmt.Sprintf("2001:db8::%x", len(r.v6)%0xffff+1)
 		r.v6[key] = p
 	}
-	return p + length + suffix
+	return p + floorLen(length, 32) + suffix
 }
 
 func (r *Redactor) redactV4(m string) string {
@@ -122,7 +135,7 @@ func (r *Redactor) redactV4(m string) string {
 		p = fmt.Sprintf("%s%d", v4Nets[i/v4PerNet], i%v4PerNet+1)
 		r.v4[addr] = p
 	}
-	return p + length
+	return p + floorLen(length, 24)
 }
 
 func (r *Redactor) redactASN(m string) string {

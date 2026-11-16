@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -69,13 +70,11 @@ func fakeController(t *testing.T, report string, status int) (*httptest.Server, 
 			return
 		}
 		w.WriteHeader(status)
-		_, _ = w.Write([]byte(`{"filename":"x","report":` + quote(report) + `}`))
+		_ = json.NewEncoder(w).Encode(map[string]string{"filename": "x", "report": report})
 	}))
 	t.Cleanup(ts.Close)
 	return ts, &seen
 }
-
-func quote(s string) string { return `"` + strings.NewReplacer("\n", `\n`, `"`, `\"`).Replace(s) + `"` }
 
 const sampleReport = "Packeteer field report\nmode: observe\n"
 

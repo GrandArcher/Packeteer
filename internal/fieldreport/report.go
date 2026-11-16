@@ -19,7 +19,7 @@ import (
 // community never goes in here.
 type Facts struct {
 	Providers int
-	// BGPNeighbors counts the iBGP sessions to the edge router.
+	// BGPNeighbors counts the neighbors the config lists, not the sessions up.
 	BGPNeighbors int
 	AddPath      bool
 	// BMP is true when rib_sources is set or a provider uses bmp.
@@ -83,7 +83,7 @@ func Render(in Input) string {
 	line("version: %s", in.Version)
 	line("mode: %s", in.Mode)
 	line("providers: %d", in.Facts.Providers)
-	line("ibgp sessions: %d (add-path: %s)", in.Facts.BGPNeighbors, yesNo(in.Facts.AddPath))
+	line("ibgp neighbors: %d (add-path: %s)", in.Facts.BGPNeighbors, yesNo(in.Facts.AddPath))
 	line("bmp: %s", yesNo(in.Facts.BMP))
 	line("router vendor: not read by Packeteer, add it in the issue form")
 	line("probers: %s", list(in.Facts.ProbeTypes))
