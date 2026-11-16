@@ -183,7 +183,7 @@ func TestDemoPreflightAllowsDockerDesktopWithANote(t *testing.T) {
 			if err != nil {
 				t.Fatalf("demo.sh: %v\n%s", err, out)
 			}
-			if n := strings.Count(out, "demo.sh: note: Docker Desktop is not run in CI"); n != 1 || !strings.Contains(out, "docs/demo.md#platforms") {
+			if n := strings.Count(out, "demo.sh: note: Docker Desktop and Docker on macOS are not run in CI"); n != 1 || !strings.Contains(out, "docs/demo.md#platforms") {
 				t.Errorf("want one note naming docs/demo.md#platforms, got %d:\n%s", n, out)
 			}
 			if !strings.Contains(out, "Packeteer demo is up (mode: observe; nothing is announced).") || !strings.Contains(log(), "up -d --build") {

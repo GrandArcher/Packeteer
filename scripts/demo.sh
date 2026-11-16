@@ -54,14 +54,14 @@ preflight() {
 	esac
 	docker compose version >/dev/null 2>&1 || fail "the Docker Compose plugin is missing. Fix: install docker-compose-plugin (Docker Desktop includes it), so that 'docker compose version' works."
 	if [ "$desktop" = yes ]; then
-		echo "demo.sh: note: Docker Desktop is not run in CI and is not verified; if the demo fails, see docs/demo.md#platforms." >&2
+		echo "demo.sh: note: Docker Desktop and Docker on macOS are not run in CI and are not verified; if the demo fails, see docs/demo.md#platforms." >&2
 	fi
 	# A lab that is already up is a no-op for compose; do not call it a clash.
 	if [ -n "$(docker ps -q --filter name='^pkd-packeteer$')" ]; then
 		return 0
 	fi
 	if (exec 3<>/dev/tcp/127.0.0.1/18080) 2>/dev/null; then
-		fail "127.0.0.1:18080 is already in use. Fix: stop what listens there (ss -ltnp 'sport = :18080'), then rerun."
+		fail "127.0.0.1:18080 is already in use. Fix: stop what listens there (ss -ltnp 'sport = :18080', or lsof -iTCP:18080 -sTCP:LISTEN on macOS), then rerun."
 	fi
 	local ids net
 	ids=$(docker network ls -q)

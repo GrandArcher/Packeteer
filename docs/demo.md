@@ -143,7 +143,8 @@ Every container and the lab network are gone. Nothing was ever announced, so the
 | Platform | Status |
 |---|---|
 | Linux with Docker Engine and the Compose plugin | Supported. CI runs `scripts/demo.sh` and this guide on it. |
-| Docker Desktop on macOS | Allowed, not run in CI (GitHub macOS runners have no Docker), not verified. |
+| Docker Desktop on Linux | Allowed, not run in CI, not verified. |
+| Docker Desktop on macOS | Allowed, not run in CI (GitHub macOS runners have no Docker), not verified. Docker on macOS without Docker Desktop (for example Colima) gets the same note. |
 | Docker Desktop on Windows, from a WSL2 terminal | Allowed, not run in CI, not verified. |
 | Windows Git Bash, MSYS, Cygwin, PowerShell, cmd | Refused by the script. Use a WSL2 terminal. |
 | Docker Desktop in Windows containers mode | Refused by the script. Switch to Linux containers. |
