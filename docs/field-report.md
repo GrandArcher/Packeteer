@@ -8,7 +8,7 @@ No operator has reported Packeteer on a production edge yet; reports are collect
 - The number of configured iBGP neighbors, whether add-path and BMP are in use, and the prober and target source types.
 - The setup checklist as ids and levels, such as `warn: bgp-down`. A provider's name is dropped from its id.
 - The number of events, warnings, and critical events among the newest 1000 (warnings and critical events stand in for error counts), and a count per catalog kind of the warning and critical events ([EVENTS.md](EVENTS.md)).
-- The totals of the `value` report for the last 30 days, per basis (`announced`, `estimate`): improvements, measured improvements, steered hours, and the loss and latency avoided. It is empty without `storage`.
+- The totals of the `value` report for the last 30 days, per basis (`announced`, `estimate`): improvements, measured improvements, steered hours, and the loss and latency avoided. It reads "not available" without `storage`.
 
 It holds no provider, router, or exchange name, no event text, no credential, and no community. Packeteer does not know your router's vendor or software version, so the issue form asks for it.
 
