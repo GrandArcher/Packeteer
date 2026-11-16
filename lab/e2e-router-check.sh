@@ -149,7 +149,7 @@ for bird in bird2 bird3; do
 		{
 			printf 'router id 192.0.2.254;\nprotocol device {}\n'
 			cat "$work/bird-snippet.txt"
-			printf '\n%s\nprotocol bgp transit {\n\tlocal 192.0.2.254 as 64500;\n\tneighbor 192.0.2.20 as 64511;\n\tipv4 {\n\t\timport all;\n\t\texport filter %s;\n\t};\n}\n' "$extra" "$out"
+			printf '\n%s\nprotocol bgp ebgp_peer {\n\tlocal 192.0.2.254 as 64500;\n\tneighbor 192.0.2.20 as 64511;\n\tipv4 {\n\t\timport all;\n\t\texport filter %s;\n\t};\n}\n' "$extra" "$out"
 		} >"$work/bird-$kind.conf"
 		chmod a+r "$work/bird-$kind.conf"
 		docker run --rm -v "$work/bird-$kind.conf:/etc/bird/rc.conf:ro" --entrypoint bird "pk-rc-$bird" -p -c /etc/bird/rc.conf
@@ -158,7 +158,7 @@ for bird in bird2 bird3; do
 			-v "pk-rc-bird:/run/bird" "pk-rc-$bird" >/dev/null
 		for _ in $(seq 1 30); do
 			docker exec pk-rc-bird birdc -s /run/bird/bird.ctl show protocols >"$work/bird-protocols.txt" 2>/dev/null &&
-				grep -q '^transit ' "$work/bird-protocols.txt" && break
+				grep -q '^ebgp_peer ' "$work/bird-protocols.txt" && break
 			sleep 1
 		done
 		docker exec pk-rc-bird birdc -s /run/bird/bird.ctl show status | grep -v 'server time' >"$work/bird-before.txt"
@@ -167,7 +167,7 @@ for bird in bird2 bird3; do
 		if [ "$kind" = good ]; then
 			check "$bird-good" bird pass 'Read from the router (bird, read-only commands)' \
 				'Import from Packeteer (protocol packeteer, ipv4): filter packeteer_in accepts only routes with 64500:666' \
-				'Export to eBGP protocol transit (ipv4): filter ebgp_out rejects 64500:666 at statement 1'
+				'Export to eBGP protocol ebgp_peer (ipv4): filter ebgp_out rejects 64500:666 at statement 1'
 		else
 			check "$bird-broken" bird fail 'filter ebgp_open accepts at statement 1 before 64500:666 is rejected' \
 				'Make the first statement of filter ebgp_open: if (64500, 666) ~ bgp_community then reject;'
