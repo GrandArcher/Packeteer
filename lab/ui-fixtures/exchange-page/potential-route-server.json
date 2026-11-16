@@ -13,6 +13,7 @@
   "rows": [
     {
       "asn": 64503,
+      "name": "Lab Network C",
       "class": "route_server",
       "bytes": 250000000,
       "mbps": 200,

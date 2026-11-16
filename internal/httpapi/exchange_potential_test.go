@@ -42,7 +42,7 @@ func TestExchangePotentialPeersEndpoint(t *testing.T) {
 	if code != http.StatusOK || !strings.HasPrefix(hdr.Get("Content-Type"), "text/csv") || !strings.Contains(hdr.Get("Content-Disposition"), "packeteer-potential-peers.csv") {
 		t.Fatalf("csv = %d %v", code, hdr)
 	}
-	if want := "asn,class,bytes,mbps,prefixes,lan_prefixes,lan_bytes,members\nAS64510,route_server,100000000,80.00,2,1,60000000,ix-lab/ix-peer-a\n"; string(body) != want {
+	if want := "asn,name,class,bytes,mbps,prefixes,lan_prefixes,lan_bytes,members\nAS64510,,route_server,100000000,80.00,2,1,60000000,ix-lab/ix-peer-a\n"; string(body) != want {
 		t.Fatalf("csv body = %q", body)
 	}
 	if classes[1] != "" || limits[1] != maxExchangeRows {
