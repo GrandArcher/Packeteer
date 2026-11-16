@@ -7,7 +7,7 @@ No operator has reported Packeteer on a production edge yet; reports are collect
 - Version, mode, and the number of providers.
 - Whether iBGP sessions, add-path, and BMP are in use, and the prober and target source types.
 - The setup checklist as ids and levels, such as `warn: bgp-down`. A provider's name is dropped from its id.
-- The number of events, warnings, and critical events among the newest 1000, and a count per catalog event kind ([EVENTS.md](EVENTS.md)).
+- The number of events, warnings, and critical events among the newest 1000 (warnings and critical events stand in for error counts), and a count per catalog event kind ([EVENTS.md](EVENTS.md)).
 - The totals of the `value` report for the last 30 days, per basis (`announced`, `estimate`): improvements, measured improvements, steered hours, and the loss and latency avoided. It is empty without `storage`.
 
 It holds no provider, router, or exchange name, no event text, no credential, and no community. Packeteer does not know your router's vendor or software version, so the issue form asks for it.
@@ -23,7 +23,7 @@ The whole text goes through one pass that replaces every IPv4 and IPv6 address a
 | AS number (`AS64500`, `asn=64500`) | 64496 to 64511, then 65536 to 65551 |
 | Host name | `router-N.example` |
 
-A prefix keeps its length and gets a placeholder address. The same value always gets the same placeholder inside one report, and the same input gives the same text. A report with more distinct values than a pool holds (762 IPv4 addresses, 32 AS numbers) reuses placeholders; that never shows a real value. File names such as `config.yaml` and `docs/CONFIG.md` are left as they are.
+A prefix keeps its length and gets a placeholder address. The same value always gets the same placeholder inside one report, and the same input gives the same text. A report with more distinct values than a pool holds (762 IPv4 addresses, 32 AS numbers) reuses placeholders; that never shows a real value. File names ending in `yaml`, `json`, `txt`, `log`, and similar extensions are left as they are.
 
 ## Run it
 
@@ -33,7 +33,7 @@ In the container, which reads `PACKETEER_CONFIG` and its `http.listen` to find t
 docker exec -it packeteer packeteer report --share
 ```
 
-It prints the preview, then `Write packeteer-field-report.txt? [y/N]`. Anything but `y` or `yes` writes nothing. An existing file is never overwritten; give another name with `-out`.
+If `http.listen` is on a non-loopback address, give `-url https://...`. It prints the preview, then `Write packeteer-field-report.txt? [y/N]`. Anything but `y` or `yes` writes nothing. An existing file is never overwritten; give another name with `-out`.
 
 | Flag | Meaning |
 |---|---|

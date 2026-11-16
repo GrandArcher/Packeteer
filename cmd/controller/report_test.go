@@ -168,12 +168,11 @@ func TestReportNeedsShare(t *testing.T) {
 
 func TestControllerURLFollowsHTTPListen(t *testing.T) {
 	for listen, want := range map[string]string{
-		"":                "http://127.0.0.1:8080",
-		"0.0.0.0:9090":    "http://127.0.0.1:9090",
-		"[::]:9091":       "http://127.0.0.1:9091",
-		":9092":           "http://127.0.0.1:9092",
-		"127.0.0.2:9093":  "http://127.0.0.2:9093",
-		"192.0.2.10:9094": "http://192.0.2.10:9094",
+		"":               "http://127.0.0.1:8080",
+		"0.0.0.0:9090":   "http://127.0.0.1:9090",
+		"[::]:9091":      "http://127.0.0.1:9091",
+		":9092":          "http://127.0.0.1:9092",
+		"127.0.0.2:9093": "http://127.0.0.2:9093",
 	} {
 		yaml := onboardConfig
 		if listen != "" {
@@ -183,6 +182,9 @@ func TestControllerURLFollowsHTTPListen(t *testing.T) {
 		if err != nil || got != want {
 			t.Errorf("listen %q: %q, %v; want %q", listen, got, err, want)
 		}
+	}
+	if got, err := controllerURL(writeOnboardConfig(t, onboardConfig+"http: {listen: \"192.0.2.10:9094\"}\n"), noEnv); err == nil || !strings.Contains(err.Error(), "give -url https") {
+		t.Errorf("a listen address off loopback: %q, %v", got, err)
 	}
 	got, err := controllerURL(writeOnboardConfig(t, onboardConfig), func(k string) string { return map[string]string{HTTPListenEnv: "off"}[k] })
 	if err == nil || !strings.Contains(err.Error(), "turns the HTTP server off") {

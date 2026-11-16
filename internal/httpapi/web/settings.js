@@ -3080,7 +3080,7 @@ function checkOffNum(v, max) {
 var fieldReportName = "packeteer-field-report.txt";
 function previewFieldReport() {
   var status = byId("fr-status");
-  status.textContent = "Reading…";
+  status.textContent = "Reading...";
   return api("GET", "/api/report/share").then(function (out) {
     fieldReportName = out.filename || fieldReportName;
     var pre = byId("fr-text");

@@ -112,8 +112,12 @@ func controllerURL(path string, getenv func(string) string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("http.listen %q: %w", listen, err)
 	}
-	if ip, perr := netip.ParseAddr(host); host == "" || perr == nil && ip.IsUnspecified() {
+	ip, perr := netip.ParseAddr(host)
+	switch {
+	case host == "" || perr == nil && ip.IsUnspecified():
 		host = "127.0.0.1"
+	case !config.LoopbackHost(host):
+		return "", fmt.Errorf("http.listen %q is not a loopback address, so the credentials would cross the network in clear text: give -url https://...", listen)
 	}
 	return "http://" + net.JoinHostPort(host, port), nil
 }

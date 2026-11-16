@@ -11,12 +11,12 @@ import (
 // realLooking is text an operator's error or checklist line could carry:
 // public-looking addresses and prefixes, AS numbers, and host names. None of
 // it may survive.
-const realLooking = `session to 8.8.8.8 down; neighbor 1.1.1.1:179 refused
-prefix 100.64.0.0/10 and 11.22.33.0/24 learned from AS3356 via as 174 (asn=15169)
-v6 peer 2606:4700:4700::1111 and prefix 2a00:1450::/32, mapped ::ffff:9.9.9.9
-dial tcp edge1.transit.example.net: lookup failed; rr-1.corp.isp.co.uk answered
-mail ops@noc.bigisp.com. Ends with 2001:4860:4860::8888.
-time 12:30:45 and docs/CONFIG.md and config.yaml stay as they are`
+const realLooking = `session to 10.20.30.40 down; neighbor 172.16.5.6:179 refused
+prefix 100.64.0.0/10 and 198.18.33.0/24 learned from AS64600 via as 64601 (asn=4200000002)
+v6 peer fd00:1234:5678::1111 and prefix fd12:3456::/32, mapped ::ffff:100.64.7.8
+dial tcp edge1.transit.example.net: lookup failed; rr-1.corp.isp.test answered
+mail ops@noc.bigisp.test. Ends with fd00:abcd::8888.
+time 12:30:45 and config.yaml stay as they are; gw.isp.md is a host`
 
 var (
 	anyV4   = regexp.MustCompile(`\b(?:\d{1,3}\.){3}\d{1,3}\b`)
@@ -59,12 +59,12 @@ func onlyDocumentation(t *testing.T, s string) {
 func TestRedactLeavesOnlyDocumentationValues(t *testing.T) {
 	got := NewRedactor().Redact(realLooking)
 	onlyDocumentation(t, got)
-	for _, real := range []string{"8.8.8.8", "1.1.1.1", "100.64.0.0", "11.22.33", "9.9.9.9", "2606:4700", "2a00:1450", "2001:4860", "3356", "15169", "transit", "corp.isp", "bigisp", "noc."} {
+	for _, real := range []string{"10.20.30.40", "172.16.5.6", "100.64.0.0", "198.18.33", "100.64.7.8", "fd00:1234", "fd12:3456", "fd00:abcd", "64600", "64601", "4200000002", "transit", "corp.isp", "bigisp", "noc.", "isp.md"} {
 		if strings.Contains(got, real) {
 			t.Errorf("%q survived:\n%s", real, got)
 		}
 	}
-	for _, kept := range []string{"12:30:45", "docs/CONFIG.md", "config.yaml", "/10", "/24", "/32", "ops@", "Ends with"} {
+	for _, kept := range []string{"12:30:45", "config.yaml", "/10", "/24", "/32", "ops@", "Ends with"} {
 		if !strings.Contains(got, kept) {
 			t.Errorf("%q was changed:\n%s", kept, got)
 		}
@@ -72,7 +72,7 @@ func TestRedactLeavesOnlyDocumentationValues(t *testing.T) {
 }
 
 func TestRedactIsStableAndDeterministic(t *testing.T) {
-	text := "a 8.8.8.8 b 8.8.8.8/24 c 1.1.1.1 d AS3356 e as3356 f AS174 g h1.net.example.org h2.net.example.org h1.net.example.org i 2606:4700::1 j 2606:4700:0:0:0:0:0:1"
+	text := "a 10.20.30.40 b 10.20.30.40/24 c 172.16.5.6 d AS64600 e as64600 f AS64601 g h1.net.example.org h2.net.example.org h1.net.example.org i fd00:1234::1 j fd00:1234:0:0:0:0:0:1"
 	r := NewRedactor()
 	first := r.Redact(text)
 	if again := r.Redact(text); again != first {
@@ -94,7 +94,7 @@ func TestRedactPlaceholderPoolsWrapInsideDocumentationRanges(t *testing.T) {
 		b.WriteString("10." + strconv.Itoa(i/250) + "." + strconv.Itoa(i%250) + ".1 ")
 	}
 	for i := 0; i < 40; i++ {
-		b.WriteString("AS" + strconv.Itoa(100+i) + " ")
+		b.WriteString("AS" + strconv.Itoa(64512+i) + " ")
 	}
 	got := r.Redact(b.String())
 	onlyDocumentation(t, got)
@@ -108,8 +108,8 @@ func TestRenderRedactsAFieldThatCarriesRealValues(t *testing.T) {
 	in := Input{
 		Version: "v1.4.0", Mode: "observe",
 		Facts:     Facts{Providers: 2, BGPNeighbors: 1, AddPath: true, BMP: true, ProbeTypes: []string{"tcp", "icmp"}, SourceTypes: []string{"flow"}},
-		Checklist: []Item{{ID: "bgp-down", Level: "warn"}, {ID: "rib 203.0.113.9 AS3356 gw.isp.net", Level: "todo"}},
-		Events:    &Events{Total: 40, Warning: 3, Critical: 1, Kinds: map[string]int{"bgp.session_down": 1, "provider.down 8.8.4.4": 3}},
+		Checklist: []Item{{ID: "bgp-down", Level: "warn"}, {ID: "rib 203.0.113.9 AS64600 gw.isp.test", Level: "todo"}},
+		Events:    &Events{Total: 40, Warning: 3, Critical: 1, Kinds: map[string]int{"bgp.session_down": 1, "provider.down 10.20.30.41": 3}},
 		ValueDays: 30,
 		Value:     []Value{{Basis: "estimate", Improvements: 4, Measured: 3, SteeredHours: 12.34, LossAvoidedPct: &loss, RTTAvoidedMs: &rtt}, {Basis: "announced"}},
 	}
@@ -125,7 +125,7 @@ func TestRenderRedactsAFieldThatCarriesRealValues(t *testing.T) {
 			t.Errorf("missing %q in:\n%s", want, got)
 		}
 	}
-	for _, real := range []string{"8.8.4.4", "3356", "isp.net", "203.0.113.9"} {
+	for _, real := range []string{"10.20.30.41", "64600", "isp.test", "203.0.113.9"} {
 		if strings.Contains(got, real) {
 			t.Errorf("%q survived:\n%s", real, got)
 		}

@@ -44,8 +44,8 @@ func TestShareReport(t *testing.T) {
 	log := eventlog.New(nil, nil, nil)
 	now := time.Now()
 	for _, e := range []plugin.Event{
-		{Time: now, Kind: "bgp.session_down", Severity: plugin.SeverityCritical, Message: "session to 8.8.8.8 down", Fields: map[string]string{"peer": "8.8.8.8", "password": "hunter2-secret"}},
-		{Time: now, Kind: "provider.down", Severity: plugin.SeverityWarning, Message: "AS3356 transit.example.net down"},
+		{Time: now, Kind: "bgp.session_down", Severity: plugin.SeverityCritical, Message: "session to 10.20.30.40 down", Fields: map[string]string{"peer": "10.20.30.40", "password": "hunter2-secret"}},
+		{Time: now, Kind: "provider.down", Severity: plugin.SeverityWarning, Message: "AS64600 transit.example.net down"},
 		{Time: now, Kind: "provider.down", Severity: plugin.SeverityWarning, Message: "again"},
 		{Time: now, Kind: "improvement.added", Severity: plugin.SeverityInfo, Message: "moved 192.0.2.0/24"},
 	} {
@@ -66,7 +66,7 @@ func TestShareReport(t *testing.T) {
 			t.Errorf("missing %q in:\n%s", want, report)
 		}
 	}
-	for _, leak := range []string{"8.8.8.8", "hunter2", "3356", "transit.example.net", "lab-b", "lab-c", "192.0.2.0/24", "improvement.added"} {
+	for _, leak := range []string{"10.20.30.40", "hunter2", "64600", "transit.example.net", "lab-b", "lab-c", "192.0.2.0/24", "improvement.added"} {
 		if strings.Contains(report, leak) {
 			t.Errorf("%q is in the report:\n%s", leak, report)
 		}

@@ -36,10 +36,11 @@ var (
 	hostRe = regexp.MustCompile(`(?i)\b(?:[a-z0-9](?:[a-z0-9_-]{0,61}[a-z0-9])?\.)+[a-z]{2,24}\b`)
 )
 
-// fileSuffixes are last labels that name a file, not a host, so a doc path
-// such as docs/CONFIG.md survives.
+// fileSuffixes are last labels that name a file, not a host, so a name such
+// as config.yaml survives. md is not here: it is also a country domain, so a
+// doc path such as docs/CONFIG.md is redacted like a host.
 var fileSuffixes = map[string]bool{
-	"md": true, "yaml": true, "yml": true, "json": true, "go": true, "js": true,
+	"yaml": true, "yml": true, "json": true, "go": true, "js": true,
 	"html": true, "txt": true, "conf": true, "log": true, "sock": true, "db": true,
 	"mmdb": true, "csv": true, "xlsx": true, "pem": true, "crt": true, "key": true,
 }
