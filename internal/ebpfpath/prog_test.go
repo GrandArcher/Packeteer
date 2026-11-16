@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"net/netip"
 	"testing"
+	"time"
 
 	"github.com/cilium/ebpf/asm"
 )
@@ -22,6 +23,7 @@ func TestProgramsAssemble(t *testing.T) {
 	for name, insns := range map[string]asm.Instructions{
 		"flow":    FlowProgram(3),
 		"capture": CaptureProgram(4, 5),
+		"track":   TrackProgram(3, 4, 5, 6, 3*time.Second),
 	} {
 		n := marshal(t, insns)
 		if n < 20 || n > 4096 {
@@ -40,6 +42,7 @@ func TestProgramsOnlyReturnNext(t *testing.T) {
 	for name, insns := range map[string]asm.Instructions{
 		"flow":    FlowProgram(3),
 		"capture": CaptureProgram(4, 5),
+		"track":   TrackProgram(3, 4, 5, 6, 3*time.Second),
 	} {
 		var r0 []int64
 		for _, i := range insns {
