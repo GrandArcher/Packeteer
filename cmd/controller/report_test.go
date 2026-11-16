@@ -183,7 +183,7 @@ func TestControllerURLFollowsHTTPListen(t *testing.T) {
 			t.Errorf("listen %q: %q, %v; want %q", listen, got, err, want)
 		}
 	}
-	if got, err := controllerURL(writeOnboardConfig(t, onboardConfig+"http: {listen: \"192.0.2.10:9094\"}\n"), noEnv); err == nil || !strings.Contains(err.Error(), "give -url https") {
+	if got, err := controllerURL(writeOnboardConfig(t, onboardConfig+"http: {listen: \"192.0.2.10:9094\"}\n"), noEnv); err == nil || !strings.Contains(err.Error(), "give -url with an https") {
 		t.Errorf("a listen address off loopback: %q, %v", got, err)
 	}
 	got, err := controllerURL(writeOnboardConfig(t, onboardConfig), func(k string) string { return map[string]string{HTTPListenEnv: "off"}[k] })

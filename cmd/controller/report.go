@@ -117,7 +117,7 @@ func controllerURL(path string, getenv func(string) string) (string, error) {
 	case host == "" || perr == nil && ip.IsUnspecified():
 		host = "127.0.0.1"
 	case !config.LoopbackHost(host):
-		return "", fmt.Errorf("http.listen %q is not a loopback address, so the credentials would cross the network in clear text: give -url https://...", listen)
+		return "", fmt.Errorf("http.listen %q is not a loopback address, so the credentials would cross the network in clear text: give -url with an https address", listen)
 	}
 	return "http://" + net.JoinHostPort(host, port), nil
 }

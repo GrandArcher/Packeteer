@@ -33,7 +33,7 @@ In the container, which reads `PACKETEER_CONFIG` and its `http.listen` to find t
 docker exec -it packeteer packeteer report --share
 ```
 
-If `http.listen` is on a non-loopback address, give `-url https://...`. It prints the preview, then `Write packeteer-field-report.txt? [y/N]`. Anything but `y` or `yes` writes nothing. An existing file is never overwritten; give another name with `-out`.
+If `http.listen` is on a non-loopback address, give `-url` an https address. It prints the preview, then `Write packeteer-field-report.txt? [y/N]`. Anything but `y` or `yes` writes nothing. An existing file is never overwritten; give another name with `-out`.
 
 | Flag | Meaning |
 |---|---|
