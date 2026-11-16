@@ -16,7 +16,10 @@ const demoFakeDocker = `#!/bin/sh
 echo "docker $*" >> "$FAKE_LOG"
 case "$1" in
 info)
-	[ "$2" = "--format" ] && echo "${FAKE_OS:-Ubuntu 24.04 LTS}"
+	case "$3" in
+	*OSType*) echo "${FAKE_OSTYPE:-linux}" ;;
+	*OperatingSystem*) echo "${FAKE_OS:-Ubuntu 24.04 LTS}" ;;
+	esac
 	exit "${FAKE_INFO_RC:-0}" ;;
 compose)
 	case "$*" in
@@ -92,8 +95,11 @@ func TestDemoPreflightFailsFastWithOneLineFix(t *testing.T) {
 		extra []string
 		want  string
 	}{
-		{"not linux", []string{"FAKE_UNAME=Darwin"}, "Linux is required"},
-		{"docker desktop", []string{"FAKE_OS=Docker Desktop"}, "Docker Desktop, not Docker Engine"},
+		{"git bash", []string{"FAKE_UNAME=MINGW64_NT-10.0-22631"}, "native Windows shell"},
+		{"msys", []string{"FAKE_UNAME=MSYS_NT-10.0"}, "native Windows shell"},
+		{"cygwin", []string{"FAKE_UNAME=CYGWIN_NT-10.0"}, "native Windows shell"},
+		{"unknown os", []string{"FAKE_UNAME=FreeBSD"}, "FreeBSD is not supported"},
+		{"windows containers", []string{"FAKE_OSTYPE=windows"}, "not running Linux containers"},
 		{"daemon down", []string{"FAKE_INFO_RC=1"}, "cannot talk to the Docker daemon"},
 		{"no compose plugin", []string{"FAKE_COMPOSE_RC=1"}, "Compose plugin is missing"},
 		{"bridge in use", []string{"FAKE_NETWORKS=walkthrough_lab 192.0.2.0/24 "}, "walkthrough_lab already uses 192.0.2.0/24"},
@@ -151,6 +157,39 @@ func TestDemoPreflightPassesOnACleanHost(t *testing.T) {
 	}
 	if !strings.Contains(out, "Packeteer demo is up (mode: observe; nothing is announced).") || !strings.Contains(log(), "up -d --build") {
 		t.Errorf("the lab was not started:\n%s\n%s", out, log())
+	}
+	if strings.Contains(out, "note:") {
+		t.Errorf("Docker Engine on Linux got a Docker Desktop note:\n%s", out)
+	}
+}
+
+// Docker Desktop is allowed, on macOS and on Windows through WSL2 (where uname
+// says Linux and the daemon says Docker Desktop), with a one-line note on
+// stderr that it is not run in CI. The lab still starts.
+func TestDemoPreflightAllowsDockerDesktopWithANote(t *testing.T) {
+	port18080Free(t)
+	cases := []struct {
+		name  string
+		extra []string
+	}{
+		{"macos", []string{"FAKE_UNAME=Darwin", "FAKE_OS=Docker Desktop"}},
+		{"macos other daemon", []string{"FAKE_UNAME=Darwin"}},
+		{"wsl2", []string{"FAKE_OS=Docker Desktop"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			run, log := demoEnv(t, false)
+			out, err := run(c.extra...)
+			if err != nil {
+				t.Fatalf("demo.sh: %v\n%s", err, out)
+			}
+			if n := strings.Count(out, "demo.sh: note: Docker Desktop is not run in CI"); n != 1 || !strings.Contains(out, "docs/demo.md#platforms") {
+				t.Errorf("want one note naming docs/demo.md#platforms, got %d:\n%s", n, out)
+			}
+			if !strings.Contains(out, "Packeteer demo is up (mode: observe; nothing is announced).") || !strings.Contains(log(), "up -d --build") {
+				t.Errorf("the lab was not started:\n%s\n%s", out, log())
+			}
+		})
 	}
 }
 

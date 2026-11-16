@@ -9,8 +9,11 @@
 # without it one is generated for this run and printed once.
 #
 # Before it builds anything, "up" checks the host and stops with a one-line
-# fix when Docker is not Docker Engine on Linux, when 127.0.0.1:18080 is
-# taken, or when another Docker network already uses 192.0.2.0/24.
+# fix when the shell is a native Windows one, Docker is missing, down, or in
+# Windows containers mode, the Compose plugin is missing, 127.0.0.1:18080 is
+# taken, or another Docker network already uses 192.0.2.0/24. Docker Desktop
+# (macOS, or Windows through WSL2) is allowed with a one-line note; CI runs
+# only Docker Engine on Linux. See docs/demo.md#platforms.
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -35,13 +38,24 @@ fail() {
 }
 
 preflight() {
-	[ "$(uname -s)" = Linux ] || fail "Linux is required; the lab needs Docker Engine on Linux. Fix: run it on a Linux host."
-	command -v docker >/dev/null 2>&1 || fail "docker is not installed. Fix: install Docker Engine, https://docs.docker.com/engine/install/"
-	docker info >/dev/null 2>&1 || fail "cannot talk to the Docker daemon. Fix: start Docker and add your user to the docker group, or use sudo."
-	case "$(docker info --format '{{.OperatingSystem}}' 2>/dev/null)" in
-	*"Docker Desktop"*) fail "this is Docker Desktop, not Docker Engine on Linux. Fix: run it on a Linux host with Docker Engine." ;;
+	local os desktop=no
+	os=$(uname -s)
+	case "$os" in
+	Linux) ;;
+	Darwin) desktop=yes ;;
+	MINGW* | MSYS* | CYGWIN*) fail "this is a native Windows shell. Fix: run it from a WSL2 terminal with Docker Desktop's WSL integration, see docs/demo.md#platforms." ;;
+	*) fail "$os is not supported. Fix: run it on Linux with Docker Engine, or on macOS or Windows (WSL2) with Docker Desktop, see docs/demo.md#platforms." ;;
 	esac
-	docker compose version >/dev/null 2>&1 || fail "the Docker Compose plugin is missing. Fix: install docker-compose-plugin, so that 'docker compose version' works."
+	command -v docker >/dev/null 2>&1 || fail "docker is not installed. Fix: install Docker Engine (Linux), https://docs.docker.com/engine/install/, or Docker Desktop (macOS, Windows)."
+	docker info >/dev/null 2>&1 || fail "cannot talk to the Docker daemon. Fix: start Docker (Docker Desktop, or the engine and your user in the docker group, or sudo)."
+	[ "$(docker info --format '{{.OSType}}' 2>/dev/null)" = linux ] || fail "Docker is not running Linux containers. Fix: switch Docker Desktop to Linux containers."
+	case "$(docker info --format '{{.OperatingSystem}}' 2>/dev/null)" in
+	*"Docker Desktop"*) desktop=yes ;;
+	esac
+	docker compose version >/dev/null 2>&1 || fail "the Docker Compose plugin is missing. Fix: install docker-compose-plugin (Docker Desktop includes it), so that 'docker compose version' works."
+	if [ "$desktop" = yes ]; then
+		echo "demo.sh: note: Docker Desktop is not run in CI and is not verified; if the demo fails, see docs/demo.md#platforms." >&2
+	fi
 	# A lab that is already up is a no-op for compose; do not call it a clash.
 	if [ -n "$(docker ps -q --filter name='^pkd-packeteer$')" ]; then
 		return 0
