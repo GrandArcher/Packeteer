@@ -22,11 +22,15 @@ type fakeKernel struct {
 	ring   uint64
 	full   uint64
 	closed bool
+	err    error // returned by next, like a ring buffer that went away
 }
 
 func (f *fakeKernel) next() (ebpfpath.Summary, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.err != nil {
+		return ebpfpath.Summary{}, f.err
+	}
 	if len(f.sums) == 0 {
 		f.mu.Unlock()
 		time.Sleep(2 * time.Millisecond)
@@ -46,8 +50,14 @@ func (f *fakeKernel) flows() ([]ebpfpath.TrackState, error) {
 
 func (f *fakeKernel) forget(k ebpfpath.TrackKey) error {
 	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.forgot = append(f.forgot, k)
-	f.mu.Unlock()
+	for i, st := range f.states {
+		if st.Key == k {
+			f.states = append(f.states[:i], f.states[i+1:]...)
+			break
+		}
+	}
 	return nil
 }
 
@@ -141,10 +151,10 @@ func TestKernelTrackerSummariesAreScored(t *testing.T) {
 		t.Fatalf("%d prefixes scored, want only 198.51.100.0/24", n)
 	}
 	s.kmu.Lock()
-	n := len(s.conns)
+	reset := s.conns[tkey(40001, "198.51.100.11")]
 	s.kmu.Unlock()
-	if n != 1 {
-		t.Fatalf("%d connections remembered, want 1: the reset one is forgotten", n)
+	if reset == nil || !reset.final {
+		t.Fatalf("the reset connection is %+v, want a tombstone", reset)
 	}
 
 	// The same 4-tuple with a new Created is a new connection.
@@ -271,5 +281,87 @@ func TestKernelTrackerNeedsEBPF(t *testing.T) {
 	}
 	if _, err := build(baseYAML + "ebpf: true\nebpf_track: true\n"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A handshake that is still pending when its connection goes idle is a
+// timeout: the table read counts it before it forgets the connection.
+func TestKernelSweepCountsTimeoutOfIdleConnection(t *testing.T) {
+	fk := &fakeKernel{}
+	s := startKernelSource(t, fk, "")
+	fk.mu.Lock()
+	fk.states = []ebpfpath.TrackState{{
+		Key: tkey(40000, "203.0.113.20"), Counters: ebpfpath.Counters{Created: 1},
+		SynAt: 100, SynAge: 3 * time.Minute, Idle: 3 * time.Minute,
+	}}
+	fk.mu.Unlock()
+	s.sweep(s.now())
+	if got := prefixTotals(s, "203.0.113.0/24"); got.Timeouts != 1 || got.Flows != 1 {
+		t.Fatalf("totals = %+v, want 1 timeout in 1 flow", got)
+	}
+}
+
+// A table read taken before the kernel forgot a reset connection arrives
+// after its final summary and must not score the connection again.
+func TestKernelStaleTableReadAfterFinalSummaryAddsNothing(t *testing.T) {
+	fk := &fakeKernel{}
+	s := startKernelSource(t, fk, "")
+	a := tkey(40000, "198.51.100.10")
+	c := ebpfpath.Counters{Created: 7, Segments: 10, Resets: 1}
+	fk.queue(ebpfpath.Summary{Key: a, Counters: c, Final: true})
+	waitDrained(t, fk)
+	fk.mu.Lock()
+	fk.states = []ebpfpath.TrackState{{Key: a, Counters: c, SynAt: 5, SynAge: time.Minute}}
+	fk.mu.Unlock()
+	s.sweep(s.now())
+	want := passive.Counts{Flows: 1, Segments: 10, Resets: 1}
+	if got := prefixTotals(s, "198.51.100.0/24"); got != want {
+		t.Fatalf("totals = %+v, want %+v (no second flow, no timeout for a reset connection)", got, want)
+	}
+}
+
+// The source reads the table on its own every second, so timeouts show up
+// without a probe round asking for them.
+func TestKernelRunSweepsTheTable(t *testing.T) {
+	fk := &fakeKernel{}
+	s := startKernelSource(t, fk, "")
+	fk.mu.Lock()
+	fk.states = []ebpfpath.TrackState{{Key: tkey(40000, "203.0.113.20"), Counters: ebpfpath.Counters{Created: 1}, SynAt: 9, SynAge: 5 * time.Second}}
+	fk.mu.Unlock()
+	deadline := time.Now().Add(5 * time.Second)
+	for prefixTotals(s, "203.0.113.0/24").Timeouts != 1 {
+		if time.Now().After(deadline) {
+			t.Fatal("the timeout was not counted without a sweep request")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// When the ring buffer fails, the tracker is closed and the source stops
+// using it.
+func TestKernelTrackerFailureClosesIt(t *testing.T) {
+	fk := &fakeKernel{ring: 2}
+	s := startKernelSource(t, fk, "")
+	fk.mu.Lock()
+	fk.err = errors.New("ring buffer closed")
+	fk.mu.Unlock()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		s.capMu.Lock()
+		gone := s.kt == nil
+		s.capMu.Unlock()
+		fk.mu.Lock()
+		closed := fk.closed
+		fk.mu.Unlock()
+		if gone && closed {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("kt cleared=%v closed=%v", gone, closed)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if _, ok := s.Truncated()["ebpf_ring_full"]; ok {
+		t.Fatal("drop counters of a closed tracker still reported")
 	}
 }

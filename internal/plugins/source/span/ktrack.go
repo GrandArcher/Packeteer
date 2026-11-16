@@ -50,29 +50,46 @@ func openKernelTracker(o ebpfpath.TrackOptions) (kernelTracker, error) {
 
 // connState is what userspace remembers of a connection the kernel tracks:
 // the counters already scored, and the handshake timeouts already counted
-// (by the kernel timestamp of the SYN or SYN-ACK).
+// (by the kernel timestamp of the SYN or SYN-ACK). A final connection is
+// kept as a tombstone for finalHold: a table read taken before the kernel
+// forgot it can still arrive, and must not score it again.
 type connState struct {
 	ebpfpath.Counters
 	synAt, synAckAt uint64
 	touched         time.Time
+	final           bool
 }
 
-// kernelRun reads summaries until the source stops.
+const finalHold = 10 * time.Second
+
+// kernelRun reads summaries until the source stops, and reads the
+// connection table every sweepEvery, as the userspace tracker sweeps while
+// packets arrive.
 func (s *Source) kernelRun(ctx context.Context, kt kernelTracker) {
 	defer s.wg.Done()
-	defer kt.close()
+	defer func() {
+		s.capMu.Lock()
+		s.kt = nil
+		s.capMu.Unlock()
+		_ = kt.close()
+	}()
+	lastSweep := s.now()
 	for !s.stopped(ctx) {
 		sum, err := kt.next()
-		if err != nil {
-			if errors.Is(err, errReadTimeout) {
-				continue
-			}
+		switch {
+		case errors.Is(err, errReadTimeout):
+		case err != nil:
 			s.log.Warn("span eBPF tracker stopped", "interface", s.iface, "err", err)
 			return
+		default:
+			s.kmu.Lock()
+			s.account(s.now(), sum.Key, sum.Counters, sum.Final)
+			s.kmu.Unlock()
 		}
-		s.kmu.Lock()
-		s.account(s.now(), sum.Key, sum.Counters, sum.Final)
-		s.kmu.Unlock()
+		if now := s.now(); now.Sub(lastSweep) >= sweepEvery {
+			lastSweep = now
+			s.kernelSweep(now, kt)
+		}
 	}
 }
 
@@ -90,6 +107,9 @@ func (s *Source) account(at time.Time, key ebpfpath.TrackKey, c ebpfpath.Counter
 		return
 	}
 	cs := s.conns[key]
+	if cs != nil && cs.final && cs.Created == c.Created {
+		return
+	}
 	var d passive.Counts
 	if cs == nil || cs.Created != c.Created {
 		cs = &connState{Counters: ebpfpath.Counters{Created: c.Created}}
@@ -115,14 +135,14 @@ func (s *Source) account(at time.Time, key ebpfpath.TrackKey, c ebpfpath.Counter
 	if d != (passive.Counts{}) {
 		s.win.Add(at, p, remote, d)
 	}
-	if final {
-		delete(s.conns, key)
-	}
+	cs.final = final
 }
 
 // kernelSweep reads the connection table. It scores the counts no summary
 // has carried yet, counts handshakes that timed out once each (the kernel
-// has no timer), and removes connections that went idle.
+// has no timer), and removes connections that went idle. A handshake
+// answered after syn_timeout and before the read is counted as neither a
+// timeout nor an RTT, as in the userspace tracker between its sweeps.
 func (s *Source) kernelSweep(now time.Time, kt kernelTracker) {
 	states, err := kt.flows()
 	if err != nil {
@@ -132,39 +152,46 @@ func (s *Source) kernelSweep(now time.Time, kt kernelTracker) {
 	s.kmu.Lock()
 	defer s.kmu.Unlock()
 	for _, st := range states {
+		s.account(now, st.Key, st.Counters, false)
+		if cs := s.conns[st.Key]; cs != nil && !cs.final {
+			s.timeouts(now, st, cs)
+		}
 		if st.Idle >= s.trk.idle {
-			s.account(now, st.Key, st.Counters, false)
 			_ = kt.forget(st.Key)
 			delete(s.conns, st.Key)
-			continue
-		}
-		s.account(now, st.Key, st.Counters, false)
-		cs := s.conns[st.Key]
-		if cs == nil {
-			continue
-		}
-		var timeouts uint64
-		if st.SynAt != 0 && st.SynAge >= s.trk.synTimeout && cs.synAt != st.SynAt {
-			cs.synAt = st.SynAt
-			timeouts++
-		}
-		if st.SynAckAt != 0 && st.SynAckAge >= s.trk.synTimeout && cs.synAckAt != st.SynAckAt {
-			cs.synAckAt = st.SynAckAt
-			timeouts++
-		}
-		if timeouts > 0 {
-			remote := st.Key.Remote.Addr()
-			if p := s.prefixFor(remote); p.IsValid() && p.Contains(remote) {
-				s.win.Add(now, p, remote, passive.Counts{Timeouts: timeouts})
-			}
 		}
 	}
-	// A connection the kernel forgot with a RST keeps no entry; one that
-	// never reports again and left the table without a summary expires here.
+	// Entries of connections that left the table without a summary, and
+	// tombstones, expire here.
 	for k, cs := range s.conns {
-		if now.Sub(cs.touched) >= s.trk.idle {
+		ttl := s.trk.idle
+		if cs.final {
+			ttl = finalHold
+		}
+		if now.Sub(cs.touched) >= ttl {
 			delete(s.conns, k)
 		}
+	}
+}
+
+// timeouts counts the handshakes of st that outlived syn_timeout and were
+// not counted yet. kmu is held.
+func (s *Source) timeouts(now time.Time, st ebpfpath.TrackState, cs *connState) {
+	var n uint64
+	if st.SynAt != 0 && st.SynAge >= s.trk.synTimeout && cs.synAt != st.SynAt {
+		cs.synAt = st.SynAt
+		n++
+	}
+	if st.SynAckAt != 0 && st.SynAckAge >= s.trk.synTimeout && cs.synAckAt != st.SynAckAt {
+		cs.synAckAt = st.SynAckAt
+		n++
+	}
+	if n == 0 {
+		return
+	}
+	remote := st.Key.Remote.Addr()
+	if p := s.prefixFor(remote); p.IsValid() && p.Contains(remote) {
+		s.win.Add(now, p, remote, passive.Counts{Timeouts: n})
 	}
 }
 

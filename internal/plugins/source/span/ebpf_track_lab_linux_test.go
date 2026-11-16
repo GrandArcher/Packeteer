@@ -318,7 +318,7 @@ func TestEBPFTrackIdleConnectionsAreForgotten(t *testing.T) {
 	if n := live(); n != 0 {
 		t.Fatalf("%d connections still in the table after the idle time", n)
 	}
-	if c := prefixTotals(s, "198.51.100.0/24"); c.Segments != 2 || c.Flows != 1 {
-		t.Fatalf("counts = %+v, want 2 segments in 1 flow", c)
+	if c := prefixTotals(s, "198.51.100.0/24"); c.Segments != 2 || c.Flows != 1 || c.Timeouts != 1 {
+		t.Fatalf("counts = %+v, want 2 segments and 1 timeout in 1 flow", c)
 	}
 }

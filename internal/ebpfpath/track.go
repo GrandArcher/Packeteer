@@ -35,10 +35,10 @@ const (
 	// MinTrackFlows and MaxTrackFlows bound the connection table.
 	MinTrackFlows = 1
 	MaxTrackFlows = 10000000
-	// ReportEvery is how often a connection that keeps sending reports its
+	// reportEvery is how often a connection that keeps sending reports its
 	// counts. Events (new connection, retransmission, handshake RTT, reset,
 	// FIN) report at once.
-	ReportEvery = time.Second
+	reportEvery = time.Second
 	// trackRingBytes holds about 10000 summaries.
 	trackRingBytes = 1 << 20
 	// Slots of the drop counter array.
@@ -241,6 +241,7 @@ func TrackProgram(flowsFD, localFD, ringFD, dropsFD int, synTimeout time.Duratio
 		asm.JSet.Imm(asm.R2, tcpRST, labelExit),
 	)
 	b.zero(sNew, TrackValueSize)
+	b.add(asm.LoadMem(asm.R1, asm.R10, sNow, asm.DWord), asm.StoreMem(asm.R10, sNew+vCreated, asm.R1, asm.DWord))
 	b.add(asm.LoadMapPtr(asm.R1, flowsFD))
 	b.stackPtr(asm.R2, keyOff)
 	b.stackPtr(asm.R3, sNew)
@@ -248,8 +249,6 @@ func TrackProgram(flowsFD, localFD, ringFD, dropsFD int, synTimeout time.Duratio
 	b.lookup(flowsFD, keyOff)
 	b.add(
 		asm.JEq.Imm(asm.R0, 0, labelExit),
-		asm.LoadMem(asm.R1, asm.R10, sNow, asm.DWord),
-		asm.StoreMem(asm.R0, vCreated, asm.R1, asm.DWord),
 		asm.StoreImm(asm.R10, sEmit, 1, asm.Word),
 		asm.Ja.Label("have"),
 	)
@@ -352,15 +351,16 @@ func TrackProgram(flowsFD, localFD, ringFD, dropsFD int, synTimeout time.Duratio
 		asm.LoadMem(asm.R3, asm.R10, sNow, asm.DWord),
 		asm.LoadMem(asm.R4, asm.R7, vReportAt, asm.DWord),
 		asm.Sub.Reg(asm.R3, asm.R4),
-		asm.JLT.Imm(asm.R3, int32(ReportEvery), labelExit),
+		asm.JLT.Imm(asm.R3, int32(reportEvery), labelExit),
 	)
 
 	// Summary: copy the counters and the key into a ring buffer record.
-	// Each counter only grows, so the copy needs no lock.
+	// Each counter only grows, so the copy needs no lock. When the ring is
+	// full the connection stays, even after a RST, so the table read scores it.
 	b.at("flush", asm.LoadMapPtr(asm.R1, ringFD))
 	b.add(asm.Mov.Imm(asm.R2, SummarySize), asm.Mov.Imm(asm.R3, 0), asm.FnRingbufReserve.Call(),
 		asm.JNE.Imm(asm.R0, 0, "reserved"))
-	b.countDropThen(dropsFD, dropRing, "flushed")
+	b.countDrop(dropsFD, dropRing)
 	b.at("reserved", asm.Mov.Reg(asm.R8, asm.R0))
 	for off := int16(0); off < vCreated-vSegs+8; off += 8 {
 		b.add(
@@ -386,8 +386,7 @@ func TrackProgram(flowsFD, localFD, ringFD, dropsFD int, synTimeout time.Duratio
 		asm.Mov.Imm(asm.R2, 0),
 		asm.FnRingbufSubmit.Call(),
 	)
-	b.at("flushed", asm.LoadMem(asm.R1, asm.R10, sEmit, asm.Word))
-	b.add(asm.JNE.Imm(asm.R1, 2, labelExit))
+	b.add(asm.LoadMem(asm.R1, asm.R10, sEmit, asm.Word), asm.JNE.Imm(asm.R1, 2, labelExit))
 	b.add(asm.LoadMapPtr(asm.R1, flowsFD))
 	b.stackPtr(asm.R2, keyOff)
 	b.add(asm.FnMapDeleteElem.Call())
@@ -409,17 +408,13 @@ func (b *builder) lpm(mapFD int, addr int32) {
 
 // countDrop adds one to slot of the drop counters and leaves the program.
 func (b *builder) countDrop(dropsFD int, slot int64) {
-	b.countDropThen(dropsFD, slot, labelExit)
-}
-
-func (b *builder) countDropThen(dropsFD int, slot int64, next string) {
 	b.add(asm.StoreImm(asm.R10, sDropKey, slot, asm.Word))
 	b.lookup(dropsFD, sDropKey)
 	b.add(
-		asm.JEq.Imm(asm.R0, 0, next),
+		asm.JEq.Imm(asm.R0, 0, labelExit),
 		asm.Mov.Imm(asm.R1, 1),
 		asm.AddAtomic.Mem(asm.R0, asm.R1, asm.DWord, 0),
-		asm.Ja.Label(next),
+		asm.Ja.Label(labelExit),
 	)
 }
 

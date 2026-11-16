@@ -1461,8 +1461,8 @@ A remote prefix is a problem when retransmissions / data segments >= `retrans_pc
 | `interface` | none | The mirror interface inside the container (host networking). Exactly one of `interface` or `pcap_file`. |
 | `pcap_file` | none | Absolute path to a classic pcap (not pcapng) mounted into the container. Replayed once at startup with its timestamps shifted to now. For labs and incident review. |
 | `promiscuous` | true | Interface capture only. Promiscuous mode is a socket membership: the kernel drops it when the socket closes or the process dies. |
-| `ebpf_track` | false | Needs `ebpf: true` (#631, [ebpf.md](ebpf.md#kernel-side-tracking-ebpf_track)). Follows the TCP connections in the kernel and reads summaries, instead of decoding frames in userspace. Same counts as the userspace tracker; IPv6 extension headers and VLAN tags are not tracked. If the program cannot load, the source logs a warning and tracks in userspace. |
 | `ebpf` | false | Interface capture only (#229, [ebpf.md](ebpf.md)). Reads frame heads from an eBPF ring buffer instead of an AF_PACKET socket. If the program cannot load (kernel older than 6.6, missing `BPF`/`NET_ADMIN`, a tun device), the source logs a warning and uses AF_PACKET. Ring buffer overflows are counted in `packeteer_truncated_total{limit="ebpf_ring_full"}`. |
+| `ebpf_track` | false | Needs `ebpf: true` (#631, [ebpf.md](ebpf.md#kernel-side-tracking-ebpf_track)). Follows the TCP connections in the kernel and reads summaries, instead of decoding frames in userspace. Counts what the userspace tracker counts, with the differences listed in ebpf.md. If the program cannot load, the source logs a warning and tracks in userspace. |
 | `local` | none | Required. Your own networks, CIDRs, no host bits, no default route, no duplicates. |
 | `exclude` | none | Remote CIDRs to ignore, no host bits, no duplicates. |
 | `window` | `5m` | `10s`-`24h`. |
