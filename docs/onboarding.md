@@ -119,7 +119,7 @@ It reads one router: with more than one `bgp.neighbors` entry it reads none and 
 
 The socket path, and the `bird.conf` path, come from environment variables that the config names (`socket_env`, `config_env`); they never appear in the config file, logs, API answers, or the UI ([CONFIG.md](CONFIG.md#preflight)). In the container, mount the socket's directory and the file read-only, for example `-v /run/frr:/run/frr -e PACKETEER_FRR_SOCKET=/run/frr/bgpd.vty`. The socket must be one the container's user can open.
 
-The `router-check` CI job (`lab/e2e-router-check.sh`) runs the stock image against FRR 10.2 and BIRD 2 and 3 daemons on documentation addresses and ASNs: the snippet's filters pass with the evidence in the detail, and an eBGP session without the reject fails with the fix. It checks that the router's running config is the same before and after, and that the socket path is in no API answer or log line.
+The `router-check` CI job (`lab/e2e-router-check.sh`) runs the stock image against FRR 10.2 and BIRD 2 and 3 daemons on documentation addresses and ASNs: the snippet's filters pass with the evidence in the detail, and an eBGP session without the reject fails with the fix. It checks that FRR's running config and BIRD's `show status` (no reconfiguration) are the same before and after, and that the socket path is in no API answer or log line.
 
 ## Not in this release
 

@@ -11,7 +11,7 @@ import (
 
 func TestAllowlistMatchesWholeCommands(t *testing.T) {
 	a := NewAllowlist(`show bgp neighbors json`, `show route-map `+Name+` json`)
-	for _, ok := range []string{"show bgp neighbors json", "show route-map packeteer-in json", "show route-map 64512:in_v4.x json"} {
+	for _, ok := range []string{"show bgp neighbors json", "show route-map packeteer-in json", "show route-map 64500:in_v4.x json"} {
 		if err := a.Check(ok); err != nil {
 			t.Errorf("%q refused: %v", ok, err)
 		}

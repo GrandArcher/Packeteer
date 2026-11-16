@@ -18,7 +18,7 @@ import (
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
-var q = plugin.FilterQuery{Community: "64512:666", Packeteer: netip.MustParseAddr("192.0.2.10")}
+var q = plugin.FilterQuery{Community: "64500:666", Packeteer: netip.MustParseAddr("192.0.2.10")}
 
 // protocolsReply follows what BIRD 2.17 prints for show protocols all
 // (proto_cmd_show, bgp_show_proto_info, channel_show_info), cut down.
@@ -30,8 +30,8 @@ func protocolsReply(packeteerIn, transitOut string) string {
 		"1006-  Description:    packeteer\n" +
 		"   BGP state:          Active\n" +
 		"     Neighbor address: 192.0.2.10\n" +
-		"     Neighbor AS:      64512\n" +
-		"     Local AS:         64512\n" +
+		"     Neighbor AS:      64500\n" +
+		"     Local AS:         64500\n" +
 		"     Last error:       Socket: Connection refused\n" +
 		"   Channel ipv4\n" +
 		"     State:          DOWN\n" +
@@ -44,7 +44,7 @@ func protocolsReply(packeteerIn, transitOut string) string {
 		"1006-  BGP state:          Active\n" +
 		"     Neighbor address: 192.0.2.20\n" +
 		"     Neighbor AS:      64511\n" +
-		"     Local AS:         64512\n" +
+		"     Local AS:         64500\n" +
 		"   Channel ipv4\n" +
 		"     State:          DOWN\n" +
 		"     Input filter:   ACCEPT\n" +
@@ -57,13 +57,13 @@ func protocolsReply(packeteerIn, transitOut string) string {
 // eBGP protocol that uses its ebgp_out filter.
 func snippetConf(t *testing.T, community string) string {
 	t.Helper()
-	out, err := snippet.Join("bird", []snippet.Params{{ASN: 64512, Router: "192.0.2.254", Packeteer: "192.0.2.10", Community: community}})
+	out, err := snippet.Join("bird", []snippet.Params{{ASN: 64500, Router: "192.0.2.254", Packeteer: "192.0.2.10", Community: community}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return "router id 192.0.2.254;\nprotocol device {}\n" + out + `
 protocol bgp transit {
-	local 192.0.2.254 as 64512;
+	local 192.0.2.254 as 64500;
 	neighbor 192.0.2.20 as 64511;
 	ipv4 { import all; export filter ebgp_out; };
 }
@@ -88,12 +88,12 @@ func details(fs []plugin.FilterFinding) string {
 
 func TestSnippetFiltersPass(t *testing.T) {
 	protos := parseProtocols(lines(t, protocolsReply("packeteer_in", "ebgp_out")))
-	got := check(protos, parseConfig(snippetConf(t, "64512:666")), q)
+	got := check(protos, parseConfig(snippetConf(t, "64500:666")), q)
 	if verdicts(got) != "pass,pass" {
 		t.Fatalf("findings:\n%s", details(got))
 	}
-	if !strings.Contains(got[0].Detail, "protocol packeteer, ipv4): filter packeteer_in accepts only routes with 64512:666") ||
-		!strings.Contains(got[1].Detail, "eBGP protocol transit (ipv4): filter ebgp_out rejects 64512:666 at statement 1") {
+	if !strings.Contains(got[0].Detail, "protocol packeteer, ipv4): filter packeteer_in accepts only routes with 64500:666") ||
+		!strings.Contains(got[1].Detail, "eBGP protocol transit (ipv4): filter ebgp_out rejects 64500:666 at statement 1") {
 		t.Errorf("details:\n%s", details(got))
 	}
 	large := plugin.FilterQuery{Community: "65536:666:1", Packeteer: q.Packeteer}
@@ -104,7 +104,7 @@ func TestSnippetFiltersPass(t *testing.T) {
 
 // The fix text quotes the condition exactly as the bird snippet writes it.
 func TestMatcherTextIsTheSnippets(t *testing.T) {
-	for _, c := range []string{"64512:666", "65536:666:1"} {
+	for _, c := range []string{"64500:666", "65536:666:1"} {
 		if got, want := newMatcher(c).text, (snippet.Params{Community: c}).BirdMatch(); got != want {
 			t.Errorf("%s: %q, snippet writes %q", c, got, want)
 		}
@@ -112,13 +112,13 @@ func TestMatcherTextIsTheSnippets(t *testing.T) {
 }
 
 func TestMissingEBGPRejectFailsWithTheFix(t *testing.T) {
-	conf := strings.Replace(snippetConf(t, "64512:666"), "filter ebgp_out {", "filter ebgp_out {\n\tbgp_path.prepend(64512);", 1)
+	conf := strings.Replace(snippetConf(t, "64500:666"), "filter ebgp_out {", "filter ebgp_out {\n\tbgp_path.prepend(64500);", 1)
 	conf = strings.Replace(conf, "filter ebgp_out {", "filter ebgp_out_old {", 1) + "\nfilter ebgp_out {\n\taccept;\n}\n"
 	got := check(parseProtocols(lines(t, protocolsReply("packeteer_in", "ebgp_out"))), parseConfig(conf), q)
 	if verdicts(got) != "pass,fail" {
 		t.Fatalf("findings:\n%s", details(got))
 	}
-	for _, want := range []string{"first statement of filter ebgp_out", "if (64512, 666) ~ bgp_community then reject;", "birdc configure"} {
+	for _, want := range []string{"first statement of filter ebgp_out", "if (64500, 666) ~ bgp_community then reject;", "birdc configure"} {
 		if !strings.Contains(got[1].Fix, want) {
 			t.Errorf("fix %q lacks %q", got[1].Fix, want)
 		}
@@ -126,11 +126,11 @@ func TestMissingEBGPRejectFailsWithTheFix(t *testing.T) {
 }
 
 func TestFilterCases(t *testing.T) {
-	base := snippetConf(t, "64512:666")
+	base := snippetConf(t, "64500:666")
 	cases := []struct {
 		name, in, out, conf, want, detail string
 	}{
-		{"export all", "packeteer_in", "ACCEPT", base, "pass,fail", "export all, so routes with 64512:666 are sent"},
+		{"export all", "packeteer_in", "ACCEPT", base, "pass,fail", "export all, so routes with 64500:666 are sent"},
 		{"export none", "packeteer_in", "REJECT", base, "pass,pass", "export none"},
 		{"import all", "ACCEPT", "ebgp_out", base, "fail,pass", "every route from Packeteer is accepted"},
 		{"import none", "REJECT", "ebgp_out", base, "fail,pass", "Packeteer's routes are dropped"},
@@ -141,26 +141,26 @@ func TestFilterCases(t *testing.T) {
 # filter pk_out { accept; }
 filter pk_in {
 	/* only Packeteer's routes { } */
-	if bgp_community ~ [(64512, 666)] then accept;
+	if bgp_community ~ [(64500, 666)] then accept;
 	reject "not from Packeteer {";
 }
 filter pk_out {
 	if net.len > 24 then reject;
-	if ((64512,666) ~ bgp_community) then reject;
-	bgp_path.prepend(64512);
+	if ((64500,666) ~ bgp_community) then reject;
+	bgp_path.prepend(64500);
 	accept;
-}`, "pass,pass", "rejects 64512:666 at statement 2"},
+}`, "pass,pass", "rejects 64500:666 at statement 2"},
 		{"import accepts on another condition", "pk_in", "ebgp_out", base + `
 filter pk_in {
 	if net ~ [ 198.51.100.0/24+ ] then accept;
 	reject;
-}`, "fail,pass", "accepts routes without 64512:666"},
+}`, "fail,pass", "accepts routes without 64500:666"},
 		{"import accepts unconditionally", "pk_in", "ebgp_out", base + "\nfilter pk_in { accept; }", "fail,pass", "statement 1"},
 		{"import never accepts", "pk_in", "ebgp_out", base + "\nfilter pk_in { if net.len > 24 then reject; reject; }", "fail,pass", "never accepts"},
-		{"import on another community test", "pk_in", "ebgp_out", base + "\nfilter pk_in { if (64512, 1) ~ bgp_community then accept; reject; }", "unknown,pass", "community condition the check does not read"},
-		{"export with an else", "packeteer_in", "pk_out", base + "\nfilter pk_out { if (64512,666) ~ bgp_community then reject; else accept; }", "pass,unknown", "statement 1 is not one the check reads"},
-		{"export assignment first", "packeteer_in", "pk_out", base + "\nfilter pk_out { bgp_med = 10; if (64512,666) ~ bgp_community then reject; accept; }", "pass,unknown", "statement 1"},
-		{"export accepts on a condition first", "packeteer_in", "pk_out", base + "\nfilter pk_out { if net ~ [ 203.0.113.0/24 ] then accept; if (64512,666) ~ bgp_community then reject; }", "pass,fail", "accepts at statement 1"},
+		{"import on another community test", "pk_in", "ebgp_out", base + "\nfilter pk_in { if (64500, 1) ~ bgp_community then accept; reject; }", "unknown,pass", "community condition the check does not read"},
+		{"export with an else", "packeteer_in", "pk_out", base + "\nfilter pk_out { if (64500,666) ~ bgp_community then reject; else accept; }", "pass,unknown", "statement 1 is not one the check reads"},
+		{"export assignment first", "packeteer_in", "pk_out", base + "\nfilter pk_out { bgp_med = 10; if (64500,666) ~ bgp_community then reject; accept; }", "pass,unknown", "statement 1"},
+		{"export accepts on a condition first", "packeteer_in", "pk_out", base + "\nfilter pk_out { if net ~ [ 203.0.113.0/24 ] then accept; if (64500,666) ~ bgp_community then reject; }", "pass,fail", "accepts at statement 1"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -183,7 +183,7 @@ filter pk_in {
 // A file BIRD does not run may be half edited: no prefix of a config, cut at
 // any byte, panics the parser.
 func TestParseConfigCutAnywhere(t *testing.T) {
-	text := snippetConf(t, "64512:666") + `
+	text := snippetConf(t, "64500:666") + `
 filter pk { if a then accept; else { if b then reject; } else
 	/* open comment
 `
@@ -199,13 +199,13 @@ filter pk { if a then accept; else { if b then reject; } else
 }
 
 func TestProtocolCases(t *testing.T) {
-	conf := parseConfig(snippetConf(t, "64512:666"))
+	conf := parseConfig(snippetConf(t, "64500:666"))
 	noPK := strings.Replace(protocolsReply("packeteer_in", "ebgp_out"), "192.0.2.10", "192.0.2.11", 1)
 	got := check(parseProtocols(lines(t, noPK)), conf, q)
 	if verdicts(got) != "pass,fail" || !strings.Contains(got[1].Detail, "no BGP protocol with neighbor 192.0.2.10") {
 		t.Fatalf("no Packeteer protocol:\n%s", details(got))
 	}
-	ebgpPK := strings.Replace(protocolsReply("packeteer_in", "ebgp_out"), "Neighbor AS:      64512", "Neighbor AS:      64496", 1)
+	ebgpPK := strings.Replace(protocolsReply("packeteer_in", "ebgp_out"), "Neighbor AS:      64500", "Neighbor AS:      64496", 1)
 	if got := check(parseProtocols(lines(t, ebgpPK)), conf, q); verdicts(got) != "fail,pass" || !strings.Contains(got[0].Detail, "not an iBGP session") {
 		t.Fatalf("eBGP Packeteer protocol:\n%s", details(got))
 	}
@@ -298,7 +298,7 @@ func TestCheckFiltersOverTheSocket(t *testing.T) {
 	dir := t.TempDir()
 	sock := filepath.Join(dir, "lab-bird.ctl")
 	conf := filepath.Join(dir, "lab-bird.conf")
-	if err := os.WriteFile(conf, []byte(snippetConf(t, "64512:666")), 0o600); err != nil {
+	if err := os.WriteFile(conf, []byte(snippetConf(t, "64500:666")), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	env := func(k string) string {

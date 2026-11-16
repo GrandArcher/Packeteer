@@ -40,9 +40,9 @@ trap cleanup EXIT
 
 cat >"$work/base.yaml" <<'YAML'
 mode: observe
-asn: 64512
+asn: 64500
 router_id: 192.0.2.10
-packeteer_community: "64512:666"
+packeteer_community: "64500:666"
 providers:
   - {name: lab-a, source_ip: 127.0.0.1, next_hop: 192.0.2.1}
 bgp:
@@ -101,7 +101,7 @@ frr_conf() { # NAME OUT_MAP EXTRA
 	{
 		printf 'frr version 10.2\nfrr defaults traditional\nhostname edge\nlog stdout informational\n!\n'
 		cat "$work/frr-snippet.txt"
-		printf 'router bgp 64512\n neighbor 192.0.2.20 remote-as 64511\n address-family ipv4 unicast\n  neighbor 192.0.2.20 route-map %s out\n exit-address-family\n!\n%s' "$2" "$3"
+		printf 'router bgp 64500\n neighbor 192.0.2.20 remote-as 64511\n address-family ipv4 unicast\n  neighbor 192.0.2.20 route-map %s out\n exit-address-family\n!\n%s' "$2" "$3"
 	} >"$work/$1/frr.conf"
 	chmod -R a+rX "$work/$1"
 	docker run -d --name "pk-rc-$1" --privileged \
@@ -123,10 +123,10 @@ frr_conf frr-broken ebgp-open $'route-map ebgp-open permit 100\n!\n'
 
 router_args=(-v "pk-rc-frr-good:$sock_dir" -e "PACKETEER_FRR_SOCKET=$sock_dir/bgpd.vty")
 check frr-good frr pass 'Read from the router (frr, read-only commands)' \
-	'Import from Packeteer 192.0.2.10 (ipv4 unicast): route-map packeteer-in permits only routes with 64512:666' \
-	'Export to eBGP neighbor 192.0.2.20 (ipv4 unicast): route-map ebgp-out denies 64512:666 at entry 10'
+	'Import from Packeteer 192.0.2.10 (ipv4 unicast): route-map packeteer-in permits only routes with 64500:666' \
+	'Export to eBGP neighbor 192.0.2.20 (ipv4 unicast): route-map ebgp-out denies 64500:666 at entry 10'
 router_args=(-v "pk-rc-frr-broken:$sock_dir" -e "PACKETEER_FRR_SOCKET=$sock_dir/bgpd.vty")
-check frr-broken frr fail 'route-map ebgp-open entry 100 permits before 64512:666 is denied' \
+check frr-broken frr fail 'route-map ebgp-open entry 100 permits before 64500:666 is denied' \
 	'Add a deny entry to route-map ebgp-open with a sequence number below 100 and match community packeteer'
 jq -e '.confirmable != true' "$work/filter-frr-broken.json" >/dev/null
 
@@ -149,7 +149,7 @@ for bird in bird2 bird3; do
 		{
 			printf 'router id 192.0.2.254;\nprotocol device {}\n'
 			cat "$work/bird-snippet.txt"
-			printf '\n%s\nprotocol bgp transit {\n\tlocal 192.0.2.254 as 64512;\n\tneighbor 192.0.2.20 as 64511;\n\tipv4 {\n\t\timport all;\n\t\texport filter %s;\n\t};\n}\n' "$extra" "$out"
+			printf '\n%s\nprotocol bgp transit {\n\tlocal 192.0.2.254 as 64500;\n\tneighbor 192.0.2.20 as 64511;\n\tipv4 {\n\t\timport all;\n\t\texport filter %s;\n\t};\n}\n' "$extra" "$out"
 		} >"$work/bird-$kind.conf"
 		chmod a+r "$work/bird-$kind.conf"
 		docker run --rm -v "$work/bird-$kind.conf:/etc/bird/rc.conf:ro" --entrypoint bird "pk-rc-$bird" -p -c /etc/bird/rc.conf
@@ -166,11 +166,11 @@ for bird in bird2 bird3; do
 			-v "$work/bird-$kind.conf:/etc/router/bird.conf:ro" -e PACKETEER_BIRD_CONFIG=/etc/router/bird.conf)
 		if [ "$kind" = good ]; then
 			check "$bird-good" bird pass 'Read from the router (bird, read-only commands)' \
-				'Import from Packeteer (protocol packeteer, ipv4): filter packeteer_in accepts only routes with 64512:666' \
-				'Export to eBGP protocol transit (ipv4): filter ebgp_out rejects 64512:666 at statement 1'
+				'Import from Packeteer (protocol packeteer, ipv4): filter packeteer_in accepts only routes with 64500:666' \
+				'Export to eBGP protocol transit (ipv4): filter ebgp_out rejects 64500:666 at statement 1'
 		else
-			check "$bird-broken" bird fail 'filter ebgp_open accepts at statement 1 before 64512:666 is rejected' \
-				'Make the first statement of filter ebgp_open: if (64512, 666) ~ bgp_community then reject;'
+			check "$bird-broken" bird fail 'filter ebgp_open accepts at statement 1 before 64500:666 is rejected' \
+				'Make the first statement of filter ebgp_open: if (64500, 666) ~ bgp_community then reject;'
 		fi
 		docker exec pk-rc-bird birdc -s /run/bird/bird.ctl show status | grep -v 'server time' >"$work/bird-after.txt"
 		diff "$work/bird-before.txt" "$work/bird-after.txt" || { echo "$bird $kind: BIRD was reconfigured" >&2; exit 1; }

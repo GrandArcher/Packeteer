@@ -21,9 +21,9 @@ import (
 // reads a real bgpd.
 
 const neighborsGood = `{
-  "192.0.2.10": {"remoteAs": 64512, "localAs": 64512, "nbrInternalLink": true, "bgpState": "Active",
+  "192.0.2.10": {"remoteAs": 64500, "localAs": 64500, "nbrInternalLink": true, "bgpState": "Active",
     "addressFamilyInfo": {"ipv4Unicast": {"inboundPathPolicyConfig": true, "routeMapForIncomingAdvertisements": "packeteer-in", "acceptedPrefixCounter": 0}}},
-  "192.0.2.20": {"remoteAs": 64511, "localAs": 64512, "nbrExternalLink": true, "bgpState": "Active",
+  "192.0.2.20": {"remoteAs": 64511, "localAs": 64500, "nbrExternalLink": true, "bgpState": "Active",
     "addressFamilyInfo": {"ipv4Unicast": {"outboundPathPolicyConfig": true, "routeMapForOutgoingAdvertisements": "ebgp-out"}}}
 }`
 
@@ -39,7 +39,7 @@ const ebgpOut = `{"ebgp-out": {"invoked": 0, "disabledOptimization": false, "pro
 const ebgpOutBroken = `{"ebgp-out": {"invoked": 0, "disabledOptimization": false, "processedChange": false, "rules": [
   {"sequenceNumber": 100, "type": "permit", "invoked": 0, "matchClauses": [], "setClauses": [], "action": "Exit routemap"}]}}`
 
-const listGood = "Named Community standard list packeteer\n    permit 64512:666\n"
+const listGood = "Named Community standard list packeteer\n    permit 64500:666\n"
 
 type reply struct {
 	out string
@@ -98,7 +98,7 @@ func serve(t *testing.T, replies map[string]reply) (*session, *fakeBGPD) {
 	return &session{w: client, r: bufio.NewReader(client)}, f
 }
 
-var q = plugin.FilterQuery{Community: "64512:666", Packeteer: netip.MustParseAddr("192.0.2.10")}
+var q = plugin.FilterQuery{Community: "64500:666", Packeteer: netip.MustParseAddr("192.0.2.10")}
 
 func run(t *testing.T, replies map[string]reply, query plugin.FilterQuery) ([]plugin.FilterFinding, *fakeBGPD) {
 	t.Helper()
@@ -128,10 +128,10 @@ func TestGoodFiltersPass(t *testing.T) {
 	if verdicts(got) != "pass,pass" {
 		t.Fatalf("findings = %+v", got)
 	}
-	if !strings.Contains(got[0].Detail, "Import from Packeteer 192.0.2.10 (ipv4 unicast): route-map packeteer-in permits only routes with 64512:666") {
+	if !strings.Contains(got[0].Detail, "Import from Packeteer 192.0.2.10 (ipv4 unicast): route-map packeteer-in permits only routes with 64500:666") {
 		t.Errorf("import detail = %q", got[0].Detail)
 	}
-	if !strings.Contains(got[1].Detail, "eBGP neighbor 192.0.2.20 (ipv4 unicast): route-map ebgp-out denies 64512:666 at entry 10") {
+	if !strings.Contains(got[1].Detail, "eBGP neighbor 192.0.2.20 (ipv4 unicast): route-map ebgp-out denies 64500:666 at entry 10") {
 		t.Errorf("export detail = %q", got[1].Detail)
 	}
 	want := []string{"show bgp neighbors json", "enable", "show route-map packeteer-in json", "show bgp community-list packeteer detail", "show route-map ebgp-out json"}
@@ -147,12 +147,12 @@ func TestMissingEBGPDenyFailsWithTheFix(t *testing.T) {
 	if verdicts(got) != "pass,fail" {
 		t.Fatalf("findings = %+v", got)
 	}
-	for _, want := range []string{"route-map ebgp-out", "sequence number below 100", "match community packeteer", "64512:666"} {
+	for _, want := range []string{"route-map ebgp-out", "sequence number below 100", "match community packeteer", "64500:666"} {
 		if !strings.Contains(got[1].Fix, want) {
 			t.Errorf("fix %q lacks %q", got[1].Fix, want)
 		}
 	}
-	if !strings.Contains(got[1].Detail, "entry 100 permits before 64512:666 is denied") {
+	if !strings.Contains(got[1].Detail, "entry 100 permits before 64500:666 is denied") {
 		t.Errorf("detail = %q", got[1].Detail)
 	}
 }
@@ -175,18 +175,18 @@ func TestPolicyCases(t *testing.T) {
 		}, "fail,pass", "every route from Packeteer is accepted"},
 		{"import permits without the community", func(r map[string]reply) {
 			r["show route-map packeteer-in json"] = reply{out: strings.Replace(packeteerIn, `"matchClauses": ["community packeteer"]`, `"matchClauses": ["ip address prefix-list any"]`, 1)}
-		}, "fail,pass", "entry 10 permits routes without 64512:666"},
+		}, "fail,pass", "entry 10 permits routes without 64500:666"},
 		{"community list also permits another value", func(r map[string]reply) {
-			r["show bgp community-list packeteer detail"] = reply{out: listGood + "    permit 64512:1\n"}
+			r["show bgp community-list packeteer detail"] = reply{out: listGood + "    permit 64500:1\n"}
 		}, "fail,pass", "permits routes without"},
 		{"community list missing", func(r map[string]reply) {
 			r["show bgp community-list packeteer detail"] = reply{out: "% Can't find community-list\n", st: 1}
-		}, "fail,fail", "never permits 64512:666"},
+		}, "fail,fail", "never permits 64500:666"},
 		{"route-map calls another", func(r map[string]reply) {
 			r["show route-map packeteer-in json"] = reply{out: strings.Replace(packeteerIn, `"setClauses": [], "action"`, `"setClauses": [], "callClause": "other", "action"`, 1)}
 		}, "unknown,pass", "calls route-map other"},
 		{"expanded list", func(r map[string]reply) {
-			r["show bgp community-list packeteer detail"] = reply{out: "Named Community expanded list packeteer\n    permit 64512:6.*\n"}
+			r["show bgp community-list packeteer detail"] = reply{out: "Named Community expanded list packeteer\n    permit 64500:6.*\n"}
 		}, "unknown,unknown", "expanded list packeteer"},
 		{"route-map not defined", func(r map[string]reply) { r["show route-map ebgp-out json"] = reply{out: "{}"} }, "pass,unknown", "applied but not defined"},
 		{"Packeteer is not a neighbor", func(r map[string]reply) {
@@ -200,7 +200,7 @@ func TestPolicyCases(t *testing.T) {
 		}, "pass,unknown", "is not read"},
 		{"import strips the community", func(r map[string]reply) {
 			r["show route-map packeteer-in json"] = reply{out: strings.Replace(packeteerIn, `"setClauses": []`, `"setClauses": ["community none"]`, 1)}
-		}, "unknown,pass", "sets community none, which can remove 64512:666"},
+		}, "unknown,pass", "sets community none, which can remove 64500:666"},
 		{"import deletes through a list", func(r map[string]reply) {
 			r["show route-map packeteer-in json"] = reply{out: strings.Replace(packeteerIn, `"setClauses": []`, `"setClauses": ["comm-list packeteer delete"]`, 1)}
 		}, "unknown,pass", "sets comm-list packeteer delete"},
@@ -208,10 +208,10 @@ func TestPolicyCases(t *testing.T) {
 			r["show route-map packeteer-in json"] = reply{out: strings.Replace(packeteerIn, `"setClauses": []`, `"setClauses": ["local-preference 300", "community 64496:1 additive"]`, 1)}
 		}, "pass,pass", ""},
 		{"list denies the community with another value first", func(r map[string]reply) {
-			r["show bgp community-list packeteer detail"] = reply{out: "Named Community standard list packeteer\n    deny 64512:666 64512:999\n    permit 64512:666\n"}
+			r["show bgp community-list packeteer detail"] = reply{out: "Named Community standard list packeteer\n    deny 64500:666 64500:999\n    permit 64500:666\n"}
 		}, "unknown,unknown", "a Packeteer route can carry more than that one"},
 		{"list permits with another value first", func(r map[string]reply) {
-			r["show bgp community-list packeteer detail"] = reply{out: "Named Community standard list packeteer\n    permit 64512:666 64512:999\n    permit 64512:666\n"}
+			r["show bgp community-list packeteer detail"] = reply{out: "Named Community standard list packeteer\n    permit 64500:666 64500:999\n    permit 64500:666\n"}
 		}, "pass,pass", ""},
 		{"route-map nested under the daemon", func(r map[string]reply) {
 			r["show route-map ebgp-out json"] = reply{out: `{"BGP": ` + ebgpOut + `}`}
@@ -278,7 +278,7 @@ func TestNonReadCommandsAreRefused(t *testing.T) {
 	s, f := serve(t, good())
 	for _, cmd := range []string{
 		"configure terminal", "configure", "conf t", "write memory", "write terminal", "write file", "copy running-config startup-config",
-		"clear bgp *", "clear ip bgp 192.0.2.20", "no router bgp 64512", "router bgp 64512", "disable", "end", "exit",
+		"clear bgp *", "clear ip bgp 192.0.2.20", "no router bgp 64500", "router bgp 64500", "disable", "end", "exit",
 		"show running-config", "show bgp neighbors json\nconfigure terminal", "show bgp neighbors json\x00write memory",
 		"show route-map x json\nwrite", "show route-map a b json", "enable password lab", "", " ",
 	} {
