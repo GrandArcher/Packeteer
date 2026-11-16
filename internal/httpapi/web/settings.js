@@ -1544,6 +1544,7 @@ function renderDiscovered() {
       row.appendChild(el("span", "tag", x.name));
       row.appendChild(el("span", "mono", d.next_hop));
       row.appendChild(el("span", "tag", d.asn ? "AS " + d.asn : "AS unknown"));
+      if (d.name) row.appendChild(el("span", "tag", d.name));
       row.appendChild(el("span", "tag", d.prefixes + " prefixes"));
       var b = el("button", "small", "Accept");
       b.type = "button";

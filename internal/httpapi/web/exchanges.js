@@ -7,7 +7,8 @@
 // bilaterally, or both (#156). Reads GET /api/exchanges, GET
 // /api/exchanges/member, and the stored exchanges report. The offload
 // section (#152) reads GET /api/exchanges/offload and the potential-peers
-// section (#154) GET /api/exchanges/potential-peers. Read-only. Rows are built
+// section (#154) GET /api/exchanges/potential-peers, with the cached
+// PeeringDB network name per AS when there is one (#629). Read-only. Rows are built
 // with textContent only. Uses getJSON, el, clear, and fmtTime from app.js. No
 // inline script: the CSP allows scripts from this origin only.
 
@@ -268,8 +269,8 @@ function renderPotential(groups) {
     any = true;
     var title = g.title + " (" + g.rep.asns + " ASNs" + (g.rep.truncated ? ", first " + rows.length : "") + ")";
     root.appendChild(el("h3", "", title));
-    root.appendChild(exTable(["AS", "Bytes", "Rate", "Prefixes on the LAN", "Members"], rows.map(function (r) {
-      return [exCell("AS" + r.asn, "mono"), exCell(r.bytes), exCell(exMbps(r.mbps)), exCell(r.lan_prefixes + " of " + r.prefixes), exCell(potentialMembers(r))];
+    root.appendChild(exTable(["AS", "Network", "Bytes", "Rate", "Prefixes on the LAN", "Members"], rows.map(function (r) {
+      return [exCell("AS" + r.asn, "mono"), exCell(r.name || ""), exCell(r.bytes), exCell(exMbps(r.mbps)), exCell(r.lan_prefixes + " of " + r.prefixes), exCell(potentialMembers(r))];
     })));
   });
   var classes = (groups[0] && groups[0].rep.classes) || {};

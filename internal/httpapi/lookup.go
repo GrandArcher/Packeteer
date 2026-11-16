@@ -53,6 +53,24 @@ func (s *Server) handleLookup(w http.ResponseWriter, r *http.Request) {
 	}{meta: s.snapshot().meta(), LookupView: v})
 }
 
+// networkNames maps each ASN to its cached PeeringDB network name. An
+// uncached ASN, an ASN with no name, an unconfigured lookup, and a stale
+// cache are absent, so a caller shows the ASN alone. It reads the cached
+// view only and never fetches.
+func (s *Server) networkNames() map[uint32]string {
+	v, ok := s.lookupView()
+	if !ok {
+		return nil
+	}
+	names := make(map[uint32]string, len(v.Networks))
+	for _, n := range v.Networks {
+		if n.Name != "" {
+			names[n.ASN] = n.Name
+		}
+	}
+	return names
+}
+
 // filterLookup copies v keeping the rows of one ASN. The counts stay the
 // size of the whole directory.
 func filterLookup(v plugin.LookupView, asn uint32) plugin.LookupView {

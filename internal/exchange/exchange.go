@@ -139,8 +139,11 @@ type Move struct {
 // Availability: the RIB keeps BMP Adj-RIB-In paths only for configured
 // providers, so there is nothing to classify.
 type Discovered struct {
-	NextHop  string `json:"next_hop"`
-	ASN      uint32 `json:"asn,omitempty"`
+	NextHop string `json:"next_hop"`
+	ASN     uint32 `json:"asn,omitempty"`
+	// Name is the PeeringDB network name from the cached lookup (#629),
+	// set by the API and omitted when none is cached.
+	Name     string `json:"name,omitempty"`
 	Prefixes int    `json:"prefixes"`
 	// Via is the session type seen for this next hop, as on a peer (#154).
 	Via string `json:"via"`

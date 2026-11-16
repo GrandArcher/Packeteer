@@ -10,7 +10,7 @@
         {"name": "ix-peer-b", "asn": 64502, "next_hop": "203.0.113.12", "prefixes": 1, "up": true, "improvements": 0, "via": "bilateral"}
       ],
       "discovered": [
-        {"next_hop": "203.0.113.13", "asn": 64503, "prefixes": 3},
+        {"next_hop": "203.0.113.13", "asn": 64503, "name": "Lab Network C", "prefixes": 3},
         {"next_hop": "203.0.113.14", "prefixes": 1}
       ]
     },

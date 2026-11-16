@@ -1,6 +1,7 @@
 package exchange
 
 import (
+	"encoding/json"
 	"net/netip"
 	"strings"
 	"testing"
@@ -133,8 +134,8 @@ func TestPotentialPeersCSV(t *testing.T) {
 		t.Fatal(err)
 	}
 	lines := strings.Split(strings.TrimSpace(b.String()), "\n")
-	if len(lines) != 2 || lines[0] != "asn,class,bytes,mbps,prefixes,lan_prefixes,lan_bytes,members" ||
-		lines[1] != "AS64510,route_server,150000000,120.00,2,1,100000000,ix-lab/ix-peer-a ix-two/198.51.100.77" {
+	if len(lines) != 2 || lines[0] != "asn,name,class,bytes,mbps,prefixes,lan_prefixes,lan_bytes,members" ||
+		lines[1] != "AS64510,,route_server,150000000,120.00,2,1,100000000,ix-lab/ix-peer-a ix-two/198.51.100.77" {
 		t.Errorf("csv = %q", b.String())
 	}
 }
@@ -147,5 +148,25 @@ func TestValidPotentialClass(t *testing.T) {
 	}
 	if ValidPotentialClass("") || ValidPotentialClass("both") {
 		t.Error("accepted a bad class")
+	}
+}
+
+// #629: a named row carries the name in the CSV and the JSON; an unnamed
+// row has an empty CSV cell and no name key.
+func TestPotentialPeersName(t *testing.T) {
+	rep := BuildPotentialPeers(potentialInput(), ClassRouteServer, 10)
+	rep.Rows[0].Name = "Lab Network, Ten"
+	var b strings.Builder
+	if err := rep.WriteCSV(&b); err != nil {
+		t.Fatal(err)
+	}
+	if want := `AS64510,"Lab Network, Ten",route_server,`; !strings.Contains(b.String(), want) {
+		t.Errorf("csv = %q, want %q", b.String(), want)
+	}
+	named, _ := json.Marshal(rep.Rows[0])
+	rep.Rows[0].Name = ""
+	unnamed, _ := json.Marshal(rep.Rows[0])
+	if !strings.Contains(string(named), `"name":"Lab Network, Ten"`) || strings.Contains(string(unnamed), `"name"`) {
+		t.Errorf("json named %s unnamed %s", named, unnamed)
 	}
 }

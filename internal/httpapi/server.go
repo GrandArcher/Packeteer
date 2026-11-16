@@ -627,6 +627,27 @@ func (s *Server) handleTelemetry(w http.ResponseWriter, _ *http.Request) {
 	}{meta: snap.meta(), Telemetry: nz(snap.Telemetry)})
 }
 
+// withMemberNames returns exs with each discovered member named from the
+// cached PeeringDB lookup (#629). The snapshot is shared, so it is copied
+// rather than written. Without a cached name the member is unchanged.
+func (s *Server) withMemberNames(exs []exchange.Stats) []exchange.Stats {
+	names := s.networkNames()
+	if len(names) == 0 {
+		return exs
+	}
+	out := make([]exchange.Stats, len(exs))
+	copy(out, exs)
+	for i := range out {
+		ds := make([]exchange.Discovered, len(out[i].Discovered))
+		copy(ds, out[i].Discovered)
+		for j := range ds {
+			ds[j].Name = names[ds[j].ASN]
+		}
+		out[i].Discovered = ds
+	}
+	return out
+}
+
 // handleExchanges serves Internet exchange statistics (#27): per peer,
 // the prefixes seen through its next hop, probe health, and improvements,
 // and next hops on the peering LAN that are not configured peers.
@@ -635,7 +656,7 @@ func (s *Server) handleExchanges(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, struct {
 		meta
 		Exchanges []exchange.Stats `json:"exchanges"`
-	}{meta: snap.meta(), Exchanges: nz(snap.Exchanges)})
+	}{meta: snap.meta(), Exchanges: nz(s.withMemberNames(snap.Exchanges))})
 }
 
 // handleHA serves the active/standby view (#31). Without an elector the
