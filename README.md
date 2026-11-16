@@ -378,9 +378,9 @@ v1.4.0 added one capability row, the lab-only path-scoring harness, and no confi
 
 v1.4.1 was a patch with no new capability rows and no config keys, so the counts above are unchanged. It fixes the quickstart (one password variable, no `openssl`, the Compose file pinned to the release) and makes `scripts/demo.sh` check Docker, port 18080, and the 192.0.2.0/24 bridge before it starts (#612). Nothing is field-proven (#54). The shipped config stays `mode: observe`, and injection stays off by default ([CHANGELOG](CHANGELOG.md#141---2026-11-14)).
 
-v1.5.0 (this release) adds one capability row, the field-report kit, and two opt-in config keys, `preflight.router_check` and `span` `ebpf_track`; the counts above include the row, two v0.8 rows (exchange autoconfig, potential peers, #629) and one v0.4 row (central management, #628) that moved from partial to done (136 done, up from 132 at 1.4.0). What an operator will look for:
+v1.5.0 (this release) adds one capability row, the field-report kit, and two opt-in config keys, `preflight.router_check` and `span` `ebpf_track`; the counts above include the row, two v0.8 rows (exchange autoconfig, potential peers, #629) and one v0.4 row (central management, #628) that moved from partial to done (136 done, up from 132 at 1.4.1). What an operator will look for:
 
-- `packeteer report --share` and a Settings panel write a redacted summary of an observe install to paste into a field-report or bug issue, preview first, with every address, prefix, and AS number replaced by a documentation placeholder and nothing uploaded ([docs/field-report.md](docs/field-report.md), #625).
+- `packeteer report --share` and a Settings panel write a redacted summary of an observe install to paste into a field-report or bug issue, preview first, with addresses, prefixes, and AS numbers replaced by documentation placeholders (pattern based; read it before pasting) and nothing uploaded ([docs/field-report.md](docs/field-report.md), #625).
 - The opt-in `preflight.router_check` (`frr` or `bird`) reads the router's import and eBGP export policy with allowlisted read-only commands and backs the `import_filter` onboarding check. It changes nothing on the router and is off by default ([docs/onboarding.md](docs/onboarding.md), #626).
 - The `only-invalid` CI job runs RPKI-invalid only paths and an approved SLURM exception against Routinator fed only local data, in observe ([docs/only-invalid.md](docs/only-invalid.md), #627).
 - The multi-POP lab pushes `thresholds` and `policies` between the two POPs in observe; the peer refuses `mode`, the allowlist, announcers, and invalid sections ([docs/multi-pop.md](docs/multi-pop.md), #628).
@@ -400,6 +400,7 @@ The Settings page can also upgrade in place (#196). It is off by default. It nee
 ### From 1.4.1 to 1.5.0
 
 - No existing config key changed and no existing config behaves differently. `preflight.router_check` and `span` `ebpf_track` are new and off by default. A downgrade to 1.4.1 needs no config change unless you set either key: remove it first, because 1.4.1 refuses unknown keys.
+- `GET /api/exchanges/potential-peers?format=csv` has a new `name` column after `asn` (#629), so every later column moves one place right. Read the CSV by header name, not position.
 
 ### From 1.4.0 to 1.4.1
 
