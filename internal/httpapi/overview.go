@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/GrandArcher/Packeteer/internal/fieldreport"
 	"github.com/GrandArcher/Packeteer/internal/preflight"
 	"github.com/GrandArcher/Packeteer/internal/probe"
 )
@@ -34,6 +35,8 @@ type Setup struct {
 	// GeoIP reports the state of the country databases (#135). Nil when no
 	// country rule and no download is configured.
 	GeoIP func() GeoIPState
+	// Report is what the field report reads from the config (#625).
+	Report fieldreport.Facts
 }
 
 // GeoIPState is what the setup checklist reads about the country databases.

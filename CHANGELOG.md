@@ -4,6 +4,10 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ## [Unreleased]
 
+### Added
+
+- `packeteer report --share`, `GET /api/report/share`, a Settings panel, and `field-report.yml` and `bug.yml` issue forms: a preview-first summary with documentation-range redaction (#625).
+
 ### Changed
 
 - Go toolchain moves to 1.27: `go.mod` and the Dockerfile builder digest, which supersedes the Dependabot bump (#623).

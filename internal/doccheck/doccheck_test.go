@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func read(t *testing.T, rel ...string) string {
@@ -183,5 +185,65 @@ func TestReadmeLinksExist(t *testing.T) {
 		if _, err := os.Stat(filepath.Join("..", "..", m[1])); err != nil {
 			t.Errorf("README.md links %s: %v", m[1], err)
 		}
+	}
+}
+
+// TestIssueFormsAreValid keeps the issue forms loadable by GitHub: a name, a
+// description, and a body of known element types with unique ids, a label on
+// every input, and options on every dropdown and checkbox group. Both forms
+// that ask for the field-report summary (#625) must warn against real data.
+func TestIssueFormsAreValid(t *testing.T) {
+	type element struct {
+		Type       string `yaml:"type"`
+		ID         string `yaml:"id"`
+		Attributes struct {
+			Label   string `yaml:"label"`
+			Value   string `yaml:"value"`
+			Options []any  `yaml:"options"`
+		} `yaml:"attributes"`
+	}
+	for _, name := range []string{"field-report.yml", "bug.yml"} {
+		var form struct {
+			Name        string    `yaml:"name"`
+			Description string    `yaml:"description"`
+			Body        []element `yaml:"body"`
+		}
+		if err := yaml.Unmarshal([]byte(read(t, ".github", "ISSUE_TEMPLATE", name)), &form); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if form.Name == "" || form.Description == "" || len(form.Body) == 0 {
+			t.Errorf("%s: name, description, and body are required: %+v", name, form)
+		}
+		ids := map[string]bool{}
+		var summary, warned bool
+		for i, e := range form.Body {
+			switch e.Type {
+			case "markdown":
+				warned = warned || strings.Contains(e.Attributes.Value, "Do not paste real")
+				if !strings.Contains(e.Attributes.Value, "packeteer report --share") && i == 0 {
+					t.Errorf("%s: the first block does not name the report command", name)
+				}
+			case "textarea", "input", "dropdown", "checkboxes":
+				if e.Attributes.Label == "" {
+					t.Errorf("%s: element %d (%s) has no label", name, i, e.Type)
+				}
+				if (e.Type == "dropdown" || e.Type == "checkboxes") && len(e.Attributes.Options) == 0 {
+					t.Errorf("%s: element %d (%s) has no options", name, i, e.Type)
+				}
+				if e.ID == "" || ids[e.ID] {
+					t.Errorf("%s: element %d has a missing or repeated id %q", name, i, e.ID)
+				}
+				ids[e.ID] = true
+				summary = summary || e.ID == "summary"
+			default:
+				t.Errorf("%s: element %d has unknown type %q", name, i, e.Type)
+			}
+		}
+		if !summary || !warned {
+			t.Errorf("%s: needs a summary field and the warning against real data (summary %v, warning %v)", name, summary, warned)
+		}
+	}
+	if _, err := os.Stat(filepath.Join("..", "..", ".github", "ISSUE_TEMPLATE", "feature.md")); err != nil {
+		t.Errorf("feature.md must stay: %v", err)
 	}
 }

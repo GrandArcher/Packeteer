@@ -6,7 +6,7 @@ Every feature ships as a plugin behind the interfaces in `pkg/plugin` wherever o
 
 Statuses: **done** (merged to `main`), **partial** (merged, but part of the intended behavior is missing; the row says what and links the issue), **in progress** (open PR or active branch), **planned** (issue exists), **won't do** (reason given).
 
-Field-proven: whether an operator has reported the row working on a production edge. None has yet; reports are collected in #54. `no (lab-proven)` means a lab with real BGP daemons (FRR, GoBGP, BIRD, MikroTik CHR) proves it on simulated routers; `no` means unit and integration tests only.
+Field-proven: whether an operator has reported the row working on a production edge. None has yet; reports are collected in #54, and `packeteer report --share` writes the redacted summary to paste there ([field-report.md](field-report.md)). `no (lab-proven)` means a lab with real BGP daemons (FRR, GoBGP, BIRD, MikroTik CHR) proves it on simulated routers; `no` means unit and integration tests only.
 
 Milestones:
 - **v0.1**: installable core outbound performance loop: probing, targets from static lists and flows, RIB via iBGP, scoring with hysteresis, injection via GoBGP, web UI + API + metrics, Docker, e2e lab, operator quick start and config reference.
@@ -24,6 +24,7 @@ Milestones:
 - **v1.2**: no new rows. Steering over the REST API and as MCP write tools (#558): pin a prefix, pause and resume optimization, acknowledge an alert; it completes the MCP row above, so the counts below move from 130 to 131 done (v1.1: 1 of 3). Lab only; nothing is field-proven (#54).
 - **v1.3**: no new rows. Pins, the pause, and alert acknowledgements survive a restart and HA takeover with `ha` or sqlite storage (#565) with a lost-state warning (#566), plus first-run setup, router config snippets, the guided inject step, the hold-time review dialog, and the System page probe-source check (#568, #569, #575, #576, #581). The counts below are unchanged. Lab only; nothing is field-proven (#54).
 - **v1.4**: one new row, an experimental, lab-only path-scoring harness (#584) that scores config variants against recorded history and never changes a default. Also finishing observe setup from the GUI (host policy routing panel, "Setup complete, still observe", #582; the `firstrun-gui` CI job, #587), the `value` report and the `/value.html` page for a manager (#583, #588), a one-command observe-only demo lab (`scripts/demo.sh`, #586) with a five-minute script (`docs/demo.md`, #590), and a chaos soak on the HA lab that checks the safety invariants on the router through a session flap, a probe-source failure, SIGTERM, and SIGKILL (`lab/e2e-chaos.sh`, #585; CI runs the short profile; the weekly 5h run is `.github/workflows/chaos.yml` and the multi-day run is documented in `lab/chaos/README.md`, #589). The counts below include the harness row (131 to 132 done). Lab only; nothing is field-proven (#54).
+- **v1.5**: one new row, the field-report kit (#625): `packeteer report --share` and a Settings button write a redacted summary for a field-report or bug issue, and two issue forms ask for it. Lab only; nothing is field-proven (#54). The counts below include the row (132 to 133 done).
 
 ## Summary
 
@@ -39,12 +40,13 @@ Milestones:
 | v0.9 | 31 | 28 |
 | v1.1 | 3 | 1 |
 | v1.4 | 1 | 1 |
+| v1.5 | 1 | 1 |
 | won't do | 2 | - |
-| **total** | 146 | 132 |
+| **total** | 147 | 133 |
 
 | Status | Count |
 |---|---|
-| done | 132 |
+| done | 133 |
 | partial | 12 |
 | in progress | 0 |
 | planned | 0 |
@@ -393,6 +395,7 @@ Threat-intelligence feed ingest (#134, [threat-feeds.md](threat-feeds.md)): `thr
 | Structured logging | done | v0.1 | core | #9 | no |
 | Non-BGP mode: flow-driven static routes for a dual-ISP site whose router has no BGP | partial (#300: off by default; routes are installed only with `mode: inject` and `nonbgp.install_routes: true`. They are derived from flow data, not from a learned BGP RIB view, under an owner-approved exception for this mode only ([design/nonbgp.md](design/nonbgp.md)); a warning is logged, printed by `-check`, and shown on every page. Flow destinations become synthetic prefixes, never more specific than /24 or /48, that widen inside the announced prefix a `covering` plugin (`ripestat`) found while at least half their blocks have flow, and narrow as blocks go idle. An improvement becomes a static route through the other link's gateway on a RouterOS 7 router (REST API) or a Linux host (netlink, protocol 250), inside the allowlist and `max_improvements`, tagged so only Packeteer's routes change. Removed on SIGTERM and when the link is lost, the probe source fails, or data goes stale; each start sweeps tagged routes a killed run left, and until then they stay. A router that redistributes static routes exports them; docs say how to filter. Labeled `synthetic` on `/api/synthetic`, `/api/improvements`, history, and the Improvements page. Lab job with the `linux` steerer (install, withdraw, SIGTERM, `kill -9` then sweep). Missing: no RouterOS lab, no herd sharing) | v1.1 | steerer (`mikrotik`, `linux`) + covering (`ripestat`) + source (`flow`) + core (`internal/nonbgp`) ([nonbgp.md](nonbgp.md)) | #300 | no (lab-proven, `linux` steerer only) |
 | MCP server for AI assistants ([mcp.md](mcp.md)) | done (#302, #558): `POST /mcp` (opt-in `mcp.enabled`) and the `packeteer-mcp` stdio bridge serve 19 read tools over the REST API (health, links, prefixes, decisions and why, search, events, anomalies, leaks, pins, the pause state, herd and outside-intel views) with the caller's own role, a rate limit, and no secret or per-vantage herd endpoint. Write tools are off by default (`mcp.write_tools`) and need an `mcp:write` token scope: maintenance windows, and (#558) pin and unpin a prefix (`POST /api/pins`, a static rule set on demand, refused unless the prefix is in the learned RIB and the allowlist), pause and resume optimization (every improvement withdrawn while paused), and alert acknowledgement. Pins, the pause, and acknowledgements are saved in `storage` (`sqlite`), or with `ha` beside the lease, and restored on start and on a takeover (#565); with memory storage they are in memory only. A start or takeover that loses any sends `steering.lost` and shows on the System page (#566). A pin is announced only in inject, with the community and NO_EXPORT, under the static rails and `max_improvements` | v1.1 | - (HTTP API) | #302, #558 | no |
+| Field-report kit: a redacted, pasteable summary of an observe-mode install for field-report and bug issues | done (#625: `packeteer report --share` and a Settings Field report panel read `GET /api/report/share`: version, mode, provider count, iBGP and BMP use, prober and source types, the setup checklist ids, event counts, and the value report totals. Every address, prefix, AS number, and host name becomes a documentation placeholder, the same input to the same placeholder; no secret, provider name, or router name is read. The CLI and the panel show the preview first and write or download only after you confirm. Nothing is uploaded; `.github/ISSUE_TEMPLATE/field-report.yml` and `bug.yml` ask for the text. The router vendor is not known to Packeteer and is asked in the form) | v1.5 | core (`internal/fieldreport`, `internal/httpapi`) + UI ([field-report.md](field-report.md)) | #625 | no |
 
 Remaining UI features (#34, [ui.md](ui.md)). **Improvement weights**: the `weighted`, `commit`, and `cost` scorers take an optional `improvement_weights` block (`performance`, default 1; `volume`, default 0). When it is set, new static, VIP, and performance moves competing for the last `max_improvements` slots are admitted by `performance x score gain + volume x Mbps` instead of by gain alone, inside their lane (static pins still first; commit and cost moves keep relief and savings order).
 

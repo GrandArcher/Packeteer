@@ -1,0 +1,44 @@
+name: Bug
+description: Something does not work as documented
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Attach the summary from `docker exec -it packeteer packeteer report --share` (or Settings, Field report in the dashboard). It replaces every address, prefix, AS number, and host name with a documentation placeholder, shows you a preview, and sends nothing. See [docs/field-report.md](https://github.com/GrandArcher/Packeteer/blob/main/docs/field-report.md).
+
+        **Do not paste real prefixes, AS numbers, host names, IP addresses, or credentials (passwords, tokens, SNMP communities, API keys) anywhere in this issue, including logs and config.** Replace them with documentation values such as 192.0.2.0/24, 2001:db8::/32, and AS64500.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what Packeteer did instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: false
+  - type: textarea
+    id: summary
+    attributes:
+      label: Redacted summary
+      description: Paste the output of `packeteer report --share`.
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: router
+    attributes:
+      label: Router vendor and software version
+    validations:
+      required: false
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: Before you submit
+      options:
+        - label: I read this issue, including any logs and config I pasted, and it contains no real prefix, AS number, host name, IP address, or credential.
+          required: true
