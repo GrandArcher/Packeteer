@@ -4,6 +4,10 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ## [Unreleased]
 
+### Added
+
+- `only-invalid` CI job: `lab/e2e-only-invalid.sh` runs `rpki.only_invalid` and an approved SLURM exception against Routinator fed only local SLURM data, in observe (#627).
+
 ### Changed
 
 - Go toolchain moves to 1.27: `go.mod` and the Dockerfile builder digest, which supersedes the Dependabot bump (#623).

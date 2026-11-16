@@ -1,0 +1,46 @@
+# Lab only (#627). Documentation prefixes, private and documentation ASNs.
+# Observe: nothing is announced. rpki.only_invalid reads the learned RIB
+# from the edge and validates it against the lab's Routinator, which
+# serves only the ROAs in lab/only-invalid/roas.json and the exceptions
+# Packeteer writes to the shared slurm directory. The irr file source has
+# a route object for 198.51.100.0/24 from AS64500.
+mode: observe
+asn: 64512
+router_id: 192.0.2.10
+providers:
+  - name: transit-a
+    source_ip: 192.0.2.11
+    next_hop: 192.0.2.21
+bgp:
+  neighbors:
+    - address: 192.0.2.254
+      description: edge
+http:
+  listen: 0.0.0.0:8080
+# The events and the audit log are read back from here.
+storage:
+  type: sqlite
+  config:
+    path: /var/lib/packeteer/data/packeteer.db
+irr:
+  enabled: true
+  sources:
+    - type: file
+      config:
+        path: /etc/packeteer/irr/irr.db
+rpki:
+  enabled: true
+  sources:
+    - type: rtr
+      name: routinator
+      config:
+        address: "192.0.2.40:3323"
+  only_invalid:
+    enabled: true
+    slurm:
+      path: /var/lib/packeteer/slurm/slurm.json
+      prefixes: [198.51.100.0/24]
+# Lab only: no sign-in; the e2e script uses the basic-auth account, which
+# may approve.
+auth:
+  enabled: false
