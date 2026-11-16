@@ -1,0 +1,91 @@
+# RPKI-invalid only path lab (#627): a real Routinator, a simulated edge
+# and a simulated eBGP transit, and Packeteer in observe mode. Documentation
+# addresses (RFC 5737) and documentation/private ASNs only.
+#
+# Routinator uses no trust anchor and never fetches from an RPKI
+# repository. Its only data are two local SLURM (RFC 8416) files: the lab
+# ROAs (lab/only-invalid/roas.json) and the exceptions file in SLURM_DIR,
+# which Packeteer writes after an admin approves and Routinator reads
+# again on every validation run (--refresh 5). lab/e2e-only-invalid.sh
+# reads the ops API at 192.0.2.10:8080 (lab-only basic auth below) and
+# Routinator's HTTP API at 192.0.2.40:8323.
+name: packeteer-e2e-only-invalid
+x-frr: &frr
+  image: quay.io/frrouting/frr:10.2.4
+  privileged: true
+  entrypoint: ["/bin/sh", "/lab/frr-start.sh"]
+services:
+  routinator:
+    image: nlnetlabs/routinator:v0.16.1
+    command:
+      - --no-rir-tals
+      - --disable-rsync
+      - --disable-rrdp
+      - --exceptions=/lab/roas.json
+      - --exceptions=/slurm/slurm.json
+      - server
+      - --rtr=0.0.0.0:3323
+      - --http=0.0.0.0:8323
+      - --refresh=5
+    volumes:
+      - ./only-invalid/roas.json:/lab/roas.json:ro
+      - ${SLURM_DIR:?SLURM_DIR is set by lab/e2e-only-invalid.sh}:/slurm:ro
+    networks:
+      lab:
+        ipv4_address: 192.0.2.40
+  edge:
+    <<: *frr
+    hostname: edge
+    environment:
+      FRR_EXPECT: "router bgp 64512;neighbor 192.0.2.10 soft-reconfiguration inbound"
+    volumes:
+      - ./frr-oi-edge:/etc/frr
+      - ./frr-start.sh:/lab/frr-start.sh:ro
+    networks:
+      lab:
+        ipv4_address: 192.0.2.254
+  transit-a:
+    <<: *frr
+    hostname: transit-a
+    environment:
+      FRR_EXPECT: "router bgp 64496;network 203.0.113.128/25;set as-path prepend 64500"
+    volumes:
+      - ./frr-oi-transit-a:/etc/frr
+      - ./frr-start.sh:/lab/frr-start.sh:ro
+    networks:
+      lab:
+        ipv4_address: 192.0.2.21
+  packeteer:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      args:
+        VERSION: e2e
+    image: packeteer:e2e
+    depends_on:
+      - edge
+      - routinator
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
+      - NET_BIND_SERVICE
+    environment:
+      PACKETEER_CONFIG: /etc/packeteer/config.yaml
+      PACKETEER_LOG_LEVEL: debug
+      # Lab-only credentials.
+      PACKETEER_HTTP_USER: lab
+      PACKETEER_HTTP_PASSWORD: lab-only
+    volumes:
+      - ./packeteer-only-invalid.yaml:/etc/packeteer/config.yaml:ro
+      - ./only-invalid/irr.db:/etc/packeteer/irr/irr.db:ro
+      - ${SLURM_DIR}:/var/lib/packeteer/slurm
+    networks:
+      lab:
+        ipv4_address: 192.0.2.10
+networks:
+  lab:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 192.0.2.0/24
+          gateway: 192.0.2.3

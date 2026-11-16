@@ -7,10 +7,12 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 ### Added
 
 - `packeteer report --share`, `GET /api/report/share`, a Settings panel, and `field-report.yml` and `bug.yml` issue forms: a preview-first summary with documentation-range redaction (#625).
+- `only-invalid` CI job: `lab/e2e-only-invalid.sh` runs `rpki.only_invalid` and an approved SLURM exception against Routinator fed only local SLURM data, in observe (#627).
 
 ### Changed
 
 - Go toolchain moves to 1.27: `go.mod` and the Dockerfile builder digest, which supersedes the Dependabot bump (#623).
+- `scripts/demo.sh` allows Docker Desktop (macOS, Windows via WSL2) with a note, refuses native Windows shells and Windows containers; `.gitattributes` keeps lab files on LF (#630).
 
 ## [1.4.1] - 2026-11-14
 

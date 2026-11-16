@@ -70,7 +70,7 @@ cd Packeteer
 ./scripts/demo.sh stop   # removes the containers
 ```
 
-About 30 seconds after the start, Overview recommends transit-b for `198.51.100.0/24` while the edge keeps transit-a and holds no route from Packeteer. [docs/demo.md](docs/demo.md) is a five-minute script to follow on screen, with the expected output of each step; CI runs it. For a host install, use [docs/quickstart.md](docs/quickstart.md). For observe, suggest, and inject on a simulated network, use [docs/walkthrough.md](docs/walkthrough.md).
+About 30 seconds after the start, Overview recommends transit-b for `198.51.100.0/24` while the edge keeps transit-a and holds no route from Packeteer. [docs/demo.md](docs/demo.md) is a five-minute script to follow on screen, with the expected output of each step; CI runs it on Linux with Docker Engine; Docker Desktop on macOS and Windows (WSL2) is allowed but unverified, see [Platforms](docs/demo.md#platforms). For a host install, use [docs/quickstart.md](docs/quickstart.md). For observe, suggest, and inject on a simulated network, use [docs/walkthrough.md](docs/walkthrough.md).
 
 ## Install
 
