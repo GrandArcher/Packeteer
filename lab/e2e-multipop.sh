@@ -28,7 +28,15 @@
 #     views mark the peer stale and the global commit incomplete, neither
 #     instance steers or announces for 20s, and after the link heals
 #     exactly one re-steer returns with the same tags;
-#  7. SIGTERM packeteer-a withdraws; SIGKILL drops the route with the session.
+#  7. SIGTERM packeteer-a withdraws; SIGKILL drops the route with the session;
+#  8. settings push (#628), both POPs restarted in observe: an admin on pop-a
+#     saves new thresholds and a rules policy, pushes both, and pop-b applies
+#     them online with no restart; pop-b refuses mode, the allowlist, the
+#     announcer, and invalid thresholds, sent straight to it with pop-a's
+#     certificate, and changes nothing; a certificate outside
+#     accept_settings_from gets 403; an invalid section through pop-a's push
+#     is refused per peer; both sides audit; both stay in observe and
+#     nothing is announced.
 set -euo pipefail
 export LC_ALL=C
 
@@ -45,8 +53,15 @@ echo "building route check and lab certificates"
 go build -o "$check_bin" ./lab/checkpop
 go build -o "$certs_bin" ./lab/mkcerts
 mkdir -p "$lab_dir/a" "$lab_dir/b" "$lab_dir/certs"
-"$certs_bin" "$lab_dir/certs" pop-a pop-b
-chmod 755 "$lab_dir" "$lab_dir/a" "$lab_dir/b" "$lab_dir/certs"
+# pop-c is a certificate from the same CA that pop-b does not accept
+# settings from.
+"$certs_bin" "$lab_dir/certs" pop-a pop-b pop-c
+# The settings push writes each instance's config, so each gets a copy.
+mkdir -p "$lab_dir/conf-a" "$lab_dir/conf-b"
+cp lab/packeteer-multipop-a.yaml "$lab_dir/conf-a/config.yaml"
+cp lab/packeteer-multipop-b.yaml "$lab_dir/conf-b/config.yaml"
+chmod 644 "$lab_dir/conf-a/config.yaml" "$lab_dir/conf-b/config.yaml"
+chmod 755 "$lab_dir" "$lab_dir/a" "$lab_dir/b" "$lab_dir/certs" "$lab_dir/conf-a" "$lab_dir/conf-b"
 export PACKETEER_LAB_DIR="$lab_dir"
 
 # flip pop file source: replace one instance's file atomically.
@@ -72,8 +87,19 @@ vty() {
 	"${compose[@]}" exec -T "$svc" vtysh "$@"
 }
 
+# Lab-only basic auth from lab/docker-compose-multipop.yml.
+lab_auth=lab:lab-only
+declare -A http_addr=([packeteer-a]=192.0.2.10 [packeteer-b]=192.0.2.20)
+
 api() {
-	"${compose[@]}" exec -T "$1" wget -qO- "http://127.0.0.1:8080$2" 2>/dev/null || true
+	curl -sS --max-time 5 -u "$lab_auth" "http://${http_addr[$1]}:8080$2" 2>/dev/null || true
+}
+
+# api_send svc method path json: prints the reply body, then the HTTP
+# status on a line of its own.
+api_send() {
+	curl -sS --max-time 40 -u "$lab_auth" -X "$2" -H 'Content-Type: application/json' \
+		--data-binary "$4" -w '\n%{http_code}' "http://${http_addr[$1]}:8080$3" || true
 }
 
 dump() {
@@ -335,5 +361,193 @@ if [ "$dropped" -ne 1 ]; then
 fi
 echo "session lost and every route gone $(($(date +%s) - start))s after SIGKILL (hold ${hold}s)"
 need_api packeteer-b /api/federation '.peers[0].fresh == false' "pop-b still sees the killed pop-a as fresh"
+
+echo "8. settings push between the POPs, both in observe (#628)"
+"${compose[@]}" stop -t 20 packeteer-b
+for p in a b; do
+	sed -i 's/^mode: inject$/mode: observe/' "$lab_dir/conf-$p/config.yaml"
+	if ! grep -qx 'mode: observe' "$lab_dir/conf-$p/config.yaml"; then
+		echo "FAIL: conf-$p/config.yaml is not in observe" >&2
+		exit 1
+	fi
+done
+"${compose[@]}" start packeteer-a packeteer-b
+for svc in packeteer-a packeteer-b; do
+	need_api "$svc" /api/federation '.local.mode == "observe" and .peers[0].fresh and .peers[0].snapshot.mode == "observe"' "$svc and its peer are not both fresh in observe"
+done
+want
+b_started=$(docker inspect -f '{{.State.StartedAt}}' "$("${compose[@]}" ps -q packeteer-b)")
+
+# split_reply: sets reply and code from api_send's output.
+reply=
+code=
+split_reply() {
+	code=${1##*$'\n'}
+	reply=${1%$'\n'*}
+}
+
+# runs_file svc: the instance runs what its config file says, in observe.
+runs_file() {
+	local yaml res
+	yaml=$(api "$1" /api/config | jq -r '.yaml // empty')
+	res=$(api_send "$1" POST /api/config/validate "$(jq -n --arg y "$yaml" '{yaml: $y}')")
+	split_reply "$res"
+	if [ -z "$yaml" ] || [ "$code" != 200 ] || ! jq -e '.valid and .mode == "observe" and ((.changed // []) | length) == 0' <<<"$reply" >/dev/null; then
+		echo "FAIL: $1 does not run its config file in observe: $code $reply" >&2
+		dump
+		exit 1
+	fi
+}
+
+# has_config svc regex...: each regex matches a line of the instance's
+# config file. A push rewrites a section in canonical YAML (sorted keys,
+# block lists), so the checks do not depend on the sender's layout.
+has_config() {
+	local svc=$1 yaml t
+	shift
+	yaml=$(api "$svc" /api/config | jq -r '.yaml // empty')
+	for t in "$@"; do
+		if ! grep -Eq -- "$t" <<<"$yaml"; then
+			echo "FAIL: $svc config file has no line matching '$t'" >&2
+			printf '%s\n' "$yaml" >&2
+			exit 1
+		fi
+	done
+}
+
+echo "admin on pop-a saves thresholds and a policy, applied online"
+cfg=$(api packeteer-a /api/config)
+base=$(jq -r .sha256 <<<"$cfg")
+edited=$(jq -r .yaml <<<"$cfg" | sed 's/^  min_rtt_delta_ms: 15$/  min_rtt_delta_ms: 25/')
+edited+=$'\npolicies:\n  - type: rules\n    config:\n      rules:\n        - name: lab-push\n          action: ignore\n          prefixes: [203.0.113.0/24]\n'
+# Thresholds and policies can change what is announced, so the editor
+# wants a dry run first and its preview token on the save.
+split_reply "$(api_send packeteer-a PUT /api/config "$(jq -n --arg y "$edited" --arg b "$base" '{yaml: $y, base: $b, dry_run: true}')")"
+token=$(jq -r '.preview_token // ""' <<<"$reply")
+if [ "$code" != 200 ] || [ -z "$token" ]; then
+	echo "FAIL: dry run on pop-a: $code $reply" >&2
+	dump
+	exit 1
+fi
+split_reply "$(api_send packeteer-a PUT /api/config "$(jq -n --arg y "$edited" --arg b "$base" --arg t "$token" '{yaml: $y, base: $b, preview_token: $t}')")"
+if [ "$code" != 200 ] || ! jq -e '(.applied | sort) == ["policies", "thresholds"] and (has("apply_error") | not)' <<<"$reply" >/dev/null; then
+	echo "FAIL: pop-a did not apply its edit online: $code $reply" >&2
+	dump
+	exit 1
+fi
+has_config packeteer-a '^  min_rtt_delta_ms: 25$' '^ +(- )?name: lab-push$'
+runs_file packeteer-a
+
+echo "pop-a pushes thresholds and policies; pop-b applies them online"
+push='{"sections":["thresholds","policies"]}'
+split_reply "$(api_send packeteer-a POST /api/federation/push "$push")"
+if [ "$code" != 200 ] || ! jq -e '.ok and (.peers | length) == 1 and .peers[0].peer == "pop-b" and .peers[0].status == "applied" and (.peers[0].applied | sort) == ["policies", "thresholds"]' <<<"$reply" >/dev/null; then
+	echo "FAIL: push to pop-b: $code $reply" >&2
+	dump
+	exit 1
+fi
+echo "push report: $(jq -c .peers <<<"$reply")"
+has_config packeteer-b '^mode: observe$' '^  min_rtt_delta_ms: 25$' '^ +(- )?name: lab-push$'
+runs_file packeteer-b
+if [ "$(docker inspect -f '{{.State.StartedAt}}' "$("${compose[@]}" ps -q packeteer-b)")" != "$b_started" ]; then
+	echo "FAIL: packeteer-b restarted for the push" >&2
+	dump
+	exit 1
+fi
+need_log packeteer-b 'msg=audit actor=pop-a .*method=federation .*action=federation\.settings target=policies,thresholds result=ok .*detail="applied applied policies,thresholds"' "pop-b did not audit the applied push"
+need_log packeteer-b 'msg=audit actor=system .*action=config\.reload .*detail="federation push applied policies,thresholds"' "pop-b did not apply the push online"
+need_log packeteer-a 'msg=audit actor=lab .*action="POST /api/federation/push" target=federation result=ok .*pop-b=applied' "pop-a did not audit the push"
+
+split_reply "$(api_send packeteer-a POST /api/federation/push "$push")"
+if [ "$code" != 200 ] || ! jq -e '.ok and .peers[0].status == "unchanged"' <<<"$reply" >/dev/null; then
+	echo "FAIL: the same push again is not unchanged: $code $reply" >&2
+	dump
+	exit 1
+fi
+
+echo "pop-b refuses what it must never accept, sent with pop-a's certificate"
+b_sha=$(api packeteer-b /api/config | jq -r .sha256)
+# denied: how many refused pushes pop-b has audited.
+denied() {
+	"${compose[@]}" logs --no-color packeteer-b 2>/dev/null | grep -Ec 'msg=audit .*action=federation\.settings .*result=denied' || true
+}
+denied_before=$(denied)
+
+# peer_push cert json: POST the body to pop-b's settings endpoint over
+# mTLS as that certificate, like a peer instance would.
+peer_push() {
+	curl -sS --max-time 40 --cacert "$lab_dir/certs/ca.crt" --cert "$lab_dir/certs/$1.crt" --key "$lab_dir/certs/$1.key" \
+		--resolve pop-b:9443:192.0.2.20 -H 'Content-Type: application/json' --data-binary "$2" \
+		-w '\n%{http_code}' https://pop-b:9443/v1/settings || true
+}
+
+refusals=0
+# refuse name json want: pop-b answers 422 refused with want in the errors.
+refuse() {
+	split_reply "$(peer_push pop-a "$2")"
+	if [ "$code" != 422 ] || ! jq -e --arg w "$3" '.status == "refused" and (.errors | join(" ") | contains($w))' <<<"$reply" >/dev/null; then
+		echo "FAIL: pop-b did not refuse $1: $code $reply" >&2
+		dump
+		exit 1
+	fi
+	refusals=$((refusals + 1))
+	echo "refused $1: $(jq -r '.errors | join("; ")' <<<"$reply")"
+}
+refuse mode '{"sections":{"mode":"inject\n"}}' 'section "mode" cannot be pushed'
+refuse allowlist '{"sections":{"allowlist":"prefixes: [198.51.100.0/24, 192.0.2.0/24]\n"}}' 'section "allowlist" cannot be pushed'
+refuse announcer '{"sections":{"announcer":"type: gobgp\n"}}' 'section "announcer" cannot be pushed'
+refuse "thresholds with mode" '{"sections":{"thresholds":"min_loss_delta_pct: 1\nmode: inject\n"}}' 'field mode not found'
+refuse "thresholds and mode together" '{"sections":{"thresholds":"min_loss_delta_pct: 2\nmin_rtt_delta_ms: 25\n","mode":"inject\n"}}' 'section "mode" cannot be pushed'
+refuse "an invalid threshold" '{"sections":{"thresholds":"min_loss_delta_pct: -4\nmin_rtt_delta_ms: 25\n"}}' 'min_loss_delta_pct'
+
+split_reply "$(peer_push pop-c '{"sections":{"thresholds":"min_loss_delta_pct: 2\n"}}')"
+if [ "$code" != 403 ] || ! jq -e '.status == "refused" and (.errors | join(" ") | contains("accept_settings_from"))' <<<"$reply" >/dev/null; then
+	echo "FAIL: pop-b took a push from pop-c, which it does not accept: $code $reply" >&2
+	dump
+	exit 1
+fi
+need_log packeteer-b 'federation settings push refused: certificate not in accept_settings_from.*client=pop-c' "pop-b did not log the pop-c refusal"
+
+echo "an invalid section in pop-a's file is refused by pop-b, per peer"
+conf=$lab_dir/conf-a/config.yaml
+cp "$conf" "$lab_dir/conf-a.saved"
+sed 's/^  min_loss_delta_pct: 1$/  min_loss_delta_pct: -4/' "$lab_dir/conf-a.saved" >"$lab_dir/conf-a/.bad"
+# The container wrote the file as root; replacing it is a rename in a
+# directory this user owns.
+mv -f "$lab_dir/conf-a/.bad" "$conf"
+split_reply "$(api_send packeteer-a POST /api/federation/push '{"sections":["thresholds"]}')"
+cp "$lab_dir/conf-a.saved" "$lab_dir/conf-a/.good"
+mv -f "$lab_dir/conf-a/.good" "$conf"
+if [ "$code" != 200 ] || ! jq -e '(.ok | not) and .peers[0].peer == "pop-b" and .peers[0].status == "refused" and (.peers[0].errors | join(" ") | contains("min_loss_delta_pct"))' <<<"$reply" >/dev/null; then
+	echo "FAIL: the invalid thresholds from pop-a were not refused by pop-b: $code $reply" >&2
+	dump
+	exit 1
+fi
+refusals=$((refusals + 1))
+echo "push report: $(jq -c .peers <<<"$reply")"
+runs_file packeteer-a
+
+echo "nothing changed on pop-b; both audited; both stay in observe"
+if [ "$(api packeteer-b /api/config | jq -r .sha256)" != "$b_sha" ]; then
+	echo "FAIL: a refused push changed pop-b's config file" >&2
+	api packeteer-b /api/config >&2
+	exit 1
+fi
+has_config packeteer-b '^mode: observe$' '^  min_loss_delta_pct: 1$' '^  min_rtt_delta_ms: 25$' '^ +(- )?name: lab-push$'
+runs_file packeteer-b
+for i in $(seq 1 10); do
+	[ "$(denied)" = "$((denied_before + refusals))" ] && break
+	sleep 1
+done
+if [ "$(denied)" != "$((denied_before + refusals))" ]; then
+	echo "FAIL: pop-b audited $(($(denied) - denied_before)) refused pushes, want $refusals (pop-c is refused before the handler, so not audited)" >&2
+	dump
+	exit 1
+fi
+need_log packeteer-a 'msg=audit actor=lab .*action="POST /api/federation/push" target=federation result=ok .*pop-b=refused' "pop-a did not audit the refused push"
+for svc in packeteer-a packeteer-b; do
+	need_api "$svc" /api/federation '.local.mode == "observe" and .peers[0].snapshot.mode == "observe"' "$svc left observe"
+done
+stay 5
 
 echo "e2e multi-pop ok"

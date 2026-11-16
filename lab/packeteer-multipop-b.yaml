@@ -37,6 +37,8 @@ federation:
     ca_file: /etc/packeteer/certs/ca.crt
     poll_interval: 1s
     max_age: 3s
+    # pop-a may push thresholds and policies here (#628).
+    accept_settings_from: [pop-a]
     peers:
       - name: pop-a
         url: https://192.0.2.10:9443
@@ -76,6 +78,11 @@ telemetry:
 announcer:
   type: gobgp
 
-# Lab only: no sign-in, so the e2e scripts can read the API (#328).
+# Lab only: no sign-in accounts (#328). The basic-auth account in the
+# compose file guards the API, which lab/e2e-multipop.sh reaches from the
+# host. A settings push (#628) writes this file.
 auth:
   enabled: false
+http:
+  listen: 0.0.0.0:8080
+  config_editor: true

@@ -92,7 +92,8 @@ Issue every instance's certificate from one CA, with the instance name as CN or 
 - a prefix only the other POP learned is never announced;
 - the other instance never steers back;
 - a cut federation link: the steer is withdrawn within the staleness limit, neither POP steers or flaps while cut off, and one re-steer returns after the heal;
-- SIGTERM and SIGKILL.
+- SIGTERM and SIGKILL;
+- a settings push (#628), with both POPs restarted in observe: pop-a saves and pushes `thresholds` and `policies`, pop-b applies them online with no restart, both stay in observe, and both audit. pop-b refuses `mode`, the allowlist, the announcer, and invalid thresholds sent with pop-a's certificate, and a certificate outside `accept_settings_from`, and its file stays unchanged.
 
 ## When sites lose contact
 
