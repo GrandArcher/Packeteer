@@ -78,17 +78,17 @@ The image is `ghcr.io/grandarcher/packeteer`, linux/amd64 and linux/arm64. It ru
 
 | Tag | What it is |
 |---|---|
-| `1.5.0` | The last release. Pin this one. |
+| `1.6.0` | The last release. Pin this one. |
 | `latest` | The same release, updated when a release tag is published. |
 | `edge` | The build from `main`. |
 
 **Step by step: [docs/quickstart.md](docs/quickstart.md).** It goes from an empty directory to a running instance in observe, with a first run on loopback, `docker run` and Compose, and the stop. CI runs every command on that page against the image built from the same commit.
 
-The short version, pinned to 1.5.0, the last release. Take the example config from the same tag as the image: the file on `main` can carry keys a release does not know yet, and unknown keys refuse startup. For `:edge`, use `main` in both places.
+The short version, pinned to 1.6.0, the last release. Take the example config from the same tag as the image: the file on `main` can carry keys a release does not know yet, and unknown keys refuse startup. For `:edge`, use `main` in both places.
 
 ```sh
-IMAGE=ghcr.io/grandarcher/packeteer:1.5.0
-curl -fsSLo config.yaml https://raw.githubusercontent.com/GrandArcher/Packeteer/v1.5.0/config.example.yaml
+IMAGE=ghcr.io/grandarcher/packeteer:1.6.0
+curl -fsSLo config.yaml https://raw.githubusercontent.com/GrandArcher/Packeteer/v1.6.0/config.example.yaml
 # Edit providers and source IPs. Leave mode: observe.
 mkdir -p plugins
 
@@ -109,7 +109,7 @@ docker run -d --name packeteer --network host \
 
 ```sh
 docker run --rm -e PACKETEER_CONFIG=/etc/packeteer/config.example.yaml \
-  ghcr.io/grandarcher/packeteer:1.5.0 -check
+  ghcr.io/grandarcher/packeteer:1.6.0 -check
 ```
 
 The default config path inside the container is `/etc/packeteer/config.yaml` (`PACKETEER_CONFIG`, or `-config`).
@@ -120,7 +120,7 @@ Without `NET_RAW`, or where ICMP is filtered, the probe falls back to TCP port 4
 
 The `packeteer-data` volume keeps report history (`storage: {type: sqlite}`, file `/var/lib/packeteer/packeteer.db`) across container restarts and upgrades, and the open billing period of SNMP 95th-percentile samples when telemetry is configured. Without the volume, reports and that window start empty after the container is recreated. Leave out `storage` to turn history off; the probe and decision loop does not depend on it, and the 95th window then lives in memory only. Sign-in on by default (no `auth.enabled`, no `PACKETEER_HTTP_USER`) adds `sqlite` when `storage` is left out.
 
-[docker-compose.yml](docker-compose.yml) runs the same container with Compose: host networking, the two capabilities, the mounts, and `restart: unless-stopped` ([quickstart, step 5](docs/quickstart.md#5-or-run-it-with-compose)). Its `image` line pins `ghcr.io/grandarcher/packeteer:1.5.0`; use `:edge` for the build from `main`. There is no `ports:` map: with host networking, `http.listen` is already an address on the host. Stop with `docker compose stop -t 30` (see [Rollback](#rollback)).
+[docker-compose.yml](docker-compose.yml) runs the same container with Compose: host networking, the two capabilities, the mounts, and `restart: unless-stopped` ([quickstart, step 5](docs/quickstart.md#5-or-run-it-with-compose)). Its `image` line pins `ghcr.io/grandarcher/packeteer:1.6.0`; use `:edge` for the build from `main`. There is no `ports:` map: with host networking, `http.listen` is already an address on the host. Stop with `docker compose stop -t 30` (see [Rollback](#rollback)).
 
 ## Minimum config
 
@@ -352,7 +352,7 @@ Symptoms, log lines, and fixes: [docs/troubleshooting.md](docs/troubleshooting.m
 
 ## Features
 
-Status on main after the 1.5.0 release, capability rows per milestone and how many are done, from the summary in [docs/FEATURES.md](docs/FEATURES.md#summary):
+Status on main after the 1.6.0 release, capability rows per milestone and how many are done, from the summary in [docs/FEATURES.md](docs/FEATURES.md#summary):
 
 | Milestone | Rows | Done |
 |---|---|---|
@@ -374,7 +374,7 @@ v0.1 is the outbound loop: probes, static and flow targets, an iBGP RIB, scoring
 
 v0.8 is about Internet exchanges and shared measurements: IXP observe-only mode with IX-F import, fabric probes, Birdseye route-server history and signals, fabric incident correlation, member pages, and multi-site health; RPKI origin labels; probe multiplexing with a PBR generator and a probe-path check; a shared IX port; PeeringDB lookup; BMP exchange peer monitoring; events from measured provider health; settings forms for most blocks of the config (the raw YAML covers the rest); and the opt-in herd with its hub. Herd is partial (phase 1 and the hub; the hub has unit and integration tests only, not lab-proven). The rows say what is missing. No row is field-proven yet (#54), and none of it relaxes the safety rules above.
 
-v0.9 is about evidence, explanations, and plugins: the Why? panel and confidence on every decision, steer verification, RPKI and IRR per provider path, registry hygiene, NetBox and Peering Manager inventory, exporters, an SNMP agent, gRPC plugins, probe agents, an external policy feed, BMP alone, MED and overload protection, and a refreshed UI (plain language, phone layout, keyboard and screen reader access, provider latency and loss). The opt-in `synthesize` block is lab only. Three v0.9 rows are partial (the eBPF data path, registry hygiene, and onboarding, which does not read the router over RouterOS's API or NETCONF) and herd keeps its v0.8 gaps. Nothing is field-proven (#54). The shipped config and every example stay `mode: observe`.
+v0.9 is about evidence, explanations, and plugins: the Why? panel and confidence on every decision, steer verification, RPKI and IRR per provider path, registry hygiene, NetBox and Peering Manager inventory, exporters, an SNMP agent, gRPC plugins, probe agents, an external policy feed, BMP alone, MED and overload protection, and a refreshed UI (plain language, phone layout, keyboard and screen reader access, provider latency and loss). The opt-in `synthesize` block is lab only. Three v0.9 rows are partial (the eBPF data path, registry hygiene, and onboarding, which does not read the router over NETCONF or run a live test-route withdrawal) and herd keeps its v0.8 gaps. Nothing is field-proven (#54). The shipped config and every example stay `mode: observe`.
 
 v1.0 adds no capability rows. It is the pre-release audit and review pass over v0.9: fixes to the allowlist and announce path, mitigation, the BMP, flow, and policy-feed inputs, sign-in and SSO, the probe agents, HA step-down, the signed upgrade, and probe and RIB cost at 100k targets, with fuzz targets for the decoders in CI ([CHANGELOG](CHANGELOG.md#100---2026-11-04), audit #486-#494 and #501-#510, review #215). The feature counts above are unchanged. Nothing is field-proven (#54). The shipped config stays `mode: observe`, sign-in stays on by default, and injection stays off by default.
 
@@ -398,7 +398,7 @@ Nothing is field-proven (#54). The shipped config stays `mode: observe`, and inj
 
 v1.4.1 was a patch with no new capability rows and no config keys, so the counts above are unchanged. It fixes the quickstart (one password variable, no `openssl`, the Compose file pinned to the release) and makes `scripts/demo.sh` check Docker, port 18080, and the 192.0.2.0/24 bridge before it starts (#612). Nothing is field-proven (#54). The shipped config stays `mode: observe`, and injection stays off by default ([CHANGELOG](CHANGELOG.md#141---2026-11-14)).
 
-v1.5.0 (this release) adds one capability row, the field-report kit, and two opt-in config keys, `preflight.router_check` and `span` `ebpf_track`; the counts above include the row, two v0.8 rows (exchange autoconfig, potential peers, #629) and one v0.4 row (central management, #628) that moved from partial to done (136 done, up from 132 at 1.4.1). What an operator will look for:
+v1.5.0 added one capability row, the field-report kit, and two opt-in config keys, `preflight.router_check` and `span` `ebpf_track`; the counts above include the row, two v0.8 rows (exchange autoconfig, potential peers, #629) and one v0.4 row (central management, #628) that moved from partial to done (136 done, up from 132 at 1.4.1). What an operator looked for:
 
 - `packeteer report --share` and a Settings panel write a redacted summary of an observe install to paste into a field-report or bug issue, preview first, with addresses, prefixes, and AS numbers replaced by documentation placeholders (pattern based; read it before pasting) and nothing uploaded ([docs/field-report.md](docs/field-report.md), #625).
 - The opt-in `preflight.router_check` (`frr` or `bird`) reads the router's import and eBGP export policy with allowlisted read-only commands and backs the `import_filter` onboarding check. It changes nothing on the router and is off by default ([docs/onboarding.md](docs/onboarding.md), #626).
@@ -411,14 +411,25 @@ v1.5.0 (this release) adds one capability row, the field-report kit, and two opt
 
 Nothing is field-proven (#54). The shipped config stays `mode: observe`, and injection stays off by default ([CHANGELOG](CHANGELOG.md#150---2026-11-16)).
 
+v1.6.0 (this release) adds no capability row and no new top-level config key; the shared IX port row moved from partial to done (137 done, up from 136 at 1.5.0), and `preflight.router_check` gained the `routeros` type. What an operator will look for:
+
+- Performance moves, `static` rules, and pins (`/api/pins`) onto a peer of an exchange with an `exchanges[].port` block now need headroom on that port; a pin that does not fit is refused naming the port, and `/api/exchanges` carries an `over_commit` flag per port ([docs/CONFIG.md](docs/CONFIG.md), [docs/performance.md](docs/performance.md), #643, the last gap of #151).
+- `preflight.router_check` type `routeros` reads RouterOS 7 BGP connections and filter rules over the REST API with GET only, from a fixed path list, for the `import_filter` onboarding check; it is off by default, and the `chr` CI job runs it against a CHR ([docs/onboarding.md](docs/onboarding.md), [docs/mikrotik.md](docs/mikrotik.md), #637).
+- The `upgrade-release` CI job upgrades from the v1.5.0 image to the build under test on one data volume, then downgrades, and checks that state is kept, the mode is `observe`, and nothing is announced ([lab/README.md](lab/README.md), #644).
+- `scripts/demo.sh --report` runs the demo and prints an address-free pass or fail block to paste into a field report. No Docker Desktop run has been recorded yet, so Docker Desktop on macOS and Windows stays "allowed, not verified" ([docs/demo.md](docs/demo.md#platforms), #646).
+- `scripts/check-paragraphs.sh` warns in CI about README and docs lines over 1,500 characters, and the oversized paragraphs are now bullets with the same meaning (#645).
+
+Nothing is field-proven (#54). The shipped config stays `mode: observe`, and injection stays off by default ([CHANGELOG](CHANGELOG.md#160---2026-11-17)).
+
 ## Upgrades
 
 Pulling a newer image and recreating the container is the plain upgrade. Your config and the `packeteer-data` volume carry over.
 
 The Settings page can also upgrade in place (#196). It is off by default. It needs `upgrade.enabled: true`, the release public key in `upgrade.public_key` ([CONFIG.md](docs/CONFIG.md#upgrade)), an admin login (auth or basic auth), and the `packeteer-data` volume to keep the new version across restarts. The public key is printed in the [v0.6.0 release notes](https://github.com/GrandArcher/Packeteer/releases/tag/v0.6.0). Every route is withdrawn before the switch, and a release whose signature or checksum does not match is refused. Details: [docs/ui.md](docs/ui.md#upgrade-from-the-ui).
 
-### From 1.5.0 to the next release
+### From 1.5.0 to 1.6.0
 
+- No existing config key changed. `preflight.router_check` type `routeros` (`url`, `username_env`, `password_env`, optional `ca_file`) is new and off by default; before a downgrade to 1.5.0 remove it, because 1.5.0 refuses it.
 - With an `exchanges[].port` block, a pin (`POST /api/pins`, the MCP `pin_prefix` tool) onto a peer of that exchange that worked before can now be refused: it is refused with the port as the reason when the prefix's volume would push the port past `capacity_mbps` or `commit_mbps`, when the port has no fresh telemetry reading, or when no target source reports the prefix's volume (#643). Performance moves and `static` rules onto the peer follow the same check every round. Without a `port` block nothing changes.
 
 ### From 1.4.1 to 1.5.0
