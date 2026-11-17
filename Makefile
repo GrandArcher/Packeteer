@@ -35,6 +35,7 @@ lint:
 	@dead="$$(deadcode -test ./...)"; if [ -n "$$dead" ]; then echo "unreachable code:"; echo "$$dead"; exit 1; fi
 	scripts/check-changelog.sh
 	scripts/check-ascii.sh
+	scripts/check-paragraphs.sh
 
 vuln:
 	scripts/govulncheck.sh
