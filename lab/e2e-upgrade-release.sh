@@ -195,8 +195,9 @@ state_is_kept() {
 	out=$(api audit)
 	jq -e '[.records[] | select(.action == "POST /api/pins" and .result == "ok" and .actor == "admin")] | length > 0' <<<"$out" >/dev/null ||
 		fail "$who: the audit log lost the pin change: $out"
-	out=$(api 'troubleshoot/lookingglass?prefix='"$prefix")
-	jq -e --arg p "$prefix" '.exact.prefix == $p' <<<"$out" >/dev/null || fail "$who: $prefix is not in the learned view: $out"
+	# The RIB is rebuilt from the session after every restart, so the route
+	# arrives some seconds after the session is Established.
+	wait_for 60 "$who: $prefix in the learned view" learned
 	quiet
 }
 state_is_kept "release $prev_version"
