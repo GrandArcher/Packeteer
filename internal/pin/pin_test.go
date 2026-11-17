@@ -60,6 +60,30 @@ func TestAddChecksTheRails(t *testing.T) {
 	}
 }
 
+func TestAddRefusesAPinThePortCannotTake(t *testing.T) {
+	r := rails
+	var asked string
+	r.Port = func(p netip.Prefix, provider string) string {
+		asked = p.String() + " " + provider
+		if provider == "transit-b" {
+			return "exchange port: ix-lab would carry 1020 of its 1000 Mbps capacity"
+		}
+		return ""
+	}
+	s := NewStore()
+	if _, err := s.Add(req("198.51.100.0/24"), r, t0); err == nil || err.Error() != "exchange port: ix-lab would carry 1020 of its 1000 Mbps capacity" {
+		t.Fatalf("err %v, want the port's reason", err)
+	}
+	if asked != "198.51.100.0/24 transit-b" || len(s.List(t0)) != 0 {
+		t.Fatalf("asked %q pins %v", asked, s.List(t0))
+	}
+	ok := req("198.51.100.0/24")
+	ok.Provider = "transit-a"
+	if _, err := s.Add(ok, r, t0); err != nil {
+		t.Fatalf("a pin the port check passes: %v", err)
+	}
+}
+
 func TestAddListRemoveAndVerdicts(t *testing.T) {
 	s := NewStore()
 	if s.Verdicts(t0) != nil {

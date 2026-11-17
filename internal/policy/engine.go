@@ -136,6 +136,23 @@ func (e *Engine) Backout(p netip.Prefix, until time.Time, reason string) (Change
 	return Change{Action: ActionRetire, Old: old}, true
 }
 
+// PortRefusal says why steering p onto provider now would not fit the
+// provider's exchange port (#643), the rule Decide applies to a pin each
+// round: the latest evaluation's port telemetry and prefix volume, with the
+// steers active now. It is empty when the steer fits or provider is not on
+// a port. Before the first evaluation a port has no reading and refuses.
+func (e *Engine) PortRefusal(p netip.Prefix, provider string, now time.Time) string {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	g := newLoadGate(e.state, e.lastIn, e.cfg, now)
+	from := e.lastIn.Native[p]
+	if imp, ok := e.state.Improvements[p]; ok {
+		from = imp.Provider
+	}
+	why, _ := g.refusePort(from, provider, p)
+	return why
+}
+
 // Decisions returns the latest per-prefix decisions and when they were made.
 func (e *Engine) Decisions() ([]Decision, time.Time) {
 	e.mu.RLock()

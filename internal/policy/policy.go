@@ -149,7 +149,8 @@ type Input struct {
 	// the router hiding the native path as the prefix leaving. Nil is none.
 	Held func(netip.Prefix) bool
 	// Usage is the latest telemetry snapshot. Commit control reads it only
-	// when the scorer implements plugin.Planner.
+	// when the scorer implements plugin.Planner; the exchange port check
+	// (#643) reads the port rows with any scorer.
 	Usage []plugin.Usage
 	// Load is each provider's interface reading for the capacity limit
 	// (#307). A limited provider missing here takes no new steer.
@@ -158,9 +159,10 @@ type Input struct {
 	// A missing or zero entry is not moved for commit or balance.
 	VolumeMbps map[netip.Prefix]float64
 	// WeightVolumeMbps is per-prefix volume read only for improvement
-	// weights (#34) and the interface capacity limit (#307) when the
-	// scorer is not a planner. It feeds nothing else: not commit control,
-	// not cost annotations. Nil means use VolumeMbps.
+	// weights (#34), the interface capacity limit (#307), and the exchange
+	// port check (#643) when the scorer is not a planner. It feeds nothing
+	// else: not commit control, not cost annotations. Nil means use
+	// VolumeMbps.
 	WeightVolumeMbps map[netip.Prefix]float64
 	// Policies is the routing-policy verdict per probed prefix, from the
 	// configured policy chain. A missing entry means no policy matched.

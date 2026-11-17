@@ -78,11 +78,33 @@ func integrateCommit(
 		}
 		want[m.Prefix] = m
 	}
+	// Every planned move holds its room on a port before any performance
+	// move or switch is checked against the port (#643): the planner did not
+	// see those. A steer undoes its own before it is decided and books what
+	// it does; a planned move that is not queued gives its room back.
+	reserved := map[netip.Prefix]string{}
+	for _, p := range netpfx.SortedKeys(want) {
+		from := nativeOf(st, in, p)
+		if imp, ok := st.Improvements[p]; ok {
+			from = imp.Provider
+		}
+		if want[p].Provider != from {
+			gate.movePort(from, want[p].Provider, p)
+			reserved[p] = from
+		}
+	}
+	unreserve := func(p netip.Prefix) {
+		if from, ok := reserved[p]; ok {
+			gate.movePort(want[p].Provider, from, p)
+			delete(reserved, p)
+		}
+	}
 
 	handled := map[netip.Prefix]bool{}
 	for _, h := range holds {
 		p := h.imp.Prefix
 		handled[p] = true
+		unreserve(p)
 		d := h.d
 		cands := byPrefix[p]
 		cause := h.imp.Cause
@@ -141,6 +163,8 @@ func integrateCommit(
 					// its planner wants it, so the refusal must not pin it.
 					out.Overloads = append(out.Overloads, note)
 					refusal = note
+				} else if why, refused := gate.refusePort(h.imp.Provider, alt.Provider, p); refused {
+					refusal = Overload{Provider: alt.Provider, Reason: why}
 				} else if st.flapNext(p, now, cfg.Flap) {
 					q := st.quarantinePrefix(p, now, cfg.Flap, out)
 					retire(p, flapReason(q), false)
@@ -148,8 +172,6 @@ func integrateCommit(
 					continue
 				} else {
 					st.noteFlip(p, now, cfg.Flap)
-					gate.release(h.imp)
-					gate.book(alt.Provider, p)
 					delete(st.confirm, p)
 					n := Improvement{
 						Prefix: p, Provider: alt.Provider, Native: h.imp.Native, Since: now,
@@ -157,6 +179,8 @@ func integrateCommit(
 						MEDOverride: medOverride(cands, alt, cfg, h.imp.Native),
 						nativeSeen:  h.imp.nativeSeen, nativeHeld: h.imp.nativeHeld,
 					}
+					gate.release(h.imp)
+					gate.book(n)
 					st.Improvements[p] = n
 					out.Changes = append(out.Changes, Change{Action: ActionSwitch, Old: h.imp, New: n})
 					setDecision(d, ActionSwitch, n.Reason, n.Provider, n.Provider, plugin.CausePerformance)
@@ -205,6 +229,7 @@ func integrateCommit(
 				Reason: mv.Reason, Cause: cause,
 				nativeSeen: h.imp.nativeSeen, nativeHeld: h.imp.nativeHeld,
 			}
+			gate.movePort(h.imp.Provider, n.Provider, p)
 			st.Improvements[p] = n
 			out.Changes = append(out.Changes, Change{Action: ActionSwitch, Old: h.imp, New: n})
 			setDecision(d, ActionSwitch, n.Reason, n.Provider, n.Provider, cause)
@@ -293,6 +318,15 @@ func integrateCommit(
 			},
 		})
 	}
+	queued := map[netip.Prefix]bool{}
+	for _, w := range fresh {
+		queued[w.imp.Prefix] = true
+	}
+	for _, p := range netpfx.SortedKeys(reserved) {
+		if !queued[p] {
+			unreserve(p)
+		}
+	}
 	if len(replaced) > 0 {
 		kept := (*wants)[:0]
 		for _, w := range *wants {
@@ -344,16 +378,7 @@ func buildPlan(
 	cheapFirst bool,
 	now time.Time,
 ) plugin.PlanInput {
-	usage := map[string]plugin.Usage{}
-	for _, u := range in.Usage {
-		if u.Provider == "" {
-			continue
-		}
-		if _, seen := usage[u.Provider]; seen {
-			continue
-		}
-		usage[u.Provider] = u
-	}
+	usage := in.usageByProvider()
 	out := plugin.PlanInput{Now: now}
 	seen := map[string]bool{}
 	for _, p := range cfg.Providers {
@@ -369,13 +394,7 @@ func buildPlan(
 			Cost: p.Cost, HasCost: p.HasCost, Port: p.Port,
 		})
 	}
-	for _, pt := range cfg.Ports {
-		row, have := usage[pt.Name]
-		out.Ports = append(out.Ports, plugin.PlanPort{
-			Name: pt.Name, CapacityMbps: pt.CapacityMbps, CommitMbps: pt.CommitMbps,
-			Usage: row, HaveRow: have,
-		})
-	}
+	out.Ports = planPorts(cfg, usage)
 	added := map[netip.Prefix]bool{}
 	add := func(p netip.Prefix, native, current string, reversible, locked bool) {
 		if !p.IsValid() || added[p] {

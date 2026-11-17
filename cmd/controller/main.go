@@ -992,7 +992,8 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		httpSrv.SetPreflight(newPreflight(live, view, lw, plugins, pktLimiter, log))
 		httpSrv.SetBlast(preview)
 		httpSrv.SetPolicyRouting(&pbr.Manager{Run: hostIP, Entries: func() []pbr.Entry { return pbr.Entries(live.snapshot()) }})
-		pc := pinControl{store: pins, cfg: live.snapshot, log: log, poke: poke, save: steer.save}
+		pc := pinControl{store: pins, cfg: live.snapshot, log: log, poke: poke, save: steer.save,
+			port: func(p netip.Prefix, provider string) string { return decider.PortRefusal(p, provider, time.Now()) }}
 		if view != nil {
 			pc.learned = func(p netip.Prefix) bool { _, ok := view.Exact(p); return ok }
 		}
@@ -1129,7 +1130,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			}
 			watch.rpki(now, rpkiStatuses(plugins))
 			if len(plugins.Telemetry) > 0 && watch.commitDue(now) {
-				watch.commit(now, exchange.WithPortCommit(collectTelemetry(loopCtx, plugins), portCommits))
+				watch.commit(now, collectTelemetry(loopCtx, plugins), portCommits)
 			}
 		})
 	}()
