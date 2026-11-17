@@ -13,8 +13,8 @@ import (
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
-// Config is the plugin's config block. The REST API carries the router
-// login, so the URL must be https (http only to a loopback host).
+// Config is the RouterOS REST config block of the mikrotik steerer and the
+// routeros router check. The REST API carries the router login, so the URL must be https (http only to a loopback host).
 type Config struct {
 	URL         string `yaml:"url"`
 	UsernameEnv string `yaml:"username_env"`

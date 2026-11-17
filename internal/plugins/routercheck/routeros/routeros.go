@@ -282,18 +282,22 @@ func (c checker) imports(cn conn) plugin.FilterFinding {
 	if why := c.unreadable(cn.in, rules); why != "" {
 		return plugin.FilterFinding{Verdict: plugin.VerdictUnknown, Detail: where + ": " + why}
 	}
-	accepts := false
+	// decided is set by the first if on the community: Packeteer's routes
+	// end there, and later rules see only routes without it.
+	accepts, decided := false, false
 	for _, r := range rules {
 		for _, s := range r.stmts {
 			switch {
 			case s.kind == "reject":
 				return c.importEnd(where, cn.in, accepts, fix)
+			case s.kind == "if" && s.action != "" && c.ours(s.cond):
+				if !decided {
+					accepts, decided = s.action == "accept", true
+				}
 			case s.kind == "accept":
 				return plugin.FilterFinding{Verdict: plugin.VerdictFail, Detail: fmt.Sprintf("%s: chain %s accepts routes without %s (rule %d).", where, cn.in, c.q.Community, r.n), Fix: fix}
 			case s.kind == "if" && s.action == "accept":
 				switch {
-				case c.ours(s.cond):
-					accepts = true
 				case mentions(s.cond):
 					return plugin.FilterFinding{Verdict: plugin.VerdictUnknown, Detail: fmt.Sprintf("%s: chain %s rule %d accepts on a community condition the check does not read; read it by hand.", where, cn.in, r.n)}
 				default:
@@ -343,6 +347,8 @@ func (c checker) exports(cn conn) plugin.FilterFinding {
 			switch {
 			case s.kind == "reject":
 				return plugin.FilterFinding{Verdict: plugin.VerdictPass, Detail: fmt.Sprintf("%s: chain %s rejects everything at rule %d.", where, cn.out, r.n)}
+			case s.kind == "if" && s.action == "accept" && c.ours(s.cond):
+				return plugin.FilterFinding{Verdict: plugin.VerdictFail, Detail: fmt.Sprintf("%s: chain %s accepts %s at rule %d.", where, cn.out, c.q.Community, r.n), Fix: fix}
 			case s.kind == "if" && s.action == "reject" && c.ours(s.cond):
 				return plugin.FilterFinding{Verdict: plugin.VerdictPass, Detail: fmt.Sprintf("%s: chain %s rejects %s at rule %d, before any accept.", where, cn.out, c.q.Community, r.n)}
 			case s.kind == "if" && s.action != "accept", s.kind == "set":
