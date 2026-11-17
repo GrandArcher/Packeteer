@@ -81,12 +81,14 @@ func newReader(t *testing.T, f *fakeRouter) *Reader {
 	return rc.(*Reader)
 }
 
-// labRouter is lab/chr/edge.rsc as RouterOS 7.23 lists it.
+// labRouter holds the BGP connections and filter rules of lab/chr/edge.rsc
+// as REST rows.
 func labRouter() *fakeRouter {
 	return &fakeRouter{items: map[string][]row{
 		"/routing/bgp/connection": {
 			{".id": "*1", "name": "packeteer", "remote.address": "192.0.2.10", "local.role": "ibgp", "input.filter": "packeteer-in"},
 			{".id": "*2", "name": "transit-a", "remote.address": "192.0.2.1", "local.role": "ebgp", "output.filter-chain": "ebgp-out"},
+			{".id": "*9", "name": "transit-b", "remote.address": "192.0.2.2", "local.role": "ebgp", "output.filter-chain": "ebgp-out"},
 			{".id": "*3", "name": "collector", "remote.address": "192.0.2.20/32", "local.role": "ebgp", "output.filter-chain": "ebgp-out"},
 			{".id": "*4", "name": "untagged", "remote.address": "192.0.2.30", "local.role": "ibgp", "input.filter": "packeteer-in"},
 		},
@@ -111,6 +113,7 @@ func TestLabRouterPassesWithGETsOnTheAllowlist(t *testing.T) {
 	want := []string{
 		"Import from Packeteer 192.0.2.10 (connection packeteer): chain packeteer-in accepts only routes with 64512:666.",
 		"Export to eBGP connection transit-a: chain ebgp-out rejects 64512:666 at rule 1, before any accept.",
+		"Export to eBGP connection transit-b: chain ebgp-out rejects 64512:666 at rule 1, before any accept.",
 		"Export to eBGP connection collector: chain ebgp-out rejects 64512:666 at rule 1, before any accept.",
 	}
 	if len(got) != len(want) {
@@ -129,18 +132,18 @@ func TestLabRouterPassesWithGETsOnTheAllowlist(t *testing.T) {
 
 func TestMissingEBGPRejectFailsWithTheFix(t *testing.T) {
 	f := labRouter()
-	f.items["/routing/bgp/connection"][2]["output.filter-chain"] = "ebgp-open"
+	f.items["/routing/bgp/connection"][3]["output.filter-chain"] = "ebgp-open"
 	f.items["/routing/filter/rule"] = append(f.items["/routing/filter/rule"], row{"chain": "ebgp-open", "rule": "accept"})
 	got, err := newReader(t, f).CheckFilters(context.Background(), labQuery)
 	if err != nil {
 		t.Fatal(err)
 	}
-	c := got[2]
+	c := got[3]
 	if c.Verdict != plugin.VerdictFail || c.Detail != "Export to eBGP connection collector: chain ebgp-open accepts at rule 1 before 64512:666 is rejected." ||
 		c.Fix != `Add the rule at the top of chain ebgp-open: /routing filter rule add chain=ebgp-open place-before=0 rule="if (bgp-communities includes 64512:666) { reject }" (Router snippets).` {
 		t.Errorf("collector = %+v", c)
 	}
-	if got[0].Verdict != plugin.VerdictPass || got[1].Verdict != plugin.VerdictPass {
+	if got[0].Verdict != plugin.VerdictPass || got[1].Verdict != plugin.VerdictPass || got[2].Verdict != plugin.VerdictPass {
 		t.Errorf("the other connections changed: %+v", got)
 	}
 }
@@ -164,7 +167,7 @@ func TestOnlyAllowlistedPathsAreRead(t *testing.T) {
 	if reqs := f.requests(); len(reqs) != 0 {
 		t.Fatalf("refused paths reached the router: %q", reqs)
 	}
-	// Put the redirecting path on a copy of the allowlist for this test only.
+	// Replace the allowlist with the redirecting path; Cleanup restores it.
 	saved := allow
 	t.Cleanup(func() { allow = saved })
 	allow = readonly.NewAllowlist(`/redirect-me`)
@@ -329,6 +332,11 @@ func TestChecks(t *testing.T) {
 			tmpl:     []row{{"name": "upstream", "output.filter-chain": "ebgp-out"}},
 			rules:    rules(append(in, [2]string{"ebgp-out", "reject"}, [2]string{"open", "accept"})...),
 			verdicts: []plugin.Verdict{pass, fail}},
+		"import rejects on an unread community condition": {conns: []row{pk},
+			rules:    rules([2]string{"packeteer-in", "if (!(bgp-communities includes 64512:666)) { reject }"}, [2]string{"packeteer-in", "accept"}),
+			verdicts: []plugin.Verdict{unk, pass}},
+		"other connection without a role": {conns: []row{pk, {"name": "mystery", "remote.address": "192.0.2.40"}}, rules: rules(in...),
+			verdicts: []plugin.Verdict{pass, unk}, detail: "Connection mystery: local.role is not set on the connection or its templates; read it by hand."},
 		"no role anywhere": {conns: []row{{"name": "packeteer", "remote.address": "192.0.2.10", "input.filter": "packeteer-in"}}, rules: rules(in...),
 			verdicts: []plugin.Verdict{unk, pass}},
 		"remote range holds Packeteer": {conns: []row{{"name": "lab", "remote.address": "192.0.2.0/24", "local.role": "ibgp", "input.filter": "packeteer-in"}}, rules: rules(in...),

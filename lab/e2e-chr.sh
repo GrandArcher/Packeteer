@@ -418,7 +418,7 @@ routes && invariants
 
 # ---- read-only router check (#637) ----
 log "read-only router check: routeros, observe, read-group user"
-reader_pw=$(openssl rand -hex 16) # generated per run, never a literal
+reader_pw=$(openssl rand -hex 16)
 chr_script() {
 	rest '/execute' -X POST -d "$(jq -n --arg s "$1" '{script: $s, "as-string": true}')" >/dev/null
 }

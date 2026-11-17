@@ -16,7 +16,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/GrandArcher/Packeteer/internal/plugins/exporter/sinkcfg"
+	"github.com/GrandArcher/Packeteer/internal/plugins/rosrest"
 	"github.com/GrandArcher/Packeteer/internal/plugins/routercheck/readonly"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
@@ -26,18 +26,8 @@ const TypeName = "routeros"
 
 func init() { plugin.RouterChecks.Register(TypeName, New) }
 
-// Config is preflight.router_check.config for type routeros. The REST API
-// carries the login, so the URL must be https (http only to a loopback
-// host).
-type Config struct {
-	// URL is the router's web service, for example https://192.0.2.254.
-	URL         string `yaml:"url"`
-	UsernameEnv string `yaml:"username_env"`
-	PasswordEnv string `yaml:"password_env"`
-	// CAFile is an absolute path to the PEM certificate that signed the
-	// router's certificate. Without it the system roots are used.
-	CAFile string `yaml:"ca_file"`
-}
+// Config is preflight.router_check.config for type routeros.
+type Config = rosrest.Config
 
 // allow is every path the reader may GET, below /rest.
 var allow = readonly.NewAllowlist(
@@ -65,30 +55,14 @@ func New(c plugin.Config, env plugin.Env) (plugin.RouterCheck, error) {
 	if err := c.Decode(&cfg); err != nil {
 		return nil, err
 	}
-	u, err := sinkcfg.HTTPURL(cfg.URL)
-	if err != nil {
-		return nil, fmt.Errorf("url: %w", err)
-	}
-	if err := sinkcfg.TokenURL(u); err != nil {
-		return nil, fmt.Errorf("url: %w", err)
-	}
-	if cfg.UsernameEnv == "" || cfg.PasswordEnv == "" {
-		return nil, errors.New("username_env and password_env are required: the REST API needs a login")
-	}
-	user, pass, err := sinkcfg.Credentials(env.Getenv, cfg.UsernameEnv, cfg.PasswordEnv)
-	if err != nil && !env.CheckOnly {
-		return nil, err
-	}
-	tlsConf, err := sinkcfg.TLS(u.Scheme == "https", cfg.CAFile)
+	login, err := cfg.Login(env)
 	if err != nil {
 		return nil, err
 	}
-	tr := http.DefaultTransport.(*http.Transport).Clone()
-	tr.TLSClientConfig = tlsConf
 	return &Reader{
-		base: strings.TrimRight(u.String(), "/") + "/rest", user: user, pass: pass,
+		base: login.Base, user: login.User, pass: login.Pass,
 		// A redirect could lead to a path that is not on the allowlist.
-		http: &http.Client{Timeout: requestTimeout, Transport: tr, CheckRedirect: func(*http.Request, []*http.Request) error {
+		http: &http.Client{Timeout: requestTimeout, Transport: login.Transport, CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
 		}},
 	}, nil
@@ -216,6 +190,10 @@ func check(conns, templates, rules []row, q plugin.FilterQuery) []plugin.FilterF
 		case strings.HasPrefix(cn.role, "ebgp"):
 			ebgp++
 			out = append(out, c.exports(cn))
+		case cn.role == "":
+			// It may be eBGP: an unknown role must not read as no eBGP.
+			ebgp++
+			out = append(out, plugin.FilterFinding{Verdict: plugin.VerdictUnknown, Detail: fmt.Sprintf("Connection %s: local.role is not set on the connection or its templates; read it by hand.", cn.name)})
 		}
 	}
 	if !found {
@@ -321,6 +299,10 @@ func (c checker) imports(cn conn) plugin.FilterFinding {
 				default:
 					return plugin.FilterFinding{Verdict: plugin.VerdictFail, Detail: fmt.Sprintf("%s: chain %s accepts routes without %s (rule %d).", where, cn.in, c.q.Community, r.n), Fix: fix}
 				}
+			case s.kind == "if" && mentions(s.cond) && !c.ours(s.cond):
+				// A reject on a community condition the check does not
+				// parse can be what keeps a later accept correct.
+				return c.unread(where, cn.in, r.n)
 			case s.kind == "if" || s.kind == "set":
 			default:
 				return c.unread(where, cn.in, r.n)

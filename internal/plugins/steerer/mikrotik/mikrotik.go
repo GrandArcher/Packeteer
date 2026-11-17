@@ -16,11 +16,10 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
-	"strings"
 	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/outbound"
-	"github.com/GrandArcher/Packeteer/internal/plugins/exporter/sinkcfg"
+	"github.com/GrandArcher/Packeteer/internal/plugins/rosrest"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -37,16 +36,8 @@ const (
 
 func init() { plugin.Steerers.Register(TypeName, New) }
 
-// Config is the plugin's config block. The REST API carries the router
-// login, so the URL must be https (http only to a loopback host).
-type Config struct {
-	URL         string `yaml:"url"`
-	UsernameEnv string `yaml:"username_env"`
-	PasswordEnv string `yaml:"password_env"`
-	// CAFile is an absolute path to the PEM certificate that signed the
-	// router's REST certificate. Without it the system roots are used.
-	CAFile string `yaml:"ca_file"`
-}
+// Config is the plugin's config block.
+type Config = rosrest.Config
 
 // Steerer is the RouterOS REST steerer.
 type Steerer struct {
@@ -62,30 +53,14 @@ func New(c plugin.Config, env plugin.Env) (plugin.Steerer, error) {
 	if err := c.Decode(&cfg); err != nil {
 		return nil, err
 	}
-	u, err := sinkcfg.HTTPURL(cfg.URL)
-	if err != nil {
-		return nil, fmt.Errorf("url: %w", err)
-	}
-	if err := sinkcfg.TokenURL(u); err != nil {
-		return nil, fmt.Errorf("url: %w", err)
-	}
-	if cfg.UsernameEnv == "" || cfg.PasswordEnv == "" {
-		return nil, errors.New("username_env and password_env are required: the REST API needs a login")
-	}
-	user, pass, err := sinkcfg.Credentials(env.Getenv, cfg.UsernameEnv, cfg.PasswordEnv)
-	if err != nil && !env.CheckOnly {
-		return nil, err
-	}
-	tlsConf, err := sinkcfg.TLS(u.Scheme == "https", cfg.CAFile)
+	login, err := cfg.Login(env)
 	if err != nil {
 		return nil, err
 	}
-	tr := http.DefaultTransport.(*http.Transport).Clone()
-	tr.TLSClientConfig = tlsConf
 	return &Steerer{
-		base: strings.TrimRight(u.String(), "/") + "/rest", user: user, pass: pass,
+		base: login.Base, user: login.User, pass: login.Pass,
 		// The login must never follow a redirect to another host.
-		http: &http.Client{Timeout: requestTimeout, Transport: tr, CheckRedirect: outbound.SameHost},
+		http: &http.Client{Timeout: requestTimeout, Transport: login.Transport, CheckRedirect: outbound.SameHost},
 	}, nil
 }
 
