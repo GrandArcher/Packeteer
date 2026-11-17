@@ -37,7 +37,14 @@ func Veth(t *testing.T, addr string) (string, string) {
 	t.Helper()
 	a, b := "pkv0", "pkv1"
 	_ = exec.Command("ip", "link", "del", a).Run()
-	ip(t, "link", "add", a, "type", "veth", "peer", "name", b)
+	// Fixed addresses, not the kernel's random ones: udev on the CI runners
+	// replaces a random MAC (MACAddressPolicy=persistent) some time after
+	// the link appears, and the address change flushes the device's
+	// neighbor table, permanent entries included (#651). The second end
+	// must not own the span fixtures' destination MAC (02:00:00:00:00:02),
+	// or their injected frames would enter its IP stack instead of being
+	// dropped there.
+	ip(t, "link", "add", a, "address", "02:00:00:00:01:01", "type", "veth", "peer", "name", b, "address", "02:00:00:00:01:02")
 	t.Cleanup(func() { _ = exec.Command("ip", "link", "del", a).Run() })
 	ip(t, "addr", "add", addr, "dev", a)
 	ip(t, "link", "set", a, "up")

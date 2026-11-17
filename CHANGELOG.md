@@ -10,6 +10,10 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 - `upgrade-release` CI job: `lab/e2e-upgrade-release.sh` runs v1.5.0 (by digest), then the PR build, on one volume, then the downgrade; state kept, observe, nothing announced (#644).
 - `scripts/demo.sh --report` runs the whole demo and prints an address-free pass/fail block for a field report, to record a Docker Desktop run (#646).
 
+### Fixed
+
+- eBPF lab veth pair gets fixed MACs, so udev's persistent MAC no longer flushes the burst test's static neighbor mid-test; CI runs that test 20 times (#651).
+
 ## [1.5.0] - 2026-11-16
 
 The v1.5 release adds a field-report kit, an opt-in read-only router check, and kernel-side tracking in the eBPF span path, and proves RPKI-invalid only paths and federation push in lab jobs; the two new config keys, `preflight.router_check` and `span` `ebpf_track`, are off by default, and the shipped config stays `mode: observe` with injection off by default.
