@@ -11,6 +11,10 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 - `scripts/demo.sh --report` runs the whole demo and prints an address-free pass/fail block for a field report, to record a Docker Desktop run (#646).
 - Performance moves, static rules, and `/api/pins` onto an exchange peer need `exchanges[].port` headroom; a pin that does not fit is refused naming the port; `over_commit` flag (#643).
 
+### Fixed
+
+- eBPF lab veth pair gets fixed MACs, so udev's persistent MAC no longer flushes the burst test's static neighbor mid-test; CI runs that test 20 times (#651).
+
 ## [1.5.0] - 2026-11-16
 
 The v1.5 release adds a field-report kit, an opt-in read-only router check, and kernel-side tracking in the eBPF span path, and proves RPKI-invalid only paths and federation push in lab jobs; the two new config keys, `preflight.router_check` and `span` `ebpf_track`, are off by default, and the shipped config stays `mode: observe` with injection off by default.

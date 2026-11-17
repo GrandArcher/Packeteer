@@ -53,11 +53,12 @@ jobs:
         run: |
           go test -c -o span.test ./internal/plugins/source/span/
           sudo ./span.test -test.run AFPacket -test.v
-      - name: eBPF data path on a veth pair (#229; root, kernel 6.6 or newer, burst unsampled flow count, same span metrics as AF_PACKET, fallback, CPU per Gbit)
+      - name: eBPF data path on a veth pair (#229; root, kernel 6.6 or newer, burst unsampled flow count, 20 runs of the burst test (#651), same span metrics as AF_PACKET, fallback, CPU per Gbit)
         run: |
           sudo ./span.test -test.run 'EBPF' -test.v
           go test -c -o flow.test ./internal/plugins/source/flow/
           sudo ./flow.test -test.run 'EBPF' -test.v
+          sudo ./flow.test -test.run '^TestEBPFSeesBurstThatSampledFlowMisses$' -test.count=20
 
   race:
     runs-on: ubuntu-latest
