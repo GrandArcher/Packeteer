@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/eventlog"
+	"github.com/GrandArcher/Packeteer/internal/exchange"
 	"github.com/GrandArcher/Packeteer/internal/httpapi"
 	"github.com/GrandArcher/Packeteer/internal/inbound"
 	"github.com/GrandArcher/Packeteer/internal/mitigation"
@@ -341,14 +342,17 @@ func billable(u plugin.Usage) float64 {
 	return math.Max(u.InMbps95, u.OutMbps95)
 }
 
-// commit reports providers whose billable 95th crosses the commit.
-func (w *eventWatch) commit(now time.Time, usage []plugin.Usage) {
+// commit reports providers whose billable 95th crosses the commit. ports is
+// port.commit_mbps by exchange name: a port row is judged on the port's
+// commit and its events name the exchange and say that nothing is moved
+// off the port (#643).
+func (w *eventWatch) commit(now time.Time, usage []plugin.Usage, ports map[string]float64) {
 	if w == nil {
 		return
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	for _, u := range usage {
+	for _, u := range exchange.WithPortCommit(usage, ports) {
 		if u.Provider == "" || u.CommitMbps <= 0 || u.Samples == 0 {
 			continue
 		}
@@ -364,10 +368,18 @@ func (w *eventWatch) commit(now time.Time, usage []plugin.Usage) {
 			"commit_mbps": strconv.FormatFloat(u.CommitMbps, 'f', 1, 64),
 			"percentile":  string(u.Mode),
 		}
+		name, note := u.Provider, ""
+		if _, port := ports[u.Provider]; port {
+			fields["exchange"] = u.Provider
+			name = "exchange port " + u.Provider
+			if over {
+				note = "; report only, nothing is moved off the port"
+			}
+		}
 		if over {
-			w.emit(now, plugin.EventCommitExceeded, fmt.Sprintf("%s 95th percentile %.1f Mbps is above its %.1f Mbps commit", u.Provider, v, u.CommitMbps), fields)
+			w.emit(now, plugin.EventCommitExceeded, fmt.Sprintf("%s 95th percentile %.1f Mbps is above its %.1f Mbps commit%s", name, v, u.CommitMbps, note), fields)
 		} else {
-			w.emit(now, plugin.EventCommitCleared, fmt.Sprintf("%s 95th percentile %.1f Mbps is within its %.1f Mbps commit", u.Provider, v, u.CommitMbps), fields)
+			w.emit(now, plugin.EventCommitCleared, fmt.Sprintf("%s 95th percentile %.1f Mbps is within its %.1f Mbps commit", name, v, u.CommitMbps), fields)
 		}
 	}
 }

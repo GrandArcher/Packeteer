@@ -21,17 +21,20 @@ import (
 )
 
 // pinControl is the API's handle on prefix pins (#558). A new pin is
-// checked against the running config's providers and allowlist and the
-// learned RIB view; Decide then treats it as a static rule.
+// checked against the running config's providers and allowlist, the
+// learned RIB view, and an exchange peer's port headroom; Decide then
+// treats it as a static rule.
 type pinControl struct {
 	store *pin.Store
 	cfg   func() *config.Config
 	// learned reports whether the exact prefix is in the RIB view. Nil
 	// when there is no RIB view, which refuses every pin.
 	learned func(netip.Prefix) bool
-	log     *slog.Logger
-	poke    func()
-	save    func()
+	// port is the decision engine's exchange port check (#643).
+	port func(p netip.Prefix, provider string) string
+	log  *slog.Logger
+	poke func()
+	save func()
 }
 
 // pinRails is the configured providers and allowlist a pin is checked
@@ -56,7 +59,7 @@ func (c pinControl) List(now time.Time) []pin.Pin { return c.store.List(now) }
 
 func (c pinControl) Add(r pin.Request, now time.Time) (pin.Pin, error) {
 	rails := pinRails(c.cfg())
-	rails.Learned = c.learned
+	rails.Learned, rails.Port = c.learned, c.port
 	p, err := c.store.Add(r, rails, now)
 	if err != nil {
 		return p, err

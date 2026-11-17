@@ -4,7 +4,8 @@
 // (usable path, loss and latency ceiling, allowlist in inject, hold_time,
 // the cap, flap quarantine), and the announcer adds the community and
 // NO_EXPORT. A pin is refused unless the prefix is inside the allowlist and
-// in the learned RIB view when it is set. Pins end at their expiry; with a
+// in the learned RIB view when it is set, and, onto an exchange peer, unless
+// the steer fits the peer's port (#643). Pins end at their expiry; with a
 // store that keeps them (#565) a restart restores the ones not expired.
 // The package announces nothing.
 package pin
@@ -68,6 +69,9 @@ type Rails struct {
 	Allowlist []netip.Prefix
 	// Learned reports whether the exact prefix is in the learned RIB view.
 	Learned func(netip.Prefix) bool
+	// Port says why the pinned steer would not fit the provider's exchange
+	// port (#643), "" when it fits. Nil checks no port.
+	Port func(p netip.Prefix, provider string) string
 }
 
 // Store holds the pins. It is safe for concurrent use.
@@ -124,6 +128,11 @@ func (r Request) check(rails Rails) error {
 		return fmt.Errorf("%s is not inside allowlist.prefixes", p)
 	case rails.Learned == nil || !rails.Learned(p):
 		return fmt.Errorf("%s is not in the learned RIB view", p)
+	}
+	if rails.Port != nil {
+		if why := rails.Port(p, r.Provider); why != "" {
+			return errors.New(why)
+		}
 	}
 	return nil
 }

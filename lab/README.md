@@ -46,6 +46,8 @@ The script checks with `lab/checkpath -nexthop`: (1) the steer reaches edge-b wi
 
 (2) ix-peer-a withdraws: the route check retires the improvement at once and nothing goes to ix-peer-b or ix-peer-c; it re-announces and the steer returns. (3) SIGHUP with the collector added: the collector gets the steer, while the edge never loses the route and its session is not reset (`connectionsEstablished` unchanged). (4) SIGHUP with `local_pref` changed is refused and nothing moves. (5) SIGHUP with the collector removed closes its session. (6) SIGTERM withdraws. (7) After a restart, SIGKILL drops the route within the 9s hold timer.
 
+`lab/e2e-ix-port.sh` is shared IX port headroom for performance moves (#643) on the same topology (`lab/packeteer-ix-port.yaml`). ix-lab has a 1000 Mbps port with a 600 Mbps commit, its usage is a `fixed` telemetry row the script rewrites, and the prefix carries 60 Mbps. In observe and then in lab inject: at 580 Mbps the move onto ix-peer-a is refused (the decision names the port, nothing is recommended or announced); at 300 Mbps it is recommended, then announced; at 700 Mbps `over_commit` and `commit.exceeded` flag the port and the move stays. SIGTERM withdraws; after a restart and a new steer, SIGKILL drops the route within the 9s hold timer.
+
 `lab/e2e-mitigation.sh` is threat mitigation (#28, first half: RTBH and BGP redirect) on its own topology (`lab/docker-compose-mitigation.yml`): the FRR edge (`lab/frr-mit-edge`) routes the discard address `192.0.2.66` to null, peers with Packeteer, learns `198.51.100.0/24` from transit-a (`lab/frr-mit-transit-a`, AS 64496), and exports to transit-b (`lab/frr-mit-transit-b`, AS 64497). Rules go through Packeteer's ops API from the host (`192.0.2.10:8080`, lab-only basic auth in the compose file; `lab/packeteer-mitigation.yaml`, `max_rules: 2`).
 
 The script checks: (1) a rule outside the mitigation allowlist and a request without credentials are refused. (2) An allowlisted `198.51.100.128/25`, which nobody advertises, is held and never announced, and a third prefix is refused by the cap. (3) RTBH: the edge's best path is Packeteer's with next hop `192.0.2.66`, BLACKHOLE, the marker, and `no-export`; zebra resolves it to the blackhole; transit-b loses the prefix instead of receiving it. (4) Redirect replaces it in place with next hop `192.0.2.77` and `64512:777`. (5) DELETE restores transit-a. (6) An 8s TTL expires on its own. (7) SIGTERM withdraws.
@@ -138,6 +140,7 @@ bash lab/e2e-bmp.sh
 bash lab/e2e-addpath.sh
 bash lab/e2e-multirouter.sh
 bash lab/e2e-ix.sh
+bash lab/e2e-ix-port.sh
 bash lab/e2e-more-specific.sh
 bash lab/e2e-synthesize.sh
 bash lab/e2e-nonbgp.sh

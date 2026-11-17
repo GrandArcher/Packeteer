@@ -340,10 +340,10 @@ func TestEventWatchCommit(t *testing.T) {
 		}
 	}
 	now := time.Now()
-	w.commit(now, u(90))
-	w.commit(now, u(120))
-	w.commit(now, u(130))
-	w.commit(now, u(100))
+	w.commit(now, u(90), nil)
+	w.commit(now, u(120), nil)
+	w.commit(now, u(130), nil)
+	w.commit(now, u(100), nil)
 	e := s.take()
 	if kinds(e) != "commit.exceeded,commit.cleared" {
 		t.Fatalf("commit kinds %s", kinds(e))
@@ -351,7 +351,7 @@ func TestEventWatchCommit(t *testing.T) {
 	if e[0].Fields["usage_mbps"] != "120.0" || e[0].Fields["commit_mbps"] != "100.0" || e[0].Severity != plugin.SeverityWarning {
 		t.Fatalf("exceeded %+v", e[0])
 	}
-	w.commit(now, []plugin.Usage{{Provider: "transit-a", CommitMbps: 100, Samples: 1, Single: true, UsageMbps: 101}})
+	w.commit(now, []plugin.Usage{{Provider: "transit-a", CommitMbps: 100, Samples: 1, Single: true, UsageMbps: 101}}, nil)
 	if e := s.take(); kinds(e) != "commit.exceeded" {
 		t.Fatalf("single figure: %s", kinds(e))
 	}

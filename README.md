@@ -350,17 +350,17 @@ Status on main after the 1.5.0 release, capability rows per milestone and how ma
 | v0.4 | 13 | 12 |
 | v0.6 | 7 | 7 |
 | v0.7 | 3 | 3 |
-| v0.8 | 20 | 18 |
+| v0.8 | 20 | 19 |
 | v0.9 | 31 | 28 |
 | v1.1 | 3 | 1 |
 | v1.4 | 1 | 1 |
 | v1.5 | 1 | 1 |
 | won't do | 2 | - |
-| **Total** | 147 | 136 |
+| **Total** | 147 | 137 |
 
 v0.1 is the outbound loop: probes, static and flow targets, an iBGP RIB, scoring with hysteresis, optional injection, the read-only UI and API, the container, and the FRR lab. v0.2 adds cost and commit control, SNMP, policies, alerts, and reports. v0.3 adds inbound optimization, BMP and add-path, multiple routers and IX, RTBH/FlowSpec mitigation, transit classification, and capped more-specific injection, all lab-proven. v0.4 adds multi-POP federation, active/standby HA and backup, RBAC/SSO/audit, flow-baseline anomaly detection that mitigates only on explicit rules, and the remaining UI rows. v0.5 is hardening on that matrix: dashboard clarity and a first-run checklist, CI-tested install and walkthrough docs, load and soak budgets, a MikroTik CHR lab in CI, and a scheduled router interop matrix. Field feedback from real observe-mode deployments (#54) is still open. v0.6 closes the gaps from the 2026-10-07 review of prefix selection, measurement, and the UI, adds flap quarantine, live apply, scale budgets up to multi-million path tables, upgrade from the UI, and a failure-mode e2e matrix. v0.7 adds exchange (IX) visibility for an edge network: an exchange view, IX LAN health probes, route-server vs bilateral prefix views, offload and potential-peers reports, dashboard widgets, Commit & Cost, Reports, search, System, and maintenance pages, and link-outs.
 
-v0.8 is about Internet exchanges and shared measurements: IXP observe-only mode with IX-F import, fabric probes, Birdseye route-server history and signals, fabric incident correlation, member pages, and multi-site health; RPKI origin labels; probe multiplexing with a PBR generator and a probe-path check; a shared IX port; PeeringDB lookup; BMP exchange peer monitoring; events from measured provider health; settings forms for most blocks of the config (the raw YAML covers the rest); and the opt-in herd with its hub. Some rows are partial: the shared IX port and herd (phase 1 and the hub; the hub has unit and integration tests only, not lab-proven). The rows say what is missing. No row is field-proven yet (#54), and none of it relaxes the safety rules above.
+v0.8 is about Internet exchanges and shared measurements: IXP observe-only mode with IX-F import, fabric probes, Birdseye route-server history and signals, fabric incident correlation, member pages, and multi-site health; RPKI origin labels; probe multiplexing with a PBR generator and a probe-path check; a shared IX port; PeeringDB lookup; BMP exchange peer monitoring; events from measured provider health; settings forms for most blocks of the config (the raw YAML covers the rest); and the opt-in herd with its hub. Herd is partial (phase 1 and the hub; the hub has unit and integration tests only, not lab-proven). The rows say what is missing. No row is field-proven yet (#54), and none of it relaxes the safety rules above.
 
 v0.9 is about evidence, explanations, and plugins: the Why? panel and confidence on every decision, steer verification, RPKI and IRR per provider path, registry hygiene, NetBox and Peering Manager inventory, exporters, an SNMP agent, gRPC plugins, probe agents, an external policy feed, BMP alone, MED and overload protection, and a refreshed UI (plain language, phone layout, keyboard and screen reader access, provider latency and loss). The opt-in `synthesize` block is lab only. Three v0.9 rows are partial (the eBPF data path, registry hygiene, and onboarding, which does not read the router over RouterOS's API or NETCONF) and herd keeps its v0.8 gaps. Nothing is field-proven (#54). The shipped config and every example stay `mode: observe`.
 
@@ -396,6 +396,10 @@ Nothing is field-proven (#54). The shipped config stays `mode: observe`, and inj
 Pulling a newer image and recreating the container is the plain upgrade. Your config and the `packeteer-data` volume carry over.
 
 The Settings page can also upgrade in place (#196). It is off by default. It needs `upgrade.enabled: true`, the release public key in `upgrade.public_key` ([CONFIG.md](docs/CONFIG.md#upgrade)), an admin login (auth or basic auth), and the `packeteer-data` volume to keep the new version across restarts. The public key is printed in the [v0.6.0 release notes](https://github.com/GrandArcher/Packeteer/releases/tag/v0.6.0). Every route is withdrawn before the switch, and a release whose signature or checksum does not match is refused. Details: [docs/ui.md](docs/ui.md#upgrade-from-the-ui).
+
+### From 1.5.0 to the next release
+
+- With an `exchanges[].port` block, a pin (`POST /api/pins`, the MCP `pin_prefix` tool) onto a peer of that exchange that worked before can now be refused: it is refused with the port as the reason when the prefix's volume would push the port past `capacity_mbps` or `commit_mbps`, when the port has no fresh telemetry reading, or when no target source reports the prefix's volume (#643). Performance moves and `static` rules onto the peer follow the same check every round. Without a `port` block nothing changes.
 
 ### From 1.4.1 to 1.5.0
 

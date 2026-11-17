@@ -31,6 +31,9 @@ func TestApplyPorts(t *testing.T) {
 		a.CapacityMbps != 1000 || a.CommitMbps != 400 || a.PortCost == nil || *a.PortCost != 1500 {
 		t.Fatalf("ix-a port = %+v", a)
 	}
+	if a.OverCommit {
+		t.Fatalf("ix-a at 300 of a 400 Mbps commit is flagged over commit: %+v", a)
+	}
 	if b := stats[1].Port; b == nil || b.State != PortStale || b.HeadroomMbps != 0 {
 		t.Fatalf("ix-b port = %+v", b)
 	}
@@ -39,6 +42,25 @@ func TestApplyPorts(t *testing.T) {
 	}
 	if stats[3].Port != nil {
 		t.Fatalf("an exchange without a port block got %+v", stats[3].Port)
+	}
+}
+
+func TestApplyPortsFlagsOverCommit(t *testing.T) {
+	now := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+	exs := []Exchange{
+		{Name: "ix-a", Port: &PortConfig{CapacityMbps: 1000, CommitMbps: 400}},
+		{Name: "ix-b", Port: &PortConfig{CapacityMbps: 1000}},
+	}
+	row := func(name string, p95 float64) plugin.Usage {
+		return plugin.Usage{Provider: name, CommitMbps: 1, Samples: 5, Single: true, UsageMbps: p95, Updated: now}
+	}
+	stats := []Stats{{Name: "ix-a"}, {Name: "ix-b"}}
+	ApplyPorts(stats, exs, []plugin.Usage{row("ix-a", 450), row("ix-b", 900)}, now, 15*time.Minute)
+	if a := stats[0].Port; !a.OverCommit || a.HeadroomMbps != -50 {
+		t.Fatalf("ix-a at 450 of a 400 Mbps commit = %+v, want over_commit and headroom -50", a)
+	}
+	if b := stats[1].Port; b.OverCommit {
+		t.Fatalf("ix-b has no commit and is flagged over commit: %+v", b)
 	}
 }
 

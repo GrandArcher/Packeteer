@@ -1,0 +1,7 @@
+# Port usage for lab/e2e-ix-port.sh (#643). ix-lab is at 700 Mbps, over its
+# 600 Mbps commit and under its 1000 Mbps capacity: flagged, report only.
+providers:
+  - name: ix-lab
+    commit_mbps: 1
+    usage_mbps: 700
+    out_mbps: 700

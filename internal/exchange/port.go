@@ -35,6 +35,9 @@ type PortStats struct {
 	P95Mbps  float64 `json:"p95_mbps"`
 	// HeadroomMbps is the room under capacity and, when set, commit.
 	HeadroomMbps float64 `json:"headroom_mbps"`
+	// OverCommit is set when the billable 95th is above commit_mbps (#643).
+	// Report only: nothing is moved off the port.
+	OverCommit bool `json:"over_commit"`
 }
 
 // PortCommits is port.commit_mbps by exchange name, for the exchanges that
@@ -87,6 +90,7 @@ func ApplyPorts(stats []Stats, exs []Exchange, rows []plugin.Usage, now time.Tim
 			if load, p95, fresh := portload.Read(u, now, maxAge); fresh {
 				ps.State, ps.LoadMbps, ps.P95Mbps = PortOK, load, p95
 				ps.HeadroomMbps = portload.Room(pc.CapacityMbps, pc.CommitMbps, load, p95)
+				ps.OverCommit = pc.CommitMbps > 0 && p95 > pc.CommitMbps
 			} else {
 				ps.State = PortStale
 			}

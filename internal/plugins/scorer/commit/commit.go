@@ -27,7 +27,6 @@ import (
 	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/netpfx"
-	"github.com/GrandArcher/Packeteer/internal/plugins/scorer/ports"
 	"github.com/GrandArcher/Packeteer/internal/plugins/scorer/weights"
 	"github.com/GrandArcher/Packeteer/internal/portload"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
@@ -183,7 +182,7 @@ type live struct {
 	// onPort marks an exchange peer. Its room is the shared port's, kept
 	// in led, not a commit of its own.
 	onPort bool
-	led    *ports.Ledger
+	led    *portload.Ledger
 }
 
 // eligible reports whether the provider can receive commit traffic at all.
@@ -214,7 +213,7 @@ type placed struct {
 // Plan implements plugin.Planner.
 func (s *Scorer) Plan(in plugin.PlanInput) []plugin.PlanMove {
 	provs := map[string]*live{}
-	led := ports.New(in, s.maxAge)
+	led := portload.NewLedger(in, s.maxAge)
 	var order []string
 	for _, p := range in.Providers {
 		if p.Name == "" {
@@ -592,7 +591,7 @@ func (s *Scorer) apply(src, dst *live, pf *placed, balancing bool, moved map[net
 // shiftLocked moves a performance steer's volume off Native onto Current.
 // The 95th still has that traffic on Native. Leaving it there makes commit
 // control move the same traffic a second time.
-func shiftLocked(provs map[string]*live, led *ports.Ledger, px plugin.PlanPrefix) {
+func shiftLocked(provs map[string]*live, led *portload.Ledger, px plugin.PlanPrefix) {
 	if px.VolumeMbps <= mbpsEps {
 		return
 	}

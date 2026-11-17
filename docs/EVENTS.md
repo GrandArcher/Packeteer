@@ -31,7 +31,7 @@ The same object is the `generic` webhook body and the `exec` `notify` params.
 | `bgp.session_down` | critical | 8 | `neighbor` | An Established iBGP session went down. |
 | `bgp.session_up` | info | 9 | `neighbor` | An iBGP session reached Established. Resolves `bgp.session_down` and `bgp.session_not_established`. |
 | `bgp.session_not_established` | critical | 62 | `neighbor` | A configured iBGP session has not reached Established `bgp.not_established_after` (default 5m) after Packeteer first saw it (#347). With no session Packeteer sees no routes and makes no recommendations. Sent once per neighbor; a session that came up and then dropped is `bgp.session_down` instead. Fields: `neighbor`, `state`, `after`, `description`. |
-| `commit.exceeded` | warning | 10 | `provider` | The billable 95th percentile for the open billing period is above `commit_mbps` (telemetry plugin required). Fields: `usage_mbps`, `commit_mbps`, `percentile`. |
+| `commit.exceeded` | warning | 10 | `provider` | The billable 95th percentile for the open billing period is above `commit_mbps` (telemetry plugin required). Fields: `usage_mbps`, `commit_mbps`, `percentile`. For an exchange's shared port the provider is the exchange name, the commit is `port.commit_mbps`, and `exchange` is set; report only, nothing is moved off the port (#643). |
 | `commit.cleared` | info | 11 | `provider` | The billable 95th percentile is back at or below the commit. |
 | `announce.failed` | critical | 12 | | Syncing improvements to the announcer failed. Sent once per failure streak. |
 | `announce.recovered` | info | 13 | | Sync succeeded after a failure. |
