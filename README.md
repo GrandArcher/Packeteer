@@ -411,7 +411,7 @@ v1.5.0 added one capability row, the field-report kit, and two opt-in config key
 
 Nothing is field-proven (#54). The shipped config stays `mode: observe`, and injection stays off by default ([CHANGELOG](CHANGELOG.md#150---2026-11-16)).
 
-v1.6.0 (this release) adds no capability row and no config key; the shared IX port row moved from partial to done (137 done, up from 136 at 1.5.0), and `preflight.router_check` gained the `routeros` type. What an operator will look for:
+v1.6.0 (this release) adds no capability row and no new top-level config key; the shared IX port row moved from partial to done (137 done, up from 136 at 1.5.0), and `preflight.router_check` gained the `routeros` type. What an operator will look for:
 
 - Performance moves, `static` rules, and pins (`/api/pins`) onto a peer of an exchange with an `exchanges[].port` block now need headroom on that port; a pin that does not fit is refused naming the port, and `/api/exchanges` carries an `over_commit` flag per port ([docs/CONFIG.md](docs/CONFIG.md), [docs/performance.md](docs/performance.md), #643, the last gap of #151).
 - `preflight.router_check` type `routeros` reads RouterOS 7 BGP connections and filter rules over the REST API with GET only, from a fixed path list, for the `import_filter` onboarding check; it is off by default, and the `chr` CI job runs it against a CHR ([docs/onboarding.md](docs/onboarding.md), [docs/mikrotik.md](docs/mikrotik.md), #637).
@@ -429,6 +429,7 @@ The Settings page can also upgrade in place (#196). It is off by default. It nee
 
 ### From 1.5.0 to 1.6.0
 
+- No existing config key changed. `preflight.router_check` type `routeros` (`url`, `username_env`, `password_env`, optional `ca_file`) is new and off by default; before a downgrade to 1.5.0 remove it, because 1.5.0 refuses it.
 - With an `exchanges[].port` block, a pin (`POST /api/pins`, the MCP `pin_prefix` tool) onto a peer of that exchange that worked before can now be refused: it is refused with the port as the reason when the prefix's volume would push the port past `capacity_mbps` or `commit_mbps`, when the port has no fresh telemetry reading, or when no target source reports the prefix's volume (#643). Performance moves and `static` rules onto the peer follow the same check every round. Without a `port` block nothing changes.
 
 ### From 1.4.1 to 1.5.0
