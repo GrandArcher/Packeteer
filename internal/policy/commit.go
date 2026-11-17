@@ -141,6 +141,8 @@ func integrateCommit(
 					// its planner wants it, so the refusal must not pin it.
 					out.Overloads = append(out.Overloads, note)
 					refusal = note
+				} else if why, refused := gate.refusePort(h.imp.Provider, alt.Provider, p); refused {
+					refusal = Overload{Provider: alt.Provider, Reason: why}
 				} else if st.flapNext(p, now, cfg.Flap) {
 					q := st.quarantinePrefix(p, now, cfg.Flap, out)
 					retire(p, flapReason(q), false)
@@ -148,8 +150,6 @@ func integrateCommit(
 					continue
 				} else {
 					st.noteFlip(p, now, cfg.Flap)
-					gate.release(h.imp)
-					gate.book(alt.Provider, p)
 					delete(st.confirm, p)
 					n := Improvement{
 						Prefix: p, Provider: alt.Provider, Native: h.imp.Native, Since: now,
@@ -157,6 +157,8 @@ func integrateCommit(
 						MEDOverride: medOverride(cands, alt, cfg, h.imp.Native),
 						nativeSeen:  h.imp.nativeSeen, nativeHeld: h.imp.nativeHeld,
 					}
+					gate.release(h.imp)
+					gate.book(n)
 					st.Improvements[p] = n
 					out.Changes = append(out.Changes, Change{Action: ActionSwitch, Old: h.imp, New: n})
 					setDecision(d, ActionSwitch, n.Reason, n.Provider, n.Provider, plugin.CausePerformance)

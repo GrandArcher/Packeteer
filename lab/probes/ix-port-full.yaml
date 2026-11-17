@@ -1,0 +1,8 @@
+# Port usage for lab/e2e-ix-port.sh (#643). ix-lab is at 580 of its 600 Mbps
+# commit: the 60 Mbps prefix would take it to 640. The row's commit_mbps is
+# the binding's placeholder; port.commit_mbps is the commit.
+providers:
+  - name: ix-lab
+    commit_mbps: 1
+    usage_mbps: 580
+    out_mbps: 580

@@ -8,6 +8,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 - `preflight.router_check` type `routeros` reads RouterOS 7 BGP connections and filter rules over the REST API with GET only, from a fixed path allowlist; proven in the `chr` CI job (#637).
 - `scripts/demo.sh --report` runs the whole demo and prints an address-free pass/fail block for a field report, to record a Docker Desktop run (#646).
+- Performance moves, static rules, and `/api/pins` onto an exchange peer need `exchanges[].port` headroom; a pin that does not fit is refused naming the port; `over_commit` flag (#643).
 
 ## [1.5.0] - 2026-11-16
 

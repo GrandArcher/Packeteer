@@ -98,11 +98,15 @@ func (l *providerLoad) pct(mbps float64) float64 {
 }
 
 // loadGate holds back performance steers from a provider whose interface
-// is at its capacity limit and sheds the ones already there (#307). A nil
-// gate admits everything.
+// is at its capacity limit and sheds the ones already there (#307), and
+// holds back performance steers and pins that would not fit an exchange
+// port (#643). Nothing is shed off a port. A nil gate admits everything.
 type loadGate struct {
 	byProv map[string]*providerLoad
-	vols   map[netip.Prefix]float64
+	// ports is the exchange port (#643) of each provider that is a peer
+	// on one; the peers of a port share one portRoom.
+	ports map[string]*portRoom
+	vols  map[netip.Prefix]float64
 }
 
 // newLoadGate reads the limited providers' load. A steer created after the
@@ -111,6 +115,10 @@ type loadGate struct {
 // added: observe judges the recommendations as inject would judge them.
 func newLoadGate(st State, in Input, cfg Config, now time.Time) *loadGate {
 	var g *loadGate
+	if len(cfg.Ports) > 0 {
+		g = &loadGate{byProv: map[string]*providerLoad{}, ports: map[string]*portRoom{}, vols: in.volumes()}
+		g.readPorts(st, in, cfg, now)
+	}
 	for _, pp := range cfg.Providers {
 		if pp.CapacityThresholdPct <= 0 {
 			continue
@@ -168,15 +176,16 @@ func (g *loadGate) refuse(provider string, p netip.Prefix) (Overload, bool) {
 	return note, true
 }
 
-// book counts an admitted steer onto provider, so the next one in the same
-// evaluation sees it.
-func (g *loadGate) book(provider string, p netip.Prefix) {
+// book counts an admitted steer onto its provider and port, so the next
+// one in the same evaluation sees it.
+func (g *loadGate) book(imp Improvement) {
 	if g == nil {
 		return
 	}
-	if l := g.byProv[provider]; l != nil && l.ok {
-		l.used += g.vols[p]
+	if l := g.byProv[imp.Provider]; l != nil && l.ok {
+		l.used += g.vols[imp.Prefix]
 	}
+	g.movePort(imp, 1)
 }
 
 // release takes a retired or switched-away steer's volume off its provider:
@@ -188,6 +197,7 @@ func (g *loadGate) release(imp Improvement) {
 	if l := g.byProv[imp.Provider]; l != nil && l.ok {
 		l.used = max(l.used-g.vols[imp.Prefix], 0)
 	}
+	g.movePort(imp, -1)
 }
 
 type shedCandidate struct {

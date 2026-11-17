@@ -26,15 +26,39 @@ func overloadLimited(cfg *config.Config) bool {
 	return false
 }
 
+// portConfigured reports whether any exchange has a shared port (#643).
+func portConfigured(cfg *config.Config) bool {
+	if cfg == nil {
+		return false
+	}
+	for _, ex := range cfg.Exchanges {
+		if ex.Port != nil {
+			return true
+		}
+	}
+	return false
+}
+
 // fillOverloadInputs reads the interface rates and capacities the limit
-// judges, and the flow volume a steer would add, when a provider has a
-// limit. The volume is the one commit control and improvement weights
-// read, so a scorer that already collected it is not asked twice.
+// judges when a provider has a limit, the port rows an exchange port is
+// judged on when one is configured (#643), and the flow volume a steer
+// would add. The volume and the rows are the ones commit control and
+// improvement weights read, so a scorer that already collected them is not
+// asked twice.
 func fillOverloadInputs(ctx context.Context, in *policy.Input, cfg *config.Config, plugins *pluginhost.Set) {
-	if in == nil || !overloadLimited(cfg) {
+	if in == nil {
 		return
 	}
-	in.Load = loadsOf(collectTelemetry(ctx, plugins))
+	limited, ported := overloadLimited(cfg), portConfigured(cfg)
+	if !limited && !ported {
+		return
+	}
+	if limited {
+		in.Load = loadsOf(collectTelemetry(ctx, plugins))
+	}
+	if ported && in.Usage == nil {
+		in.Usage = collectTelemetry(ctx, plugins)
+	}
 	if !scorerPlans(plugins) && in.WeightVolumeMbps == nil {
 		in.WeightVolumeMbps = collectVolumes(ctx, plugins)
 	}

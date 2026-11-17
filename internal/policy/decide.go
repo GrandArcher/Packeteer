@@ -351,9 +351,16 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 					d.Action, d.Reason = ActionKeep, "policy static: hold_time not elapsed before switching to "+static
 					continue
 				}
+				if why, refused := gate.refusePort(imp.Provider, static, p); refused {
+					d.Recommended, d.Cause = static, plugin.CauseStatic
+					d.Action, d.Reason = ActionKeep, why
+					continue
+				}
 				n := Improvement{Prefix: p, Provider: static, Native: imp.Native, Since: now,
 					Reason: "policy static (" + verdict.Rule + ")", Cause: plugin.CauseStatic,
 					nativeSeen: imp.nativeSeen, nativeHeld: imp.nativeHeld}
+				gate.release(imp)
+				gate.book(n)
 				st.Improvements[p] = n
 				out.Changes = append(out.Changes, Change{Action: ActionSwitch, Old: imp, New: n})
 				setDecision(d, ActionSwitch, n.Reason, n.Provider, n.Provider, plugin.CauseStatic)
@@ -418,6 +425,11 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 						out.Overloads = append(out.Overloads, note)
 						continue
 					}
+					if why, refused := gate.refusePort(imp.Provider, alt.Provider, p); refused {
+						d.Recommended = alt.Provider
+						d.Action, d.Reason = ActionKeep, why
+						continue
+					}
 					if st.flapNext(p, now, cfg.Flap) {
 						q := st.quarantinePrefix(p, now, cfg.Flap, &out)
 						retire(p, flapReason(q), false)
@@ -425,12 +437,12 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 						continue
 					}
 					st.noteFlip(p, now, cfg.Flap)
-					gate.release(imp)
-					gate.book(alt.Provider, p)
 					delete(st.confirm, p)
 					sw := Improvement{Prefix: p, Provider: alt.Provider, Native: imp.Native, Since: now,
 						Reason: reasonText(alt, cur), Cause: plugin.CausePerformance, MEDOverride: medOverride(cands, alt, cfg, imp.Native),
 						Covering: imp.Covering, nativeSeen: imp.nativeSeen, nativeHeld: imp.nativeHeld}
+					gate.release(imp)
+					gate.book(sw)
 					st.Improvements[p] = sw
 					out.Changes = append(out.Changes, Change{Action: ActionSwitch, Old: imp, New: sw})
 					d.Action, d.Reason, d.Current, d.Cause = ActionSwitch, sw.Reason, sw.Provider, plugin.CausePerformance
@@ -616,6 +628,12 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 				continue
 			}
 		}
+		if w.imp.Cause == plugin.CausePerformance || w.imp.Cause == plugin.CauseStatic {
+			if why, refused := gate.refusePort(w.imp.Native, w.imp.Provider, w.imp.Prefix); refused {
+				w.d.Reason, w.d.Recommended = why, w.imp.Provider
+				continue
+			}
+		}
 		if st.flapNext(w.imp.Prefix, now, cfg.Flap) {
 			q := st.quarantinePrefix(w.imp.Prefix, now, cfg.Flap, &out)
 			w.d.Reason, w.d.Recommended = flapReason(q), w.imp.Provider
@@ -632,7 +650,7 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 			continue
 		}
 		st.noteFlip(w.imp.Prefix, now, cfg.Flap)
-		gate.book(w.imp.Provider, w.imp.Prefix)
+		gate.book(w.imp)
 		delete(st.confirm, w.imp.Prefix)
 		st.Improvements[w.imp.Prefix] = w.imp
 		out.Changes = append(out.Changes, Change{Action: ActionImprove, New: w.imp})
