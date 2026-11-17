@@ -363,8 +363,8 @@ preflight:
 	if set.RouterCheck == nil || set.RouterCheck.Type != "frr" {
 		t.Fatalf("router check = %+v", set.RouterCheck)
 	}
-	cfg.Preflight.RouterCheck.Type = "routeros"
-	if _, err := pluginhost.Build(cfg, pluginhost.Options{Logger: discardLog(), Getenv: env}); err == nil || !strings.Contains(err.Error(), "preflight.router_check") || !strings.Contains(err.Error(), "available: bird, frr") {
+	cfg.Preflight.RouterCheck.Type = "junos"
+	if _, err := pluginhost.Build(cfg, pluginhost.Options{Logger: discardLog(), Getenv: env}); err == nil || !strings.Contains(err.Error(), "preflight.router_check") || !strings.Contains(err.Error(), "available: bird, frr, routeros") {
 		t.Fatalf("unknown type = %v", err)
 	}
 }

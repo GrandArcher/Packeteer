@@ -4,6 +4,10 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ## [Unreleased]
 
+### Added
+
+- `preflight.router_check` type `routeros` reads RouterOS 7 BGP connections and filter rules over the REST API with GET only, from a fixed path allowlist; proven in the `chr` CI job (#637).
+
 ## [1.5.0] - 2026-11-16
 
 The v1.5 release adds a field-report kit, an opt-in read-only router check, and kernel-side tracking in the eBPF span path, and proves RPKI-invalid only paths and federation push in lab jobs; the two new config keys, `preflight.router_check` and `span` `ebpf_track`, are off by default, and the shipped config stays `mode: observe` with injection off by default.

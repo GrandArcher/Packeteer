@@ -551,7 +551,7 @@ Adding, changing, or removing `lookup` needs a restart. Rollback: remove `lookup
 
 ### `preflight`
 
-`preflight.router_check` is the read-only router check (#626): one plugin, `type: frr` or `type: bird`. It is off by default; without it `import_filter` waits for an administrator's confirmation as before. Point it only at a lab router or a router you chose; it never writes to it. Details and limits: [onboarding.md](onboarding.md#read-only-router-check).
+`preflight.router_check` is the read-only router check (#626): one plugin, `type: frr`, `bird`, or `routeros` (#637). It is off by default; without it `import_filter` waits for an administrator's confirmation as before. Point it only at a lab router or a router you chose; it never writes to it. Details and limits: [onboarding.md](onboarding.md#read-only-router-check).
 
 ```yaml
 preflight:
@@ -561,7 +561,22 @@ preflight:
       socket_env: PACKETEER_FRR_SOCKET   # the variable's name, not the path
 ```
 
-`socket_env` (required) names the environment variable that holds the absolute path of the router's socket: bgpd's vty socket (`bgpd.vty`) for `frr`, the control socket (`bird.ctl`) for `bird`. `type: bird` also needs `config_env`, the variable that holds the absolute path of the `bird.conf` BIRD runs, mounted read-only. The paths are not written in the config file and are not shown in logs, the API, or the UI. With the config editor's check (`-check` keeps it) an unset variable is not an error; at start it is. Adding, changing, or removing `preflight` needs a restart. Rollback: remove `preflight` and restart.
+`socket_env` (required) names the environment variable that holds the absolute path of the router's socket: bgpd's vty socket (`bgpd.vty`) for `frr`, the control socket (`bird.ctl`) for `bird`. `type: bird` also needs `config_env`, the variable that holds the absolute path of the `bird.conf` BIRD runs, mounted read-only. The paths are not written in the config file and are not shown in logs, the API, or the UI. `type: routeros` reads a RouterOS 7 router over its REST API instead:
+
+```yaml
+preflight:
+  router_check:
+    type: routeros
+    config:
+      url: https://192.0.2.254
+      username_env: PACKETEER_ROUTER_READ_USER
+      password_env: PACKETEER_ROUTER_READ_PASSWORD
+      ca_file: /etc/packeteer/router-ca.pem   # optional
+```
+
+`url` (required) is the router's web service: https, or http only to a loopback host, with no login, query, or fragment. `username_env` and `password_env` (required) name the variables that hold the login; use an account in the `read` group. `ca_file` is an absolute path to the PEM certificate that signed the router's certificate; without it the system roots are used.
+
+With the config editor's check (`-check` keeps it) an unset variable is not an error; at start it is. Adding, changing, or removing `preflight` needs a restart. Rollback: remove `preflight` and restart.
 
 ### `herd`
 

@@ -12,10 +12,17 @@
 #   - drops the route on flip-back, SIGTERM, a frozen process (hold timer),
 #     and SIGKILL. Graceful restart stays off.
 #
+# Then the read-only router check (#637): Packeteer in observe with
+# preflight.router_check type routeros, logged in as a read-group user made
+# for this run, passes import_filter on edge.rsc and fails it with the fix
+# once an eBGP connection's output chain lacks the reject. The router's
+# /export is the same before and after each read, and the login is in no
+# API answer or log line.
+#
 # Documentation prefixes and private/documentation ASNs only. Lab/CI only.
 #
 # Needs: sudo (tap device and lab addresses), qemu-system-x86_64, qemu-img,
-# curl, jq, unzip, go. Packeteer runs from the container image with
+# curl, jq, unzip, openssl, go. Packeteer runs from the container image with
 # --network host and a mounted config (docker build unless PACKETEER_IMAGE
 # names an image). PACKETEER_BIN runs a local binary instead (development
 # without Docker). CHR_ACCEL=kvm|tcg overrides accelerator detection.
@@ -253,7 +260,8 @@ pk_start() {
 	else
 		docker rm -f "$pk_name" >/dev/null 2>&1 || true
 		docker run -d --name "$pk_name" --network host --cap-add NET_RAW --cap-add NET_ADMIN \
-			-e PACKETEER_LOG_LEVEL=debug \
+			-e PACKETEER_LOG_LEVEL=debug -e PACKETEER_ROUTER_READ_USER -e PACKETEER_ROUTER_READ_PASSWORD \
+			-e PACKETEER_HTTP_USER -e PACKETEER_HTTP_PASSWORD \
 			-v "$work/packeteer.yaml:/etc/packeteer/config.yaml:ro" \
 			-v "$work/probes:/etc/packeteer/probes:ro" "$image" >/dev/null
 	fi
@@ -407,4 +415,72 @@ pk_wait
 
 wait_for "collector gets the native path back after the crash" 30 collector_has_native
 routes && invariants
+
+# ---- read-only router check (#637) ----
+log "read-only router check: routeros, observe, read-group user"
+reader_pw=$(openssl rand -hex 16)
+chr_script() {
+	rest '/execute' -X POST -d "$(jq -n --arg s "$1" '{script: $s, "as-string": true}')" >/dev/null
+}
+chr_script "/user add name=pk-reader group=read password=\"${reader_pw}\""
+rest '/user' | jq -e 'any(.[]; .name == "pk-reader" and .group == "read")' >/dev/null || fail "read-group user not created"
+export PACKETEER_ROUTER_READ_USER=pk-reader PACKETEER_ROUTER_READ_PASSWORD="$reader_pw"
+# Running the preflight checks needs a login on Packeteer's API.
+http_pw=$(openssl rand -hex 16)
+export PACKETEER_HTTP_USER=lab PACKETEER_HTTP_PASSWORD="$http_pw"
+{
+	sed 's/^mode: inject$/mode: observe/' "$work/packeteer.yaml"
+	printf 'preflight:\n  router_check:\n    type: routeros\n    config:\n'
+	printf '      url: http://127.0.0.1:%s\n      username_env: PACKETEER_ROUTER_READ_USER\n      password_env: PACKETEER_ROUTER_READ_PASSWORD\n' "$rest_port"
+} >"$work/router-check.yaml"
+mv "$work/router-check.yaml" "$work/packeteer.yaml"
+grep -q '^mode: observe$' "$work/packeteer.yaml" || fail "router check config is not observe"
+
+router_export() {
+	rest '/execute' -X POST -d '{"script": "/export", "as-string": true}' | jq -r '.ret' | grep -v '^#'
+}
+
+# check_filter NAME STATUS PATTERN... runs the preflight checks and expects
+# import_filter to have STATUS with every PATTERN in its detail and fix.
+check_filter() {
+	local name=$1 status=$2 want
+	shift 2
+	router_export >"$work/export-$name-before.txt"
+	curl -fsS -m 30 -u "lab:$http_pw" -X POST "http://${pk_http}/api/preflight/run" >"$work/report-$name.json"
+	curl -fsS -m 10 -u "lab:$http_pw" "http://${pk_http}/api/preflight" >"$work/latest-$name.json"
+	router_export >"$work/export-$name-after.txt"
+	jq '.results[] | select(.id == "import_filter")' "$work/report-$name.json" | tee "$work/filter-$name.json"
+	jq -e --arg s "$status" '.status == $s' "$work/filter-$name.json" >/dev/null || fail "$name: import_filter is not $status"
+	for want in "$@"; do
+		jq -r '.detail + "\n" + (.fix // "")' "$work/filter-$name.json" | grep -qF -- "$want" || fail "$name: import_filter lacks: $want"
+	done
+	diff "$work/export-$name-before.txt" "$work/export-$name-after.txt" || fail "$name: the router config changed during the read"
+	[ -s "$work/export-$name-after.txt" ] || fail "$name: empty /export"
+}
+
+pk_start
+api_up() { curl -fsS -m 2 -u "lab:$http_pw" "http://${pk_http}/healthz" >/dev/null 2>&1; }
+wait_for "Packeteer API (router check)" 60 api_up
+
+check_filter good pass 'Read from the router (routeros, read-only commands)' \
+	'Import from Packeteer 192.0.2.10 (connection packeteer): chain packeteer-in accepts only routes with 64512:666.' \
+	'Export to eBGP connection collector: chain ebgp-out rejects 64512:666 at rule 1, before any accept.'
+
+log "the collector's output chain without the reject"
+chr_script '/routing filter rule add chain=ebgp-open rule="accept"'
+chr_script '/routing bgp connection set [find where name=collector] output.filter-chain=ebgp-open'
+rest '/routing/bgp/connection' | jq -e 'any(.[]; .name == "collector" and ."output.filter-chain" == "ebgp-open")' >/dev/null ||
+	fail "collector output chain not changed"
+check_filter broken fail 'Export to eBGP connection collector: chain ebgp-open accepts at rule 1 before 64512:666 is rejected.' \
+	'/routing filter rule add chain=ebgp-open place-before=0 rule="if (bgp-communities includes 64512:666) { reject }"'
+jq -e '.confirmable != true' "$work/filter-broken.json" >/dev/null || fail "a failing router check is confirmable"
+
+pk_signal TERM
+pk_wait
+pk_logs >"$work/packeteer-router-check.log"
+grep -qF 'announce=disabled' "$work/packeteer-router-check.log" || fail "router check run was not observe"
+if grep -lF -e "$reader_pw" -e pk-reader "$work"/report-*.json "$work"/latest-*.json "$work/packeteer-router-check.log"; then
+	fail "the router login is in the output above"
+fi
+log "router check: pass with evidence, fail with the fix, router config unchanged"
 log "e2e-chr ok"

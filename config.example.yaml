@@ -690,10 +690,14 @@ storage:
 # bird.conf path) comes from the environment, never this file.
 # preflight:
 #   router_check:
-#     type: frr                          # or bird
+#     type: frr                          # or bird, routeros
 #     config:
 #       socket_env: PACKETEER_FRR_SOCKET   # bird: PACKETEER_BIRD_SOCKET
 #       # config_env: PACKETEER_BIRD_CONFIG  # bird only
+#       # routeros (REST GET only, a read-group account) takes instead:
+#       # url: https://192.0.2.254
+#       # username_env: PACKETEER_ROUTER_READ_USER
+#       # password_env: PACKETEER_ROUTER_READ_PASSWORD
 
 # Providers, next hops, and provider communities from NetBox or Peering
 # Manager (docs/inventory.md). Read only by `packeteer config plan`, `diff`,
