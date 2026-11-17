@@ -350,4 +350,46 @@ func TestPlannedMoveHoldsPortRoomUnderCostPrecedence(t *testing.T) {
 	if d := decision(t, out, pA); len(st.Improvements) != 1 || !strings.HasPrefix(d.Reason, "exchange port: ix 95th would reach 660 of its 600 Mbps commit") {
 		t.Fatalf("improvements %+v pA decision %+v, want pA refused by the port", st.Improvements, d)
 	}
+	// In inject with pB outside the allowlist the cost move is not queued
+	// and gives its room back: pA's performance move fits.
+	c.Mode, c.Allowlist = "inject", []netip.Prefix{pA}
+	st, out = Decide(NewState(), input, c, costScorer(t, "precedence: cost\n"), t0)
+	if imp := st.Improvements[pA]; imp.Provider != "ix-a" || len(st.Improvements) != 1 {
+		t.Fatalf("improvements %+v pA decision %+v, want only pA's move onto ix-a", st.Improvements, decision(t, out, pA))
+	}
+}
+
+func TestHoldSwitchSeesTheRoundsPlannedMoves(t *testing.T) {
+	// pB is a commit steer on transit b (native a) and ix-a is now much
+	// faster, so it switches for performance. The planner also plans a new
+	// commit move of pA (60 Mbps) off a onto the port. The port reads 500 of
+	// its 600 Mbps commit: room for one of the two.
+	later := t0.Add(time.Hour)
+	row := func(name string, commit, p95 float64) plugin.Usage {
+		u := billable(name, commit, p95)
+		u.Updated = later
+		return u
+	}
+	c := portCfg(1000, 600)
+	c.Providers = append(c.Providers, ProviderPolicy{Name: "b", Precedence: 1000})
+	st := NewState()
+	st.Improvements[pB] = Improvement{Prefix: pB, Provider: "b", Native: "a", Since: t0, Cause: plugin.CauseCommit}
+	input := in(results(later, pA, m{"a", 0, 40}, m{"b", 0, 40}, m{"ix-a", 0, 40}, m{"ix-b", 0, 40}), map[netip.Prefix]string{pA: "a", pB: "a"})
+	input.Results = append(input.Results, results(later, pB, m{"a", 0, 90}, m{"b", 0, 90}, m{"ix-a", 0, 20}, m{"ix-b", 0, 90})...)
+	input.ProviderUp = map[string]bool{"a": true, "b": true, "ix-a": true, "ix-b": true}
+	input.Usage = []plugin.Usage{row("a", 100, 190), row("b", 1000, 990), row("ix", 1, 500)}
+	input.VolumeMbps = map[netip.Prefix]float64{pA: 60, pB: 60}
+	next, out := Decide(st, input, c, commitScorer(t, ""), later)
+	onPort := 0
+	for _, imp := range next.Improvements {
+		if imp.Provider == "ix-a" || imp.Provider == "ix-b" {
+			onPort++
+		}
+	}
+	if onPort != 1 || next.Improvements[pA].Provider != "ix-a" || next.Improvements[pB].Provider != "b" {
+		t.Fatalf("improvements %+v, want only pA's planned move on the port", next.Improvements)
+	}
+	if d := decision(t, out, pB); d.Action != ActionKeep || !strings.HasPrefix(d.Reason, "exchange port: ix 95th would reach 620 of its 600 Mbps commit") {
+		t.Fatalf("pB decision %+v, want the switch refused by the port", d)
+	}
 }

@@ -78,11 +78,33 @@ func integrateCommit(
 		}
 		want[m.Prefix] = m
 	}
+	// Every planned move holds its room on a port before any performance
+	// move or switch is checked against the port (#643): the planner did not
+	// see those. A steer undoes its own before it is decided and books what
+	// it does; a planned move that is not queued gives its room back.
+	reserved := map[netip.Prefix]string{}
+	for _, p := range netpfx.SortedKeys(want) {
+		from := nativeOf(st, in, p)
+		if imp, ok := st.Improvements[p]; ok {
+			from = imp.Provider
+		}
+		if want[p].Provider != from {
+			gate.movePort(from, want[p].Provider, p)
+			reserved[p] = from
+		}
+	}
+	unreserve := func(p netip.Prefix) {
+		if from, ok := reserved[p]; ok {
+			gate.movePort(want[p].Provider, from, p)
+			delete(reserved, p)
+		}
+	}
 
 	handled := map[netip.Prefix]bool{}
 	for _, h := range holds {
 		p := h.imp.Prefix
 		handled[p] = true
+		unreserve(p)
 		d := h.d
 		cands := byPrefix[p]
 		cause := h.imp.Cause
@@ -295,6 +317,15 @@ func integrateCommit(
 				Reason: mv.Reason, Cause: mv.Cause,
 			},
 		})
+	}
+	queued := map[netip.Prefix]bool{}
+	for _, w := range fresh {
+		queued[w.imp.Prefix] = true
+	}
+	for _, p := range netpfx.SortedKeys(reserved) {
+		if !queued[p] {
+			unreserve(p)
+		}
 	}
 	if len(replaced) > 0 {
 		kept := (*wants)[:0]

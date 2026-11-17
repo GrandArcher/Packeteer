@@ -19,7 +19,7 @@
 # Lab inject (the same file with mode: inject, after a restart):
 #  4. The port is at 580 Mbps: nothing is announced.
 #  5. The port falls to 300 Mbps: the route goes to the edge via ix-peer-a
-#     with the community.
+#     with the community and NO_EXPORT.
 #  6. The port rises to 700 Mbps: flagged, and the route stays (nothing is
 #     moved off a port over its commit).
 #  7. SIGTERM withdraws.
@@ -62,7 +62,7 @@ router_json() {
 }
 
 steered() {
-	router_json edge | "$check_bin" -has 64512:666 -nexthop 203.0.113.11 -aspath "64501 64501 64501"
+	router_json edge | "$check_bin" -has 64512:666 -has no-export -nexthop 203.0.113.11 -aspath "64501 64501 64501"
 }
 
 native() {
