@@ -7,6 +7,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 ### Added
 
 - `preflight.router_check` type `routeros` reads RouterOS 7 BGP connections and filter rules over the REST API with GET only, from a fixed path allowlist; proven in the `chr` CI job (#637).
+- `upgrade-release` CI job: `lab/e2e-upgrade-release.sh` runs v1.5.0 (by digest), then the PR build, on one volume, then the downgrade; state kept, observe, nothing announced (#644).
 
 ## [1.5.0] - 2026-11-16
 

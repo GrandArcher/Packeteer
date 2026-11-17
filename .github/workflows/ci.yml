@@ -3039,6 +3039,18 @@ jobs:
           PACKETEER_DOCS_CLEANUP: ./scripts/demo.sh stop
         run: bash lab/e2e-docs.sh docs/demo.md
 
+  upgrade-release:
+    # Upgrade between real releases (#644): the last published image, pinned
+    # by digest in the script, writes state; the image built from this tree
+    # then starts on the same volume; then the documented downgrade. Observe
+    # mode; the edge must receive nothing.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: release upgrade lab (#644; v1.5.0 by digest then the PR build on one volume, -check, pin, pause, ack, users, history restored, observe, nothing announced, downgrade, SIGTERM exit 0)
+        run: bash lab/e2e-upgrade-release.sh
+
   only-invalid:
     # RPKI-invalid only paths (#401) against a real Routinator (#627).
     # Routinator has no trust anchor and fetches nothing: its data are local
