@@ -37,7 +37,6 @@ services:
         ipv4_address: 192.0.2.10
 volumes:
   packeteer-data:
-    name: packeteer-data
 networks:
   lab:
     driver: bridge

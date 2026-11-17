@@ -157,7 +157,7 @@ resp=$(call POST users '{"name":"noc-viewer","role":"viewer","password":"lab-onl
 [ "$(tail -n1 <<<"$resp")" = 201 ] || fail "create user: $resp"
 resp=$(call POST pins "{\"prefix\":\"$prefix\",\"provider\":\"transit-a\",\"max_loss_pct\":5,\"duration\":\"24h\",\"reason\":\"upgrade lab\"}")
 case "$(tail -n1 <<<"$resp")" in 200 | 201) ;; *) fail "pin: $resp" ;; esac
-pin_id=$(sed '$d' <<<"$resp" | jq -r '.id // .pin.id')
+pin_id=$(sed '$d' <<<"$resp" | jq -r .id)
 [ -n "$pin_id" ] && [ "$pin_id" != null ] || fail "pin has no id: $resp"
 resp=$(call POST optimization/pause '{"reason":"upgrade lab pause"}')
 case "$(tail -n1 <<<"$resp")" in 200 | 201) ;; *) fail "pause: $resp" ;; esac
@@ -193,7 +193,7 @@ state_is_kept() {
 	[ "$(curl -sS -o /dev/null -w '%{http_code}' "${viewer[@]}" "$base/me")" = 200 ] ||
 		fail "$who: the viewer cannot sign in with the password set before the upgrade"
 	out=$(api audit)
-	jq -e '[.. | strings | select(. == "POST /api/pins")] | length > 0' <<<"$out" >/dev/null ||
+	jq -e '[.records[] | select(.action == "POST /api/pins" and .result == "ok" and .actor == "admin")] | length > 0' <<<"$out" >/dev/null ||
 		fail "$who: the audit log lost the pin change: $out"
 	out=$(api 'troubleshoot/lookingglass?prefix='"$prefix")
 	jq -e --arg p "$prefix" '.exact.prefix == $p' <<<"$out" >/dev/null || fail "$who: $prefix is not in the learned view: $out"
@@ -224,7 +224,8 @@ EOF
 chmod 644 "$work/config-new.yaml"
 check_cfg "$new_image" "$work/config-new.yaml" || { cat "$work/check.out" >&2; fail "-check refused the routeros key on the build"; }
 if check_cfg "$prev_image" "$work/config-new.yaml"; then fail "the release accepted a key it should refuse"; fi
-echo "e2e-upgrade-release: the release refuses the new key, as the notes say: $(head -n1 "$work/check.out")"
+grep -q routeros "$work/check.out" || { cat "$work/check.out" >&2; fail "the release refused the config, but not for the routeros type"; }
+echo "e2e-upgrade-release: the release refuses the new key, as the notes say: $(grep -m1 routeros "$work/check.out")"
 check_cfg "$prev_image" "$work/config.yaml" || { cat "$work/check.out" >&2; fail "-check failed on the release after the key was removed"; }
 stop
 start "$prev_image" "$prev_version"
