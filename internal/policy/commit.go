@@ -207,6 +207,7 @@ func integrateCommit(
 				Reason: mv.Reason, Cause: cause,
 				nativeSeen: h.imp.nativeSeen, nativeHeld: h.imp.nativeHeld,
 			}
+			gate.movePort(h.imp.Provider, n.Provider, p)
 			st.Improvements[p] = n
 			out.Changes = append(out.Changes, Change{Action: ActionSwitch, Old: h.imp, New: n})
 			setDecision(d, ActionSwitch, n.Reason, n.Provider, n.Provider, cause)
@@ -346,16 +347,7 @@ func buildPlan(
 	cheapFirst bool,
 	now time.Time,
 ) plugin.PlanInput {
-	usage := map[string]plugin.Usage{}
-	for _, u := range in.Usage {
-		if u.Provider == "" {
-			continue
-		}
-		if _, seen := usage[u.Provider]; seen {
-			continue
-		}
-		usage[u.Provider] = u
-	}
+	usage := in.usageByProvider()
 	out := plugin.PlanInput{Now: now}
 	seen := map[string]bool{}
 	for _, p := range cfg.Providers {
@@ -371,13 +363,7 @@ func buildPlan(
 			Cost: p.Cost, HasCost: p.HasCost, Port: p.Port,
 		})
 	}
-	for _, pt := range cfg.Ports {
-		row, have := usage[pt.Name]
-		out.Ports = append(out.Ports, plugin.PlanPort{
-			Name: pt.Name, CapacityMbps: pt.CapacityMbps, CommitMbps: pt.CommitMbps,
-			Usage: row, HaveRow: have,
-		})
-	}
+	out.Ports = planPorts(cfg, usage)
 	added := map[netip.Prefix]bool{}
 	add := func(p netip.Prefix, native, current string, reversible, locked bool) {
 		if !p.IsValid() || added[p] {

@@ -619,6 +619,14 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 		}
 		return netpfx.Less(wants[a].imp.Prefix, wants[b].imp.Prefix)
 	})
+	// A planned commit or cost move holds its room on a port before any
+	// performance move or pin is checked against it: under cost precedence
+	// the planner did not see those (#643).
+	for _, w := range wants {
+		if w.commit {
+			gate.movePort(w.imp.Native, w.imp.Provider, w.imp.Prefix)
+		}
+	}
 	for _, w := range wants {
 		w.d.Cause = w.imp.Cause
 		if w.imp.Cause == plugin.CausePerformance {
@@ -650,7 +658,11 @@ func Decide(prev State, in Input, cfg Config, scorer plugin.Scorer, now time.Tim
 			continue
 		}
 		st.noteFlip(w.imp.Prefix, now, cfg.Flap)
-		gate.book(w.imp)
+		if w.commit {
+			gate.bookLoad(w.imp)
+		} else {
+			gate.book(w.imp)
+		}
 		delete(st.confirm, w.imp.Prefix)
 		st.Improvements[w.imp.Prefix] = w.imp
 		out.Changes = append(out.Changes, Change{Action: ActionImprove, New: w.imp})

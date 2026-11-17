@@ -92,7 +92,7 @@ func TestPerformanceMoveOntoPortNeedsHeadroom(t *testing.T) {
 				"exchange port: ix would carry 1020 of its 1000 Mbps capacity with this 60 Mbps steer onto ix-a"},
 			{"no port row", perfPortInput(t0, 60), "exchange port: ix: no port telemetry, so no new steer goes onto ix-a"},
 			{"stale port row", perfPortInput(t0, 60, billable("ix", 1, 100)), "exchange port: ix: port reading is stale"},
-			{"no volume", perfPortInput(t0, 0, billable("ix", 1, 100)), "exchange port: ix: 198.51.100.0/24 has no known volume"},
+			{"no volume", perfPortInput(t0, 0, billable("ix", 1, 100)), "exchange port: ix: the prefix has no known volume"},
 		} {
 			now := t0
 			if tc.name == "stale port row" {
@@ -282,5 +282,72 @@ func TestActiveSteerSwitchOntoPortNeedsHeadroom(t *testing.T) {
 				t.Fatalf("%s port at %v: decision %+v, want kept with the port as the reason", cause, tc.p95, d)
 			}
 		}
+	}
+}
+
+func TestSteerBackOntoItsNativePortIsCounted(t *testing.T) {
+	// pB's native exit is ix-a, on the port, and it is steered to transit
+	// b. This round pB comes back onto the port, by a retire to its native
+	// path or a switch to ix-b, and pA wants 60 Mbps onto ix-a. The port
+	// reads 500 of its 600 Mbps commit. In inject pB is not in that reading,
+	// so pA would take the port to 620 and is refused. In observe nothing
+	// moved, the reading holds pB, and pA fits.
+	later := t0.Add(time.Hour)
+	for _, back := range []struct {
+		name         string
+		ixA, b, ixB  float64
+		wantProvider string
+	}{
+		{"retire to native", 30, 80, 90, ""},
+		{"switch to ix-b", 80, 70, 40, "ix-b"},
+	} {
+		for _, tc := range []struct {
+			mode    string
+			refused bool
+		}{{"observe", false}, {"inject", true}} {
+			c := portCfg(1000, 600)
+			c.Mode, c.Allowlist = tc.mode, []netip.Prefix{pA, pB}
+			c.Providers = append(c.Providers, ProviderPolicy{Name: "b", Precedence: 10})
+			st := NewState()
+			st.Improvements[pB] = Improvement{Prefix: pB, Provider: "b", Native: "ix-a", Since: t0, Cause: plugin.CausePerformance}
+			input := in(results(later, pA, m{"a", 0, 60}, m{"b", 0, 60}, m{"ix-a", 0, 30}, m{"ix-b", 0, 45}), map[netip.Prefix]string{pA: "a", pB: "ix-a"})
+			input.Results = append(input.Results, results(later, pB, m{"a", 0, 90}, m{"b", 0, back.b}, m{"ix-a", 0, back.ixA}, m{"ix-b", 0, back.ixB})...)
+			input.ProviderUp = map[string]bool{"a": true, "b": true, "ix-a": true, "ix-b": true}
+			u := billable("ix", 1, 500)
+			u.Updated = later.Add(-time.Second)
+			input.Usage = []plugin.Usage{u}
+			input.WeightVolumeMbps = map[netip.Prefix]float64{pA: 60, pB: 60}
+			next, out := Decide(st, input, c, scorer(t), later)
+			if got := next.Improvements[pB].Provider; got != back.wantProvider {
+				t.Fatalf("%s %s: pB on %q, want %q (%+v)", back.name, tc.mode, got, back.wantProvider, decision(t, out, pB))
+			}
+			d := decision(t, out, pA)
+			_, moved := next.Improvements[pA]
+			if moved == tc.refused || (tc.refused && !strings.HasPrefix(d.Reason, "exchange port: ix 95th would reach 620 of its 600 Mbps commit")) {
+				t.Fatalf("%s %s: pA decision %+v moved %v, refused want %v", back.name, tc.mode, d, moved, tc.refused)
+			}
+		}
+	}
+}
+
+func TestPlannedMoveHoldsPortRoomUnderCostPrecedence(t *testing.T) {
+	// Cost precedence: the cost planner moves pB (native transit a, 60
+	// Mbps) onto the flat-priced port without seeing pA's performance move
+	// (pA's native c has no cost, so the planner leaves pA alone). The port
+	// has 60 Mbps of room under its commit, so pA's move onto ix-a is
+	// refused.
+	c := portCfg(1000, 600)
+	c.Providers = append(c.Providers, ProviderPolicy{Name: "c", Precedence: 10})
+	input := in(results(t0, pA, m{"a", 0, 60}, m{"c", 0, 60}, m{"ix-a", 0, 30}, m{"ix-b", 0, 60}), map[netip.Prefix]string{pA: "c", pB: "a"})
+	input.Results = append(input.Results, results(t0, pB, m{"a", 0, 40}, m{"c", 0, 40}, m{"ix-a", 0, 40}, m{"ix-b", 0, 40})...)
+	input.ProviderUp = map[string]bool{"a": true, "c": true, "ix-a": true, "ix-b": true}
+	input.Usage = []plugin.Usage{billable("a", 1000, 100), billable("ix", 1, 540)}
+	input.VolumeMbps = map[netip.Prefix]float64{pA: 60, pB: 60}
+	st, out := Decide(NewState(), input, c, costScorer(t, "precedence: cost\n"), t0)
+	if imp := st.Improvements[pB]; imp.Cause != plugin.CauseCost || (imp.Provider != "ix-a" && imp.Provider != "ix-b") {
+		t.Fatalf("pB improvement %+v, want a cost move onto the port (%+v)", imp, decision(t, out, pB))
+	}
+	if d := decision(t, out, pA); len(st.Improvements) != 1 || !strings.HasPrefix(d.Reason, "exchange port: ix 95th would reach 660 of its 600 Mbps commit") {
+		t.Fatalf("improvements %+v pA decision %+v, want pA refused by the port", st.Improvements, d)
 	}
 }

@@ -366,9 +366,10 @@ scorer:
 #     max_prefix_warn_pct: 90
 #     # One interface shared by every peer (#151). Its usage is a telemetry
 #     # binding named ix-example. No move (commit, cost, performance, or a
-#     # pin) is made onto a peer that pushes the port past capacity or commit. port_cost is a flat
-#     # monthly fee: peers cost 0 per Mbps and may not set cost. The binding's
-#     # own commit_mbps is a placeholder (use 1); port.commit_mbps is the commit.
+#     # pin) is made onto a peer that pushes the port past capacity or
+#     # commit. port_cost is a flat monthly fee: peers cost 0 per Mbps and may
+#     # not set cost. The binding's own commit_mbps is a placeholder (use 1);
+#     # port.commit_mbps is the commit.
 #     port: {capacity_mbps: 10000, commit_mbps: 6000, port_cost: 1500}
 #     # This network's own router addresses on the LAN, as PeeringDB lists
 #     # the connection. Only registry hygiene reads them (#289).

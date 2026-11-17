@@ -23,6 +23,8 @@
 #  6. The port rises to 700 Mbps: flagged, and the route stays (nothing is
 #     moved off a port over its commit).
 #  7. SIGTERM withdraws.
+#  8. Restart with room, steer, SIGKILL: the route drops with the session
+#     (no graceful restart).
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -185,5 +187,22 @@ echo "inject 7. SIGTERM withdraws"
 "${compose[@]}" stop -t 20 packeteer
 wait_for "route gone after SIGTERM" 15 no_packeteer_path
 wait_for "edge on transit-a" 5 native
+
+echo "inject 8. restart with room, steer, SIGKILL: the route drops with the session"
+flip lab/probes/ix-port-room.yaml usage.yaml
+"${compose[@]}" start packeteer
+wait_for "steer after restart" 60 steered
+hold_timer=$(awk '$1 == "neighbor" && $2 == "192.0.2.10" && $3 == "timers" { print $5 }' lab/frr-ix-edge/frr.conf)
+case "$hold_timer" in
+'' | *[!0-9]*)
+	echo "lab hold timer is not an integer: '${hold_timer}'" >&2
+	exit 1
+	;;
+esac
+cid=$("${compose[@]}" ps -q packeteer)
+[ -n "$cid" ] || fail "packeteer is not running"
+docker kill -s KILL "$cid"
+wait_for "route gone after SIGKILL" $(((hold_timer + 6) / 2)) no_packeteer_path
+wait_for "edge on transit-a after SIGKILL" 5 native
 
 echo "IX port e2e ok"

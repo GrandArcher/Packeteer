@@ -53,11 +53,17 @@ func fillOverloadInputs(ctx context.Context, in *policy.Input, cfg *config.Confi
 	if !limited && !ported {
 		return
 	}
+	rows := in.Usage
+	if rows == nil || limited {
+		// in.Usage of a planner may carry federation peers' rows; the
+		// interface limit reads this instance's own.
+		rows = collectTelemetry(ctx, plugins)
+	}
 	if limited {
-		in.Load = loadsOf(collectTelemetry(ctx, plugins))
+		in.Load = loadsOf(rows)
 	}
 	if ported && in.Usage == nil {
-		in.Usage = collectTelemetry(ctx, plugins)
+		in.Usage = rows
 	}
 	if !scorerPlans(plugins) && in.WeightVolumeMbps == nil {
 		in.WeightVolumeMbps = collectVolumes(ctx, plugins)

@@ -1,5 +1,6 @@
 // Package portload reads a shared exchange port's telemetry row (#151). The
-// ops API and the commit and cost scorers judge the port by the same rules.
+// ops API, the commit and cost scorers, and the decision engine (#643) judge
+// the port by the same rules.
 package portload
 
 import (
