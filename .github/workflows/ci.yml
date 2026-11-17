@@ -95,6 +95,8 @@ jobs:
         run: scripts/check-changelog.sh
       - name: Documentation is ASCII
         run: scripts/check-ascii.sh
+      - name: Documentation paragraphs (warning only)
+        run: scripts/check-paragraphs.sh
 
   govulncheck:
     runs-on: ubuntu-latest
