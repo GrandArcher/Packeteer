@@ -171,8 +171,9 @@ The script reads `/routing/route` and `/routing/bgp/session` over REST and check
 6. SIGTERM withdraws it and Packeteer exits 0 after `withdrew all ... prefixes=1`.
 7. SIGSTOP (a frozen process that keeps TCP open): the route stays while the session is established and is gone when the 9s hold timer expires.
 8. SIGKILL: exit 137, the session closes and the route is gone within the hold time.
+9. Read-only router check (#637): a `read`-group user made for the run, Packeteer in observe with `preflight.router_check` type `routeros`. `import_filter` passes with the evidence on edge.rsc, then fails with the fix once the collector's `output.filter-chain` is a chain that only accepts. `/export` is the same before and after each read, and the login is in no API answer or log line.
 
-Locally without Docker: `CHR_ACCEL=tcg PACKETEER_BIN=/path/to/packeteer bash lab/e2e-chr.sh` (needs sudo for the tap, `qemu-system-x86_64`, `qemu-img`, `jq`, `unzip`, and Go). `CHR_CACHE=dir` keeps the downloaded zip between runs.
+Locally without Docker: `CHR_ACCEL=tcg PACKETEER_BIN=/path/to/packeteer bash lab/e2e-chr.sh` (needs sudo for the tap, `qemu-system-x86_64`, `qemu-img`, `jq`, `unzip`, `openssl`, and Go). `CHR_CACHE=dir` keeps the downloaded zip between runs.
 
 ## Router interop matrix (#53)
 

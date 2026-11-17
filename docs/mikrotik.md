@@ -78,6 +78,8 @@ RouterOS offers the graceful-restart capability (`gr` under `local.capabilities`
 - never receives an allowlisted prefix that is not in Packeteer's learned RIB
 - drops the route on flip-back, on SIGTERM (Packeteer withdraws first), on a frozen process (the router's 9s hold timer expires), and on SIGKILL (the session closes)
 
+The same job runs the read-only router check (`preflight.router_check` type `routeros`, GET requests only) as a `read`-group user: see [onboarding.md](onboarding.md#read-only-router-check).
+
 Once Packeteer's route is best, the router stops advertising the prefix to Packeteer (best path only), as described above; the improvement stays.
 
 FRR, Junos, and IOS equivalents: [frr.md](frr.md), [junos.md](junos.md), [cisco.md](cisco.md). The whole observe -> suggest -> inject sequence, with the checks at each step: [walkthrough.md](walkthrough.md).

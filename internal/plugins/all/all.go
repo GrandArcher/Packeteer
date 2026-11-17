@@ -47,6 +47,7 @@ import (
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/ribsource/bmp"            // BMP monitoring station (RIB source, leak source)
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/routercheck/bird"         // BIRD router check (read-only, preflight)
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/routercheck/frr"          // FRR router check (read-only, preflight)
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/routercheck/routeros"     // RouterOS router check (REST GET only, preflight)
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/rpki/ripestat"            // RIPEstat RPKI lookup, display only
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/rpki/rtr"                 // RTR RPKI origin validation source
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/rpki/vrpjson"             // HTTP JSON VRP origin validation source
