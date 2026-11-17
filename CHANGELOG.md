@@ -14,7 +14,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ## [1.5.0] - 2026-11-16
 
-v1.5 adds a field-report kit, an opt-in read-only router check (`preflight.router_check`), and kernel-side eBPF span tracking (`span` `ebpf_track`), and lab-proves RPKI-invalid only paths and federation push. Both new keys are off by default; the config stays `mode: observe`, injection off.
+v1.5 adds a field-report kit, an opt-in read-only router check (`preflight.router_check`), and kernel-side eBPF span tracking (`span` `ebpf_track`), and lab-proves RPKI-invalid only paths and federation push; both new keys are off by default, the shipped config stays `mode: observe`, and injection stays off by default.
 
 ### Added
 

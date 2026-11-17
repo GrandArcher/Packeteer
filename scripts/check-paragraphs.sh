@@ -5,6 +5,8 @@
 #   - docs/FEATURES.md table rows: one row per capability, status text stays in the row.
 #   - CHANGELOG.md is not scanned: check-changelog.sh caps entries at 200
 #     characters, and release summaries are prose paragraphs above them.
+# Lines of 1,100 to 1,500 characters (the /api/exchanges and potential-peers
+# rows, PeeringDB refresh, span/NET_RAW, router-check removal) are under the limit and stay.
 limit=1500
 git ls-files -z -- README.md 'docs/*.md' |
   xargs -0 awk -v limit="$limit" '
