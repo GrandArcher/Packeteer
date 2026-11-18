@@ -4,6 +4,10 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ## [Unreleased]
 
+### Added
+
+- `registry` CI job: `lab/e2e-registry.sh` runs the registry scan and confirmed pushes against in-lab IRR, VRP, PeeringDB and RIPE REST stand-ins on an internal network; no live registry (#657).
+
 ### Changed
 
 - `upgrade-release` CI job starts from the v1.6.0 image, pinned by digest, instead of v1.5.0; the downgrade step no longer needs the `routeros` key, which v1.6.0 accepts (#656).

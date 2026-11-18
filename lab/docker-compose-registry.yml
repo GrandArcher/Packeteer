@@ -1,0 +1,98 @@
+# Registry hygiene lab (#657, for #289): a simulated edge and eBGP transit
+# (the RPKI-invalid lab's), Packeteer in observe mode, and registry-stub,
+# the in-lab stand-in for the IRR (whois), RPKI (VRP JSON), PeeringDB, and
+# RIPE REST API. Documentation addresses (RFC 5737) and documentation/private
+# ASNs only.
+#
+# The lab network is internal: it has no route out, so nothing here can
+# reach RADB, ARIN, RIPE, PeeringDB, or any other public registry, and
+# lab/e2e-registry.sh checks that. The stand-in is a static Go binary the
+# script builds (lab/registrystub) and runs in a stock alpine container.
+# The script reads the ops API at 192.0.2.10:8080 (lab-only basic auth
+# below) and the stand-in's state at 192.0.2.40:8323/_lab/state.
+name: packeteer-e2e-registry
+x-frr: &frr
+  image: quay.io/frrouting/frr:10.2.4
+  privileged: true
+  entrypoint: ["/bin/sh", "/lab/frr-start.sh"]
+services:
+  registry-stub:
+    image: alpine:3.22
+    command:
+      - /stub/registrystub
+      - -cert=/certs/registry-stub.crt
+      - -key=/certs/registry-stub.key
+    environment:
+      # Lab-only values the stand-in accepts for a write; obviously fake.
+      STUB_RIPE_USER: lab-ripe-user
+      STUB_RIPE_PASSWORD: lab-ripe-password-not-a-secret
+      STUB_PEERINGDB_API_KEY: lab-peeringdb-key-not-a-secret
+    volumes:
+      - ${LAB_DIR:?LAB_DIR is set by lab/e2e-registry.sh}/stub:/stub:ro
+      - ${LAB_DIR}/certs:/certs:ro
+    networks:
+      lab:
+        ipv4_address: 192.0.2.40
+  edge:
+    <<: *frr
+    hostname: edge
+    environment:
+      FRR_EXPECT: "router bgp 64512;neighbor 192.0.2.10 soft-reconfiguration inbound"
+    volumes:
+      - ./frr-oi-edge:/etc/frr
+      - ./frr-start.sh:/lab/frr-start.sh:ro
+    networks:
+      lab:
+        ipv4_address: 192.0.2.254
+  transit-a:
+    <<: *frr
+    hostname: transit-a
+    environment:
+      FRR_EXPECT: "router bgp 64496;network 203.0.113.128/25;set as-path prepend 64500"
+    volumes:
+      - ./frr-oi-transit-a:/etc/frr
+      - ./frr-start.sh:/lab/frr-start.sh:ro
+    networks:
+      lab:
+        ipv4_address: 192.0.2.21
+  packeteer:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      args:
+        VERSION: e2e
+    image: packeteer:e2e
+    depends_on:
+      - edge
+      - registry-stub
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
+      - NET_BIND_SERVICE
+    environment:
+      PACKETEER_CONFIG: /etc/packeteer/config.yaml
+      PACKETEER_LOG_LEVEL: debug
+      # Lab-only credentials.
+      PACKETEER_HTTP_USER: lab
+      PACKETEER_HTTP_PASSWORD: lab-only
+      # The registry credentials come from the environment, never the config.
+      PACKETEER_RIPE_USER: lab-ripe-user
+      PACKETEER_RIPE_PASSWORD: lab-ripe-password-not-a-secret
+      PACKETEER_PEERINGDB_API_KEY: lab-peeringdb-key-not-a-secret
+      # The stand-in's per-run CA is the only root Packeteer trusts here.
+      SSL_CERT_FILE: /etc/packeteer/certs/ca.crt
+    volumes:
+      - ./packeteer-registry.yaml:/etc/packeteer/config.yaml:ro
+      - ${LAB_DIR}/certs:/etc/packeteer/certs:ro
+    networks:
+      lab:
+        ipv4_address: 192.0.2.10
+networks:
+  lab:
+    driver: bridge
+    # No route out of the lab: no live registry can be reached.
+    internal: true
+    ipam:
+      config:
+        - subnet: 192.0.2.0/24
+          gateway: 192.0.2.3

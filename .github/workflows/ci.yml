@@ -3071,6 +3071,21 @@ jobs:
       - name: Routinator lab (#627; invalid only path classed stale_roa with evidence, covered invalid route not raised, approved SLURM exception served as valid and the case clears, audit log, nothing announced, SIGTERM)
         run: bash lab/e2e-only-invalid.sh
 
+  registry:
+    # Registry hygiene (#289) against in-lab registry stand-ins only (#657).
+    # The lab network is internal: no live registry is reachable, and no
+    # registry credential or endpoint is used. Observe mode. One scan runs a
+    # minute after start.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+      - name: registry hygiene lab (#657; missing and stale route object, ROA gap, PeeringDB max-prefix and port-speed drift against stand-ins on an internal network, wrong digest refused, confirmed pushes reach the stand-in only and are audit-logged, nothing announced, SIGTERM)
+        run: bash lab/e2e-registry.sh
+
   chaos:
     # Chaos soak (#585), short profile: one pass of a session flap, a
     # transit-b probe-source failure, SIGTERM, and SIGKILL on the HA lab,
