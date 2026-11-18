@@ -251,10 +251,17 @@ flip() {
 	mv "$work/probes/.next" "$work/probes/state.yaml"
 }
 
-if [ -n "${PACKETEER_BIN:-}" ]; then
-	sed "s#/etc/packeteer/probes/#$work/probes/#" lab/chr/packeteer.yaml >"$work/packeteer.yaml"
-else
-	cp lab/chr/packeteer.yaml "$work/packeteer.yaml"
+# pk_config FILE makes FILE the config of the next pk_start.
+pk_config() {
+	if [ -n "${PACKETEER_BIN:-}" ]; then
+		sed "s#/etc/packeteer/probes/#$work/probes/#" "$1" >"$work/packeteer.yaml"
+	else
+		cp "$1" "$work/packeteer.yaml"
+	fi
+}
+
+pk_config lab/chr/packeteer.yaml
+if [ -z "${PACKETEER_BIN:-}" ]; then
 	image=${PACKETEER_IMAGE:-}
 	if [ -z "$image" ]; then
 		image=packeteer:chr
@@ -514,11 +521,7 @@ chr_script "/user add name=pk-steer group=pk-steer password=\"${steer_pw}\""
 rest '/user' | jq -e 'any(.[]; .name == "pk-steer" and .group == "pk-steer")' >/dev/null || fail "steerer user not created"
 export PACKETEER_ROUTER_USER=pk-steer PACKETEER_ROUTER_PASSWORD="$steer_pw"
 
-if [ -n "${PACKETEER_BIN:-}" ]; then
-	sed "s#/etc/packeteer/probes/#$work/probes/#" lab/chr/packeteer-nonbgp.yaml >"$work/packeteer.yaml"
-else
-	cp lab/chr/packeteer-nonbgp.yaml "$work/packeteer.yaml"
-fi
+pk_config lab/chr/packeteer-nonbgp.yaml
 flip prefer-b
 
 go build -o "$work/sendflow" ./lab/sendflow
@@ -529,15 +532,11 @@ flow_pid=$!
 steer_prefix=203.0.113.0/24
 steer_tag=packeteer-steer
 
-# steer_state prints present, absent, or bad for the tagged routes in
-# /ip/route, filtered here rather than by a REST query: present is exactly
-# one, ${steer_prefix} via transit-b's 192.0.2.2, active. Any other tagged
-# route (198.51.100.0/24 is not allowlisted) is bad.
+# steer_state prints present, absent, or bad for the tagged routes in the
+# last /ip/route read, filtered here rather than by a REST query: present
+# is exactly one, ${steer_prefix} via transit-b's 192.0.2.2, active. Any
+# other tagged route (198.51.100.0/24 is not allowlisted) is bad.
 steer_state() {
-	rest '/ip/route' -o "$work/ip-routes.json" 2>/dev/null && jq -e 'type == "array"' "$work/ip-routes.json" >/dev/null 2>&1 || {
-		echo unknown
-		return
-	}
 	jq -r --arg p "$steer_prefix" --arg t "$steer_tag" '
 		[.[] | select(.comment == $t)] as $r |
 		if ($r | length) == 0 then "absent"
@@ -546,15 +545,28 @@ steer_state() {
 }
 
 steer_is() {
-	local s
+	local s i
+	for i in 1 2 3 4 5; do
+		if rest '/ip/route' -o "$work/ip-routes.json" 2>/dev/null && jq -e 'type == "array"' "$work/ip-routes.json" >/dev/null 2>&1; then
+			break
+		fi
+		[ "$i" = 5 ] && fail "cannot read /ip/route from the CHR"
+		sleep 1
+	done
 	s=$(steer_state)
-	[ "$s" = bad ] && fail "CHR holds a wrong packeteer-steer route: $(jq -c '[.[] | select(.comment == "packeteer-steer")]' "$work/ip-routes.json")"
+	[ "$s" = bad ] && fail "CHR holds a wrong ${steer_tag} route: $(jq -c --arg t "$steer_tag" '[.[] | select(.comment == $t)]' "$work/ip-routes.json")"
 	[ "$s" = "$1" ]
 }
 
 pk_log_has() {
 	pk_logs >"$work/pk-nonbgp.log"
 	grep -Eq -- "$1" "$work/pk-nonbgp.log"
+}
+
+# Each run's log is kept for the login check at the end: pk_start removes
+# the previous container.
+pk_keep_log() {
+	pk_logs >>"$work/pk-nonbgp-all.log"
 }
 
 log "non-BGP: Packeteer in inject with nonbgp.install_routes, mikrotik steerer"
@@ -568,6 +580,7 @@ log "RouterOS holds ${steer_prefix} via 192.0.2.2, comment ${steer_tag}, active"
 log "non-BGP: SIGTERM removes the route before exit"
 pk_signal TERM
 pk_wait
+pk_keep_log
 [ "$pk_rc" = 0 ] || fail "Packeteer exit code $pk_rc after SIGTERM (non-BGP)"
 steer_is absent || fail "route left on the CHR after SIGTERM"
 pk_log_has "non-BGP: route removed.*prefix=${steer_prefix}" || fail "SIGTERM removal not logged"
@@ -579,8 +592,9 @@ wait_for "tagged route after the restart" 90 steer_is present
 log "non-BGP: SIGKILL leaves the route; the next start, with no flow, sweeps it"
 pk_signal KILL
 pk_wait
+pk_keep_log
 [ "$pk_rc" = 137 ] || fail "expected SIGKILL exit 137, got $pk_rc (non-BGP)"
-kill "$flow_pid"
+kill "$flow_pid" 2>/dev/null || true
 wait "$flow_pid" 2>/dev/null || true
 flow_pid=
 sleep 3
@@ -590,10 +604,11 @@ wait_for "start-up sweep of the killed run's route" 60 steer_is absent
 wait_for "sweep logged" 10 pk_log_has "removed a route left on the router by an earlier run.*prefix=${steer_prefix}"
 pk_signal TERM
 pk_wait
+pk_keep_log
 [ "$pk_rc" = 0 ] || fail "Packeteer exit code $pk_rc after the sweep run"
 steer_is absent || fail "a tagged route is on the CHR after the sweep run"
-if grep -lF -e "$steer_pw" "$work/pk-nonbgp.log" "$work/ip-routes.json"; then
-	fail "the steerer password is in the output above"
+if grep -lF -e "$steer_pw" -e pk-steer "$work/pk-nonbgp-all.log" "$work/ip-routes.json"; then
+	fail "the steerer login is in the output above"
 fi
 log "non-BGP: install, SIGTERM, SIGKILL then sweep on RouterOS"
 log "e2e-chr ok"

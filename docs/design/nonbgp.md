@@ -49,10 +49,10 @@ announces or installs a prefix that is not in the learned RIB view.
 - Lab: `lab/e2e-nonbgp.sh` (CI) installs a route with the `linux` steerer
   in a simulated router's network namespace, withdraws it on probe-source
   failure and SIGTERM, and proves that `kill -9` leaves it and the next start
-  sweeps it. The `chr` CI job (`lab/e2e-chr.sh`, #655) does the same with
-  the `mikrotik` steerer on a throwaway RouterOS CHR: the route is installed
-  with the `packeteer-steer` comment, removed on SIGTERM, left by `kill -9`,
-  and swept by the next start. Documentation prefixes and ASNs only.
+  sweeps it. The `chr` CI job (`lab/e2e-chr.sh`, #655) runs install, SIGTERM,
+  and `kill -9` then sweep with the `mikrotik` steerer on a throwaway
+  RouterOS CHR: the route is installed with the `packeteer-steer` comment,
+  removed on SIGTERM, left by `kill -9`, and swept by the next start. Documentation prefixes and ASNs only.
 - Steerers are in-process only. Router credentials come from environment
   variables and the URL must be https (http only to a loopback host).
 - No graceful restart is involved: there is no BGP session.

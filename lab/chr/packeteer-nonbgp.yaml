@@ -17,7 +17,7 @@ thresholds:
   min_loss_delta_pct: 1
   min_rtt_delta_ms: 15
 http:
-  listen: "127.0.0.1:18090"
+  listen: ""
 providers:
   - name: transit-a
     source_ip: 192.0.2.11
@@ -53,7 +53,3 @@ nonbgp:
       url: http://127.0.0.1:18780
       username_env: PACKETEER_ROUTER_USER
       password_env: PACKETEER_ROUTER_PASSWORD
-
-# Lab only: no sign-in, so the script can read the API (#328).
-auth:
-  enabled: false
