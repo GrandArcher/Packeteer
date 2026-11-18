@@ -79,3 +79,7 @@ jobs:
 ```
 
 An entry cannot outlive its signed expiry, so pruning removes exactly the stale ones.
+
+## Lab
+
+`lab/e2e-herd.sh` (#659) runs a local stand-in hub (`lab/herdhub`) for three members in observe mode: each publishes its entry with `herd entry`, `herd hub-check -list` builds the list, and the stand-in serves it over https with a tampered and an expired entry added. Each member refuses those two and pulls from the other two as hub peers. No public hub repository is created or used. See [lab/README.md](../lab/README.md).
