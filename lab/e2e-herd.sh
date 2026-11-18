@@ -1,11 +1,12 @@
 #!/bin/bash
-# Herd phase 1 (#260) with its hub and dashboard (#261, #296) proved in the
-# lab (#659) against three simulated members: member-a, member-b, and
-# member-c, each a Packeteer instance in observe mode in its own AS (64496,
-# 64497, 64498) behind its own FRR edge. Each edge learns 192.0.2.128/26
-# (path "64501 64510") and 192.0.2.192/27 (path "64501 64511") from one
-# upstream, which answers the members' ICMP probes at 192.0.2.130; the dark
-# host 192.0.2.200 answers none, so every member sees loss toward AS64511.
+# Herd phase 1 (#260) with its hub (#261) and the dashboard world view (#296)
+# proved in the lab (#659) against three simulated members: member-a,
+# member-b, and member-c, each a Packeteer instance in observe mode in its
+# own AS (64496, 64497, 64498) behind its own FRR edge. Each edge learns
+# 192.0.2.128/26 (path "64501 64510") and 192.0.2.192/27 (path
+# "64501 64511") from one upstream, which answers the members' ICMP
+# probes at 192.0.2.130; the dark host 192.0.2.200 answers none, so every
+# member sees loss toward AS64511.
 # Documentation addresses and ASNs only; keys and certificates are
 # generated for this run.
 #
@@ -56,8 +57,25 @@ keys_bin=$(mktemp)
 certs_bin=$(mktemp)
 trap 'rc=$?; if [ "$rc" -ne 0 ]; then echo "---- lab logs ----"; "${compose[@]}" logs --no-color || true; "${compose[@]}" ps || true; fi; "${compose[@]}" unpause member-b >/dev/null 2>&1 || true; "${compose[@]}" down -v --remove-orphans || true; rm -f "$keys_bin" "$certs_bin"; rm -rf "$lab_dir"; exit "$rc"' EXIT
 
+api() {
+	"${compose[@]}" exec -T "member-$1" wget -qO- "http://127.0.0.1:8080$2" 2>/dev/null || true
+}
+
+dump() {
+	local m
+	for m in a b c; do
+		api "$m" /api/herd >&2
+		echo >&2
+	done
+	for m in a b c; do
+		"${compose[@]}" exec -T "edge-$m" vtysh -c 'show bgp summary' -c 'show bgp ipv4 unicast' >&2 || true
+	done
+	"${compose[@]}" logs --no-color herd-hub member-a member-b member-c >&2 || true
+}
+
 fail() {
 	echo "FAIL: $*" >&2
+	dump
 	exit 1
 }
 
@@ -75,6 +93,7 @@ export PACKETEER_LAB_DIR="$lab_dir"
 
 declare -A ip=([a]=192.0.2.10 [b]=192.0.2.11 [c]=192.0.2.12 [d]=192.0.2.13)
 declare -A asn=([a]=64496 [b]=64497 [c]=64498 [d]=64499)
+# edge[d] names no router: d is never started, its config only validates.
 declare -A edge=([a]=192.0.2.254 [b]=192.0.2.253 [c]=192.0.2.252 [d]=192.0.2.251)
 declare -A country=([a]=US [b]=DE [c]=JP [d]=FR)
 
@@ -185,22 +204,6 @@ for i in $(seq 1 30); do
 done
 "${compose[@]}" up -d
 
-api() {
-	"${compose[@]}" exec -T "member-$1" wget -qO- "http://127.0.0.1:8080$2" 2>/dev/null || true
-}
-
-dump() {
-	local m
-	for m in a b c; do
-		api "$m" /api/herd >&2
-		echo >&2
-	done
-	for m in a b c; do
-		"${compose[@]}" exec -T "edge-$m" vtysh -c 'show bgp summary' -c 'show bgp ipv4 unicast' >&2 || true
-	done
-	"${compose[@]}" logs --no-color herd-hub member-a member-b member-c >&2 || true
-}
-
 # need_api member path jq-filter why [tries]: wait until the filter holds.
 need_api() {
 	local i tries=${5:-90}
@@ -210,10 +213,8 @@ need_api() {
 		fi
 		sleep 1
 	done
-	echo "FAIL: $4 (member-$1 $2 does not satisfy: $3)" >&2
 	api "$1" "$2" >&2
-	dump
-	exit 1
+	fail "$4 (member-$1 $2 does not satisfy: $3)"
 }
 
 # need_status member path code why: the ops API answers with this HTTP
@@ -223,10 +224,8 @@ need_status() {
 	local out
 	out=$("${compose[@]}" exec -T "member-$1" wget -S -O /dev/null "http://127.0.0.1:8080$2" 2>&1 || true)
 	if ! printf '%s\n' "$out" | grep -Eq "HTTP/1\.[01] $3 "; then
-		echo "FAIL: $4 (member-$1 $2 did not answer $3)" >&2
 		printf '%s\n' "$out" >&2
-		dump
-		exit 1
+		fail "$4 (member-$1 $2 did not answer $3)"
 	fi
 }
 
@@ -238,9 +237,7 @@ need_log() {
 		fi
 		sleep 1
 	done
-	echo "FAIL: $why (no $svc log matching: $pattern)" >&2
-	dump
-	exit 1
+	fail "$why (no $svc log matching: $pattern)"
 }
 
 # peers_of member: set urls (JSON strings) and asns to the other two members'.
@@ -272,8 +269,8 @@ for m in a b c; do
 done
 for m in a b c; do
 	got=$("${compose[@]}" exec -T "edge-$m" vtysh -c "show bgp ipv4 unicast neighbors ${ip[$m]} received-routes json" 2>/dev/null | jq -r '(.receivedRoutes // {}) | length' 2>/dev/null || true)
-	[ "$got" = 0 ] || { echo "FAIL: edge-$m received routes from member-$m ($got); herd members announce nothing" >&2; dump; exit 1; }
-	api "$m" /api/improvements | jq -e '(.improvements | length) == 0' >/dev/null || { echo "FAIL: member-$m has an improvement" >&2; dump; exit 1; }
+	[ "$got" = 0 ] || fail "edge-$m received routes from member-$m ($got); herd members announce nothing"
+	api "$m" /api/improvements | jq -e '(.improvements | length) == 0' >/dev/null || fail "member-$m has an improvement"
 done
 
 echo "3. per-vantage view: one vantage per member and country, never merged"
@@ -290,26 +287,23 @@ bash lab/ui-smoke.sh "http://${ip[a]}:8080/herd.html" \
 	'World view' '3 of 3 members see loss (pooled by origin AS)' \
 	'this node (AS64496), US, via AS64501, icmp' ', DE, via AS64501, icmp' ', JP, via AS64501, icmp' \
 	'>AS64497<' '>AS64498<' '>hub<' \
-	--absent 'No target shows loss' || { dump; exit 1; }
+	--absent 'No target shows loss' || fail "member-a /herd.html does not show the world view"
 
 echo "5. nothing on the never-shared list reaches a response, and preview equals a pull"
 for m in a b; do
 	prev=$(api "$m" '/api/herd/preview?origin_asn=64510&nonce=lab')
 	if [ -z "$prev" ] || ! printf '%s' "$prev" | jq -e '(.records | length) > 0 and .granularity == "origin_asn" and (.signature | length) > 0' >/dev/null; then
-		echo "FAIL: member-$m preview has no signed origin-level records: $prev" >&2
-		dump
-		exit 1
+		fail "member-$m preview has no signed origin-level records: $prev"
 	fi
 	for leak in 192.0.2.128 192.0.2.130 192.0.2.192 192.0.2.200 lab-upstream-secret '"prefix"' as_path; do
 		if printf '%s' "$prev" | grep -q "$leak"; then
-			echo "FAIL: member-$m preview contains $leak" >&2
 			printf '%s\n' "$prev" >&2
-			exit 1
+			fail "member-$m preview contains $leak"
 		fi
 	done
 done
 prevc=$(api c '/api/herd/preview?origin_asn=64510')
-printf '%s' "$prevc" | jq -e '(.records | length) == 0' >/dev/null || { echo "FAIL: member-c serves records for an excluded prefix: $prevc" >&2; dump; exit 1; }
+printf '%s' "$prevc" | jq -e '(.records | length) == 0' >/dev/null || fail "member-c serves records for an excluded prefix: $prevc"
 
 echo "6. the served-response audit records the pulls"
 need_log member-a 'action=herd\.serve target=.*nonce=' "member-a logged no served pull"
@@ -325,11 +319,9 @@ before=$(stamp a)
 sleep 8
 after=$(stamp a)
 if [ -z "$after" ] || [ "$after" = "$before" ]; then
-	echo "FAIL: member-a probe results did not advance while a peer was paused ($before -> $after)" >&2
-	dump
-	exit 1
+	fail "member-a probe results did not advance while a peer was paused ($before -> $after)"
 fi
-api a /readyz | jq -e '.ready == true' >/dev/null || { echo "FAIL: member-a is not ready with a paused peer" >&2; dump; exit 1; }
+api a /readyz | jq -e '.ready == true' >/dev/null || fail "member-a is not ready with a paused peer"
 "${compose[@]}" unpause member-b
 
 echo "8. SIGTERM: a member with herd on exits"
@@ -341,8 +333,6 @@ for i in $(seq 1 20); do
 	sleep 1
 done
 if [ "$("${compose[@]}" ps -q --status running member-a | wc -l)" -ne 0 ]; then
-	echo "FAIL: member-a did not exit on SIGTERM" >&2
-	dump
-	exit 1
+	fail "member-a did not exit on SIGTERM"
 fi
 echo "herd lab: ok"
