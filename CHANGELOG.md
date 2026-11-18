@@ -10,7 +10,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Changed
 
-- Herd lab (`lab/e2e-herd.sh`): members in their own ASes find each other through a local hub (`lab/herdhub`) only; tampered and expired entries refused; `/herd.html` world view shows all three (#659).
+- Herd lab (`lab/e2e-herd.sh`): members in own ASes find each other through a local hub (`lab/herdhub`) only; tampered and expired entries refused; `/herd.html` world view shows all three (#659).
 - `upgrade-release` CI job starts from the v1.6.0 image, pinned by digest, instead of v1.5.0; the downgrade step no longer needs the `routeros` key, which v1.6.0 accepts (#656).
 
 ### Fixed
