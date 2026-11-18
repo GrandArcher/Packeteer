@@ -3,8 +3,9 @@
 # (pinned by digest) with sqlite history, a second user, a pin, a pause and an
 # acknowledged alert, stops it, starts the image built from this tree on the
 # same packeteer-data volume, and checks what the 1.2 to 1.3 upgrade notes
-# promise. Then it does the documented downgrade (remove the keys the release
-# does not know, start the release image) on that volume. Complements
+# promise. Then it does the documented downgrade on that volume: it starts the
+# release image again (no config key is newer than the release, so none is
+# removed). Complements
 # lab/e2e-upgrade.sh, which upgrades a build of this tree against a fake
 # release server.
 #
