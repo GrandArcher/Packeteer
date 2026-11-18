@@ -47,6 +47,9 @@ A `*_env` key set through the config editor (raw YAML, the form, or a federation
 | `threat_feeds.feeds` `http` | `PACKETEER_FEED_` |
 | `external_policy` | `PACKETEER_POLICY_` |
 | `nonbgp.steerer` `mikrotik` | `PACKETEER_ROUTER_` |
+| `preflight.router_check` `frr` | `PACKETEER_FRR_` |
+| `preflight.router_check` `bird` | `PACKETEER_BIRD_` |
+| `preflight.router_check` `routeros` | `PACKETEER_ROUTER_READ_` |
 
 Any other plugin takes only names the running config already uses there.
 

@@ -4,6 +4,9 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ## [Unreleased]
 
+### Added
+
+- Settings forms for `rpki` (with `only_invalid`), `registry`, `mcp`, `verify`, `herd` and `preflight.router_check`; never mode, allowlist, announcer, SLURM, `push_enabled` or backout (#670).
 ### Changed
 
 - `upgrade-release` CI job starts from the v1.7.0 image, pinned by digest, instead of v1.6.0; the downgrade step still removes no key (#669).

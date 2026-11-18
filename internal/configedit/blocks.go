@@ -6,6 +6,7 @@ import (
 	"math"
 	"net"
 	"net/netip"
+	"net/url"
 	"reflect"
 	"slices"
 	"strconv"
@@ -31,8 +32,8 @@ import (
 type Kind string
 
 // Field kinds. A value in Values is a string for string, int, float,
-// duration, enum, env, and time; a bool for bool; a []string for list and
-// cidrs; a []Values for rows; and a Values (nil when absent) for group.
+// duration, enum, env, and time; a bool for bool; a []string for list, ints,
+// and cidrs; a []Values for rows; and a Values (nil when absent) for group.
 const (
 	KindString   Kind = "string"
 	KindInt      Kind = "int"
@@ -42,6 +43,7 @@ const (
 	KindEnum     Kind = "enum"
 	KindList     Kind = "list"
 	KindCIDRs    Kind = "cidrs"
+	KindInts     Kind = "ints"
 	KindTime     Kind = "time"
 	KindRows     Kind = "rows"
 	KindGroup    Kind = "group"
@@ -76,6 +78,10 @@ type Field struct {
 	// DefaultTrue is a bool the loader reads as true when the key is
 	// absent. Writing true then deletes the key.
 	DefaultTrue bool `json:"default_true,omitempty"`
+	// StartOn is a bool the page shows ticked when it adds the block, so
+	// turning a block on turns it on. The loader still reads an absent key
+	// as false.
+	StartOn bool `json:"start_on,omitempty"`
 	// For names the scorer types a knob belongs to. Another scorer's
 	// strict decoder refuses the key, so a switch drops it.
 	For []string `json:"for,omitempty"`
@@ -132,6 +138,39 @@ var checkers = map[string]func(string) error{
 		_, err := config.HTTPSHostURL(s)
 		return err
 	},
+	"envname": func(s string) error {
+		if !envVarName.MatchString(s) {
+			return fmt.Errorf("%q must be an environment variable name: letters, digits, and underscores", s)
+		}
+		return nil
+	},
+	// baseurl is a plugin's http(s) address. It may not carry a login: the
+	// credentials of a read-only reader come from the environment.
+	"baseurl": func(s string) error {
+		u, err := url.Parse(s)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+			return fmt.Errorf("%q must be http:// or https:// with a host, and no login or query", s)
+		}
+		return nil
+	},
+	"herdurl": func(s string) error {
+		if err := config.CheckHerdURL(s); err != nil {
+			return fmt.Errorf("%q %v", s, err)
+		}
+		return nil
+	},
+	"herdkey": func(s string) error {
+		if _, err := config.ParseHerdKey(s); err != nil {
+			return fmt.Errorf("%q %v", s, err)
+		}
+		return nil
+	},
+	"country": func(s string) error {
+		if len(s) != 2 || s[0] < 'A' || s[0] > 'Z' || s[1] < 'A' || s[1] > 'Z' {
+			return fmt.Errorf("%q must be an ISO 3166-1 alpha-2 code in capitals", s)
+		}
+		return nil
+	},
 	"abspath": func(s string) error {
 		if !strings.HasPrefix(s, "/") || strings.ContainsAny(s, "\r\n") {
 			return fmt.Errorf("%q must be an absolute path", s)
@@ -170,7 +209,7 @@ func readField(m *yaml.Node, f Field) any {
 			return f.DefaultTrue
 		}
 		return b
-	case KindList, KindCIDRs:
+	case KindList, KindInts, KindCIDRs:
 		if n != nil && n.Kind == yaml.ScalarNode && n.Tag != "!!null" {
 			return []string{n.Value}
 		}
@@ -250,7 +289,7 @@ func normalizeField(path string, f Field, raw any) (any, error) {
 			return strings.EqualFold(strings.TrimSpace(b), "true"), nil
 		}
 		return bad()
-	case KindList, KindCIDRs:
+	case KindList, KindInts, KindCIDRs:
 		switch l := raw.(type) {
 		case nil:
 			return []string{}, nil
@@ -362,7 +401,7 @@ func validateField(path string, f Field, val any) error {
 	switch f.Kind {
 	case KindBool:
 		return nil
-	case KindList, KindCIDRs:
+	case KindList, KindInts, KindCIDRs:
 		return validateList(path, f, val.([]string))
 	case KindRows:
 		return validateRows(path, f, val.([]Values))
@@ -449,6 +488,15 @@ func validateList(path string, f Field, list []string) error {
 			return fieldErr(at, "duplicate value %s", s)
 		}
 		seen[s] = true
+		if f.Kind == KindInts {
+			n, err := strconv.ParseInt(s, 10, 64)
+			if err != nil || !within(float64(n), f) {
+				return fieldErr(at, "%q must be a whole number%s", s, bounds(f, ""))
+			}
+		}
+		if len(f.Options) > 0 && !slices.Contains(f.Options, s) {
+			return fieldErr(at, "%q is invalid (want %s)", s, strings.Join(f.Options, ", "))
+		}
 		if f.Kind == KindCIDRs {
 			p, err := netip.ParsePrefix(s)
 			if err != nil || p != p.Masked() {
@@ -522,7 +570,9 @@ func writeField(m *yaml.Node, f Field, val any) error {
 			setPath(m, f.Key, "false", "!!bool")
 		}
 	case KindList, KindCIDRs:
-		setPathList(m, f.Key, val.([]string))
+		setPathList(m, f.Key, val.([]string), "!!str")
+	case KindInts:
+		setPathList(m, f.Key, val.([]string), "!!int")
 	case KindRows:
 		return writeRows(m, f, val.([]Values))
 	case KindGroup:
@@ -583,7 +633,7 @@ func deletePath(m *yaml.Node, parts []string) {
 	}
 }
 
-func setPathList(m *yaml.Node, key string, vals []string) {
+func setPathList(m *yaml.Node, key string, vals []string, tag string) {
 	parts := strings.Split(key, ".")
 	if len(vals) == 0 {
 		deletePath(m, parts)
@@ -592,7 +642,7 @@ func setPathList(m *yaml.Node, key string, vals []string) {
 	for _, p := range parts[:len(parts)-1] {
 		m = ensureMapping(m, p)
 	}
-	setStringList(m, parts[len(parts)-1], vals, "!!str")
+	setStringList(m, parts[len(parts)-1], vals, tag)
 }
 
 func writeRows(m *yaml.Node, f Field, rows []Values) error {

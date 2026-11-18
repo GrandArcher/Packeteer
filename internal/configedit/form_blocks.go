@@ -127,6 +127,9 @@ func (f Form) validateBlocks(cur Form) error {
 		if b.ID == "inbound_announcer" && v != nil && (f.Inbound == nil || !f.Inbound.Enabled) {
 			return fieldErr("inbound.announcer", "needs the inbound block on: turn it on above, or the announcer would be the only key under inbound")
 		}
+		if b.ID == "rpki_only_invalid" && v != nil && f.Blocks["rpki"] == nil {
+			return fieldErr("rpki.only_invalid", "needs the RPKI block on: turn it on above, or only_invalid would be the only key under rpki")
+		}
 		if b.ID == "scorer" && !slices.Contains(scorerTypes, f.ScorerType) {
 			return fmt.Errorf("%w: scorer.config: this file uses scorer type %s, which the form does not edit. Change it in the raw YAML", ErrForm, f.ScorerType)
 		}

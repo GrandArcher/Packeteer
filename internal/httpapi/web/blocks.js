@@ -30,8 +30,8 @@ function loadSchema() {
 function blankValues(fields) {
   var v = {_key: ""};
   fields.forEach(function (f) {
-    if (f.kind === "bool") v[f.key] = !!f.default_true;
-    else if (f.kind === "list" || f.kind === "cidrs" || f.kind === "rows") v[f.key] = [];
+    if (f.kind === "bool") v[f.key] = !!f.default_true || !!f.start_on;
+    else if (f.kind === "list" || f.kind === "ints" || f.kind === "cidrs" || f.kind === "rows") v[f.key] = [];
     else if (f.kind === "group") v[f.key] = null;
     else v[f.key] = "";
   });
@@ -179,6 +179,9 @@ function renderField(parent, f, obj, path, rerender) {
   case "list":
     renderStrings(box, f, obj, help, check, rerender);
     break;
+  case "ints":
+    renderStrings(box, f, obj, help, intCheck(f), rerender);
+    break;
   case "cidrs":
     bindCIDRs(box, f.label, obj, f.key, help, f.key, rerender);
     break;
@@ -191,6 +194,18 @@ function renderField(parent, f, obj, path, rerender) {
   default:
     renderText(box, f, obj, help, check);
   }
+}
+
+// intCheck refuses a list item that is not a whole number inside the
+// field's bounds, as the server does.
+function intCheck(f) {
+  return function (v) {
+    var n = Number(v);
+    if (!/^\d+$/.test(v) || (f.min != null && n < f.min) || (f.max != null && n > f.max)) {
+      return "Enter a whole number" + (f.min != null && f.max != null ? " from " + f.min + " to " + f.max : "") + ".";
+    }
+    return "";
+  };
 }
 
 function renderText(box, f, obj, help, check) {
@@ -246,7 +261,7 @@ function renderTime(box, f, obj, help) {
 function renderStrings(box, f, obj, help, check, rerender) {
   var list = obj[f.key] || [];
   obj[f.key] = list;
-  var options = suggestFor(f.key);
+  var options = f.options && f.options.length ? f.options.map(function (o) { return [o, o]; }) : suggestFor(f.key);
   var wrap = el("div", "g-strings");
   list.forEach(function (v, i) {
     var row = el("div", "row");

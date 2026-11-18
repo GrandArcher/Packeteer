@@ -448,6 +448,7 @@ scorer:
 # non-empty cache answers. avoid_invalid only refuses a new improvement onto
 # an invalid path. display_fallback (ripestat) labels the prefix card only,
 # when no source is fresh, and sends each looked-up prefix to RIPE NCC.
+# Settings has a form for this block (docs/ui.md).
 # rpki:
 #   enabled: false
 #   avoid_invalid: false
@@ -516,6 +517,7 @@ scorer:
 # push_enabled, needs an admin to confirm each diff, and reads credentials
 # only from PACKETEER_PEERINGDB_API_KEY, PACKETEER_RIPE_USER, and
 # PACKETEER_RIPE_PASSWORD. as_set and the IRR checks need irr enabled.
+# Settings has a form for this block (docs/ui.md).
 # registry:
 #   enabled: false
 #   asns: [64496]
@@ -690,6 +692,7 @@ storage:
 # with what it runs. Off by default. Point it only at a lab router or one you
 # chose; it never writes to the router. The socket path (and for bird the
 # bird.conf path) comes from the environment, never this file.
+# Settings has a form for this block (docs/ui.md).
 # preflight:
 #   router_check:
 #     type: frr                          # or bird, routeros
@@ -891,6 +894,7 @@ plugin_dir: /etc/packeteer/plugins
 # unless write_tools is true and the token has scope "mcp:write". A pin is
 # announced only in inject, under a static rule's rails. Rollback:
 # enabled: false.
+# Settings has a form for this block (docs/ui.md).
 # mcp:
 #   enabled: true
 #   # write_tools: false
@@ -1072,6 +1076,7 @@ plugin_dir: /etc/packeteer/plugins
 # (a telemetry plugin) must show the traffic moved: verified, partial, or not
 # moved, in the UI, /api/verification and events. backout lists the directions
 # whose steer is undone when it did not move; [] only reports. Needs a restart.
+# Settings has a form for this block (docs/ui.md).
 # verify:
 #   enabled: true
 #   outbound_window: 5m
@@ -1087,6 +1092,7 @@ plugin_dir: /etc/packeteer/plugins
 # (never names, host addresses, or usage) with the static peers you pin by
 # key; advisory only, never read by a decision, never announces. Needs
 # storage type sqlite and bgp.neighbors. Changes need a restart.
+# Settings has a form for this block (docs/ui.md).
 # herd:
 #   enabled: true
 #   share:
