@@ -1,10 +1,16 @@
-# Herd lab (#260). Three members, each a Packeteer instance in observe mode,
-# behind one FRR edge that learns 192.0.2.128/26 (path "64501 64510") from a
-# simulated upstream. The upstream owns 192.0.2.130, so real ICMP probes are
-# answered. Documentation addresses (RFC 5737) and documentation or private
-# ASNs only. Brought up by lab/e2e-herd.sh, which sets PACKETEER_LAB_DIR:
-# keys/ holds each member's herd key (from lab/mkherdkeys) and a.yaml,
-# b.yaml, c.yaml the rendered configs.
+# Herd lab (#260, #659). Three members, each a Packeteer instance in observe
+# mode in its own AS (64496, 64497, 64498) behind its own FRR edge. Each edge
+# learns 192.0.2.128/26 (path "64501 64510") and 192.0.2.192/27 (path
+# "64501 64511") from one simulated upstream. The upstream owns 192.0.2.130,
+# so probes of the first are answered; dark owns 192.0.2.200 in the second
+# and answers no ping, so every member sees loss there. herd-hub is the
+# local hub (lab/herdhub), not a public repository: members find each other
+# only through the list it serves over https, trusted through the lab CA in
+# SSL_CERT_FILE. Documentation addresses (RFC 5737) and documentation ASNs
+# only. Brought up by lab/e2e-herd.sh, which sets PACKETEER_LAB_DIR: keys/
+# holds each member's herd key (from lab/mkherdkeys), a.yaml, b.yaml, c.yaml
+# the rendered configs, certs/ the lab CA and hub certificate (lab/mkcerts),
+# and hub/ the hub binary and its list.
 name: packeteer-e2e-herd
 x-frr: &frr
   image: quay.io/frrouting/frr:10.2.4
@@ -20,62 +26,106 @@ x-member: &member
   cap_add:
     - NET_RAW
     - NET_ADMIN
-  depends_on:
-    - edge
+  environment:
+    PACKETEER_CONFIG: /etc/packeteer/config.yaml
+    PACKETEER_LOG_LEVEL: debug
+    SSL_CERT_FILE: /etc/packeteer/certs/ca.crt
 services:
+  herd-hub:
+    image: alpine:3.22
+    command: ["/hub/herdhub", "-cert", "/certs/herd-hub.crt", "-key", "/certs/herd-hub.key", "-list", "/hub/herd.json"]
+    volumes:
+      - ${PACKETEER_LAB_DIR}/hub:/hub:ro
+      - ${PACKETEER_LAB_DIR}/certs:/certs:ro
+    networks:
+      lab:
+        ipv4_address: 192.0.2.20
+  dark:
+    image: alpine:3.22
+    command: ["sleep", "infinity"]
+    sysctls:
+      net.ipv4.icmp_echo_ignore_all: 1
+    networks:
+      lab:
+        ipv4_address: 192.0.2.200
   upstream:
     <<: *frr
     hostname: upstream
     entrypoint: ["/bin/sh", "-c", "ip addr add 192.0.2.130/32 dev lo && exec /bin/sh /lab/frr-start.sh"]
     environment:
-      FRR_EXPECT: "router bgp 64501;network 192.0.2.128/26;route-map behind-origin out"
+      FRR_EXPECT: "router bgp 64501;network 192.0.2.128/26;network 192.0.2.192/27;route-map behind-origin out"
     volumes:
       - ./frr-herd-upstream:/etc/frr
       - ./frr-start.sh:/lab/frr-start.sh:ro
     networks:
       lab:
         ipv4_address: 192.0.2.21
-  edge:
+  edge-a:
     <<: *frr
-    hostname: edge
+    hostname: edge-a
     environment:
-      FRR_EXPECT: "router bgp 64512;neighbor members peer-group;route-map from-members in"
+      FRR_EXPECT: "router bgp 64496;neighbor 192.0.2.10 remote-as 64496;route-map from-member in"
     volumes:
-      - ./frr-herd-edge:/etc/frr
+      - ./frr-herd-edge-a:/etc/frr
       - ./frr-start.sh:/lab/frr-start.sh:ro
     networks:
       lab:
         ipv4_address: 192.0.2.254
+  edge-b:
+    <<: *frr
+    hostname: edge-b
+    environment:
+      FRR_EXPECT: "router bgp 64497;neighbor 192.0.2.11 remote-as 64497;route-map from-member in"
+    volumes:
+      - ./frr-herd-edge-b:/etc/frr
+      - ./frr-start.sh:/lab/frr-start.sh:ro
+    networks:
+      lab:
+        ipv4_address: 192.0.2.253
+  edge-c:
+    <<: *frr
+    hostname: edge-c
+    environment:
+      FRR_EXPECT: "router bgp 64498;neighbor 192.0.2.12 remote-as 64498;route-map from-member in"
+    volumes:
+      - ./frr-herd-edge-c:/etc/frr
+      - ./frr-start.sh:/lab/frr-start.sh:ro
+    networks:
+      lab:
+        ipv4_address: 192.0.2.252
   member-a:
     <<: *member
-    environment:
-      PACKETEER_CONFIG: /etc/packeteer/config.yaml
-      PACKETEER_LOG_LEVEL: debug
+    depends_on:
+      - edge-a
+      - herd-hub
     volumes:
       - ${PACKETEER_LAB_DIR}/a.yaml:/etc/packeteer/config.yaml:ro
       - ${PACKETEER_LAB_DIR}/keys:/etc/packeteer/herd:ro
+      - ${PACKETEER_LAB_DIR}/certs/ca.crt:/etc/packeteer/certs/ca.crt:ro
     networks:
       lab:
         ipv4_address: 192.0.2.10
   member-b:
     <<: *member
-    environment:
-      PACKETEER_CONFIG: /etc/packeteer/config.yaml
-      PACKETEER_LOG_LEVEL: debug
+    depends_on:
+      - edge-b
+      - herd-hub
     volumes:
       - ${PACKETEER_LAB_DIR}/b.yaml:/etc/packeteer/config.yaml:ro
       - ${PACKETEER_LAB_DIR}/keys:/etc/packeteer/herd:ro
+      - ${PACKETEER_LAB_DIR}/certs/ca.crt:/etc/packeteer/certs/ca.crt:ro
     networks:
       lab:
         ipv4_address: 192.0.2.11
   member-c:
     <<: *member
-    environment:
-      PACKETEER_CONFIG: /etc/packeteer/config.yaml
-      PACKETEER_LOG_LEVEL: debug
+    depends_on:
+      - edge-c
+      - herd-hub
     volumes:
       - ${PACKETEER_LAB_DIR}/c.yaml:/etc/packeteer/config.yaml:ro
       - ${PACKETEER_LAB_DIR}/keys:/etc/packeteer/herd:ro
+      - ${PACKETEER_LAB_DIR}/certs/ca.crt:/etc/packeteer/certs/ca.crt:ro
     networks:
       lab:
         ipv4_address: 192.0.2.12

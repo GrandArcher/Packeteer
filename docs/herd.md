@@ -53,4 +53,4 @@ Outside intelligence is a separate panel, opt-in per source under `herd.outside`
 
 ## Lab
 
-`lab/e2e-herd.sh` runs three members (FRR edge plus Packeteer each) on documentation prefixes and ASNs with generated keys. See [lab/README.md](../lab/README.md). Labs never talk to a real herd and configure no hub.
+`lab/e2e-herd.sh` runs three members (FRR edge plus Packeteer each, one AS each) on documentation prefixes and ASNs with generated keys (#659). They find each other only through a local hub (`lab/herdhub`) that serves the list `packeteer herd hub-check` built from their entries, plus a tampered and an expired entry every member refuses; it is not a public hub repository, and labs never talk to a real herd. The run also checks the world view on `/herd.html`. See [lab/README.md](../lab/README.md).
