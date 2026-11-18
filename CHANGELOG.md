@@ -4,6 +4,10 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ## [Unreleased]
 
+### Added
+
+- Settings forms for the `rpki` (with `only_invalid`), `registry`, `mcp`, `verify`, `herd` and `preflight.router_check` blocks; never mode, allowlist, announcer, SLURM, `push_enabled` or backout (#670).
+
 ## [1.7.0] - 2026-11-18
 
 The v1.7 release lab-proves the RouterOS non-BGP steerer, registry hygiene, and the herd hub and dashboard, adds the federation settings form, points the upgrade test at v1.6.0, and hardens CI flakes, with no new config key and the flow target discovery row moved to done (138 done); the shipped config stays `mode: observe` and injection stays off by default.

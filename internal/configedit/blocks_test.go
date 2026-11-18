@@ -947,8 +947,10 @@ func sampleValues(fields []Field) Values {
 		switch f.Kind {
 		case KindBool:
 			v[f.Key] = !f.DefaultTrue
-		case KindList, KindCIDRs:
-			if f.Kind == KindCIDRs {
+		case KindList, KindInts, KindCIDRs:
+			if f.Kind == KindInts {
+				v[f.Key] = []string{"64496", "64497"}
+			} else if f.Kind == KindCIDRs {
 				v[f.Key] = []string{"192.0.2.0/24", "198.51.100.0/24"}
 			} else {
 				v[f.Key] = []string{"192.0.2.1", "192.0.2.2"}
