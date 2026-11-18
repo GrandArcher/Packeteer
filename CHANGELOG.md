@@ -6,6 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Added
 
+- `chr` CI job runs non-BGP mode with the `mikrotik` steerer on the throwaway CHR: tagged static route installed, removed on SIGTERM, swept after `kill -9` (#655).
 - `registry` CI job: `lab/e2e-registry.sh` runs the registry scan and confirmed pushes against in-lab IRR, VRP, PeeringDB and RIPE REST stand-ins on an internal network; no live registry (#657).
 
 ### Changed
@@ -14,6 +15,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Fixed
 
+- `mikrotik` steerer sends the RouterOS row id (`*` and hex) unescaped in PATCH and DELETE; RouterOS rejected the percent-encoded `*`, so SIGTERM left the route (#655).
 - Fuzz CI reruns a target only on the engine's own deadline (`lab/fuzzrun`); HA lab lease `ttl` 6s survives one slow tick; known-flake list in CONTRIBUTING (#660).
 
 ## [1.6.0] - 2026-11-17

@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/outbound"
@@ -77,6 +78,18 @@ func path(p netip.Prefix) string {
 		return "/ipv6/route"
 	}
 	return "/ip/route"
+}
+
+// doItem sends a request for one row. RouterOS reads a row id only as
+// written, "*" and hex digits, and rejects a percent-encoded "*" (400,
+// invalid resource identifier), so the id goes into the path unescaped.
+// Any other id is refused, so a value from the router cannot change the
+// request path.
+func (s *Steerer) doItem(ctx context.Context, method string, p netip.Prefix, id string, body any) error {
+	if len(id) < 2 || id[0] != '*' || strings.Trim(id[1:], "0123456789abcdefABCDEF") != "" {
+		return fmt.Errorf("routeros %s %s: route id %q is not \"*\" and hex digits", method, path(p), id)
+	}
+	return s.do(ctx, method, path(p)+"/"+id, body, nil)
 }
 
 func (s *Steerer) do(ctx context.Context, method, p string, body any, out any) error {
@@ -174,11 +187,11 @@ func (s *Steerer) Install(ctx context.Context, r plugin.SteerRoute) error {
 	// A second tagged row would keep the old gateway and split the traffic.
 	for _, extra := range rows {
 		if extra.ID != mine.ID {
-			errs = append(errs, s.do(ctx, http.MethodDelete, path(p)+"/"+url.PathEscape(extra.ID), nil, nil))
+			errs = append(errs, s.doItem(ctx, http.MethodDelete, p, extra.ID, nil))
 		}
 	}
 	if mine.Gateway != r.NextHop.String() {
-		errs = append(errs, s.do(ctx, http.MethodPatch, path(p)+"/"+url.PathEscape(mine.ID), map[string]string{"gateway": r.NextHop.String()}, nil))
+		errs = append(errs, s.doItem(ctx, http.MethodPatch, p, mine.ID, map[string]string{"gateway": r.NextHop.String()}))
 	}
 	return errors.Join(errs...)
 }
@@ -194,7 +207,7 @@ func (s *Steerer) Remove(ctx context.Context, p netip.Prefix) error {
 		if r.Comment != Tag {
 			continue
 		}
-		errs = append(errs, s.do(ctx, http.MethodDelete, path(p)+"/"+url.PathEscape(r.ID), nil, nil))
+		errs = append(errs, s.doItem(ctx, http.MethodDelete, p, r.ID, nil))
 	}
 	return errors.Join(errs...)
 }
