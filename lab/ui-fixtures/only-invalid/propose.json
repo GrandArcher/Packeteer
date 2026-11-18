@@ -56,6 +56,11 @@
         "name": "hijack_feeds",
         "points": 0,
         "detail": "no hijack_feeds configured"
+      },
+      {
+        "name": "origin_agreement",
+        "points": 0,
+        "detail": "no origin_collectors configured"
       }
     ],
     "paths": [

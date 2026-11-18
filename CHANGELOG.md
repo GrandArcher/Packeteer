@@ -6,7 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Added
 
-- `rpki.only_invalid.origin_collectors` (`origin_collector` plugin `json`) adds an `origin_agreement` signal; the `origin-agreement` CI job proves it against RIS and RouteViews stand-ins on an internal network (#671).
+- `rpki.only_invalid.origin_collectors` (`origin_collector` plugin `json`) adds an `origin_agreement` signal; the `origin-agreement` CI job proves it on RIS and RouteViews stand-ins (#671).
 
 ### Changed
 
