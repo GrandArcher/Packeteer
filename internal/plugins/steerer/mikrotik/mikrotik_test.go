@@ -67,8 +67,7 @@ func (f *fakeRouterOS) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"error":400,"message":"Bad Request","detail":"failure to create route"}`))
 		return
 	}
-	// RouterOS matches the id as written and rejects a percent-encoded
-	// "*", as the CHR lab showed.
+	// RouterOS matches the id as written and rejects a percent-encoded "*".
 	if strings.Contains(strings.ToUpper(r.URL.EscapedPath()), "%2A") {
 		w.WriteHeader(http.StatusBadRequest)
 		_, _ = w.Write([]byte(`{"error":400,"message":"Bad Request","detail":"missing or invalid resource identifier"}`))
@@ -246,7 +245,7 @@ func TestInstallRefusesAHandWrittenRoute(t *testing.T) {
 func TestRowIDGoesIntoThePathUnescapedAndIsChecked(t *testing.T) {
 	rt := newFakeRouterOS()
 	id := rt.add("/ip/route", "203.0.113.0/24", "192.0.2.1", Tag)
-	bad := rt.add("/ip/route", "198.51.100.0/24", "192.0.2.1", Tag)
+	rt.add("/ip/route", "198.51.100.0/24", "192.0.2.1", Tag)
 	rt.rows["/ip/route"][1][".id"] = "*1/../../system/reset"
 	s := newSteerer(t, rt)
 	if err := s.Remove(context.Background(), pfx("203.0.113.0/24")); err != nil {
@@ -258,7 +257,7 @@ func TestRowIDGoesIntoThePathUnescapedAndIsChecked(t *testing.T) {
 	n := len(rt.calls)
 	err := s.Remove(context.Background(), pfx("198.51.100.0/24"))
 	if err == nil || !strings.Contains(err.Error(), "is not") {
-		t.Fatalf("err = %v, want the id refused (row was %s)", err, bad)
+		t.Fatalf("err = %v, want the malformed id refused", err)
 	}
 	for _, c := range rt.calls[n:] {
 		if !strings.HasPrefix(c, "GET ") {
