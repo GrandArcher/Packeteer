@@ -8,7 +8,7 @@
 // members fetched the list. It is a lab tool, not a public hub, and it
 // announces nothing.
 //
-// Usage: herdhub -cert FILE -key FILE -list FILE [-listen ADDR]
+// Usage: herdhub -cert FILE -key FILE -list FILE
 package main
 
 import (
@@ -20,7 +20,6 @@ import (
 )
 
 func main() {
-	listen := flag.String("listen", ":8443", "address to listen on")
 	cert := flag.String("cert", "", "TLS certificate")
 	key := flag.String("key", "", "TLS key")
 	list := flag.String("list", "", "hub list document to serve")
@@ -28,7 +27,7 @@ func main() {
 	if *cert == "" || *key == "" || *list == "" {
 		log.Fatal("herdhub: -cert, -key, and -list are required")
 	}
-	srv := &http.Server{Addr: *listen, Handler: handler(*list, log.Default()), ReadHeaderTimeout: 10 * time.Second}
+	srv := &http.Server{Addr: ":8443", Handler: handler(*list, log.Default()), ReadHeaderTimeout: 10 * time.Second}
 	log.Fatal(srv.ListenAndServeTLS(*cert, *key))
 }
 

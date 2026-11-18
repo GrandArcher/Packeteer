@@ -69,7 +69,7 @@ CGO_ENABLED=0 GOOS=linux GOARCH="$(go env GOARCH)" go build -o "$lab_dir/hub/her
 "$certs_bin" "$lab_dir/certs" herd-hub
 # d is never started: its key signs the expired entry.
 "$keys_bin" "$lab_dir/keys" a b c d >/dev/null
-# The containers read these as other users; the keys protect nothing.
+# A rootless Docker reads these as another user; the keys protect nothing.
 chmod 755 "$lab_dir" "$lab_dir/keys" "$lab_dir/certs" "$lab_dir/hub" "$lab_dir/hub/herdhub"
 export PACKETEER_LAB_DIR="$lab_dir"
 
@@ -169,7 +169,7 @@ if out=$(hub_check "$lab_dir/bad" /hub 2>&1); then
 fi
 printf '%s\n' "$out" | grep -q "^${asn[b]}.json: entry asn ${asn[b]}: signature does not verify$" || fail "hub-check did not refuse the tampered entry: $out"
 printf '%s\n' "$out" | grep -q "^${asn[d]}.json: entry asn ${asn[d]}: expired at " || fail "hub-check did not refuse the expired entry: $out"
-# The hub is not trusted: it serves the bad entries too, and every node must refuse them.
+# The hub cannot alter an entry: it serves the bad entries too, and every node must refuse them.
 jq --slurpfile t "$lab_dir/bad/${asn[b]}.json" --slurpfile x "$lab_dir/bad/${asn[d]}.json" '.entries += $t + $x' \
 	"$lab_dir/repo/herd.json" >"$lab_dir/hub/herd.json"
 chmod 644 "$lab_dir/hub/herd.json"

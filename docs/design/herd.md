@@ -619,7 +619,8 @@ Everything here is advisory.
 6. Herd plugins run in-process only, like the federation plugin; they
    never announce.
 7. CI and labs never talk to a real herd: labs run their own members
-   with documentation prefixes and ASNs, and no seed is configured.
+   with documentation prefixes and ASNs, and no real seed or hub is
+   configured. The herd lab's hub is a local stand-in (`lab/herdhub`).
 8. Herd failure or overload never affects routing, probing, or the
    announcer. If herd is stuck, out of budget, or crashed, the instance
    behaves exactly as if herd were off.
