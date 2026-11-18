@@ -8,7 +8,7 @@ import (
 
 // The blocks of the Settings forms of #670 are read once at start, so Preview
 // lists each one as a restart key and a reload refuses them (the page shows
-// the list before Save).
+// the list before Save). Herd is covered by TestHerdChangeNeedsRestart.
 func TestSettingsFormBlocksNeedRestart(t *testing.T) {
 	const base = `mode: observe
 asn: 64512
@@ -32,5 +32,27 @@ providers:
 				t.Fatalf("planReload: %v", err)
 			}
 		})
+	}
+}
+
+// A router check added through the editor may name only the documented
+// variables: a name such as PACKETEER_ADMIN_PASSWORD would send that value to
+// the router's address (#504).
+func TestRouterCheckEnvNamesAreChecked(t *testing.T) {
+	const base = `mode: observe
+asn: 64512
+router_id: 192.0.2.10
+providers:
+  - {name: transit-a, source_ip: 192.0.2.11, next_hop: 192.0.2.1}
+`
+	check := func(env string) error {
+		next := mustParse(t, base+"preflight:\n  router_check:\n    type: routeros\n    config: {url: \"https://192.0.2.254\", username_env: PACKETEER_ROUTER_READ_USER, password_env: "+env+"}\n")
+		return checkEnvNames(mustParse(t, base), next)
+	}
+	if err := check("PACKETEER_ROUTER_READ_PASSWORD"); err != nil {
+		t.Fatalf("documented name refused: %v", err)
+	}
+	if err := check("PACKETEER_ADMIN_PASSWORD"); err == nil || !strings.Contains(err.Error(), "preflight.router_check/routeros") {
+		t.Fatalf("err = %v, want the admin password name refused", err)
 	}
 }
