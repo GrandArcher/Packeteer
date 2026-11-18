@@ -12,8 +12,8 @@
 # prefix in PeeringDB where two are announced, and lists a 1000 Mbps port
 # where the config says 10000. Checked:
 #  - the network is internal, and the stand-in is the only registry the
-#    scan reads (every stand-in request is whois, PeeringDB, or the VRP
-#    document; none is a write before a push);
+#    scan reads (every stand-in request is whois, PeeringDB, the VRP
+#    document, or the RIPE REST API; none is a write before a push);
 #  - the first scan reports exactly: a missing route object, a stale route
 #    object (shown, not yet offered for delete), a ROA gap (maxLength), a
 #    PeeringDB max-prefix drift, and a PeeringDB port-speed drift;
@@ -155,6 +155,19 @@ wait_for 60 "packeteer learned $new_net" learned "$new_net"
 scanned() { api registry | jq -e '.scanned != null and (.sections | length) > 0' >/dev/null; }
 echo "waiting for the first scan"
 wait_for 240 "the first registry scan" scanned
+# The scan runs a minute after Packeteer starts and the next one an hour
+# later. A slow runner can start it before the learned RIB is ready; the
+# scan then skips the network, and a restart gives a new first scan.
+for _ in 1 2; do
+	api registry | jq -e '[.sections[] | select(.name == "network" and .status == "skipped")] | length == 0' >/dev/null && break
+	echo "the first scan ran before the RIB was ready; restarting packeteer for a new first scan"
+	"${compose[@]}" restart -t 20 packeteer
+	wait_for 120 "packeteer session" session_up
+	wait_for 60 "ops API" api_up
+	wait_for 60 "packeteer learned $all_net" learned "$all_net"
+	wait_for 60 "packeteer learned $new_net" learned "$new_net"
+	wait_for 240 "the new first registry scan" scanned
+done
 
 rep=$(api registry)
 jq -e '.push_enabled == true' <<<"$rep" >/dev/null || fail "push_enabled is not on in the lab config"

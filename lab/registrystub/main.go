@@ -6,7 +6,11 @@
 // come from the environment, and every request is recorded without its
 // credentials so the script can check what reached the stand-in.
 //
-// Usage: registrystub -cert FILE -key FILE [-whois ADDR] [-https ADDR] [-http ADDR]
+// It listens on :43 (whois), :8443 (https: RIPE REST under /ripe, PeeringDB
+// under /peeringdb) and :8323 (http: VRP JSON at /json, lab state at
+// /_lab/state).
+//
+// Usage: registrystub -cert FILE -key FILE
 package main
 
 import (
@@ -132,8 +136,8 @@ func (w *statusWriter) WriteHeader(code int) {
 	w.ResponseWriter.WriteHeader(code)
 }
 
-// wrap records the request after the handler ran. authorized is decided by
-// the handler through the returned func.
+// wrap records the request after the handler ran. The handler returns
+// whether the request carried the lab credentials.
 func (s *stub) wrap(service string, h func(w http.ResponseWriter, r *http.Request) bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
@@ -380,9 +384,6 @@ func (s *stub) whois(query string) string {
 func main() {
 	cert := flag.String("cert", "", "TLS certificate for the https listener")
 	keyFile := flag.String("key", "", "TLS key for the https listener")
-	whoisAddr := flag.String("whois", ":43", "whois listen address")
-	httpsAddr := flag.String("https", ":8443", "https listen address (RIPE REST under /ripe, PeeringDB under /peeringdb)")
-	httpAddr := flag.String("http", ":8323", "http listen address (VRP JSON at /json, lab state at /_lab/state)")
 	flag.Parse()
 	if *cert == "" || *keyFile == "" {
 		log.Fatal("registrystub: -cert and -key are required")
@@ -392,15 +393,15 @@ func main() {
 		log.Fatal(err)
 	}
 	s := newStub(os.Getenv, time.Now)
-	ln, err := net.Listen("tcp", *whoisAddr)
+	ln, err := net.Listen("tcp", ":43")
 	if err != nil {
 		log.Fatal(err)
 	}
 	go s.serveWhois(ln)
 	go func() {
-		srv := &http.Server{Addr: *httpsAddr, Handler: s.httpsHandler(), TLSConfig: &tls.Config{Certificates: []tls.Certificate{pair}}, ReadHeaderTimeout: 10 * time.Second}
+		srv := &http.Server{Addr: ":8443", Handler: s.httpsHandler(), TLSConfig: &tls.Config{Certificates: []tls.Certificate{pair}}, ReadHeaderTimeout: 10 * time.Second}
 		log.Fatal(srv.ListenAndServeTLS("", ""))
 	}()
-	srv := &http.Server{Addr: *httpAddr, Handler: s.httpHandler(), ReadHeaderTimeout: 10 * time.Second}
+	srv := &http.Server{Addr: ":8323", Handler: s.httpHandler(), ReadHeaderTimeout: 10 * time.Second}
 	log.Fatal(srv.ListenAndServe())
 }
