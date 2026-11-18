@@ -2,7 +2,8 @@
 // Runs the dashboard's settings push control (#137) against a small DOM
 // stand-in: the form appears only when the API says a push is possible, it
 // is built once, it posts the chosen sections, and the per-peer answer is
-// shown. The control is the real web/fedpush.js, which the Overview and Settings share. Run by
+// shown. The control is the real web/fedpush.js, which the Overview and
+// Settings share. Run by
 // TestFederationPushPage.
 
 var fs = require("fs");
