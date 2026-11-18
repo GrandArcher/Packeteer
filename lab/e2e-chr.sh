@@ -19,6 +19,14 @@
 # /export is the same before and after each read, and the login is in no
 # API answer or log line.
 #
+# Then non-BGP mode (#300, #655) with the mikrotik steerer, the lab
+# speakers stopped: lab/sendflow feeds Packeteer's flow source, and RouterOS
+# gets one static route, 203.0.113.0/24 via 192.0.2.2 with the comment
+# packeteer-steer, over the REST API as a read/write user made for this run.
+# SIGTERM removes it; after SIGKILL it stays, and the next start sweeps it.
+# These routes are derived from flow data, not from a learned BGP RIB view;
+# lab only, inside this throwaway CHR.
+#
 # Documentation prefixes and private/documentation ASNs only. Lab/CI only.
 #
 # Needs: sudo (tap device and lab addresses), qemu-system-x86_64, qemu-img,
@@ -49,6 +57,7 @@ mkdir -p "$work/probes"
 pk_pid=
 pk_name=pkchr
 peer_pids=()
+flow_pid=
 
 log() { echo "== $*"; }
 
@@ -94,6 +103,7 @@ cleanup() {
 		dump
 	fi
 	for p in "${peer_pids[@]}"; do kill "$p" 2>/dev/null; done
+	[ -n "$flow_pid" ] && kill "$flow_pid" 2>/dev/null
 	if [ -n "${PACKETEER_BIN:-}" ]; then
 		[ -n "$pk_pid" ] && kill -CONT "$pk_pid" 2>/dev/null && kill -KILL "$pk_pid" 2>/dev/null
 	else
@@ -241,10 +251,17 @@ flip() {
 	mv "$work/probes/.next" "$work/probes/state.yaml"
 }
 
-if [ -n "${PACKETEER_BIN:-}" ]; then
-	sed "s#/etc/packeteer/probes/#$work/probes/#" lab/chr/packeteer.yaml >"$work/packeteer.yaml"
-else
-	cp lab/chr/packeteer.yaml "$work/packeteer.yaml"
+# pk_config FILE makes FILE the config of the next pk_start.
+pk_config() {
+	if [ -n "${PACKETEER_BIN:-}" ]; then
+		sed "s#/etc/packeteer/probes/#$work/probes/#" "$1" >"$work/packeteer.yaml"
+	else
+		cp "$1" "$work/packeteer.yaml"
+	fi
+}
+
+pk_config lab/chr/packeteer.yaml
+if [ -z "${PACKETEER_BIN:-}" ]; then
 	image=${PACKETEER_IMAGE:-}
 	if [ -z "$image" ]; then
 		image=packeteer:chr
@@ -262,6 +279,7 @@ pk_start() {
 		docker run -d --name "$pk_name" --network host --cap-add NET_RAW --cap-add NET_ADMIN \
 			-e PACKETEER_LOG_LEVEL=debug -e PACKETEER_ROUTER_READ_USER -e PACKETEER_ROUTER_READ_PASSWORD \
 			-e PACKETEER_HTTP_USER -e PACKETEER_HTTP_PASSWORD \
+			-e PACKETEER_ROUTER_USER -e PACKETEER_ROUTER_PASSWORD \
 			-v "$work/packeteer.yaml:/etc/packeteer/config.yaml:ro" \
 			-v "$work/probes:/etc/packeteer/probes:ro" "$image" >/dev/null
 	fi
@@ -483,4 +501,114 @@ if grep -lF -e "$reader_pw" -e pk-reader "$work"/report-*.json "$work"/latest-*.
 	fail "the router login is in the output above"
 fi
 log "router check: pass with evidence, fail with the fix, router config unchanged"
+
+# ---- non-BGP mode with the mikrotik steerer (#300, #655) ----
+# The speakers go first, so the CHR has no BGP route for the lab prefixes:
+# the steerer refuses a prefix that has a route it did not add.
+log "non-BGP: stopping the lab speakers"
+for p in "${peer_pids[@]}"; do kill "$p" 2>/dev/null || true; done
+peer_pids=()
+no_lab_routes() {
+	routes && jq -e 'all(.[]; ."dst-address" | test("^(198\\.51\\.100|203\\.0\\.113)\\.") | not)' "$work/routes.json" >/dev/null
+}
+wait_for "CHR drops the speakers' routes" 60 no_lab_routes
+
+# The steerer logs in as a read/write REST user made for this run.
+steer_pw=$(openssl rand -hex 16)
+chr_script '/user group add name=pk-steer policy=read,write,api,rest-api'
+rest '/user/group' | jq -e 'any(.[]; .name == "pk-steer")' >/dev/null || fail "user group pk-steer not created"
+chr_script "/user add name=pk-steer group=pk-steer password=\"${steer_pw}\""
+rest '/user' | jq -e 'any(.[]; .name == "pk-steer" and .group == "pk-steer")' >/dev/null || fail "steerer user not created"
+export PACKETEER_ROUTER_USER=pk-steer PACKETEER_ROUTER_PASSWORD="$steer_pw"
+
+pk_config lab/chr/packeteer-nonbgp.yaml
+flip prefer-b
+
+go build -o "$work/sendflow" ./lab/sendflow
+printf '%s\n' "203.0.113.7 tcp 1" "198.51.100.77 tcp 1" >"$work/rates.txt"
+"$work/sendflow" -to 127.0.0.1:12055 -rates "$work/rates.txt" -every 200ms >"$work/sendflow.log" 2>&1 &
+flow_pid=$!
+
+steer_prefix=203.0.113.0/24
+steer_tag=packeteer-steer
+
+# steer_state prints present, absent, or bad for the tagged routes in the
+# last /ip/route read, filtered here rather than by a REST query: present
+# is exactly one, ${steer_prefix} via transit-b's 192.0.2.2, active. Any
+# other tagged route (198.51.100.0/24 is not allowlisted) is bad.
+steer_state() {
+	jq -r --arg p "$steer_prefix" --arg t "$steer_tag" '
+		[.[] | select(.comment == $t)] as $r |
+		if ($r | length) == 0 then "absent"
+		elif ($r | length) == 1 and ($r[0] | ."dst-address" == $p and .gateway == "192.0.2.2" and .active == "true")
+		then "present" else "bad" end' "$work/ip-routes.json"
+}
+
+steer_is() {
+	local s i
+	for i in 1 2 3 4 5; do
+		if rest '/ip/route' -o "$work/ip-routes.json" 2>/dev/null && jq -e 'type == "array"' "$work/ip-routes.json" >/dev/null 2>&1; then
+			break
+		fi
+		[ "$i" = 5 ] && fail "cannot read /ip/route from the CHR"
+		sleep 1
+	done
+	s=$(steer_state)
+	[ "$s" = bad ] && fail "CHR holds a wrong ${steer_tag} route: $(jq -c --arg t "$steer_tag" '[.[] | select(.comment == $t)]' "$work/ip-routes.json")"
+	[ "$s" = "$1" ]
+}
+
+pk_log_has() {
+	pk_logs >"$work/pk-nonbgp.log"
+	grep -Eq -- "$1" "$work/pk-nonbgp.log"
+}
+
+# Each run's log is kept for the login check at the end: pk_start removes
+# the previous container.
+pk_keep_log() {
+	pk_logs >>"$work/pk-nonbgp-all.log"
+}
+
+log "non-BGP: Packeteer in inject with nonbgp.install_routes, mikrotik steerer"
+pk_start
+wait_for "start-up warning" 30 pk_log_has 'non-BGP mode is on. Its static routes are derived from flow data, NOT from a learned BGP RIB view'
+wait_for "tagged static route for ${steer_prefix}" 90 steer_is present
+wait_for "install logged" 10 pk_log_has "non-BGP: steered.*prefix=${steer_prefix} provider=transit-b"
+jq -c --arg t "$steer_tag" '.[] | select(.comment == $t) | {"dst-address", gateway, comment, active, distance}' "$work/ip-routes.json"
+log "RouterOS holds ${steer_prefix} via 192.0.2.2, comment ${steer_tag}, active"
+
+log "non-BGP: SIGTERM removes the route before exit"
+pk_signal TERM
+pk_wait
+pk_keep_log
+[ "$pk_rc" = 0 ] || fail "Packeteer exit code $pk_rc after SIGTERM (non-BGP)"
+steer_is absent || fail "route left on the CHR after SIGTERM"
+pk_log_has "non-BGP: route removed.*prefix=${steer_prefix}" || fail "SIGTERM removal not logged"
+
+log "non-BGP: restart installs it again"
+pk_start
+wait_for "tagged route after the restart" 90 steer_is present
+
+log "non-BGP: SIGKILL leaves the route; the next start, with no flow, sweeps it"
+pk_signal KILL
+pk_wait
+pk_keep_log
+[ "$pk_rc" = 137 ] || fail "expected SIGKILL exit 137, got $pk_rc (non-BGP)"
+kill "$flow_pid" 2>/dev/null || true
+wait "$flow_pid" 2>/dev/null || true
+flow_pid=
+sleep 3
+steer_is present || fail "the route vanished after SIGKILL; the sweep below proves nothing"
+pk_start
+wait_for "start-up sweep of the killed run's route" 60 steer_is absent
+wait_for "sweep logged" 10 pk_log_has "removed a route left on the router by an earlier run.*prefix=${steer_prefix}"
+pk_signal TERM
+pk_wait
+pk_keep_log
+[ "$pk_rc" = 0 ] || fail "Packeteer exit code $pk_rc after the sweep run"
+steer_is absent || fail "a tagged route is on the CHR after the sweep run"
+if grep -lF -e "$steer_pw" -e pk-steer "$work/pk-nonbgp-all.log" "$work/ip-routes.json"; then
+	fail "the steerer login is in the output above"
+fi
+log "non-BGP: install, SIGTERM, SIGKILL then sweep on RouterOS"
 log "e2e-chr ok"

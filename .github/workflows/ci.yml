@@ -3525,7 +3525,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq --no-install-recommends qemu-system-x86 qemu-utils
-      - name: CHR lab (RouterOS accepts and filters Packeteer's iBGP route, community + NO_EXPORT, no eBGP export, unlearned prefix never announced, flip-back, SIGTERM, frozen process, SIGKILL; #637 read-only routeros router check passes, fails with the fix, router config unchanged)
+      - name: CHR lab (RouterOS accepts and filters Packeteer's iBGP route, community + NO_EXPORT, no eBGP export, unlearned prefix never announced, flip-back, SIGTERM, frozen process, SIGKILL; #637 read-only routeros router check passes, fails with the fix, router config unchanged; #655 non-BGP mikrotik steerer installs a tagged static route, SIGTERM removes it, the next start sweeps it after SIGKILL)
         run: bash lab/e2e-chr.sh
 
   load:
