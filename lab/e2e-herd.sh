@@ -39,7 +39,7 @@
 #  6. the served-response audit logs the pulls: unfiltered pages on the
 #     listing members a and b, origin_asn queries on the query-only c;
 #  7. isolation: with member-b paused (a peer that never answers), a and c
-#     keep probing and finish rounds, and report b as failing;
+#     report b as failing, and a keeps probing and stays ready;
 #  8. a member with herd on exits on SIGTERM.
 # That herd data never reaches Decide, a scorer, or an announcer is the
 # import rule in internal/herd/boundary_test.go; this lab shows the effect.
