@@ -1,0 +1,70 @@
+# Lab only (#657). Documentation prefixes and ASNs. Observe: nothing is
+# announced. Registry hygiene reads the learned RIB from the edge and
+# compares it with the in-lab registry stand-in (lab/registrystub): its
+# whois IRR, VRP JSON, PeeringDB, and RIPE REST API. Every registry address
+# below is the stand-in; the lab network has no route out. push_enabled is
+# on for the stand-in only. The lab credentials are in the compose file.
+mode: observe
+asn: 64512
+router_id: 192.0.2.10
+providers:
+  - name: transit-a
+    source_ip: 192.0.2.11
+    next_hop: 192.0.2.21
+exchanges:
+  - name: ix-lab
+    lans: [198.51.100.0/24]
+    local_lan_addrs: [198.51.100.130]
+    port: {capacity_mbps: 10000}
+    peers:
+      - {name: ix-peer-a, asn: 64502, next_hop: 198.51.100.131, source_ip: 192.0.2.32}
+bgp:
+  neighbors:
+    - address: 192.0.2.254
+      description: edge
+      add_path: true
+http:
+  listen: 0.0.0.0:8080
+storage:
+  type: sqlite
+  config:
+    path: /var/lib/packeteer/data/packeteer.db
+irr:
+  enabled: true
+  sources:
+    - type: whois
+      name: lab-irr
+      config:
+        address: "registry-stub:43"
+        dialect: ripe
+        databases: [TEST]
+        rate_per_minute: 600
+rpki:
+  enabled: true
+  sources:
+    - type: json
+      name: lab-vrp
+      config:
+        url: "http://registry-stub:8323/json"
+# Only the exchange id comes from here (registry.md); its base_url is the
+# stand-in as well.
+lookup:
+  type: peeringdb
+  config:
+    base_url: "https://registry-stub:8443/peeringdb"
+    exchanges:
+      - {name: ix-lab, ix_id: 7}
+registry:
+  enabled: true
+  asns: [64501]
+  irr: {source: TEST, mnt_by: MAINT-LAB}
+  push_enabled: true
+  sources:
+    - type: peeringdb
+      config: {base_url: "https://registry-stub:8443/peeringdb"}
+    - type: ripe
+      config: {base_url: "https://registry-stub:8443/ripe", source: TEST}
+# Lab only: no sign-in; the e2e script uses the basic-auth account, which
+# is the admin that may push.
+auth:
+  enabled: false

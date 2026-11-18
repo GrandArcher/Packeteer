@@ -219,7 +219,7 @@ role packeteer-a active pk-a
 echo "2. pk-b starts and stays standby"
 "${compose[@]}" up -d packeteer-b
 role packeteer-b standby pk-a
-# Longer than a crash takeover (12s): the standby never announces while
+# Longer than a crash takeover (13s): the standby never announces while
 # the active instance renews.
 stay a 20
 out=$(api packeteer-b /api/ha)

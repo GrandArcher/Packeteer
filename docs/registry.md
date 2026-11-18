@@ -1,6 +1,6 @@
 # Registry hygiene
 
-Packeteer sees what the network announces and where it peers, so it can say where IRR, RPKI, the as-set, and PeeringDB disagree (#289). The scan reads. A change reaches a registry only through a push that an admin confirmed after seeing its diff, and pushing is off by default. Nothing here announces a route or changes the learned RIB. Not for a public edge: tested on fixtures only, not lab-proven.
+Packeteer sees what the network announces and where it peers, so it can say where IRR, RPKI, the as-set, and PeeringDB disagree (#289). The scan reads. A change reaches a registry only through a push that an admin confirmed after seeing its diff, and pushing is off by default. Nothing here announces a route or changes the learned RIB. Not for a public edge: tested on fixtures and in-process servers, and lab-proven against in-lab stand-ins only (see [Lab proof](#lab-proof)).
 
 ## What it finds
 
@@ -58,6 +58,10 @@ Default interval is 24h; the first scan runs a minute after start so the RIB can
 ## UI and API
 
 The Registry page (`/registry.html`, [ui.md](ui.md#registry)) lists the scan sections and each finding. `GET /api/registry` returns the same (viewer role).
+
+## Lab proof
+
+`lab/e2e-registry.sh` (the `registry` CI job, #657) runs the scan and the pushes against `lab/registrystub`, a stand-in for a whois IRR, a VRP JSON document, PeeringDB, and the RIPE REST API, on a Docker network marked `internal`, so no live RADB, ARIN, RIPE, PeeringDB, or other registry is reachable and no registry credential is used. It checks the five findings (missing route object, stale route object, ROA maxLength gap, PeeringDB max-prefix drift, port-speed drift), that a wrong digest changes nothing, that confirmed pushes land on the stand-in only with the lab credentials from the environment, and that each is audit-logged without a credential. The delete of the stale object is not pushed: it is offered only when a second scan shows it again, and the shortest interval is an hour. A push to RADB or ARIN is still not provided. See [lab/README.md](../lab/README.md).
 
 ## Rollback
 
