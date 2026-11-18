@@ -7,6 +7,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 ### Changed
 
 - `upgrade-release` CI job starts from the v1.6.0 image, pinned by digest, instead of v1.5.0; the downgrade step no longer needs the `routeros` key, which v1.6.0 accepts (#656).
+
 ### Fixed
 
 - Fuzz CI reruns a target only on the engine's own deadline (`lab/fuzzrun`); HA lab lease `ttl` 6s survives one slow tick; known-flake list in CONTRIBUTING (#660).
