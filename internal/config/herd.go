@@ -35,8 +35,11 @@ type Herd struct {
 	Peers   []HerdPeer `yaml:"peers"`
 	// Hub is the public list of herd servers used as seeds (#261). Nil
 	// means no hub: only the static peers are used.
-	Hub    *HerdHub   `yaml:"hub"`
-	Limits HerdLimits `yaml:"limits"`
+	Hub *HerdHub `yaml:"hub"`
+	// Identity is where member identities are checked (#672). Nil means
+	// none: no member is verified.
+	Identity *HerdIdentity `yaml:"identity"`
+	Limits   HerdLimits    `yaml:"limits"`
 	// Outside is the opt-in outside intelligence on the herd dashboard
 	// (#296). Each source is off until chosen. It is shown apart from herd
 	// data, never counted as a vantage, and never read by Decide.
@@ -82,6 +85,20 @@ type HerdHub struct {
 	Refresh time.Duration `yaml:"refresh"`
 	// MaxPeers caps the peers taken from the list (default 16).
 	MaxPeers int `yaml:"max_peers"`
+	// ExchangePeers caps the peers learned from other peers' peer lists
+	// (peer exchange, #672), apart from the hub peers (default 16).
+	ExchangePeers int `yaml:"exchange_peers"`
+}
+
+// HerdIdentity reads the validated RPKI Signed Checklists (RFC 9323) that
+// bind node keys to ASNs, as a relying party reports them. A member whose
+// node key is listed for its ASN is verified; the others are shown and not
+// counted.
+type HerdIdentity struct {
+	// URL is the https address of the checklist document.
+	URL string `yaml:"url"`
+	// Refresh is how often it is fetched again (default 1h).
+	Refresh time.Duration `yaml:"refresh"`
 }
 
 // HerdShare chooses what leaves the box.
@@ -96,6 +113,10 @@ type HerdShare struct {
 	Sources []string `yaml:"sources"`
 	// Discovery is query_only (default) or listing.
 	Discovery string `yaml:"discovery"`
+	// CrowdK is the crowd threshold (#672): at route level, a route only
+	// flow or span listed is served once at least this many other verified
+	// ASNs serve records for that exact route (default 2).
+	CrowdK int `yaml:"crowd_k"`
 	// Exclude is what is never shared. A prefix excludes every route
 	// equal to, inside, or covering it. An ASN excludes every route whose
 	// origin is that ASN or whose AS path contains it.
@@ -163,6 +184,11 @@ const (
 	MaxHerdHubRefresh        = 7 * 24 * time.Hour
 	DefaultHerdHubPeers      = 16
 	MaxHerdHubPeers          = 64
+	DefaultHerdIDRefresh     = time.Hour
+	MinHerdIDRefresh         = 10 * time.Minute
+	MaxHerdIDRefresh         = 24 * time.Hour
+	DefaultHerdCrowdK        = 2
+	MaxHerdCrowdK            = 64
 	DefaultHerdAtlasRefresh  = 15 * time.Minute
 	MinHerdAtlasRefresh      = 15 * time.Minute
 	MaxHerdAtlasRefresh      = 24 * time.Hour
@@ -184,6 +210,10 @@ func (c *Config) HerdOn() bool { return c.Herd != nil && c.Herd.Enabled }
 
 // Serving reports whether the pull API listens and peers are pulled.
 func (h *Herd) Serving() bool { return h.Enabled && !h.PreviewOnly }
+
+// HerdHintsSource is the target source type that probes what verified herd
+// members see degraded (#672).
+const HerdHintsSource = "herd_hints"
 
 // HerdSourceTypes are the target source types a record may come from.
 var HerdSourceTypes = []string{"static", "vip", "outage", "flow", "span"}
@@ -254,6 +284,15 @@ func (c *Config) defaultHerd() {
 		if h.Hub.MaxPeers == 0 {
 			h.Hub.MaxPeers = DefaultHerdHubPeers
 		}
+		if h.Hub.ExchangePeers == 0 {
+			h.Hub.ExchangePeers = DefaultHerdHubPeers
+		}
+	}
+	if h.Identity != nil && h.Identity.Refresh == 0 {
+		h.Identity.Refresh = DefaultHerdIDRefresh
+	}
+	if h.Share.CrowdK == 0 {
+		h.Share.CrowdK = DefaultHerdCrowdK
 	}
 	h.Limits.applyDefaults()
 	if h.Outside.Atlas.Enabled && h.Outside.Atlas.Refresh == 0 {
@@ -289,6 +328,11 @@ func ParseHerdKey(s string) ([]byte, error) {
 
 func (c *Config) validateHerd(add func(string, ...any)) {
 	h := c.Herd
+	for i, s := range c.Sources {
+		if s.Type == HerdHintsSource && (h == nil || !h.Serving()) {
+			add("sources[%d]: type %s needs herd enabled and serving: its hints come from pulled records", i, s.Type)
+		}
+	}
 	if h == nil || !h.Enabled {
 		return
 	}
@@ -329,11 +373,14 @@ func (c *Config) validateHerd(add func(string, ...any)) {
 			add("herd.share.sources[%d]: %q must be one of %s", i, s, strings.Join(HerdSourceTypes, ", "))
 			continue
 		}
-		// Route level flow and span records need the crowd threshold, which
-		// needs verified identities (a later phase).
-		if h.Share.Granularity == HerdRoute && (s == "flow" || s == "span") {
-			add("herd.share.sources[%d]: %s targets come from user traffic and cannot be shared at route level yet (needs the crowd threshold)", i, s)
+		// Only verified members count toward the crowd threshold, so
+		// without an identity source such a route would never be served.
+		if h.Share.Granularity == HerdRoute && (s == "flow" || s == "span") && h.Identity == nil {
+			add("herd.share.sources[%d]: %s targets at route level need herd.identity: only verified members count toward crowd_k", i, s)
 		}
+	}
+	if h.Share.CrowdK < 1 || h.Share.CrowdK > MaxHerdCrowdK {
+		add("herd.share.crowd_k %d must be between 1 and %d", h.Share.CrowdK, MaxHerdCrowdK)
 	}
 	h.Share.Exclude.validate(add, "herd.share.exclude")
 	if h.RetentionDays < MinHerdRetentionDays || h.RetentionDays > MaxHerdRetentionDays {
@@ -352,8 +399,8 @@ func (c *Config) validateHerd(add func(string, ...any)) {
 	})
 	c.validateHerdOutside(add)
 	if h.PreviewOnly {
-		if h.Listen != "" || len(h.Peers) > 0 || h.Hub != nil {
-			add("herd.preview_only serves and pulls nothing: remove herd.listen, herd.peers, and herd.hub")
+		if h.Listen != "" || len(h.Peers) > 0 || h.Hub != nil || h.Identity != nil {
+			add("herd.preview_only serves and pulls nothing: remove herd.listen, herd.peers, herd.hub, and herd.identity")
 		}
 		return
 	}
@@ -368,6 +415,14 @@ func (c *Config) validateHerd(add func(string, ...any)) {
 	}
 	if h.Hub != nil {
 		h.Hub.validate(add)
+	}
+	if id := h.Identity; id != nil {
+		if u, err := url.Parse(id.URL); err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.Fragment != "" {
+			add("herd.identity.url %q must be an https URL", id.URL)
+		}
+		if id.Refresh < MinHerdIDRefresh || id.Refresh > MaxHerdIDRefresh {
+			add("herd.identity.refresh %s must be between %s and %s", id.Refresh, MinHerdIDRefresh, MaxHerdIDRefresh)
+		}
 	}
 	urls, keys := map[string]bool{}, map[string]bool{}
 	for i, p := range h.Peers {
@@ -393,6 +448,9 @@ func (b *HerdHub) validate(add func(string, ...any)) {
 	}
 	if b.MaxPeers < 1 || b.MaxPeers > MaxHerdHubPeers {
 		add("herd.hub.max_peers %d must be between 1 and %d", b.MaxPeers, MaxHerdHubPeers)
+	}
+	if b.ExchangePeers < 1 || b.ExchangePeers > MaxHerdHubPeers {
+		add("herd.hub.exchange_peers %d must be between 1 and %d", b.ExchangePeers, MaxHerdHubPeers)
 	}
 }
 

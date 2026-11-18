@@ -117,3 +117,11 @@ func (r *Rules) Allowed(rt Route) bool {
 	}
 	return slices.ContainsFunc(rt.Sources, func(s string) bool { return r.Sources[s] })
 }
+
+// UserDerived reports whether every opted-in source that listed rt takes
+// its targets from user traffic (flow, span). Such a route can show what a
+// member's users talk to, so at route level it waits for the crowd
+// threshold.
+func (r *Rules) UserDerived(rt Route) bool {
+	return !slices.ContainsFunc(rt.Sources, func(s string) bool { return r.Sources[s] && s != "flow" && s != "span" })
+}

@@ -27,10 +27,13 @@ const (
 	minWindow      = time.Minute
 )
 
-// Basis says what the independent-vantage counts rest on. Identity proof
-// by RPKI is not implemented, so a member is a configured peer with a
-// pinned key, counted once per ASN; nothing here is called verified.
-const Basis = "pinned_key"
+// What the independent-vantage counts rest on: every member with a pinned
+// key, once per ASN, when no identity source is configured; otherwise only
+// the members it verified, once per ASN (#672).
+const (
+	BasisPinned = "pinned_key"
+	BasisRPKI   = "rpki"
+)
 
 // QueryError is a dashboard request the caller can fix; any other error is
 // the store failing.
@@ -77,10 +80,20 @@ func lessTarget(a, b Target) bool {
 type Board struct {
 	Store plugin.HerdStore
 	// Self is this node's ASN; Peers maps a peer's key id to its ASN.
-	Self      uint32
-	Peers     map[string]uint32
+	Self  uint32
+	Peers map[string]uint32
+	// Verified is the members the identity source verified, by key id and
+	// "local" for this node; nil when none is configured.
+	Verified  map[string]bool
 	Retention time.Duration
 	Now       time.Time
+}
+
+func (b Board) basis() string {
+	if b.Verified == nil {
+		return BasisPinned
+	}
+	return BasisRPKI
 }
 
 // boardQuery is one parsed dashboard request.
@@ -140,7 +153,7 @@ func (b Board) load(ctx context.Context, bq boardQuery, span time.Duration) ([]o
 	if truncated {
 		rows = rows[:viewRows]
 	}
-	return decodeRows(rows, b.Self, b.Peers), truncated, nil
+	return decodeRows(rows, b.Self, b.Peers, b.Verified), truncated, nil
 }
 
 func (b Board) age(t time.Time) float64 { return max(b.Now.Sub(t).Seconds(), 0) }
@@ -191,8 +204,8 @@ type MemberRow struct {
 	Local    bool   `json:"local"`
 	ASN      uint32 `json:"asn"`
 	Identity string `json:"identity"`
-	// Verified is false for every member: RPKI identity proof is not
-	// implemented, so a member is only a pinned key.
+	// Verified is set when the identity source binds the member's key to
+	// its ASN. An unverified member is shown and never counted.
 	Verified  bool     `json:"verified"`
 	Source    string   `json:"source"`
 	Countries []string `json:"countries"`
@@ -251,10 +264,11 @@ func (b Board) Overview(ctx context.Context, st NodeStatus) (Overview, error) {
 		a.newest = latest(a.newest, r.time)
 	}
 	row := func(member string, local bool, asn uint32, source string) MemberRow {
-		m := MemberRow{Member: member, Local: local, ASN: asn, Identity: "pinned_key", Source: source, Countries: []string{}}
+		key := member
 		if local {
-			m.Identity = "local"
+			key = "local"
 		}
+		m := MemberRow{Member: member, Local: local, ASN: asn, Identity: identityOf(key, b.Verified), Verified: b.Verified[key], Source: source, Countries: []string{}}
 		if a := byMember[member]; a != nil {
 			m.Records, m.Vantages = a.records, len(a.vantages)
 			for c := range a.countries {
@@ -328,11 +342,14 @@ type EventVantage struct {
 	RTTAvgMs   *float64 `json:"rtt_avg_ms,omitempty"`
 	AgeSeconds float64  `json:"age_seconds"`
 	Degraded   bool     `json:"degraded"`
+	// Counted is false for an unverified member's row, which is shown and
+	// left out of every count.
+	Counted bool `json:"counted"`
 }
 
 // EventRow is one target where at least one member sees loss at or above
-// the threshold. Reporting and Degraded count members (one per ASN), not
-// records or vantages: "3 of 4 members".
+// the threshold. Reporting and Degraded count the members the basis
+// counts (one per ASN), not records or vantages: "3 of 4 members".
 type EventRow struct {
 	Target
 	Reporting int `json:"reporting"`
@@ -360,7 +377,7 @@ type Events struct {
 // window. A target is listed when any member sees loss at or above loss.
 // It is not limited to routes in the local RIB: this is display only.
 func (b Board) Events(ctx context.Context, raw string) (Events, error) {
-	ev := Events{Enabled: true, AsOf: b.Now, Basis: Basis, Events: []EventRow{}}
+	ev := Events{Enabled: true, AsOf: b.Now, Basis: b.basis(), Events: []EventRow{}}
 	bq, err := b.parse(raw, []string{"window", "loss"}, 15*time.Minute, 24*time.Hour)
 	if err != nil {
 		return ev, err
@@ -379,22 +396,26 @@ func (b Board) Events(ctx context.Context, raw string) (Events, error) {
 	for t, list := range byTarget {
 		row := EventRow{Target: t, ByProvider: []ProviderCount{}, Vantages: []EventVantage{}}
 		seen, lossy, origins := map[uint32]bool{}, map[uint32]bool{}, map[uint32]bool{}
+		shown := false
 		type pk struct{ provider, asn uint32 }
 		pAll, pBad := map[pk]bool{}, map[pk]bool{}
 		for _, o := range list {
 			d := degraded(o, bq.loss)
-			seen[o.asn] = true
 			if t.Kind == kindPrefix && o.rec.OriginASN != 0 {
 				origins[o.rec.OriginASN] = true
 			}
-			pAll[pk{o.rec.ProviderASN, o.asn}] = true
-			if d {
-				lossy[o.asn] = true
-				pBad[pk{o.rec.ProviderASN, o.asn}] = true
+			shown = shown || d
+			if o.counted {
+				seen[o.asn] = true
+				pAll[pk{o.rec.ProviderASN, o.asn}] = true
+				if d {
+					lossy[o.asn] = true
+					pBad[pk{o.rec.ProviderASN, o.asn}] = true
+				}
 			}
-			row.Vantages = append(row.Vantages, EventVantage{VantageRef: o.ref(), LossPct: *o.rec.LossPct, RTTAvgMs: o.rec.RTTAvgMs, AgeSeconds: b.age(o.time), Degraded: d})
+			row.Vantages = append(row.Vantages, EventVantage{VantageRef: o.ref(), LossPct: *o.rec.LossPct, RTTAvgMs: o.rec.RTTAvgMs, AgeSeconds: b.age(o.time), Degraded: d, Counted: o.counted})
 		}
-		if len(lossy) == 0 {
+		if !shown {
 			continue
 		}
 		row.Reporting, row.Degraded, row.Origins = len(seen), len(lossy), sortedASNs(origins)

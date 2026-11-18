@@ -23,6 +23,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/inbound"
 	"github.com/GrandArcher/Packeteer/internal/mitigation"
 	"github.com/GrandArcher/Packeteer/internal/pluginhost"
+	"github.com/GrandArcher/Packeteer/internal/plugins/source/herdhints"
 	"github.com/GrandArcher/Packeteer/internal/policy"
 	"github.com/GrandArcher/Packeteer/internal/probe"
 	"github.com/GrandArcher/Packeteer/internal/rib"
@@ -421,6 +422,8 @@ type reloader struct {
 
 	plugins *pluginhost.Set
 	engine  *probe.Engine
+	// hints reads the herd hints for a herd_hints source a reload adds.
+	hints func() []herdhints.Hint
 	// perASN is the probe.per_asn_pps set the engine was built with; new
 	// traceroute sources share it.
 	perASN  *probe.ASNLimits
@@ -644,6 +647,7 @@ func (r *reloader) applyOnline(ctx context.Context, next *config.Config, online 
 			wirePacketWait(r.plugins, r.perASN)
 			wireLearnedRoutes(r.plugins, r.rib)
 			wireOutage(r.plugins, r.engine, r.rib, r.dispatch)
+			wireHerdHints(r.plugins, r.hints)
 		}
 		if slices.Contains(online, "policies") {
 			r.plugins.SetPolicies(policies)

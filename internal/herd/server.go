@@ -41,10 +41,16 @@ type ServerOptions struct {
 	// the view is not shared.
 	RIB   RIB
 	Rules *Rules
-	// Peers are the pinned keys, by key id; Hub adds the hub peers' keys.
-	// Only these connect.
-	Peers map[string]ed25519.PublicKey
-	Hub   *KeySet
+	// Peers are the pinned keys, by key id; Hub adds the hub peers' keys
+	// and Exchange the keys learned by peer exchange. Only these connect.
+	Peers    map[string]ed25519.PublicKey
+	Hub      *KeySet
+	Exchange *KeySet
+	// Relay, when set, is the peer list served on PathPeers.
+	Relay func() []Relayed
+	// Crowd counts the other verified ASNs that serve records for exactly
+	// this route, from this node's pulls. Nil counts none.
+	Crowd func(netip.Prefix) int
 	Now   func() time.Time
 	Log   *slog.Logger
 	Trips *Trips
@@ -119,6 +125,9 @@ func (s *Server) Start() error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET "+PathStatus, s.handle)
 	mux.HandleFunc("GET "+PathRecords, s.handle)
+	if s.o.Relay != nil {
+		mux.HandleFunc("GET "+PathPeers, s.handle)
+	}
 	s.srv = &http.Server{
 		Handler:           mux,
 		ReadHeaderTimeout: s.lim.Timeout,
@@ -327,10 +336,11 @@ func addressKey(a net.Addr) string {
 	return ip.String()
 }
 
-// pinned reports whether id is a static peer or a current hub peer.
+// pinned reports whether id is a static peer, a current hub peer, or a
+// current peer learned by peer exchange.
 func (s *Server) pinned(id string) bool {
 	_, ok := s.o.Peers[id]
-	return ok || s.o.Hub.Has(id)
+	return ok || s.o.Hub.Has(id) || s.o.Exchange.Has(id)
 }
 
 func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
@@ -367,12 +377,17 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 	if !s.admitRequest(w, tc, 1, now) {
 		return
 	}
-	if r.URL.Path == PathStatus {
+	if r.URL.Path == PathStatus || r.URL.Path == PathPeers {
 		if r.URL.RawQuery != "" {
-			writeError(w, http.StatusBadRequest, "the status document takes no parameters")
+			writeError(w, http.StatusBadRequest, "this document takes no parameters")
 			return
 		}
-		body, _ := s.Status()
+		var body []byte
+		if r.URL.Path == PathPeers {
+			body = s.PeerList()
+		} else {
+			body, _ = s.Status()
+		}
 		writeJSONBytes(w, http.StatusOK, body)
 		return
 	}
@@ -448,6 +463,17 @@ func (s *Server) Status() ([]byte, Status) {
 	st.Signature, _ = s.o.Node.sign(st)
 	b, _ := json.Marshal(st)
 	return b, st
+}
+
+// PeerList is the signed peer exchange document.
+func (s *Server) PeerList() []byte {
+	l := PeerList{Schema: Schema, Member: s.o.Node.ID(), GeneratedAt: s.o.Now().UTC().Truncate(time.Millisecond), Entries: s.o.Relay()}
+	if l.Entries == nil {
+		l.Entries = []Relayed{}
+	}
+	l.Signature, _ = s.o.Node.sign(l)
+	b, _ := json.Marshal(l)
+	return b
 }
 
 // Preview is the response a puller would get for raw, produced by the same
@@ -531,6 +557,15 @@ func (s *Server) fill(env *Envelope, hq plugin.HerdQuery, after *plugin.HerdReco
 	size := overhead
 	examined, work := 0, 20*s.lim.PageRecords
 	hq.Limit = min(limit*2+1, work)
+	crowd := map[netip.Prefix]bool{}
+	crowded := func(p netip.Prefix) bool {
+		ok, seen := crowd[p]
+		if !seen {
+			ok = s.o.Crowd != nil && s.o.Crowd(p) >= s.o.Cfg.Share.CrowdK
+			crowd[p] = ok
+		}
+		return ok
+	}
 	for {
 		hq.After = after
 		rows, err := s.o.Store.HerdRecords(context.Background(), hq)
@@ -544,7 +579,7 @@ func (s *Server) fill(env *Envelope, hq plugin.HerdQuery, after *plugin.HerdReco
 				return
 			}
 			examined++
-			rec, ok := s.servable(row)
+			rec, ok := s.servable(row, crowded)
 			if ok {
 				b, _ := json.Marshal(rec)
 				if size+len(b)+1 > s.lim.ResponseBytes && len(env.Records) > 0 {
@@ -579,8 +614,11 @@ func cursorOf(r *plugin.HerdRecord) string {
 // route behind it the exact prefix with a path through its provider, the
 // exclude list (against both the stored and the current path), own
 // prefixes, and source opt-in. A pooled record with even one route that
-// now fails is dropped whole, because it cannot be un-pooled.
-func (s *Server) servable(row plugin.HerdRecord) (Record, bool) {
+// now fails is dropped whole, because it cannot be un-pooled. At route
+// level, a route that only user traffic (flow, span) put on the probe list
+// waits for the crowd threshold: crowded reports whether enough other
+// verified members serve it already.
+func (s *Server) servable(row plugin.HerdRecord, crowded func(netip.Prefix) bool) (Record, bool) {
 	var rec Record
 	if json.Unmarshal(row.Body, &rec) != nil || rec.Granularity != s.o.Cfg.Share.Granularity {
 		return rec, false
@@ -594,6 +632,9 @@ func (s *Server) servable(row plugin.HerdRecord) (Record, bool) {
 		cur := rt
 		cur.Path = path
 		if !ok || !s.o.Rules.Allowed(rt) || !s.o.Rules.Allowed(cur) {
+			return rec, false
+		}
+		if rec.Granularity == config.HerdRoute && s.o.Rules.UserDerived(rt) && !crowded(rt.Prefix) {
 			return rec, false
 		}
 	}

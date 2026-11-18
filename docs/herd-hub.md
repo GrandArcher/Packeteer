@@ -10,6 +10,7 @@ herd:
     url: https://hub.example.net/herd.json   # https only
     refresh: 6h                              # 10m to 168h
     max_peers: 16                            # 1 to 64
+    exchange_peers: 16                       # peers learned by exchange, 1 to 64
 ```
 
 The list is fetched at start and every `refresh`. Redirects to http are not followed, the body is limited to 4 MiB and 4096 entries, and a failed fetch keeps the last list. Before the first successful fetch the node uses the snapshot built into the release (`internal/herd/hub_snapshot.json`, refreshed at release time with `make hub-snapshot HUB_URL=...`); a stale snapshot only loses its expired entries.
@@ -25,9 +26,11 @@ A node accepts from the hub list only what the signature and the checks above sh
 - Its node keys may connect to this node's pull API and read the records this node shares, as a static peer's key may.
 - Its ASN is a claim. A node pins each ASN to the node keys of its newest accepted entry (the release snapshot's members are pinned before any hub list is read); a newer entry for that ASN is used only when one of those keys signed it, which is how a member rotates keys. A list that is the first to name an ASN with entries signed by unrelated keys gets none of them used. Pins are kept in memory, so after a restart the first list read pins again, and at most 8192 ASNs are pinned: a new ASN past that is refused until a restart, and a pin stays after its entry expires (#493). A hub peer's status document is only compared with its own entry.
 
-So a hub repository that merges entries without checking who submitted them lets a stranger become a pull client of every node. Review entries before merging, and share only what you would give any listed member. What a node accepts from a peer is still decided by the pinned key and the signed responses, as for static peers. This is the gap RPKI validation of the identity statement would close; this build does not do it.
+So a hub repository that merges entries without checking who submitted them lets a stranger become a pull client of every node. Review entries before merging, and share only what you would give any listed member. What a node accepts from a peer is still decided by the pinned key and the signed responses, as for static peers.
 
-The identity statement and RSC (RFC 9323) an entry may reference are carried, not validated: this build does not check RPKI objects, so a hub peer's ASN is a claim. Do not treat it as verified.
+Hub peers also relay entries by peer exchange ([herd.md](herd.md#peer-exchange), #672), so a hub may list only a few seed nodes and members find the rest from their peer lists. An exchanged entry gets the same trust as a hub entry, and an ASN the hub pinned cannot be taken over by one.
+
+The identity statement and RSC (RFC 9323) an entry may reference are carried, not validated, so a hub peer's ASN is a claim. Whether a member counts is decided by `herd.identity` ([herd.md](herd.md#identity)), which reads checklists a relying party validated; without it nobody is verified.
 
 ## Joining
 
@@ -82,4 +85,4 @@ An entry cannot outlive its signed expiry, so pruning removes exactly the stale 
 
 ## Lab
 
-`lab/e2e-herd.sh` (#659) runs a local stand-in hub (`lab/herdhub`) for three members in observe mode: each publishes its entry with `herd entry`, `herd hub-check -list` builds the list, and the stand-in serves it over https with a tampered and an expired entry added. Each member refuses those two and pulls from the other two as hub peers. No public hub repository is created or used. See [lab/README.md](../lab/README.md).
+`lab/e2e-herd.sh` (#659, #672) runs a local stand-in hub (`lab/herdhub`) for three members in observe mode: each publishes its entry with `herd entry`, and `herd hub-check -list` checks the entries. The stand-in serves a list of only its own seed node, with a tampered and an expired entry added. Each member refuses those two, pulls from the seed, and finds the other two members in the seed's peer list. No public hub repository is created or used. See [lab/README.md](../lab/README.md).

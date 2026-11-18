@@ -97,7 +97,15 @@ var rows = rowsOf(members);
 assert(rows.length === 4 && rows[0][0] === "this node" && rows[0][3] === "no", "member rows: " + JSON.stringify(rows));
 assert(rows.every(function (r) { return r[3] === "no"; }), "no member is shown verified");
 assert(rows[2][10].indexOf("stale: timeout") === 0 && rows[3][8] === "-" && rows[3][9] === "never", "stale and never-pulled peers: " + JSON.stringify(rows));
-assert(members.textContent.indexOf("RPKI identity proof is not implemented") >= 0, "the verified column is explained");
+assert(members.textContent.indexOf("without one nobody is verified. Unverified members are listed and never counted.") >= 0, "the verified column is explained");
+assert(rows[1][2] === "pinned key", "identity of a pinned peer: " + JSON.stringify(rows[1]));
+var verified = box();
+context.renderHerdOverview(box(), verified, {sharing: load("overview").sharing, members: [
+  {member: "local", local: true, asn: 64501, identity: "local", verified: true, source: "local", countries: []},
+  {member: "key-a-0123456789", asn: 64502, identity: "rpki", verified: true, source: "exchange", countries: []},
+  {member: "key-b-0123456789", asn: 64503, identity: "unverified", verified: false, source: "exchange", countries: []}]});
+var vr = rowsOf(verified);
+assert(vr[0][3] === "yes" && vr[1][2] === "RPKI" && vr[1][3] === "yes" && vr[2][2] === "unverified" && vr[2][3] === "no", "verified rows: " + JSON.stringify(vr));
 context.shellAdmin = false;
 sharing = box();
 context.renderHerdOverview(sharing, box(), load("overview"));
@@ -117,6 +125,14 @@ assert(links[1] === "/herd.html?origin_asn=64512&prefix=198.51.100.0%2F24#herd-m
 var vrows = rowsOf(events);
 assert(vrows[0][0].indexOf("this node (AS64501), US, via AS64520, icmp") === 0 && vrows[0][1] === "40.0 %" && vrows[0][4] === "loss", "local vantage row: " + JSON.stringify(vrows[0]));
 assert(find(events, "td").filter(function (td) { return td.className === "bad"; }).length >= 3, "degraded cells are marked, not only colored: text says loss");
+var rpki = box();
+context.renderHerdEvents(rpki, {basis: "rpki", loss_pct: 5, window_seconds: 900, targets: 1, events: [{kind: "origin_asn", value: "64511", reporting: 1, degraded: 1, by_provider: [],
+  vantages: [{member: "key-a", asn: 64502, country: "DE", provider_asn: 64520, method: "icmp", loss_pct: 50, age_seconds: 60, degraded: true, counted: true},
+    {member: "key-b", asn: 64503, country: "JP", provider_asn: 64520, method: "icmp", loss_pct: 60, age_seconds: 60, degraded: true, counted: false}]}]});
+assert(rpki.textContent.indexOf("Counts are RPKI-verified members, one per ASN; unverified members are listed and not counted.") >= 0, "rpki basis: " + rpki.textContent);
+assert(rpki.textContent.indexOf("1 of 1 members see loss") >= 0, "rpki count: " + rpki.textContent);
+var rr = rowsOf(rpki);
+assert(rr.length === 2 && rr[0][4] === "loss" && rr[1][4] === "loss, not counted", "an unverified row is listed and marked: " + JSON.stringify(rr));
 var none = box();
 context.renderHerdEvents(none, {events: [], loss_pct: 5, window_seconds: 900, targets: 3});
 assert(none.textContent === "No target shows loss at or above 5 % from any member in the last 15 min (3 targets measured).", "quiet: " + none.textContent);

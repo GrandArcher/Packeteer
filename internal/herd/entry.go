@@ -69,6 +69,9 @@ type Entry struct {
 	// Signer is the node key that made Signature; it is one of Nodes.
 	Signer    string `json:"signer"`
 	Signature string `json:"signature,omitempty"`
+
+	// raw is the signed document as checked, which peer exchange relays.
+	raw []byte
 }
 
 // SignEntry fills the schema and signer, signs e with the node key, and
@@ -109,6 +112,7 @@ func CheckEntry(raw []byte, now time.Time) (Entry, error) {
 	if err := verifyDocument(ed25519.PublicKey(signer), raw); err != nil {
 		return e, fmt.Errorf("entry asn %d: %w", e.ASN, err)
 	}
+	e.raw = slices.Clone(raw)
 	return e, nil
 }
 

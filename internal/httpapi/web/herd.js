@@ -88,13 +88,17 @@ function renderHerdOverview(sharing, members, d) {
   var rows = (d.members || []).map(function (m) {
     var state = m.stale ? "stale" : "fresh";
     return [ixpCell(m.local ? "this node" : m.member.slice(0, 12), "mono"), ixpCell("AS" + m.asn),
-      ixpCell(m.local ? "this node" : "pinned key"), ixpCell(m.verified ? "yes" : "no"), ixpCell(m.source),
+      ixpCell(m.local ? "this node" : herdIdentity(m.identity)), ixpCell(m.verified ? "yes" : "no"), ixpCell(m.source),
       ixpCell((m.countries || []).join(", ")), ixpCell(m.vantages), ixpCell(m.records),
       ixpCell(herdAge(m.newest_age_seconds)), ixpCell(m.last_ok ? fmtTime(m.last_ok) : (m.local ? "" : "never")),
       ixpCell(m.last_error ? state + ": " + m.last_error : state, m.stale ? "bad" : "")];
   });
   members.appendChild(ixpTable(["Member", "ASN", "Identity", "Verified", "Source", "Countries", "Vantages", "Records (24 h)", "Newest record", "Last pulled", "State"], rows));
-  members.appendChild(el("p", "tag", "Verified is no for every member: identity is a pinned key, and RPKI identity proof is not implemented."));
+  members.appendChild(el("p", "tag", "Verified means the identity source (herd.identity) binds the member's key to its ASN; without one nobody is verified. Unverified members are listed and never counted."));
+}
+
+function herdIdentity(id) {
+  return {pinned_key: "pinned key", rpki: "RPKI", unverified: "unverified"}[id] || id;
 }
 
 // ---- World view ----
@@ -106,7 +110,9 @@ function renderHerdEvents(root, d) {
     root.appendChild(el("p", "empty", "No target shows loss at or above " + d.loss_pct + " % from any member in the last " + win + " (" + d.targets + " targets measured)."));
     return;
   }
-  root.appendChild(el("p", "tag", "Counts are members with a pinned key, one per ASN; none is RPKI-verified. Loss at or above " + d.loss_pct + " %, last " + win + "."));
+  root.appendChild(el("p", "tag", (d.basis === "rpki"
+    ? "Counts are RPKI-verified members, one per ASN; unverified members are listed and not counted."
+    : "Counts are members with a pinned key, one per ASN; none is RPKI-verified.") + " Loss at or above " + d.loss_pct + " %, last " + win + "."));
   d.events.forEach(function (e) {
     var box = el("div", "tool-result");
     var head = el("div", "tool-head");
@@ -120,7 +126,7 @@ function renderHerdEvents(root, d) {
     }).join("; ")));
     box.appendChild(ixpTable(["Vantage", "Loss", "RTT avg", "Age", "State"], (e.vantages || []).map(function (v) {
       return [ixpCell(herdVantageLabel(v)), ixpCell(herdPct(v.loss_pct), v.degraded ? "bad" : ""), ixpCell(herdMs(v.rtt_avg_ms)),
-        ixpCell(herdAge(v.age_seconds)), ixpCell(v.degraded ? "loss" : "ok", v.degraded ? "bad" : "")];
+        ixpCell(herdAge(v.age_seconds)), ixpCell((v.degraded ? "loss" : "ok") + (v.counted === false ? ", not counted" : ""), v.degraded ? "bad" : "")];
     })));
     root.appendChild(box);
   });
