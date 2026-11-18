@@ -993,7 +993,7 @@ One HTTP GET per lookup: `<url>?prefix=198.51.100.0/24`, answered with `{"prefix
 | Key | Default | Meaning |
 |---|---|---|
 | `url` | none | Required. `http` or `https`, no credentials, query, or fragment. |
-| `rate_per_minute` | `60` | Lookups sent per minute. 1-600. |
+| `rate_per_minute` | `60` | Lookups sent per minute. 1-600. Each open case is looked up once per scan, one at a time, so a few hundred cases against a public service can take longer than the 5-minute scan interval; the lookups wait, and a lookup that waits past 10 seconds is no answer. |
 
 ### `irr`
 

@@ -166,7 +166,7 @@ wait_for 60 "$disagree disagreed by routeviews" disagree_ok
 wait_for 60 "$empty seen by neither collector" empty_ok
 
 cases=$(api rpki/only-invalid | jq -c '[.cases[].prefix] | sort')
-[ "$cases" = "[\"$agree\",\"$empty\",\"$disagree\"]" ] || fail "open cases are $cases, want the three /25s"
+[ "$cases" = "[\"$agree\",\"$disagree\",\"$empty\"]" ] || fail "open cases are $cases, want the three /25s"
 # ROA, route age, and provider signals stay as they were: agreement is
 # added evidence, and it did not make a stale ROA of a case with no IRR or
 # route age behind it.
@@ -192,7 +192,7 @@ down_ok() {
 }
 wait_for 420 "every case without agreement while both collectors are down" down_ok
 cases=$(api rpki/only-invalid | jq -c '[.cases[].prefix] | sort')
-[ "$cases" = "[\"$agree\",\"$empty\",\"$disagree\"]" ] || fail "a down collector changed the open cases: $cases"
+[ "$cases" = "[\"$agree\",\"$disagree\",\"$empty\"]" ] || fail "a down collector changed the open cases: $cases"
 api rpki/only-invalid | jq -e '.cases | all(.class != "stale_roa")' >/dev/null || fail "a down collector produced a stale_roa case"
 
 quiet

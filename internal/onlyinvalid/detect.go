@@ -520,8 +520,7 @@ func (d *Detector) collectorSignal(ctx context.Context, prefix netip.Prefix, ori
 	if len(d.deps.Collectors) == 0 {
 		return Signal{Name: "origin_agreement", Detail: "no origin_collectors configured"}
 	}
-	var agree, silent, failed []string
-	var disagree []string
+	var agree, silent, failed, disagree []string
 	for _, c := range d.deps.Collectors {
 		cctx, cancel := context.WithTimeout(ctx, feedTimeout)
 		origins, err := c.Plugin.Origins(cctx, prefix)
