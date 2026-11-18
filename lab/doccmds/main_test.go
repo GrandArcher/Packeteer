@@ -262,7 +262,7 @@ func TestGuidesUseDocumentationNumbers(t *testing.T) {
 		"docs/quickstart.md", "docs/walkthrough.md", "docs/troubleshooting.md", "docs/demo.md",
 		"docs/frr.md", "docs/junos.md", "docs/cisco.md", "docs/routers.md", "docs/mikrotik.md",
 		"lab/frr-walkthrough/frr.conf", "lab/packeteer-walkthrough.yaml", "lab/docker-compose-walkthrough.yml",
-		"lab/chr/edge.rsc", "lab/chr/packeteer.yaml", "lab/e2e-chr.sh",
+		"lab/chr/edge.rsc", "lab/chr/packeteer.yaml", "lab/chr/packeteer-nonbgp.yaml", "lab/e2e-chr.sh",
 		"docs/vrf.md", "lab/frr-vrf/frr.conf", "lab/frr-vrf-transit-a/frr.conf", "lab/frr-vrf-transit-b/frr.conf",
 		"lab/packeteer-vrf.yaml", "lab/docker-compose-vrf.yml", "lab/e2e-vrf.sh", "lab/frr-vrf-start.sh",
 		"lab/packeteer-demo.yaml", "lab/docker-compose-demo.yml", "lab/e2e-demo.sh", "scripts/demo.sh",

@@ -1,0 +1,59 @@
+# Lab only (lab/e2e-chr.sh, #655): non-BGP mode (#300) with the mikrotik
+# steerer against the throwaway CHR. Documentation prefixes, private ASN.
+# The static routes this installs are derived from flow data, NOT from a
+# learned BGP RIB view.
+#
+# lab/sendflow sends traffic to 203.0.113.7 (allowlisted) and 198.51.100.77
+# (not allowlisted). The fixed prober makes transit-b faster, so
+# 203.0.113.0/24 gets a static route via 192.0.2.2 tagged packeteer-steer.
+mode: inject
+asn: 64512
+router_id: 192.0.2.10
+packeteer_community: "64512:666"
+local_pref: 250
+max_improvements: 5
+hold_time: 2s
+thresholds:
+  min_loss_delta_pct: 1
+  min_rtt_delta_ms: 15
+http:
+  listen: "127.0.0.1:18090"
+providers:
+  - name: transit-a
+    source_ip: 192.0.2.11
+    next_hop: 192.0.2.1
+  - name: transit-b
+    source_ip: 192.0.2.12
+    next_hop: 192.0.2.2
+allowlist:
+  prefixes:
+    - 203.0.113.0/24
+probe:
+  path_check: {enabled: false}
+  interval: 2s
+  timeout: 500ms
+  packets: 4
+probers:
+  - type: fixed
+    config:
+      file: /etc/packeteer/probes/state.yaml
+sources:
+  - type: flow
+    config:
+      listen: 127.0.0.1:12055
+      window: 30s
+nonbgp:
+  install_routes: true
+  default_provider: transit-a
+  steerer:
+    type: mikrotik
+    config:
+      # http is allowed only to a loopback host: the CHR's REST API on the
+      # QEMU host forward.
+      url: http://127.0.0.1:18780
+      username_env: PACKETEER_ROUTER_USER
+      password_env: PACKETEER_ROUTER_PASSWORD
+
+# Lab only: no sign-in, so the script can read the API (#328).
+auth:
+  enabled: false

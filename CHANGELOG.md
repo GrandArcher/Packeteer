@@ -7,6 +7,9 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 ### Changed
 
 - `upgrade-release` CI job starts from the v1.6.0 image, pinned by digest, instead of v1.5.0; the downgrade step no longer needs the `routeros` key, which v1.6.0 accepts (#656).
+### Added
+
+- `chr` CI job runs non-BGP mode with the `mikrotik` steerer on the throwaway CHR: tagged static route installed, removed on SIGTERM, swept after `kill -9` (#655).
 
 ## [1.6.0] - 2026-11-17
 
