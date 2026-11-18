@@ -964,9 +964,10 @@ RPKI-invalid only paths (#401, not on a public edge). Off by default; needs `rpk
 
 | Key | Default | Meaning |
 |---|---|---|
-| `enabled` | `false` | `true` turns the report on. A block that is not enabled must not set `hijack_feeds` or `slurm`. |
+| `enabled` | `false` | `true` turns the report on. A block that is not enabled must not set `hijack_feeds`, `origin_collectors`, or `slurm`. |
 | `stable_after` | `720h` | How long the oldest learned path with the origin must be in the RIB to count as a stable origin (+2). 1h-8760h. |
 | `hijack_feeds` | none | `hijack_feed` plugin entries asked for incidents for each case: `file` ([hijack feed `file`](#hijack-feed-file)). Instance names must differ. Evidence only. |
+| `origin_collectors` | none | `origin_collector` plugin entries asked which origins a public collector set (RIPE RIS, RouteViews) sees for each case: `json` ([origin collector `json`](#origin-collector-json)). Instance names must differ. Evidence only: agreement, disagreement, and no answer are the `origin_agreement` signal. |
 | `slurm` | none | Allows proposing SLURM exceptions, with the keys below. Without it no exception can be proposed. |
 
 `slurm` keys:
@@ -984,6 +985,15 @@ Reads a mounted JSON file `{"incidents": [{"prefix": "...", "origin": 64511, "de
 | Key | Default | Meaning |
 |---|---|---|
 | `path` | none | Required. The file inside the container, for example `/etc/packeteer/hijacks.json`. |
+
+### Origin collector `json`
+
+One HTTP GET per lookup: `<url>?prefix=198.51.100.0/24`, answered with `{"prefix": "198.51.100.0/24", "origins": [64500]}`. Packeteer ships no client for a public service: `url` is an endpoint the operator runs or trusts that serves the origins RIS or RouteViews data shows (the lab uses stand-ins, [only-invalid.md](only-invalid.md#origin-agreement)). `prefix` in the answer must be the one asked, so the answer for a covering or more specific prefix is an error. `origins` empty means the collector saw no announcement of exactly that prefix. A failed request, a non-200 answer, or a bad body is an error. At most 1,000 origins; redirects stay on the same host.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `url` | none | Required. `http` or `https`, no credentials, query, or fragment. |
+| `rate_per_minute` | `60` | Lookups sent per minute. 1-600. |
 
 ### `irr`
 

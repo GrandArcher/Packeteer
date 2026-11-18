@@ -128,6 +128,12 @@ type Feed struct {
 	Plugin plugin.HijackFeed
 }
 
+// Collector is one origin_collectors entry.
+type Collector struct {
+	Name   string
+	Plugin plugin.OriginCollector
+}
+
 // Deps are what the detector reads.
 type Deps struct {
 	RIB  RIB
@@ -135,9 +141,12 @@ type Deps struct {
 	// IRR is irr.Checker.Lookup, nil when irr is off.
 	IRR   func(prefix netip.Prefix, origin uint32, provider string) plugin.IRRAnswer
 	Feeds []Feed
-	Emit  func(plugin.Event)
-	Log   *slog.Logger
-	Now   func() time.Time
+	// Collectors are the public collector stand-ins or endpoints asked for
+	// the origins they see.
+	Collectors []Collector
+	Emit       func(plugin.Event)
+	Log        *slog.Logger
+	Now        func() time.Time
 }
 
 // Status is the last scan.
@@ -309,7 +318,7 @@ func (d *Detector) inspect(ctx context.Context, sel rib.Route, now time.Time) (C
 	}
 	c.Signals = append(c.Signals, d.irrSignals(prefix, origin, sel.Provider)...)
 	c.Signals = append(c.Signals, d.ageSignal(c, now), roaSignal(c), providerSignal(c))
-	c.Signals = append(c.Signals, d.feedSignal(ctx, prefix, origin))
+	c.Signals = append(c.Signals, d.feedSignal(ctx, prefix, origin), d.collectorSignal(ctx, prefix, origin))
 	corroborated := false
 	for _, s := range c.Signals {
 		c.Score += s.Points
@@ -500,6 +509,56 @@ func (d *Detector) feedSignal(ctx context.Context, prefix netip.Prefix, origin u
 		return Signal{Name: "hijack_feeds", Detail: "no feed answered: " + strings.Join(failed, ", ")}
 	}
 	return Signal{Name: "hijack_feeds", Points: 1, Detail: fmt.Sprintf("%d of %d feeds report no incident for AS%d", answered, len(d.deps.Feeds), origin)}
+}
+
+// collectorSignal: the origins public collectors see for exactly the
+// prefix. A collector that lists the local origin agrees (one is +1, two
+// or more +2); one that lists origins but not the local one disagrees
+// (-2, whatever the others say). A collector that saw nothing or could not
+// answer is no evidence: silence is never agreement.
+func (d *Detector) collectorSignal(ctx context.Context, prefix netip.Prefix, origin uint32) Signal {
+	if len(d.deps.Collectors) == 0 {
+		return Signal{Name: "origin_agreement", Detail: "no origin_collectors configured"}
+	}
+	var agree, silent, failed []string
+	var disagree []string
+	for _, c := range d.deps.Collectors {
+		cctx, cancel := context.WithTimeout(ctx, feedTimeout)
+		origins, err := c.Plugin.Origins(cctx, prefix)
+		cancel()
+		switch {
+		case err != nil:
+			d.deps.Log.Warn("origin collector lookup failed", "collector", c.Name, "prefix", prefix, "err", err)
+			failed = append(failed, c.Name)
+		case len(origins) == 0:
+			silent = append(silent, c.Name)
+		case slices.Contains(origins, origin):
+			agree = append(agree, c.Name)
+		default:
+			slices.Sort(origins)
+			disagree = append(disagree, fmt.Sprintf("%s sees %s", c.Name, asList(slices.Compact(origins))))
+		}
+	}
+	var rest []string
+	if len(silent) > 0 {
+		rest = append(rest, "no origin seen by "+strings.Join(silent, ", "))
+	}
+	if len(failed) > 0 {
+		rest = append(rest, "no answer from "+strings.Join(failed, ", "))
+	}
+	tail := ""
+	if len(rest) > 0 {
+		tail = "; " + strings.Join(rest, "; ")
+	}
+	switch {
+	case len(disagree) > 0:
+		return Signal{Name: "origin_agreement", Points: -2, Detail: fmt.Sprintf("not AS%d: %s%s", origin, strings.Join(disagree, ", "), tail)}
+	case len(agree) >= 2:
+		return Signal{Name: "origin_agreement", Points: 2, Detail: fmt.Sprintf("%s see AS%d as an origin%s", strings.Join(agree, ", "), origin, tail)}
+	case len(agree) == 1:
+		return Signal{Name: "origin_agreement", Points: 1, Detail: fmt.Sprintf("%s sees AS%d as an origin%s", agree[0], origin, tail)}
+	}
+	return Signal{Name: "origin_agreement", Detail: "no collector reports an origin" + tail}
 }
 
 func asList(asns []uint32) string {

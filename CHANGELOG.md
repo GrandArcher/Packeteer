@@ -4,6 +4,10 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ## [Unreleased]
 
+### Added
+
+- `rpki.only_invalid.origin_collectors` (`origin_collector` plugin `json`) adds an `origin_agreement` signal; the `origin-agreement` CI job proves it against RIS and RouteViews stand-ins on an internal network (#671).
+
 ### Changed
 
 - `upgrade-release` CI job starts from the v1.7.0 image, pinned by digest, instead of v1.6.0; the downgrade step still removes no key (#669).

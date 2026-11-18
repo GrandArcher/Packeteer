@@ -11,6 +11,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/config"
 	"github.com/GrandArcher/Packeteer/internal/geoip"
 	"github.com/GrandArcher/Packeteer/internal/plugins/announcer/gobgp"
+	collectorjson "github.com/GrandArcher/Packeteer/internal/plugins/collector/httpjson"
 	"github.com/GrandArcher/Packeteer/internal/plugins/detector/baseline"
 	"github.com/GrandArcher/Packeteer/internal/plugins/elector/lease"
 	"github.com/GrandArcher/Packeteer/internal/plugins/exec"
@@ -133,6 +134,7 @@ func TestConfigDocCoversStructs(t *testing.T) {
 		irrwhois.Config{},
 		irrfile.Config{},
 		hijackfile.Config{},
+		collectorjson.Config{},
 		fabricicmp.Config{},
 		birdseye.Config{},
 		birdseye.ServerConfig{},

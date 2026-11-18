@@ -84,13 +84,14 @@ func TestOnlyInvalidParses(t *testing.T) {
 		t.Fatal("only_invalid on without the block")
 	}
 	y := minimalYAML + rpkiOn + "  only_invalid:\n    enabled: true\n    hijack_feeds: [{type: \" file \", config: {path: /etc/packeteer/hijacks.json}}]\n" +
+		"    origin_collectors: [{type: \" json \", name: ris, config: {url: \"http://192.0.2.50:8080/ris\"}}]\n" +
 		"    slurm:\n      path: /var/lib/packeteer/slurm.json\n      prefixes: [198.51.100.0/24, \"2001:db8::/32\"]\n      review_after: 720h\n"
 	cfg, err = Parse([]byte(y))
 	if err != nil {
 		t.Fatal(err)
 	}
 	o := cfg.RPKI.OnlyInvalid
-	if !cfg.OnlyInvalidOn() || o.StableAfter != 720*time.Hour || o.HijackFeeds[0].Type != "file" || *o.SLURM.ReviewAfter != 720*time.Hour {
+	if !cfg.OnlyInvalidOn() || o.StableAfter != 720*time.Hour || o.HijackFeeds[0].Type != "file" || o.OriginCollectors[0].Type != "json" || *o.SLURM.ReviewAfter != 720*time.Hour {
 		t.Fatalf("only_invalid = %+v", o)
 	}
 	if got := o.SLURM.SLURMPrefixes(); len(got) != 2 || got[0] != netip.MustParsePrefix("198.51.100.0/24") || got[1] != netip.MustParsePrefix("2001:db8::/32") {
@@ -117,10 +118,12 @@ func TestOnlyInvalidValidation(t *testing.T) {
 	slurm := on + "    slurm:\n      path: /var/lib/packeteer/slurm.json\n"
 	tests := []struct{ name, yaml, want string }{
 		{"without rpki", minimalYAML + "rpki:\n  only_invalid: {enabled: true}\n", "rpki.enabled is false but"},
-		{"disabled with slurm", minimalYAML + rpkiOn + "  only_invalid:\n    slurm: {path: /x}\n", "rpki.only_invalid.enabled is false but hijack_feeds or slurm is set"},
+		{"disabled with slurm", minimalYAML + rpkiOn + "  only_invalid:\n    slurm: {path: /x}\n", "rpki.only_invalid.enabled is false but hijack_feeds, origin_collectors, or slurm is set"},
 		{"short stable_after", on + "    stable_after: 1m\n", "rpki.only_invalid.stable_after 1m0s must be between 1h0m0s and 8760h0m0s"},
 		{"feed without type", on + "    hijack_feeds: [{}]\n", "rpki.only_invalid.hijack_feeds[0]: type is required"},
 		{"feed name twice", on + "    hijack_feeds: [{type: file}, {type: file}]\n", "rpki.only_invalid.hijack_feeds[1]: name \"file\" is used twice"},
+		{"collector without type", on + "    origin_collectors: [{}]\n", "rpki.only_invalid.origin_collectors[0]: type is required"},
+		{"collector name twice", on + "    origin_collectors: [{type: json}, {type: json}]\n", "rpki.only_invalid.origin_collectors[1]: name \"json\" is used twice"},
 		{"with ixp", slurm + "      prefixes: [198.51.100.0/24]\nixp: {}\n", "rpki.only_invalid.slurm cannot be combined with ixp"},
 		{"relative path", on + "    slurm: {path: slurm.json, prefixes: [198.51.100.0/24]}\n", "rpki.only_invalid.slurm.path \"slurm.json\" must be an absolute path"},
 		{"no prefixes", slurm, "rpki.only_invalid.slurm.prefixes: at least one prefix is required"},

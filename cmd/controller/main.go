@@ -279,7 +279,7 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		if s := cfg.RPKI.OnlyInvalid.SLURM; s != nil {
 			slurm = s.Path + " (each exception needs an admin to approve it)"
 		}
-		fmt.Fprintf(stdout, "rpki only_invalid: report RPKI-invalid only paths, hijack_feeds=%d, slurm exceptions %s (never announces)\n", len(cfg.RPKI.OnlyInvalid.HijackFeeds), slurm)
+		fmt.Fprintf(stdout, "rpki only_invalid: report RPKI-invalid only paths, hijack_feeds=%d, origin_collectors=%d, slurm exceptions %s (never announces)\n", len(cfg.RPKI.OnlyInvalid.HijackFeeds), len(cfg.RPKI.OnlyInvalid.OriginCollectors), slurm)
 	}
 	if cfg.Lookup != nil {
 		fmt.Fprintf(stdout, "lookup: %s (read-only, never announces)\n", cfg.Lookup.Type)

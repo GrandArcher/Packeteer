@@ -4,6 +4,7 @@ package all
 
 import (
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/announcer/gobgp"          // gobgp announcer
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/collector/httpjson"       // public collector origin lookup over HTTP JSON (evidence only)
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/covering/ripestat"        // RIPEstat announced-prefix lookup (non-BGP mode)
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/detector/baseline"        // baseline anomaly detector
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/elector/lease"            // lease-file HA elector

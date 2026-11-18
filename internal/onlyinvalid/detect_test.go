@@ -385,3 +385,128 @@ func TestStaleNeedsIRROrHistory(t *testing.T) {
 		t.Fatalf("with history: %+v", c)
 	}
 }
+
+type fakeCollector struct {
+	plugin.Base
+	origins map[netip.Prefix][]uint32
+	err     error
+	asked   []netip.Prefix
+}
+
+func (f *fakeCollector) Origins(_ context.Context, p netip.Prefix) ([]uint32, error) {
+	f.asked = append(f.asked, p)
+	return f.origins[p], f.err
+}
+
+func collectors(cs ...Collector) func(*Deps) { return func(d *Deps) { d.Collectors = cs } }
+
+// weakFixture has only the weak signals (same-origin ROA, two providers),
+// a score of 2 that is never a stale ROA without the IRR or the route age.
+func weakFixture() (*fakeRIB, *fakeRPKI) {
+	r, v, _ := staleFixture()
+	for i := range r.paths[fixture] {
+		r.paths[fixture][i].Age = t0.Add(-time.Hour)
+	}
+	return r, v
+}
+
+func scanWith(r RIB, v RPKI, irr func(netip.Prefix, uint32, string) plugin.IRRAnswer, opts ...func(*Deps)) *Detector {
+	d := Deps{RIB: r, RPKI: v, IRR: irr, Emit: func(plugin.Event) {}, Now: func() time.Time { return t0 }}
+	for _, o := range opts {
+		o(&d)
+	}
+	det := NewDetector(d, 30*24*time.Hour)
+	det.Scan(context.Background())
+	return det
+}
+
+// #671: collectors that list the local origin agree, and the signal says
+// which. Agreement raises the score but never makes a stale ROA alone.
+func TestCollectorAgreement(t *testing.T) {
+	r, v := weakFixture()
+	ris := &fakeCollector{origins: map[netip.Prefix][]uint32{fixture: {64500}}}
+	rv := &fakeCollector{origins: map[netip.Prefix][]uint32{fixture: {64500, 64510}}}
+	d := scanWith(r, v, nil, collectors(Collector{"ris", ris}, Collector{"routeviews", rv}))
+	c, _ := d.Case(fixture)
+	s := signal(c, "origin_agreement")
+	if s.Points != 2 || s.Detail != "ris, routeviews see AS64500 as an origin" {
+		t.Fatalf("signal = %+v", s)
+	}
+	if c.Score != 4 || c.Class != ClassUnclear {
+		t.Fatalf("agreement alone must not class stale_roa: score %d class %s", c.Score, c.Class)
+	}
+	if len(ris.asked) != 1 || ris.asked[0] != fixture {
+		t.Fatalf("ris asked %v", ris.asked)
+	}
+
+	d = scanWith(r, v, nil, collectors(Collector{"ris", ris}, Collector{"routeviews", &fakeCollector{}}))
+	c, _ = d.Case(fixture)
+	if s = signal(c, "origin_agreement"); s.Points != 1 || s.Detail != "ris sees AS64500 as an origin; no origin seen by routeviews" {
+		t.Fatalf("one of two: %+v", s)
+	}
+
+	// With the IRR route object the agreement reaches the class.
+	r, v, irr := staleFixture()
+	d = scanWith(r, v, irr, collectors(Collector{"ris", ris}))
+	if c, _ = d.Case(fixture); c.Class != ClassStaleROA || c.Score != 8 {
+		t.Fatalf("with IRR: %+v", c)
+	}
+}
+
+// #671: a collector that lists other origins disagrees, whatever the
+// other collector says, and the score drops.
+func TestCollectorDisagreement(t *testing.T) {
+	r, v := weakFixture()
+	ris := &fakeCollector{origins: map[netip.Prefix][]uint32{fixture: {64500}}}
+	rv := &fakeCollector{origins: map[netip.Prefix][]uint32{fixture: {64511, 64511, 64510}}}
+	d := scanWith(r, v, nil, collectors(Collector{"ris", ris}, Collector{"routeviews", rv}))
+	c, _ := d.Case(fixture)
+	s := signal(c, "origin_agreement")
+	if s.Points != -2 || s.Detail != "not AS64500: routeviews sees AS64510, AS64511" {
+		t.Fatalf("signal = %+v", s)
+	}
+	if c.Score != 0 || c.Class != ClassUnclear {
+		t.Fatalf("score %d class %s", c.Score, c.Class)
+	}
+	// With a conflicting origin on the learned paths too, it is a hijack.
+	r, v, irr := staleFixture()
+	r.paths[fixture] = nil
+	r.add("198.51.100.0/24", "transit-a", t0.Add(-2*time.Hour), 64496, 64511)
+	r.add("198.51.100.0/24", "transit-b", t0.Add(-90*24*time.Hour), 64497, 64500)
+	ris = &fakeCollector{origins: map[netip.Prefix][]uint32{fixture: {64500}}}
+	d = scanWith(r, v, irr, collectors(Collector{"ris", ris}))
+	if c, _ = d.Case(fixture); c.Origin != 64511 || c.Class != ClassHijack || signal(c, "origin_agreement").Points != -2 {
+		t.Fatalf("case = %+v", c)
+	}
+}
+
+// #671: a collector that is down, or sees nothing, never invents
+// agreement: the signal is neutral and the score and class are what they
+// are with no collector configured.
+func TestCollectorDownOrEmptyIsNotAgreement(t *testing.T) {
+	r, v := weakFixture()
+	base, _ := scanWith(r, v, nil).Case(fixture)
+	if s := signal(base, "origin_agreement"); s.Points != 0 || s.Detail != "no origin_collectors configured" {
+		t.Fatalf("none configured: %+v", s)
+	}
+	down := &fakeCollector{err: errors.New("connection refused")}
+	empty := &fakeCollector{}
+	for name, cs := range map[string][]Collector{
+		"down":  {{"ris", down}, {"routeviews", down}},
+		"empty": {{"ris", empty}, {"routeviews", empty}},
+		"mixed": {{"ris", down}, {"routeviews", empty}},
+	} {
+		c, _ := scanWith(r, v, nil, collectors(cs...)).Case(fixture)
+		s := signal(c, "origin_agreement")
+		if s.Points != 0 || !strings.HasPrefix(s.Detail, "no collector reports an origin") {
+			t.Errorf("%s: signal = %+v", name, s)
+		}
+		if c.Score != base.Score || c.Class != base.Class {
+			t.Errorf("%s: score %d class %s, want %d %s", name, c.Score, c.Class, base.Score, base.Class)
+		}
+	}
+	c, _ := scanWith(r, v, nil, collectors(Collector{"ris", down}, Collector{"routeviews", empty})).Case(fixture)
+	if d := signal(c, "origin_agreement").Detail; d != "no collector reports an origin; no origin seen by routeviews; no answer from ris" {
+		t.Fatalf("detail = %q", d)
+	}
+}
