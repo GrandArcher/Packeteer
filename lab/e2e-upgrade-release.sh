@@ -3,8 +3,9 @@
 # (pinned by digest) with sqlite history, a second user, a pin, a pause and an
 # acknowledged alert, stops it, starts the image built from this tree on the
 # same packeteer-data volume, and checks what the 1.2 to 1.3 upgrade notes
-# promise. Then it does the documented downgrade (remove the keys the release
-# does not know, start the release image) on that volume. Complements
+# promise. Then it does the documented downgrade on that volume: it starts the
+# release image again (no config key is newer than the release, so none is
+# removed). Complements
 # lab/e2e-upgrade.sh, which upgrades a build of this tree against a fake
 # release server.
 #
@@ -22,8 +23,8 @@ set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"
 
-prev_version=1.5.0
-prev_image="${PREV_IMAGE:-ghcr.io/grandarcher/packeteer@sha256:fc4a335ec25ca63e4fb7c1709480704174b4cf3fae100d5a12d0451c183e074a}"
+prev_version=1.6.0
+prev_image="${PREV_IMAGE:-ghcr.io/grandarcher/packeteer@sha256:324c39af4efc17c0e755e2348664fc502ac083ba8cc02518a11baf2c5d13ffaf}"
 case "$prev_image" in
 *@sha256:????????????????????????????????????????????????????????????????) ;;
 *)
@@ -134,11 +135,9 @@ stop() {
 }
 
 # check_cfg IMAGE FILE: the image's -check on a config file, with no data
-# volume, so it cannot touch the shared one. The two variables are fake
-# values for the routeros key; -check reads no router.
+# volume, so it cannot touch the shared one.
 check_cfg() {
 	docker run --rm -v "$2:/etc/packeteer/config.yaml:ro" -v "$root/lab/probes:/etc/packeteer/probes:ro" \
-		-e PACKETEER_ROUTER_READ_USER=lab -e PACKETEER_ROUTER_READ_PASSWORD=lab-only \
 		"$1" -check >"$work/check.out" 2>&1
 }
 
@@ -210,24 +209,11 @@ n=$(api 'events?limit=1000' | jq '[.events[] | select(.kind == "controller.start
 [ "$n" -gt "$(cat "$work/started.txt")" ] || fail "no new controller.started event after the upgrade (before $(cat "$work/started.txt"), now $n)"
 echo "e2e-upgrade-release: upgrade kept pin, pause, ack, users, history; mode observe; nothing announced"
 
-echo "== downgrade: remove the keys the release does not know, start the release image"
-# preflight.router_check type routeros (#637) is newer than the release.
-cp "$work/config.yaml" "$work/config-new.yaml"
-cat >>"$work/config-new.yaml" <<'EOF'
-preflight:
-  router_check:
-    type: routeros
-    config:
-      url: https://192.0.2.254
-      username_env: PACKETEER_ROUTER_READ_USER
-      password_env: PACKETEER_ROUTER_READ_PASSWORD
-EOF
-chmod 644 "$work/config-new.yaml"
-check_cfg "$new_image" "$work/config-new.yaml" || { cat "$work/check.out" >&2; fail "-check refused the routeros key on the build"; }
-if check_cfg "$prev_image" "$work/config-new.yaml"; then fail "the release accepted a key it should refuse"; fi
-grep -q routeros "$work/check.out" || { cat "$work/check.out" >&2; fail "the release refused the config, but not for the routeros type"; }
-echo "e2e-upgrade-release: the release refuses the new key, as the notes say: $(grep -m1 routeros "$work/check.out")"
-check_cfg "$prev_image" "$work/config.yaml" || { cat "$work/check.out" >&2; fail "-check failed on the release after the key was removed"; }
+echo "== downgrade: start the release image on the same volume"
+# No config key is newer than the release (v1.6.0 accepts everything the build
+# does), so the downgrade removes nothing. When the build adds a key, write it
+# into a copy of the config here, check that the release refuses it, and start
+# the release with the original config, as the README upgrade notes say.
 stop
 start "$prev_image" "$prev_version"
 state_is_kept "release $prev_version after the downgrade"
