@@ -15,6 +15,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Fixed
 
+- `mikrotik` steerer sends the RouterOS row id (`*` and hex) unescaped in PATCH and DELETE; RouterOS rejected the percent-encoded `*`, so SIGTERM left the route (#655).
 - Fuzz CI reruns a target only on the engine's own deadline (`lab/fuzzrun`); HA lab lease `ttl` 6s survives one slow tick; known-flake list in CONTRIBUTING (#660).
 
 ## [1.6.0] - 2026-11-17

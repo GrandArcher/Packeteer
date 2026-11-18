@@ -34,10 +34,13 @@ func (f *fakeRouterOS) add(kind, dst, gw, comment string) string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.next++
-	id := fmt.Sprintf("*%d", f.next)
+	id := f.id()
 	f.rows[kind] = append(f.rows[kind], map[string]string{".id": id, "dst-address": dst, "gateway": gw, "comment": comment})
 	return id
 }
+
+// id is a row id in the form RouterOS gives a dynamic or static route.
+func (f *fakeRouterOS) id() string { return fmt.Sprintf("*%X", 0x80000000+f.next) }
 
 func (f *fakeRouterOS) find(kind, dst string) []map[string]string {
 	f.mu.Lock()
@@ -64,7 +67,14 @@ func (f *fakeRouterOS) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"error":400,"message":"Bad Request","detail":"failure to create route"}`))
 		return
 	}
-	trim := strings.TrimPrefix(r.URL.Path, "/rest")
+	// RouterOS matches the id as written and rejects a percent-encoded
+	// "*", as the CHR lab showed.
+	if strings.Contains(strings.ToUpper(r.URL.EscapedPath()), "%2A") {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":400,"message":"Bad Request","detail":"missing or invalid resource identifier"}`))
+		return
+	}
+	trim := strings.TrimPrefix(r.URL.EscapedPath(), "/rest")
 	kind, id := trim, ""
 	if i := strings.LastIndex(trim, "/*"); i >= 0 {
 		kind, id = trim[:i], trim[i+1:]
@@ -95,14 +105,14 @@ func (f *fakeRouterOS) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		var body map[string]string
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		f.next++
-		body[".id"] = fmt.Sprintf("*%d", f.next)
+		body[".id"] = f.id()
 		f.rows[kind] = append(rows, body)
 		_ = json.NewEncoder(w).Encode(body)
 	case http.MethodPatch:
 		var body map[string]string
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		for _, row := range rows {
-			if row[".id"] == "*"+strings.TrimPrefix(id, "*") || row[".id"] == id {
+			if row[".id"] == id {
 				for k, v := range body {
 					row[k] = v
 				}
@@ -230,6 +240,30 @@ func TestInstallRefusesAHandWrittenRoute(t *testing.T) {
 	}
 	if len(rt.find("/ip/route", "203.0.113.0/24")) != 1 {
 		t.Fatal("Remove deleted a route it does not own")
+	}
+}
+
+func TestRowIDGoesIntoThePathUnescapedAndIsChecked(t *testing.T) {
+	rt := newFakeRouterOS()
+	id := rt.add("/ip/route", "203.0.113.0/24", "192.0.2.1", Tag)
+	bad := rt.add("/ip/route", "198.51.100.0/24", "192.0.2.1", Tag)
+	rt.rows["/ip/route"][1][".id"] = "*1/../../system/reset"
+	s := newSteerer(t, rt)
+	if err := s.Remove(context.Background(), pfx("203.0.113.0/24")); err != nil {
+		t.Fatal(err)
+	}
+	if want := "DELETE /rest/ip/route/" + id; rt.calls[len(rt.calls)-1] != want {
+		t.Fatalf("last call = %q, want %q", rt.calls[len(rt.calls)-1], want)
+	}
+	n := len(rt.calls)
+	err := s.Remove(context.Background(), pfx("198.51.100.0/24"))
+	if err == nil || !strings.Contains(err.Error(), "is not") {
+		t.Fatalf("err = %v, want the id refused (row was %s)", err, bad)
+	}
+	for _, c := range rt.calls[n:] {
+		if !strings.HasPrefix(c, "GET ") {
+			t.Fatalf("a request was sent for a malformed id: %s", c)
+		}
 	}
 }
 
