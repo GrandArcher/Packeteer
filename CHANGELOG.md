@@ -6,7 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Added
 
-- Settings forms for the `rpki` (with `only_invalid`), `registry`, `mcp`, `verify`, `herd` and `preflight.router_check` blocks; never mode, allowlist, announcer, SLURM, `push_enabled` or backout (#670).
+- Settings forms for `rpki` (with `only_invalid`), `registry`, `mcp`, `verify`, `herd` and `preflight.router_check`; never mode, allowlist, announcer, SLURM, `push_enabled` or backout (#670).
 
 ## [1.7.0] - 2026-11-18
 
