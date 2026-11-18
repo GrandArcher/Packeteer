@@ -78,17 +78,17 @@ The image is `ghcr.io/grandarcher/packeteer`, linux/amd64 and linux/arm64. It ru
 
 | Tag | What it is |
 |---|---|
-| `1.6.0` | The last release. Pin this one. |
+| `1.7.0` | The last release. Pin this one. |
 | `latest` | The same release, updated when a release tag is published. |
 | `edge` | The build from `main`. |
 
 **Step by step: [docs/quickstart.md](docs/quickstart.md).** It goes from an empty directory to a running instance in observe, with a first run on loopback, `docker run` and Compose, and the stop. CI runs every command on that page against the image built from the same commit.
 
-The short version, pinned to 1.6.0, the last release. Take the example config from the same tag as the image: the file on `main` can carry keys a release does not know yet, and unknown keys refuse startup. For `:edge`, use `main` in both places.
+The short version, pinned to 1.7.0, the last release. Take the example config from the same tag as the image: the file on `main` can carry keys a release does not know yet, and unknown keys refuse startup. For `:edge`, use `main` in both places.
 
 ```sh
-IMAGE=ghcr.io/grandarcher/packeteer:1.6.0
-curl -fsSLo config.yaml https://raw.githubusercontent.com/GrandArcher/Packeteer/v1.6.0/config.example.yaml
+IMAGE=ghcr.io/grandarcher/packeteer:1.7.0
+curl -fsSLo config.yaml https://raw.githubusercontent.com/GrandArcher/Packeteer/v1.7.0/config.example.yaml
 # Edit providers and source IPs. Leave mode: observe.
 mkdir -p plugins
 
@@ -109,7 +109,7 @@ docker run -d --name packeteer --network host \
 
 ```sh
 docker run --rm -e PACKETEER_CONFIG=/etc/packeteer/config.example.yaml \
-  ghcr.io/grandarcher/packeteer:1.6.0 -check
+  ghcr.io/grandarcher/packeteer:1.7.0 -check
 ```
 
 The default config path inside the container is `/etc/packeteer/config.yaml` (`PACKETEER_CONFIG`, or `-config`).
@@ -120,7 +120,7 @@ Without `NET_RAW`, or where ICMP is filtered, the probe falls back to TCP port 4
 
 The `packeteer-data` volume keeps report history (`storage: {type: sqlite}`, file `/var/lib/packeteer/packeteer.db`) across container restarts and upgrades, and the open billing period of SNMP 95th-percentile samples when telemetry is configured. Without the volume, reports and that window start empty after the container is recreated. Leave out `storage` to turn history off; the probe and decision loop does not depend on it, and the 95th window then lives in memory only. Sign-in on by default (no `auth.enabled`, no `PACKETEER_HTTP_USER`) adds `sqlite` when `storage` is left out.
 
-[docker-compose.yml](docker-compose.yml) runs the same container with Compose: host networking, the two capabilities, the mounts, and `restart: unless-stopped` ([quickstart, step 5](docs/quickstart.md#5-or-run-it-with-compose)). Its `image` line pins `ghcr.io/grandarcher/packeteer:1.6.0`; use `:edge` for the build from `main`. There is no `ports:` map: with host networking, `http.listen` is already an address on the host. Stop with `docker compose stop -t 30` (see [Rollback](#rollback)).
+[docker-compose.yml](docker-compose.yml) runs the same container with Compose: host networking, the two capabilities, the mounts, and `restart: unless-stopped` ([quickstart, step 5](docs/quickstart.md#5-or-run-it-with-compose)). Its `image` line pins `ghcr.io/grandarcher/packeteer:1.7.0`; use `:edge` for the build from `main`. There is no `ports:` map: with host networking, `http.listen` is already an address on the host. Stop with `docker compose stop -t 30` (see [Rollback](#rollback)).
 
 ## Minimum config
 
@@ -352,11 +352,11 @@ Symptoms, log lines, and fixes: [docs/troubleshooting.md](docs/troubleshooting.m
 
 ## Features
 
-Status on main after the 1.6.0 release, capability rows per milestone and how many are done, from the summary in [docs/FEATURES.md](docs/FEATURES.md#summary):
+Status on main after the 1.7.0 release, capability rows per milestone and how many are done, from the summary in [docs/FEATURES.md](docs/FEATURES.md#summary):
 
 | Milestone | Rows | Done |
 |---|---|---|
-| v0.1 | 24 | 23 |
+| v0.1 | 24 | 24 |
 | v0.2 | 25 | 25 |
 | v0.3 | 17 | 17 |
 | v0.4 | 13 | 12 |
@@ -368,7 +368,7 @@ Status on main after the 1.6.0 release, capability rows per milestone and how ma
 | v1.4 | 1 | 1 |
 | v1.5 | 1 | 1 |
 | won't do | 2 | - |
-| **Total** | 147 | 137 |
+| **Total** | 147 | 138 |
 
 v0.1 is the outbound loop: probes, static and flow targets, an iBGP RIB, scoring with hysteresis, optional injection, the read-only UI and API, the container, and the FRR lab. v0.2 adds cost and commit control, SNMP, policies, alerts, and reports. v0.3 adds inbound optimization, BMP and add-path, multiple routers and IX, RTBH/FlowSpec mitigation, transit classification, and capped more-specific injection, all lab-proven. v0.4 adds multi-POP federation, active/standby HA and backup, RBAC/SSO/audit, flow-baseline anomaly detection that mitigates only on explicit rules, and the remaining UI rows. v0.5 is hardening on that matrix: dashboard clarity and a first-run checklist, CI-tested install and walkthrough docs, load and soak budgets, a MikroTik CHR lab in CI, and a scheduled router interop matrix. Field feedback from real observe-mode deployments (#54) is still open. v0.6 closes the gaps from the 2026-10-07 review of prefix selection, measurement, and the UI, adds flap quarantine, live apply, scale budgets up to multi-million path tables, upgrade from the UI, and a failure-mode e2e matrix. v0.7 adds exchange (IX) visibility for an edge network: an exchange view, IX LAN health probes, route-server vs bilateral prefix views, offload and potential-peers reports, dashboard widgets, Commit & Cost, Reports, search, System, and maintenance pages, and link-outs.
 
@@ -411,7 +411,7 @@ v1.5.0 added one capability row, the field-report kit, and two opt-in config key
 
 Nothing is field-proven (#54). The shipped config stays `mode: observe`, and injection stays off by default ([CHANGELOG](CHANGELOG.md#150---2026-11-16)).
 
-v1.6.0 (this release) adds no capability row and no new top-level config key; the shared IX port row moved from partial to done (137 done, up from 136 at 1.5.0), and `preflight.router_check` gained the `routeros` type. What an operator will look for:
+v1.6.0 added no capability row and no new top-level config key; the shared IX port row moved from partial to done (137 done, up from 136 at 1.5.0), and `preflight.router_check` gained the `routeros` type. What an operator looked for:
 
 - Performance moves, `static` rules, and pins (`/api/pins`) onto a peer of an exchange with an `exchanges[].port` block now need headroom on that port; a pin that does not fit is refused naming the port, and `/api/exchanges` carries an `over_commit` flag per port ([docs/CONFIG.md](docs/CONFIG.md), [docs/performance.md](docs/performance.md), #643, the last gap of #151).
 - `preflight.router_check` type `routeros` reads RouterOS 7 BGP connections and filter rules over the REST API with GET only, from a fixed path list, for the `import_filter` onboarding check; it is off by default, and the `chr` CI job runs it against a CHR ([docs/onboarding.md](docs/onboarding.md), [docs/mikrotik.md](docs/mikrotik.md), #637).
@@ -421,11 +421,27 @@ v1.6.0 (this release) adds no capability row and no new top-level config key; th
 
 Nothing is field-proven (#54). The shipped config stays `mode: observe`, and injection stays off by default ([CHANGELOG](CHANGELOG.md#160---2026-11-17)).
 
+v1.7.0 (this release) adds no capability row and no config key. The flow-based target discovery row moved from partial to done (138 done, up from 137 at 1.6.0); it is a status change only, no behavior changed. What an operator will look for:
+
+- The `federation` block (peers, `accept_settings_from`, certificate paths, timing) and the Push of `thresholds` and `policies` have a form on the Settings page; it never edits `mode`, the allowlist, or the announcer, and a change needs a restart ([docs/ui.md](docs/ui.md), [docs/multi-pop.md](docs/multi-pop.md), #658).
+- The `chr` CI job runs non-BGP mode with the `mikrotik` steerer on a throwaway RouterOS CHR: the tagged static route is installed, removed on SIGTERM, and swept after `kill -9`. The steerer now sends the RouterOS row id unescaped, because RouterOS rejected the percent-encoded `*` and SIGTERM left the route ([docs/nonbgp.md](docs/nonbgp.md), [docs/mikrotik.md](docs/mikrotik.md), #655).
+- The `registry` CI job runs the registry scan and confirmed pushes against in-lab IRR, VRP, PeeringDB, and RIPE REST stand-ins on an internal network; no live registry is contacted ([docs/registry.md](docs/registry.md), #657).
+- `lab/e2e-herd.sh` runs three members, each in its own AS, that find each other through a local hub stand-in only; a tampered and an expired entry are refused, and `/herd.html` lists all three. There is no public hub ([docs/herd-hub.md](docs/herd-hub.md), #659).
+- The `upgrade-release` CI job now starts from the v1.6.0 image, pinned by digest, instead of v1.5.0 (#656). `CONTRIBUTING.md` lists the known CI flakes and the fuzz and HA lab hardening (#660).
+- Docker Desktop on macOS and Windows stays "allowed, not verified": no `scripts/demo.sh --report` result has been recorded ([docs/demo.md](docs/demo.md#platforms)).
+
+Nothing is field-proven (#54). The shipped config stays `mode: observe`, and injection stays off by default ([CHANGELOG](CHANGELOG.md#170---2026-11-18)).
+
 ## Upgrades
 
 Pulling a newer image and recreating the container is the plain upgrade. Your config and the `packeteer-data` volume carry over.
 
 The Settings page can also upgrade in place (#196). It is off by default. It needs `upgrade.enabled: true`, the release public key in `upgrade.public_key` ([CONFIG.md](docs/CONFIG.md#upgrade)), an admin login (auth or basic auth), and the `packeteer-data` volume to keep the new version across restarts. The public key is printed in the [v0.6.0 release notes](https://github.com/GrandArcher/Packeteer/releases/tag/v0.6.0). Every route is withdrawn before the switch, and a release whose signature or checksum does not match is refused. Details: [docs/ui.md](docs/ui.md#upgrade-from-the-ui).
+
+### From 1.6.0 to 1.7.0
+
+- No config key changed and no existing config behaves differently. The Settings form writes the same `federation` keys as before. A downgrade to 1.6.0 needs no config change.
+- With the `mikrotik` steerer in non-BGP mode, a route that an earlier run could not remove (RouterOS refused the escaped row id) is swept on the next start, because it carries the `packeteer-steer` comment.
 
 ### From 1.5.0 to 1.6.0
 
