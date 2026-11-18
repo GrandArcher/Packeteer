@@ -78,7 +78,7 @@ case_sigkill() { do_sigkill; }
 case_session_loss() { do_session_loss; }
 
 # No instance can measure: the active one withdraws and the standby has
-# nothing to announce, even past the time a takeover takes (12s).
+# nothing to announce, even past the time a takeover takes (13s).
 case_stale_measurements() {
 	rm -f "$lab_dir/state.yaml"
 	wait_routes 40 "probe results gone"

@@ -30,19 +30,19 @@ jobs:
         run: go test ./...
       - name: path-scoring harness fixture replay (#584; experimental, lab only; baseline vs a worse and a better variant)
         run: go run ./lab/evolve -history lab/evolve/testdata/history.jsonl -base lab/evolve/testdata/baseline.yaml -variant lab/evolve/testdata/worse.yaml -variant lab/evolve/testdata/better.yaml
-      - name: fuzz the NetFlow v9 and IPFIX decoders (#502)
+      - name: fuzz the NetFlow v9 and IPFIX decoders (#502; lab/fuzzrun reruns only the fuzz engine's own deadline, #660)
         run: |
-          go test -run '^$' -fuzz '^FuzzDecodeIPFIX$' -fuzztime 15s ./internal/plugins/source/flow/
-          go test -run '^$' -fuzz '^FuzzDecodeV9$' -fuzztime 15s ./internal/plugins/source/flow/
-      - name: fuzz the other wire parsers (#510; NetFlow v5, sFlow, BMP, RTR, SNMP BER, TWAMP, pcap)
+          go run ./lab/fuzzrun FuzzDecodeIPFIX 15s ./internal/plugins/source/flow/
+          go run ./lab/fuzzrun FuzzDecodeV9 15s ./internal/plugins/source/flow/
+      - name: fuzz the other wire parsers (#510; NetFlow v5, sFlow, BMP, RTR, SNMP BER, TWAMP, pcap; same rerun rule)
         run: |
-          go test -run '^$' -fuzz '^FuzzDecodeV5$' -fuzztime 10s ./internal/plugins/source/flow/
-          go test -run '^$' -fuzz '^FuzzSFlow$' -fuzztime 10s ./internal/plugins/source/flow/
-          go test -run '^$' -fuzz '^FuzzBMPStream$' -fuzztime 10s ./internal/plugins/ribsource/bmp/
-          go test -run '^$' -fuzz '^FuzzRTRStream$' -fuzztime 10s ./internal/plugins/rpki/rtr/
-          go test -run '^$' -fuzz '^FuzzBER$' -fuzztime 10s ./internal/plugins/exporter/snmpagent/
-          go test -run '^$' -fuzz '^FuzzParse$' -fuzztime 10s ./internal/twamp/
-          go test -run '^$' -fuzz '^FuzzPcap$' -fuzztime 10s ./internal/plugins/source/span/
+          go run ./lab/fuzzrun FuzzDecodeV5 10s ./internal/plugins/source/flow/
+          go run ./lab/fuzzrun FuzzSFlow 10s ./internal/plugins/source/flow/
+          go run ./lab/fuzzrun FuzzBMPStream 10s ./internal/plugins/ribsource/bmp/
+          go run ./lab/fuzzrun FuzzRTRStream 10s ./internal/plugins/rpki/rtr/
+          go run ./lab/fuzzrun FuzzBER 10s ./internal/plugins/exporter/snmpagent/
+          go run ./lab/fuzzrun FuzzParse 10s ./internal/twamp/
+          go run ./lab/fuzzrun FuzzPcap 10s ./internal/plugins/source/span/
       - name: upgrade e2e (#196; binary install, bad signature and checksum, upgrade in place, rollback, observe)
         run: MODE=bin bash lab/e2e-upgrade.sh
       - name: icmp prober with raw sockets (root)

@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -381,5 +383,30 @@ func TestWriteAtomicReportsDirectorySync(t *testing.T) {
 	// Tests skip fsync; then the directory is not opened either.
 	if err := writeAtomic(path, []byte("{}"), false); err != nil {
 		t.Fatalf("durable=false: %v", err)
+	}
+}
+
+// A tick that waits out the lock (renew) for a stalled peer or disk fails
+// and delays the next success by one renew, so the active instance steps
+// down and withdraws when ttl/2 is no more than two renews (#660, the HA
+// lab on a loaded runner). The lab pair keeps a margin over that.
+func TestLabHAConfigsSurviveOneFailedTick(t *testing.T) {
+	for _, name := range []string{"packeteer-ha-a.yaml", "packeteer-ha-b.yaml"} {
+		raw, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "lab", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var doc struct {
+			HA struct {
+				Config Config `yaml:"config"`
+			} `yaml:"ha"`
+		}
+		if err := yaml.Unmarshal(raw, &doc); err != nil {
+			t.Fatal(err)
+		}
+		c := doc.HA.Config
+		if c.Renew <= 0 || c.TTL/2 <= 2*c.Renew {
+			t.Errorf("%s: ttl %s and renew %s step the active instance down after one failed tick", name, c.TTL, c.Renew)
+		}
 	}
 }

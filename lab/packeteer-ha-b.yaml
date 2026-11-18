@@ -54,14 +54,14 @@ storage:
   config:
     path: /var/lib/packeteer/data/packeteer.db
 # Both instances mount the same volume on /var/lib/packeteer/ha. With the
-# edge's 9s hold time a standby waits max(4s, 2s + 9s + 1s) = 12s after
+# edge's 9s hold time a standby waits max(6s, 3s + 9s + 1s) = 13s after
 # the lease last changed before it takes over from a crashed instance.
 ha:
   type: lease
   config:
     path: /var/lib/packeteer/ha/lease.json
     id: pk-b
-    ttl: 4s
+    ttl: 6s
     renew: 1s
 
 # Lab only: the basic-auth account from the compose file, no sign-in
