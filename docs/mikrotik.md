@@ -80,7 +80,7 @@ RouterOS offers the graceful-restart capability (`gr` under `local.capabilities`
 
 The same job runs the read-only router check (`preflight.router_check` type `routeros`, GET requests only) as a `read`-group user: see [onboarding.md](onboarding.md#read-only-router-check).
 
-It then runs non-BGP mode ([nonbgp.md](nonbgp.md), #300) with the `mikrotik` steerer, the BGP speakers stopped, logged in as a user of a `read,write,rest-api` group made for the run ([lab/chr/packeteer-nonbgp.yaml](../lab/chr/packeteer-nonbgp.yaml), inject with `nonbgp.install_routes: true`, lab only). RouterOS gets exactly one static route, `203.0.113.0/24` via 192.0.2.2 with the comment `packeteer-steer`, active; SIGTERM removes it; after SIGKILL it stays, and the next start, with no flow, sweeps it.
+It then runs non-BGP mode ([nonbgp.md](nonbgp.md), #300) with the `mikrotik` steerer, the BGP speakers stopped, logged in as a user of a `read,write,api,rest-api` group made for the run ([lab/chr/packeteer-nonbgp.yaml](../lab/chr/packeteer-nonbgp.yaml), inject with `nonbgp.install_routes: true`, lab only). RouterOS gets exactly one static route, `203.0.113.0/24` via 192.0.2.2 with the comment `packeteer-steer`, active; SIGTERM removes it; after SIGKILL it stays, and the next start, with no flow, sweeps it.
 
 Once Packeteer's route is best, the router stops advertising the prefix to Packeteer (best path only), as described above; the improvement stays.
 

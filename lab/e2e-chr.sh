@@ -515,7 +515,7 @@ wait_for "CHR drops the speakers' routes" 60 no_lab_routes
 
 # The steerer logs in as a read/write REST user made for this run.
 steer_pw=$(openssl rand -hex 16)
-chr_script '/user group add name=pk-steer policy=read,write,rest-api'
+chr_script '/user group add name=pk-steer policy=read,write,api,rest-api'
 rest '/user/group' | jq -e 'any(.[]; .name == "pk-steer")' >/dev/null || fail "user group pk-steer not created"
 chr_script "/user add name=pk-steer group=pk-steer password=\"${steer_pw}\""
 rest '/user' | jq -e 'any(.[]; .name == "pk-steer" and .group == "pk-steer")' >/dev/null || fail "steerer user not created"
