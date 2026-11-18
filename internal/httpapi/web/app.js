@@ -1261,7 +1261,8 @@ function refresh() {
     // The central view is optional too.
     if (results[5].status === "fulfilled") {
       renderFederation(results[5].value);
-      renderFedPush(Boolean(results[5].value && results[5].value.push_enabled));
+      // Only the Overview and Settings pages load fedpush.js.
+      if (typeof renderFedPush === "function") renderFedPush(Boolean(results[5].value && results[5].value.push_enabled));
     }
     renderStatus(err);
     renderConn(err);

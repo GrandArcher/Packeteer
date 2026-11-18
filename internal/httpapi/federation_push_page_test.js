@@ -72,9 +72,12 @@ function fn(src, name) {
 
 var page = fs.readFileSync(path.join(__dirname, "web", "fedpush.js"), "utf8");
 vm.runInContext(page, context);
-// el and clear come from the page that loads fedpush.js (app.js or ui.js).
-var ui = fs.readFileSync(path.join(__dirname, "web", "ui.js"), "utf8");
-["el", "clear"].forEach(function (name) { vm.runInContext(fn(ui, name), context); });
+// el and clear come from the page that loads fedpush.js; the Overview's are app.js's.
+var app = fs.readFileSync(path.join(__dirname, "web", "app.js"), "utf8");
+["el", "clear"].forEach(function (name) { vm.runInContext(fn(app, name), context); });
+
+// Pages that load app.js but not fedpush.js must not throw in refresh().
+assert(/typeof renderFedPush === "function"\)\s*renderFedPush\(/.test(app), "app.js guards renderFedPush for pages without fedpush.js");
 
 var root = ids["fed-push"];
 
