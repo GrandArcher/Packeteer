@@ -6,6 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Added
 
+- Settings form for the `federation` block (peers, `accept_settings_from`, paths) and a Push of `thresholds` and `policies` under it; never mode, allowlist, or announcer (#658).
 - `registry` CI job: `lab/e2e-registry.sh` runs the registry scan and confirmed pushes against in-lab IRR, VRP, PeeringDB and RIPE REST stand-ins on an internal network; no live registry (#657).
 
 ### Changed

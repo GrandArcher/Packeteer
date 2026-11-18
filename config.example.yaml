@@ -536,6 +536,7 @@ scorer:
 # only for a prefix this POP learned, while the peer is fresh and exits the
 # prefix through it. global_commit shares one commit across POPs (commit
 # scorer). /api/federation is the central view. Certificates are mounted.
+# Settings has a form for the federation block and the push (docs/ui.md).
 # domain: pop-a
 # inter_dc_rtt:
 #   pop-b: 12ms

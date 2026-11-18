@@ -406,6 +406,7 @@ global.fetch = function (url, opts) {
       text: function () { return Promise.resolve(JSON.stringify({yaml: req.yaml, form: req.form})); }
     });
   }
+  if (method === "GET" && String(url) === "/api/federation") return reply({push_enabled: true});
   return Promise.reject(new Error("offline"));
 };
 
@@ -443,6 +444,7 @@ function reply(body) {
 vm.runInThisContext(fs.readFileSync(path.join(dir, "web/ui.js"), "utf8"), {filename: "ui.js"});
 vm.runInThisContext(fs.readFileSync(path.join(dir, "web/countries.js"), "utf8"), {filename: "countries.js"});
 vm.runInThisContext(fs.readFileSync(path.join(dir, "web/settings.js"), "utf8"), {filename: "settings.js"});
+vm.runInThisContext(fs.readFileSync(path.join(dir, "web/fedpush.js"), "utf8"), {filename: "fedpush.js"});
 
 // The long sections start closed (#580), and a link such as
 // /settings.html#commit-setup opens the one it points at, on load and on a
@@ -550,6 +552,9 @@ async function main() {
   await flush();
   assert(typeof form === "object", "settings form did not load");
   assert(!calls.some(function (c) { return c.method === "PUT"; }), "startup wrote config");
+  var pushBox = document.getElementById("fed-push");
+  assert(pushBox.hidden === false && pushBox.querySelectorAll("button").length === 1, "the push control is not shown when the instance can push (#658)");
+  assert(!calls.some(function (c) { return c.method === "POST" && c.url === "/api/federation/push"; }), "startup pushed settings");
 
   form.anomaly.enabled = true;
   form.anomaly.mitigation_mode = "observe";

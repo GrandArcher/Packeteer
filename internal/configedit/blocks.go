@@ -6,6 +6,7 @@ import (
 	"math"
 	"net"
 	"net/netip"
+	"net/url"
 	"reflect"
 	"slices"
 	"strconv"
@@ -127,6 +128,14 @@ var checkers = map[string]func(string) error{
 	"community": func(s string) error {
 		_, err := config.CommunityText(s)
 		return err
+	},
+	// httpsurl matches the federation peer's url check.
+	"httpsurl": func(s string) error {
+		u, err := url.Parse(s)
+		if err != nil || u.Scheme != "https" || u.Host == "" || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.User != nil {
+			return fmt.Errorf("%q must be https://host:port", s)
+		}
+		return nil
 	},
 	"abspath": func(s string) error {
 		if !strings.HasPrefix(s, "/") || strings.ContainsAny(s, "\r\n") {

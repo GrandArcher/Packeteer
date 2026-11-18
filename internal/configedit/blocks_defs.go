@@ -231,6 +231,33 @@ var blockDefs = []Block{
 		},
 	},
 	{
+		ID: "federation", Title: "Federation (multi-POP)", YAML: "",
+		Help: "Joins this instance to the other POPs over mutual TLS. Peers share a read-only view; nothing here announces or decides. A peer may push thresholds and policies to this instance only when it is listed under Accept settings from. Mode, the allowlist, and the announcer are never pushed. A change needs a restart.",
+		Fields: []Field{
+			field("domain", "Routing domain", "This instance's routing domain. Federation needs it.", KindString).check("name"),
+			field("instance", "Instance name", "How peers see this instance. Empty uses the domain.", KindString).check("name").adv(),
+			field("federation", "Federation", "Off runs this instance on its own.", KindGroup).with(
+				field("type", "Type", "The only federation transport is mtls.", KindEnum).opts("mtls").req(),
+				field("config.listen", "Listen", "host:port that serves this instance's snapshot to peers. Empty only polls. With --network host this is a host port: allow it only from the peers.", KindString).check("hostport"),
+				field("config.cert_file", "Certificate file", "Absolute path of this instance's certificate in the container.", KindString).check("abspath").req(),
+				field("config.key_file", "Key file", "Absolute path of its private key in the container. Only the path is stored.", KindString).check("abspath").req(),
+				field("config.ca_file", "CA file", "Absolute path of the CA that signs every instance's certificate.", KindString).check("abspath").req(),
+				field("config.peers", "Peers", "The other instances. Each peer's snapshot must carry its name and its certificate must be valid for it.", KindRows).unique("name").with(
+					field("name", "Name", "The peer's instance name.", KindString).check("name").req(),
+					field("url", "URL", "https://host:port of the peer.", KindString).check("httpsurl").req(),
+					field("server_name", "Certificate name", "Overrides the name checked on the peer's certificate.", KindString).check("name").adv(),
+					field("domain", "Pinned domain", "The routing domain this peer may claim. Empty accepts what it claims.", KindString).check("name").adv(),
+				),
+				field("config.allow_clients", "Allowed readers", "Certificate names that may read this instance's snapshot, one per row. Empty uses the peer names.", KindList).check("name"),
+				field("config.accept_settings_from", "Accept settings from", "Certificate names that may push thresholds and policies here, one per row. Empty refuses every push. Needs a listen address and the config editor.", KindList).check("name"),
+				field("config.poll_interval", "Poll interval", "How often each peer is read, 100ms to 1m.", KindDuration).rng(0.1, 60).dflt("2s").adv(),
+				field("config.timeout", "Read timeout", "Bounds one read. At most the poll interval.", KindDuration).rng(0.001, 60).adv(),
+				field("config.max_age", "Peer data max age", "A peer's data older than this is not used. From the poll interval to 10m. Empty is three poll intervals.", KindDuration).rng(0.1, 600).adv(),
+				field("config.max_bytes", "Largest snapshot", "Bytes accepted from a peer, 1024 to 1073741824.", KindInt).rng(1024, 1073741824).dflt("16777216").adv(),
+			),
+		},
+	},
+	{
 		ID: "http", Title: "HTTP server", YAML: "http", path: []string{"http"},
 		Help: "The dashboard, API, and this page. A change to these needs a restart. Mind lock-out: a listen address or allowed range that excludes you, or the editor off, ends this page.",
 		Fields: []Field{

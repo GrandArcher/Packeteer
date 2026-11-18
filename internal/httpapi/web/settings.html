@@ -468,6 +468,11 @@
         <p id="an-state" class="tag"></p>
         <div id="form-anomaly-rules"></div>
         <button type="button" id="form-add-anomaly-rule">+ Anomaly rule</button>
+        <div class="block-mount" data-block="federation"></div>
+        <div id="fed-push" hidden>
+          <h4>Push settings to peers</h4>
+          <p class="tag">Sends the thresholds and policies in the saved file, not unsaved edits, to every peer. Each peer checks them like a local save and applies them with no restart. A peer must list this instance under Accept settings from. Only these two sections are sent; every other key stays as each peer has it.</p>
+        </div>
         <div class="block-mount" data-block="http"></div>
         <h3>Plugins</h3>
         <p class="tag">Probers, notifiers, telemetry, storage, and the sources and policies that have no card above. Untick one to remove it on Save; the Preview shows what goes. Show settings lists its plain settings. A key that may hold a secret is listed by name and never shown, and a nested value is kept as it is.</p>
@@ -556,6 +561,7 @@
 <script src="/countries.js"></script>
 <script src="/settings.js"></script>
 <script src="/blocks.js"></script>
+<script src="/fedpush.js"></script>
 <script src="/commitsetup.js"></script>
 <script src="/upgrade.js"></script>
 </body>
