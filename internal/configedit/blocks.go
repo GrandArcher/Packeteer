@@ -128,6 +128,10 @@ var checkers = map[string]func(string) error{
 		_, err := config.CommunityText(s)
 		return err
 	},
+	"httpsurl": func(s string) error {
+		_, err := config.HTTPSHostURL(s)
+		return err
+	},
 	"abspath": func(s string) error {
 		if !strings.HasPrefix(s, "/") || strings.ContainsAny(s, "\r\n") {
 			return fmt.Errorf("%q must be an absolute path", s)

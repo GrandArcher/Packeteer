@@ -22,7 +22,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"regexp"
 	"slices"
@@ -30,6 +29,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/GrandArcher/Packeteer/internal/config"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
@@ -206,9 +206,9 @@ func New(c plugin.Config, env plugin.Env) (plugin.Federation, error) {
 		if p.Domain != "" && !nameRE.MatchString(p.Domain) {
 			return nil, fmt.Errorf("peers[%d] (%s): domain %q must be 1-64 characters of letters, digits, '_', '.' or '-'", i, p.Name, p.Domain)
 		}
-		u, err := url.Parse(p.URL)
-		if err != nil || u.Scheme != "https" || u.Host == "" || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.User != nil {
-			return nil, fmt.Errorf("peers[%d] (%s): url %q must be https://host:port", i, p.Name, p.URL)
+		u, err := config.HTTPSHostURL(p.URL)
+		if err != nil {
+			return nil, fmt.Errorf("peers[%d] (%s): url %w", i, p.Name, err)
 		}
 		f.peers = append(f.peers, &peerState{cfg: p, url: "https://" + u.Host + SnapshotPath, pushURL: "https://" + u.Host + SettingsPath})
 	}

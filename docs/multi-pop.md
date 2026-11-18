@@ -122,7 +122,7 @@ http:
   config_editor: true               # the push is written to the mounted file
 ```
 
-On the sending instance, save the change in the settings page or the YAML editor first, then press Push on the dashboard's POPs section or call `POST /api/federation/push` with `{"sections": ["thresholds"]}` (optionally `"peers": ["pop-b"]`). The sender needs `http.config_editor` and an admin sign-in. Each peer validates the sections like a local `PUT /api/config` and applies them online with no restart; the reply has one row per peer: `applied`, `unchanged`, `refused` with the reasons, `failed`, or `unreachable`.
+On the sending instance, save the change in the settings page or the YAML editor first, then press Push on the dashboard's POPs section or under Federation in Settings (the Settings forms also edit the peers and `accept_settings_from`; [ui.md](ui.md#settings-blocks-330)), or call `POST /api/federation/push` with `{"sections": ["thresholds"]}` (optionally `"peers": ["pop-b"]`). The sender needs `http.config_editor` and an admin sign-in. Each peer validates the sections like a local `PUT /api/config` and applies them online with no restart; the reply has one row per peer: `applied`, `unchanged`, `refused` with the reasons, `failed`, or `unreachable`.
 
 Only `thresholds` and `policies` are accepted. `mode`, the allowlist, the announcer, and every other key are refused, a push never turns inject on, and a peer whose file has other unapplied edits refuses it. Both sides write an audit record. The endpoint is in [API.md](API.md).
 

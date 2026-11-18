@@ -2,7 +2,8 @@
 // Runs the dashboard's settings push control (#137) against a small DOM
 // stand-in: the form appears only when the API says a push is possible, it
 // is built once, it posts the chosen sections, and the per-peer answer is
-// shown. The page functions are cut out of the real app.js. Run by
+// shown. The control is the real web/fedpush.js, which the Overview and
+// Settings share. Run by
 // TestFederationPushPage.
 
 var fs = require("fs");
@@ -69,12 +70,14 @@ function fn(src, name) {
   assert(false, "unbalanced " + name);
 }
 
+var page = fs.readFileSync(path.join(__dirname, "web", "fedpush.js"), "utf8");
+vm.runInContext(page, context);
+// el and clear come from the page that loads fedpush.js; the Overview's are app.js's.
 var app = fs.readFileSync(path.join(__dirname, "web", "app.js"), "utf8");
-var decl = app.slice(app.indexOf("var FED_PUSH_SECTIONS"), app.indexOf("function renderFedPush("));
-vm.runInContext(decl, context);
-["el", "clear", "table", "renderFedPush", "fedPushSend", "renderFedPushReport"].forEach(function (name) {
-  vm.runInContext(fn(app, name), context);
-});
+["el", "clear"].forEach(function (name) { vm.runInContext(fn(app, name), context); });
+
+// Pages that load app.js but not fedpush.js must not throw in refresh().
+assert(/typeof renderFedPush === "function"\)\s*renderFedPush\(/.test(app), "app.js guards renderFedPush for pages without fedpush.js");
 
 var root = ids["fed-push"];
 
@@ -95,6 +98,7 @@ var buttons = find(root, "button");
 assert(buttons.length === 1 && buttons[0].textContent === "Push to all peers", "one push button");
 
 var done = null;
+var calls = [];
 function click() { done = buttons[0].listeners.click(); return done; }
 
 // Nothing chosen: no request.
@@ -129,7 +133,7 @@ done.then(function () {
   assert(rows[1][1] === "refused" && rows[1][2] === "min_loss_delta_pct must not be negative", "refused row shows why: " + rows[1]);
   assert(rows[2][1] === "unreachable" && rows[2][2] === "connection refused", "unreachable row: " + rows[2]);
   assert(rows[3][1] === "unchanged" && rows[3][2] === "already had these settings", "unchanged row: " + rows[3]);
-  var dots = find(root, "span").map(function (s) { return s.className; });
+  var dots = find(root, "span").map(function (s) { return s.className; }).filter(Boolean);
   assert(dots.join(",") === "dot up,dot down,dot down,dot up", "dots = " + dots);
   assert(root.textContent.indexOf("At least one peer did not take them.") >= 0, "summary says a peer refused");
 
@@ -139,6 +143,18 @@ done.then(function () {
 }).then(function () {
   assert(root.textContent.indexOf("Push failed: forbidden") >= 0, "failure shown");
   assert(find(root, "input").length === 2, "the form is still there after a failure");
+
+  // Settings has api(), not postJSON.
+  context.postJSON = undefined;
+  context.api = function (method, url, body) {
+    calls.push({ method: method, url: url, body: body });
+    return Promise.resolve({ ok: true, peers: [{ peer: "pop-b", status: "applied", applied: ["thresholds"] }] });
+  };
+  return click();
+}).then(function () {
+  assert(calls.length === 1 && calls[0].method === "POST" && calls[0].url === "/api/federation/push", "Settings posts through api: " + JSON.stringify(calls));
+  assert(JSON.stringify(calls[0].body) === JSON.stringify({ sections: ["thresholds", "policies"] }), "same body through api");
+  assert(root.textContent.indexOf("Every peer has these settings.") >= 0, "summary says every peer took them");
   console.log("ok");
 }).catch(function (e) {
   console.error("FAIL: " + e.stack);

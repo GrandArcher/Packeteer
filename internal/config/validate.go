@@ -7,6 +7,7 @@ import (
 	"math"
 	"net"
 	"net/netip"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -914,6 +915,16 @@ func validProviderGroup(s string) bool {
 		}
 	}
 	return true
+}
+
+// HTTPSHostURL parses s as a bare https://host:port base URL (no user info,
+// query or path beyond "/"), the form a federation peer is addressed by.
+func HTTPSHostURL(s string) (*url.URL, error) {
+	u, err := url.Parse(s)
+	if err != nil || u.Scheme != "https" || u.Host == "" || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.User != nil {
+		return nil, fmt.Errorf("%q must be https://host:port", s)
+	}
+	return u, nil
 }
 
 // CommunityText parses s as a standard community ("asn:value", each half

@@ -1020,6 +1020,15 @@ function loadConfig() {
   }, function (err) { editorOff(err); edStatus(explain(err)); });
 }
 
+// loadFedPush shows the push control under the federation block when this
+// instance can push (federation, editor, and sign-in). A failed read leaves
+// it hidden.
+function loadFedPush() {
+  api("GET", "/api/federation").then(function (st) {
+    renderFedPush(Boolean(st && st.push_enabled));
+  }, function () {});
+}
+
 function checkConfig() {
   api("POST", "/api/config/validate", {yaml: document.getElementById("ed-yaml").value}).then(function (res) {
     edStatus(describe(res), res.errors);
@@ -3013,6 +3022,7 @@ openHash();
 loadPreflight();
 loadSetupSkip();
 loadConfig();
+loadFedPush();
 renderSubs();
 
 function bindStaticChecks() {
