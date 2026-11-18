@@ -26,12 +26,13 @@ Milestones:
 - **v1.4**: one new row, an experimental, lab-only path-scoring harness (#584) that scores config variants against recorded history and never changes a default. Also finishing observe setup from the GUI (host policy routing panel, "Setup complete, still observe", #582; the `firstrun-gui` CI job, #587), the `value` report and the `/value.html` page for a manager (#583, #588), a one-command observe-only demo lab (`scripts/demo.sh`, #586) with a five-minute script (`docs/demo.md`, #590), and a chaos soak on the HA lab that checks the safety invariants on the router through a session flap, a probe-source failure, SIGTERM, and SIGKILL (`lab/e2e-chaos.sh`, #585; CI runs the short profile; the weekly 5h run is `.github/workflows/chaos.yml` and the multi-day run is documented in `lab/chaos/README.md`, #589). The counts below include the harness row (131 to 132 done). Lab only; nothing is field-proven (#54).
 - **v1.5**: one new row, the field-report kit (#625): `packeteer report --share` and a Settings button write a redacted summary for a field-report or bug issue, and two issue forms ask for it. Lab only; nothing is field-proven (#54). The counts below include the row, and two v0.8 rows that move from partial to done (#629): 136 done.
 - **v1.6**: no new rows. The shared IX port row is done (#643, the last gap of #151): performance moves, `static` rules, and pins onto an exchange peer need `exchanges[].port` headroom. Also the `routeros` `preflight.router_check` type (#637), the `upgrade-release` lab between real releases (#644), `scripts/demo.sh --report` (#646; Docker Desktop stays unverified until a run is recorded), and the paragraph-length lint (#645). The counts below include the shared IX port row moving to done: 137 done. Lab only; nothing is field-proven (#54).
+- **v1.7**: no new rows. The flow-based target discovery row moves from partial to done: it had no remaining gap to name, and no behavior changed. Lab-proven in CI: non-BGP mode with the `mikrotik` steerer on a RouterOS CHR (#655), registry hygiene against in-lab registry stand-ins (#657), and the herd hub and dashboard world view with a local hub stand-in (#659); also the federation settings form (#658), the `upgrade-release` lab from v1.6.0 (#656), and CI flake hardening (#660). The counts below include the flow row moving to done: 138 done. Lab only; nothing is field-proven (#54).
 
 ## Summary
 
 | Milestone | Rows | Done |
 |---|---|---|
-| v0.1 | 24 | 23 |
+| v0.1 | 24 | 24 |
 | v0.2 | 25 | 25 |
 | v0.3 | 17 | 17 |
 | v0.4 | 13 | 12 |
@@ -43,12 +44,12 @@ Milestones:
 | v1.4 | 1 | 1 |
 | v1.5 | 1 | 1 |
 | won't do | 2 | - |
-| **total** | 147 | 137 |
+| **total** | 147 | 138 |
 
 | Status | Count |
 |---|---|
-| done | 137 |
-| partial | 8 |
+| done | 138 |
+| partial | 7 |
 | in progress | 0 |
 | planned | 0 |
 | won't do | 2 |
@@ -72,7 +73,7 @@ The flow window keeps 20,000 exact cells by default, and a fixed HyperLogLog per
 | Throughput-aware scoring (prefix volume weighting) | done (lab-proven) | v0.4 | scorer (`commit` uses flow volume, #18; `improvement_weights` rank performance moves for the cap by gain and volume, #34) | #18, #34 | no (lab-proven) |
 | Probe sources per provider (source-IP policy routing) | done | v0.1 | core + docs | #2 | no |
 | Static probe target lists | done | v0.1 | source (`static`) | #2 | no |
-| Flow-based target discovery (NetFlow v5/v9, IPFIX, sFlow) | partial: up to three of the busiest destinations are probe candidates, probed first, and automatic in-prefix hosts fill in only when fewer than three were named (#113, #119); a prefix is kept when its bytes clear `min_bytes` or its share of the window clears `min_pct` (either bar; zero disables that bar), and `top_n` is the priority tier inside `max_targets`, with the rest on `tail_interval` (#118); optional `subranges` measures the busiest sub-ranges inside a wide prefix, each with its own address and score, the prefix decision uses their traffic-weighted aggregate, and `/api/decisions` and the dashboard flag a heterogeneous prefix; measurement only (#121); a fixed HyperLogLog per bucket counts prefixes past the 20,000 exact cells, and that estimate is not a probe target or a volume (#125); readers decode in order and hand records to `workers` counting goroutines, so a window stall fills a counted queue instead of the socket buffer (#385); a malformed v9/IPFIX template set ends its datagram, a template allocates no more than its set length allows, and a sampling rate is dropped with its last template (#502) | v0.1 | source (`flow`) | #5, #113, #118, #119, #121, #125, #385, #502, #493 | no |
+| Flow-based target discovery (NetFlow v5/v9, IPFIX, sFlow) | done: up to three of the busiest destinations are probe candidates, probed first, and automatic in-prefix hosts fill in only when fewer than three were named (#113, #119); a prefix is kept when its bytes clear `min_bytes` or its share of the window clears `min_pct` (either bar; zero disables that bar), and `top_n` is the priority tier inside `max_targets`, with the rest on `tail_interval` (#118); optional `subranges` measures the busiest sub-ranges inside a wide prefix, each with its own address and score, the prefix decision uses their traffic-weighted aggregate, and `/api/decisions` and the dashboard flag a heterogeneous prefix; measurement only (#121); a fixed HyperLogLog per bucket counts prefixes past the 20,000 exact cells, and that estimate is not a probe target or a volume (#125); readers decode in order and hand records to `workers` counting goroutines, so a window stall fills a counted queue instead of the socket buffer (#385); a malformed v9/IPFIX template set ends its datagram, a template allocates no more than its set length allows, and a sampling rate is dropped with its last template (#502) | v0.1 | source (`flow`) | #5, #113, #118, #119, #121, #125, #385, #502, #493 | no |
 | Passive problem detection from flows | done (#21, #133): unsampled NetFlow v5/v9 and IPFIX score SYN without ACK and RST; sampled NetFlow/IPFIX and sFlow score inbound RST only, as a share of sampled TCP records, with rate-weighted `min_flows` and at least 10 samples (lower confidence; retransmits are not visible) | v0.2 | source (`flow` `problems`) | #21, #133 | no |
 | SPAN / mirrored-traffic collector | done | v0.2 | source (`span`) | #21 | no |
 | Optional eBPF data path: `span` capture from a ring buffer, unsampled per-flow collector for `flow`, fallback when unsupported | partial (#229, [ebpf.md](ebpf.md)): tc programs assembled in Go, TCX attach (Linux 6.6), off by default, falls back when unsupported. RTT, retransmit, and loss tracking in the kernel for `span` with `ebpf_track: true` (#631; IPv6 extension headers and VLAN tags are not tracked there). Missing: probe capture through eBPF (probers keep their raw sockets) | v0.9 | source (`span`, `flow`) | #229 | no |

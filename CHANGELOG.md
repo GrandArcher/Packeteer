@@ -1,8 +1,12 @@
 # Changelog
 
-All notable changes to Packeteer are documented here. Versions are Git tags on `main`. The image tags `ghcr.io/grandarcher/packeteer:<version>` (for example `:1.6.0`) and `:latest` are published from each `v<version>` tag. `:edge` tracks `main`.
+All notable changes to Packeteer are documented here. Versions are Git tags on `main`. The image tags `ghcr.io/grandarcher/packeteer:<version>` (for example `:1.7.0`) and `:latest` are published from each `v<version>` tag. `:edge` tracks `main`.
 
 ## [Unreleased]
+
+## [1.7.0] - 2026-11-18
+
+The v1.7 release lab-proves the RouterOS non-BGP steerer, registry hygiene, and the herd hub and dashboard, adds the federation settings form, points the upgrade test at v1.6.0, and hardens CI flakes. It adds no config key; the flow target discovery row moves to done (138 done, up from 137). The shipped config stays `mode: observe` and injection stays off by default.
 
 ### Added
 
@@ -581,7 +585,8 @@ First release. An observe-first BGP path performance controller in one container
 - Communities are RFC 1997 (two 16-bit integers). `router_id` is IPv4.
 - RouterOS, Junos, and IOS snippets are documentation. The automated BGP test is the FRR lab.
 
-[Unreleased]: https://github.com/GrandArcher/Packeteer/compare/v1.6.0...HEAD
+[Unreleased]: https://github.com/GrandArcher/Packeteer/compare/v1.7.0...HEAD
+[1.7.0]: https://github.com/GrandArcher/Packeteer/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/GrandArcher/Packeteer/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/GrandArcher/Packeteer/compare/v1.4.1...v1.5.0
 [1.4.1]: https://github.com/GrandArcher/Packeteer/compare/v1.4.0...v1.4.1
