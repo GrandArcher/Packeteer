@@ -1,8 +1,12 @@
 # Changelog
 
-All notable changes to Packeteer are documented here. Versions are Git tags on `main`. The image tags `ghcr.io/grandarcher/packeteer:<version>` (for example `:1.7.0`) and `:latest` are published from each `v<version>` tag. `:edge` tracks `main`.
+All notable changes to Packeteer are documented here. Versions are Git tags on `main`. The image tags `ghcr.io/grandarcher/packeteer:<version>` (for example `:1.8.0`) and `:latest` are published from each `v<version>` tag. `:edge` tracks `main`.
 
 ## [Unreleased]
+
+## [1.8.0] - 2026-11-19
+
+The v1.8 release adds an RIS and RouteViews origin signal for RPKI-invalid only paths, Settings forms for six more blocks, herd phase 2 in the lab, and lab proof of the registry delete push, with no new capability row (138 done); the shipped config stays `mode: observe` and injection stays off by default.
 
 ### Added
 
@@ -12,6 +16,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Changed
 
+- With `herd.hub` set, the node now relays a peer list and learns up to `herd.hub.exchange_peers` (default 16) members, whose keys may pull shared records; advisory only (#672).
 - `registry.interval` may be 1m-168h while `registry.irr.source` is `TEST`; the `registry` CI job uses it to prove the stale-object delete push and its wrong-digest refusal in the lab (#673).
 - `upgrade-release` CI job starts from the v1.7.0 image, pinned by digest, instead of v1.6.0; the downgrade step still removes no key (#669).
 
@@ -596,7 +601,8 @@ First release. An observe-first BGP path performance controller in one container
 - Communities are RFC 1997 (two 16-bit integers). `router_id` is IPv4.
 - RouterOS, Junos, and IOS snippets are documentation. The automated BGP test is the FRR lab.
 
-[Unreleased]: https://github.com/GrandArcher/Packeteer/compare/v1.7.0...HEAD
+[Unreleased]: https://github.com/GrandArcher/Packeteer/compare/v1.8.0...HEAD
+[1.8.0]: https://github.com/GrandArcher/Packeteer/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/GrandArcher/Packeteer/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/GrandArcher/Packeteer/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/GrandArcher/Packeteer/compare/v1.4.1...v1.5.0
