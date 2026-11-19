@@ -23,6 +23,10 @@ const (
 	testHold  = 300 * time.Millisecond
 	// testWait is how long a standby waits out a live holder's record.
 	testWait = testTTL/2 + testHold + testRenew
+	// wideTTL lets the holder miss renewals for ttl/2 - renew (1.4s)
+	// before it steps down, against 400ms at testTTL: -race on a shared
+	// runner stalls the renew loop longer than that (#681).
+	wideTTL = 3 * time.Second
 )
 
 // node is one lease instance with a switchable candidacy.
@@ -34,7 +38,12 @@ type node struct {
 
 func newNode(t *testing.T, path, id string) *node {
 	t.Helper()
-	l, err := newLease(Config{Path: path, ID: id, TTL: testTTL, Renew: testRenew}, nil)
+	return newNodeTTL(t, path, id, testTTL)
+}
+
+func newNodeTTL(t *testing.T, path, id string, ttl time.Duration) *node {
+	t.Helper()
+	l, err := newLease(Config{Path: path, ID: id, TTL: ttl, Renew: testRenew}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,12 +155,15 @@ func TestConfig(t *testing.T) {
 
 func TestOneActiveAndStandbyNeverActive(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "ha", "lease.json")
-	a, b := newNode(t, path, "pk-a"), newNode(t, path, "pk-b")
+	a, b := newNodeTTL(t, path, "pk-a", wideTTL), newNodeTTL(t, path, "pk-b", wideTTL)
 	a.start(t)
 	waitFor(t, "a active", 5*time.Second, a.Active)
 	stop := watchExclusive(t, a, b)
 	b.start(t)
-	time.Sleep(3 * testWait / 2)
+	// Watch past the standby's takeover wait, so a standby that ignored
+	// the renewals would take over inside the window.
+	w := b.wait(&record{TTLMS: wideTTL.Milliseconds(), RouteHoldMS: testHold.Milliseconds()})
+	time.Sleep(3 * w / 2)
 	stop()
 	if b.Active() {
 		t.Fatal("standby became active while the active instance renews")
