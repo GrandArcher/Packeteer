@@ -4,6 +4,10 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ## [Unreleased]
 
+### Fixed
+
+- `TestOneActiveAndStandbyNeverActive` runs at a 3s lease ttl so a stalled renewal under `-race` on a shared runner no longer steps the holder down; elector unchanged (#681).
+
 ## [1.8.0] - 2026-11-19
 
 The v1.8 release adds an RIS and RouteViews origin signal for RPKI-invalid only paths, Settings forms for six more blocks, herd phase 2 in the lab, and lab proof of the registry delete push, with no new capability row (138 done); the shipped config stays `mode: observe` and injection stays off by default.
