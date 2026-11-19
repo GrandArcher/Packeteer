@@ -155,8 +155,8 @@ func (c *Config) validateOnlyInvalid(add func(string, ...any)) {
 	if o.StableAfter < onlyinvalid.MinStableAfter || o.StableAfter > onlyinvalid.MaxStableAfter {
 		add("rpki.only_invalid.stable_after %s must be between %s and %s", o.StableAfter, onlyinvalid.MinStableAfter, onlyinvalid.MaxStableAfter)
 	}
-	validateSpecs(add, "rpki.only_invalid.hijack_feeds", o.HijackFeeds)
-	validateSpecs(add, "rpki.only_invalid.origin_collectors", o.OriginCollectors)
+	validateSpecList(add, "rpki.only_invalid.hijack_feeds", o.HijackFeeds)
+	validateSpecList(add, "rpki.only_invalid.origin_collectors", o.OriginCollectors)
 	s := o.SLURM
 	if s == nil {
 		return
@@ -186,9 +186,9 @@ func (c *Config) validateOnlyInvalid(add func(string, ...any)) {
 	}
 }
 
-// validateSpecs checks a list of plugin entries: each has a type and the
+// validateSpecList checks a list of plugin entries: each has a type and the
 // instance names differ.
-func validateSpecs(add func(string, ...any), key string, specs []PluginSpec) {
+func validateSpecList(add func(string, ...any), key string, specs []PluginSpec) {
 	names := map[string]bool{}
 	for i, f := range specs {
 		if f.Type == "" {

@@ -111,23 +111,14 @@ func (c *Config) validateRegistry(add func(string, ...any)) {
 	if r.IRR.MntBy != "" && !rpslMntner.MatchString(r.IRR.MntBy) {
 		add("registry.irr.mnt_by %q is not a maintainer name", r.IRR.MntBy)
 	}
-	names := map[string]bool{}
+	validateSpecList(add, "registry.sources", r.Sources)
 	hasRIPE := false
 	for i, s := range r.Sources {
-		if s.Type == "" {
-			add("registry.sources[%d]: type is required", i)
-			continue
-		}
 		if s.Type == "ripe" {
 			hasRIPE = true
 			if got := ripeDatabase(s); got != "" && r.PushEnabled && (r.IRR.Source == "RIPE" || r.IRR.Source == "TEST") && got != r.IRR.Source {
 				add("registry.sources[%d]: the ripe source writes to %s and registry.irr.source is %s; set both to the same database", i, got, r.IRR.Source)
 			}
-		}
-		if n := s.InstanceName(); names[n] {
-			add("registry.sources[%d]: name %q is used twice; set name", i, n)
-		} else {
-			names[n] = true
 		}
 	}
 	if r.PushEnabled && len(r.Sources) == 0 {

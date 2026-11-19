@@ -534,8 +534,9 @@ func (d *Detector) collectorSignal(ctx context.Context, prefix netip.Prefix, ori
 		case slices.Contains(origins, origin):
 			agree = append(agree, c.Name)
 		default:
-			slices.Sort(origins)
-			disagree = append(disagree, fmt.Sprintf("%s sees %s", c.Name, asList(slices.Compact(origins))))
+			seen := slices.Clone(origins)
+			slices.Sort(seen)
+			disagree = append(disagree, fmt.Sprintf("%s sees %s", c.Name, asList(slices.Compact(seen))))
 		}
 	}
 	var rest []string
