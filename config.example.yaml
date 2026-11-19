@@ -478,6 +478,13 @@ scorer:
 #       - type: file
 #         config:
 #           path: /etc/packeteer/hijacks.json
+#     # Origins a public collector set (RIS, RouteViews) sees for each case,
+#     # from an endpoint you run or trust (docs/CONFIG.md#origin-collector-json).
+#     origin_collectors:
+#       - type: json
+#         name: ris
+#         config:
+#           url: http://192.0.2.50:8080/ris
 #     slurm:
 #       path: /var/lib/packeteer/slurm/slurm.json
 #       prefixes: [198.51.100.0/24]

@@ -3,6 +3,8 @@ package main
 import (
 	"errors"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"net/netip"
 	"path/filepath"
 	"strings"
@@ -45,6 +47,11 @@ func TestNewOnlyInvalid(t *testing.T) {
 		t.Fatal("built without rpki.only_invalid")
 	}
 
+	// The collector stand-in sees the local origin for the prefix.
+	collector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"prefix":"` + r.URL.Query().Get("prefix") + `","origins":[64500]}`))
+	}))
+	defer collector.Close()
 	slurm := filepath.Join(t.TempDir(), "slurm.json")
 	// BMP alone (#237): the view is ready while a BMP peer is up.
 	bmpAlone := strings.Replace(bmpConfig, "bgp:\n  neighbors:\n    - address: 192.0.2.254\n", "", 1)
@@ -55,6 +62,7 @@ func TestNewOnlyInvalid(t *testing.T) {
   only_invalid:
     enabled: true
     hijack_feeds: [{type: file, name: radar-export, config: {path: ../../internal/plugins/hijackfeed/file/testdata/incidents.json}}]
+    origin_collectors: [{type: json, name: ris, config: {url: "` + collector.URL + `/ris"}}]
     slurm:
       path: ` + slurm + `
       prefixes: [198.51.100.0/24]
@@ -85,6 +93,9 @@ func TestNewOnlyInvalid(t *testing.T) {
 	var mu sync.Mutex
 	var events []plugin.Event
 	emit := func(e plugin.Event) { mu.Lock(); events = append(events, e); mu.Unlock() }
+	if len(plugins.OriginCollectors) != 1 || plugins.OriginCollectors[0].Name != "ris" {
+		t.Fatalf("origin collectors = %+v", plugins.OriginCollectors)
+	}
 	svc := newOnlyInvalid(cfg, plugins, view, rpki.NewSet([]plugin.RPKI{freshVRPs{vrps: vrps}}), irr.NewChecker(nil, irr.Options{}), emit, auth.NewAuditor(nil, nil, nil), slog.New(slog.DiscardHandler))
 	if svc == nil || svc.Exceptions == nil || svc.Exceptions.Path() != slurm {
 		t.Fatalf("service = %+v", svc)
@@ -94,13 +105,14 @@ func TestNewOnlyInvalid(t *testing.T) {
 	}
 	svc.Scan(t.Context())
 	c, ok := svc.Case(netip.MustParsePrefix("198.51.100.0/24"))
-	// The same-origin ROA, two providers, and a quiet feed score 3, but
-	// without IRR or route age that also fits a forged-origin hijack.
-	if !ok || c.Origin != 64500 || len(c.Paths) != 2 || c.Score != 3 || c.Class != onlyinvalid.ClassUnclear {
+	// The same-origin ROA, two providers, a quiet feed, and one collector
+	// that sees the origin score 4, but without IRR or route age that also
+	// fits a forged-origin hijack.
+	if !ok || c.Origin != 64500 || len(c.Paths) != 2 || c.Score != 4 || c.Class != onlyinvalid.ClassUnclear {
 		t.Fatalf("case = %+v, status %+v", c, svc.Status())
 	}
 	evidence := c.Evidence()
-	for _, want := range []string{"irr_route +0: irr is off", "roa_same_origin +1", "providers +1: 2 providers agree on AS64500 (transit-a, transit-b)", "hijack_feeds +1: 1 of 1 feeds report no incident for AS64500"} {
+	for _, want := range []string{"irr_route +0: irr is off", "roa_same_origin +1", "providers +1: 2 providers agree on AS64500 (transit-a, transit-b)", "hijack_feeds +1: 1 of 1 feeds report no incident for AS64500", "origin_agreement +1: ris sees AS64500 as an origin"} {
 		if !strings.Contains(evidence, want) {
 			t.Errorf("evidence lacks %q: %s", want, evidence)
 		}

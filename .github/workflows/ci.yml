@@ -3086,6 +3086,21 @@ jobs:
       - name: registry hygiene lab (#657; missing and stale route object, ROA gap, PeeringDB max-prefix and port-speed drift against stand-ins on an internal network, wrong digest refused, confirmed pushes reach the stand-in only and are audit-logged, nothing announced, SIGTERM)
         run: bash lab/e2e-registry.sh
 
+  origin-agreement:
+    # RIS and RouteViews origin agreement for RPKI-invalid only paths (#401)
+    # against in-lab stand-ins only (#671). The lab network is internal: no
+    # live collector is reachable. Observe mode. One scan runs a minute after
+    # start and the next five minutes later.
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+      - name: origin agreement lab (#671; agreement, disagreement, and empty answers from RIS and RouteViews stand-ins on an internal network, down collectors add no agreement, nothing announced, SIGTERM)
+        run: bash lab/e2e-origin-agreement.sh
+
   chaos:
     # Chaos soak (#585), short profile: one pass of a session flap, a
     # transit-b probe-source failure, SIGTERM, and SIGKILL on the HA lab,

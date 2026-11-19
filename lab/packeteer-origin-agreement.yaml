@@ -1,0 +1,42 @@
+# Lab only (#671). Documentation prefixes, private and documentation ASNs.
+# Observe: nothing is announced. rpki.only_invalid reads the learned RIB
+# from the edge, validates it against the lab ROAs served by vrp-stub, and
+# asks the RIS and RouteViews stand-ins (lab/collectorstub) which origins
+# they see. Every address below is a stand-in; the lab network has no route
+# out, so no live collector or RPKI cache can be reached.
+mode: observe
+asn: 64512
+router_id: 192.0.2.10
+providers:
+  - name: transit-a
+    source_ip: 192.0.2.11
+    next_hop: 192.0.2.21
+bgp:
+  neighbors:
+    - address: 192.0.2.254
+      description: edge
+http:
+  listen: 0.0.0.0:8080
+storage:
+  type: sqlite
+  config:
+    path: /var/lib/packeteer/data/packeteer.db
+rpki:
+  enabled: true
+  sources:
+    - type: json
+      name: lab-vrp
+      config:
+        url: "http://vrp-stub:8080/json"
+  only_invalid:
+    enabled: true
+    origin_collectors:
+      - type: json
+        name: ris
+        config: {url: "http://ris-stub:8080/ris"}
+      - type: json
+        name: routeviews
+        config: {url: "http://routeviews-stub:8080/routeviews"}
+# Lab only: no sign-in; the e2e script uses the basic-auth account.
+auth:
+  enabled: false

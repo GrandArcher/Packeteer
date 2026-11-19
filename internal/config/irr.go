@@ -68,18 +68,7 @@ func (c *Config) validateIRR(add func(string, ...any)) {
 	if len(r.Sources) == 0 {
 		add("irr.sources: at least one source is required when irr.enabled")
 	}
-	names := map[string]bool{}
-	for i, s := range r.Sources {
-		if s.Type == "" {
-			add("irr.sources[%d]: type is required", i)
-			continue
-		}
-		if n := s.InstanceName(); names[n] {
-			add("irr.sources[%d]: name %q is used twice; set name", i, n)
-		} else {
-			names[n] = true
-		}
-	}
+	validateSpecList(add, "irr.sources", r.Sources)
 	if r.Refresh < irr.MinRefresh || r.Refresh > irr.MaxStaleness {
 		add("irr.refresh %s must be between %s and %s", r.Refresh, irr.MinRefresh, irr.MaxStaleness)
 	}

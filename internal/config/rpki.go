@@ -43,6 +43,9 @@ type OnlyInvalid struct {
 	StableAfter time.Duration `yaml:"stable_after"`
 	// HijackFeeds are hijack_feed plugins asked for incidents.
 	HijackFeeds []PluginSpec `yaml:"hijack_feeds"`
+	// OriginCollectors are origin_collector plugins that report which
+	// origins a public collector set sees for the prefix (#671).
+	OriginCollectors []PluginSpec `yaml:"origin_collectors"`
 	// SLURM allows proposing accept-invalid exceptions. Nil proposes
 	// none.
 	SLURM *OnlyInvalidSLURM `yaml:"slurm"`
@@ -104,6 +107,9 @@ func (c *Config) normalizeRPKI() {
 		for i := range o.HijackFeeds {
 			o.HijackFeeds[i].Type = strings.TrimSpace(o.HijackFeeds[i].Type)
 		}
+		for i := range o.OriginCollectors {
+			o.OriginCollectors[i].Type = strings.TrimSpace(o.OriginCollectors[i].Type)
+		}
 	}
 }
 
@@ -141,26 +147,16 @@ func (c *Config) validateOnlyInvalid(add func(string, ...any)) {
 		return
 	}
 	if !o.Enabled {
-		if len(o.HijackFeeds) > 0 || o.SLURM != nil {
-			add("rpki.only_invalid.enabled is false but hijack_feeds or slurm is set")
+		if len(o.HijackFeeds) > 0 || len(o.OriginCollectors) > 0 || o.SLURM != nil {
+			add("rpki.only_invalid.enabled is false but hijack_feeds, origin_collectors, or slurm is set")
 		}
 		return
 	}
 	if o.StableAfter < onlyinvalid.MinStableAfter || o.StableAfter > onlyinvalid.MaxStableAfter {
 		add("rpki.only_invalid.stable_after %s must be between %s and %s", o.StableAfter, onlyinvalid.MinStableAfter, onlyinvalid.MaxStableAfter)
 	}
-	names := map[string]bool{}
-	for i, f := range o.HijackFeeds {
-		if f.Type == "" {
-			add("rpki.only_invalid.hijack_feeds[%d]: type is required", i)
-			continue
-		}
-		if n := f.InstanceName(); names[n] {
-			add("rpki.only_invalid.hijack_feeds[%d]: name %q is used twice; set name", i, n)
-		} else {
-			names[n] = true
-		}
-	}
+	validateSpecList(add, "rpki.only_invalid.hijack_feeds", o.HijackFeeds)
+	validateSpecList(add, "rpki.only_invalid.origin_collectors", o.OriginCollectors)
 	s := o.SLURM
 	if s == nil {
 		return
@@ -187,5 +183,22 @@ func (c *Config) validateOnlyInvalid(add func(string, ...any)) {
 	}
 	if r := s.ReviewAfter; r != nil && *r != 0 && (*r < onlyinvalid.MinReviewAfter || *r > onlyinvalid.MaxReviewAfter) {
 		add("rpki.only_invalid.slurm.review_after %s must be 0s (no reminder) or between %s and %s", *r, onlyinvalid.MinReviewAfter, onlyinvalid.MaxReviewAfter)
+	}
+}
+
+// validateSpecList checks a list of plugin entries: each has a type and the
+// instance names differ.
+func validateSpecList(add func(string, ...any), key string, specs []PluginSpec) {
+	names := map[string]bool{}
+	for i, f := range specs {
+		if f.Type == "" {
+			add("%s[%d]: type is required", key, i)
+			continue
+		}
+		if n := f.InstanceName(); names[n] {
+			add("%s[%d]: name %q is used twice; set name", key, i, n)
+		} else {
+			names[n] = true
+		}
 	}
 }

@@ -1,0 +1,99 @@
+# Origin agreement lab (#671, for #401): a simulated edge and eBGP transit,
+# Packeteer in observe mode, and three small stand-ins (lab/collectorstub):
+# ris-stub and routeviews-stub, which answer the origins a public collector
+# set would see for a prefix, and vrp-stub, the lab ROAs as a Routinator-style
+# JSON document. Documentation addresses (RFC 5737) and documentation/private
+# ASNs only.
+#
+# The lab network is internal: it has no route out, so nothing here can
+# reach RIPE RIS, RouteViews, or any other live collector, and
+# lab/e2e-origin-agreement.sh checks that. The stand-in is a static Go binary
+# the script builds and runs in a stock alpine container. The script reads
+# the ops API at 192.0.2.10:8080 (lab-only basic auth below) and each
+# stand-in's state at /_lab/state.
+name: packeteer-e2e-origin-agreement
+x-frr: &frr
+  image: quay.io/frrouting/frr:10.2.4
+  privileged: true
+  entrypoint: ["/bin/sh", "/lab/frr-start.sh"]
+x-stub: &stub
+  image: alpine:3.22
+  volumes:
+    - ${LAB_DIR:?LAB_DIR is set by lab/e2e-origin-agreement.sh}/stub:/stub:ro
+services:
+  ris-stub:
+    <<: *stub
+    command: ["/stub/collectorstub", "-role", "ris"]
+    networks:
+      lab:
+        ipv4_address: 192.0.2.50
+  routeviews-stub:
+    <<: *stub
+    command: ["/stub/collectorstub", "-role", "routeviews"]
+    networks:
+      lab:
+        ipv4_address: 192.0.2.51
+  vrp-stub:
+    <<: *stub
+    command: ["/stub/collectorstub", "-role", "vrp"]
+    networks:
+      lab:
+        ipv4_address: 192.0.2.52
+  edge:
+    <<: *frr
+    hostname: edge
+    environment:
+      FRR_EXPECT: "router bgp 64512;neighbor 192.0.2.10 soft-reconfiguration inbound"
+    volumes:
+      - ./frr-oi-edge:/etc/frr
+      - ./frr-start.sh:/lab/frr-start.sh:ro
+    networks:
+      lab:
+        ipv4_address: 192.0.2.254
+  transit-a:
+    <<: *frr
+    hostname: transit-a
+    environment:
+      FRR_EXPECT: "router bgp 64496;network 203.0.113.128/25;set as-path prepend 64500"
+    volumes:
+      - ./frr-oc-transit-a:/etc/frr
+      - ./frr-start.sh:/lab/frr-start.sh:ro
+    networks:
+      lab:
+        ipv4_address: 192.0.2.21
+  packeteer:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      args:
+        VERSION: e2e
+    image: packeteer:e2e
+    depends_on:
+      - edge
+      - ris-stub
+      - routeviews-stub
+      - vrp-stub
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
+      - NET_BIND_SERVICE
+    environment:
+      PACKETEER_CONFIG: /etc/packeteer/config.yaml
+      PACKETEER_LOG_LEVEL: debug
+      # Lab-only credentials.
+      PACKETEER_HTTP_USER: lab
+      PACKETEER_HTTP_PASSWORD: lab-only
+    volumes:
+      - ./packeteer-origin-agreement.yaml:/etc/packeteer/config.yaml:ro
+    networks:
+      lab:
+        ipv4_address: 192.0.2.10
+networks:
+  lab:
+    driver: bridge
+    # No route out of the lab: no live collector can be reached.
+    internal: true
+    ipam:
+      config:
+        - subnet: 192.0.2.0/24
+          gateway: 192.0.2.3

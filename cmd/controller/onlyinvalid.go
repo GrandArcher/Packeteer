@@ -31,6 +31,9 @@ func newOnlyInvalid(cfg *config.Config, plugins *pluginhost.Set, view *rib.View,
 	for _, f := range plugins.HijackFeeds {
 		deps.Feeds = append(deps.Feeds, onlyinvalid.Feed{Name: f.Name, Plugin: f.Plugin})
 	}
+	for _, c := range plugins.OriginCollectors {
+		deps.Collectors = append(deps.Collectors, onlyinvalid.Collector{Name: c.Name, Plugin: c.Plugin})
+	}
 	o := cfg.RPKI.OnlyInvalid
 	svc := &onlyinvalid.Service{Detector: onlyinvalid.NewDetector(deps, o.StableAfter)}
 	if s := o.SLURM; s != nil {

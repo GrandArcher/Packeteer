@@ -25,10 +25,15 @@ Each case lists its paths (provider, AS path, learn time), the ROAs covering it,
 | `roa_same_origin` | +1 / 0 | A ROA authorizes the same origin for a covering prefix with a maxLength shorter than the route, so the covering prefix is valid for that origin / no ROA names the origin. Weak alone: a forged-origin sub-prefix hijack (RFC 9319) looks the same. |
 | `providers` | +1 / -2 / 0 | Two or more providers carry the same origin / another learned path ends in a different origin (conflicting origin) / one provider. |
 | `hijack_feeds` | -4 / +1 / 0 | A feed reports an incident for the prefix with this origin or no origin / every feed that answered reports none / no feed configured or none answered. |
+| `origin_agreement` | +1 / +2 / -2 / 0 | One collector / two or more collectors list the origin / a collector lists origins that do not include it / no collector configured, none saw the prefix, or none answered. |
 
 A score of 3 or more is `stale_roa` when `irr_route` or `origin_stable` is positive, and `unclear` without that support. -2 or less is `hijack`; anything between is `unclear`. Each case has a suggested action: contact the prefix holder, or keep dropping and report it.
 
-Public collector agreement (RIS, RouteViews) is not a signal yet.
+Agreement raises the score but never makes a stale ROA alone, and silence is never agreement: a collector that is down, or sees nothing, scores 0, the same as no collector.
+
+## Origin agreement
+
+`origin_collectors` are `origin_collector` plugins ([PLUGINS.md](PLUGINS.md)) asked, for each case, which origins a public collector set sees for exactly that prefix. The case lists the answer in the `origin_agreement` signal: which collectors see the local origin, or, when one lists other origins, those that disagree, and which saw nothing or did not answer. The built-in `json` type reads an HTTP JSON endpoint ([CONFIG.md](CONFIG.md#origin-collector-json)). Packeteer has no client for RIS or RouteViews: the endpoint is one the operator runs or trusts, and no request goes to a public collector unless the operator points `url` at one. The signal only reports. It does not change the learned RIB, announce, or propose an exception.
 
 ## Hijack feeds
 
@@ -83,6 +88,10 @@ rpki:
       - type: file
         name: radar-export
         config: {path: /etc/packeteer/hijacks.json}
+    origin_collectors:
+      - type: json
+        name: ris
+        config: {url: "http://192.0.2.50:8080/ris"}
     slurm:
       path: /var/lib/packeteer/slurm/slurm.json
       prefixes: [198.51.100.0/24]
@@ -100,3 +109,5 @@ Remove `rpki.only_invalid` and restart. The exceptions stay in the SLURM file, a
 Unit tests use recorded fixtures with documentation prefixes and ASNs, never live IRR, RPKI, or feed lookups: a stale ROA with IRR and history in agreement, the same prefix from a conflicting origin with a hijack feed hit, a valid alternative path, a valid covering route, the SLURM rules, propose and approve with the audit records, the AS0 filter, the reminder, and a stub RTR cache that serves its ROAs with the approved file applied to the `rtr` plugin, which turns the fixture route from invalid to valid.
 
 The `only-invalid` CI job (`lab/e2e-only-invalid.sh`, #627) runs it against Routinator 0.16.1 with no trust anchor and no repository fetch: Routinator's only data are the lab ROAs as SLURM assertions (`lab/only-invalid/roas.json`) and the file Packeteer writes. An FRR transit sends the edge 198.51.100.0/25 from AS64500 (longer than the ROA's maxLength 24) and an invalid 203.0.113.128/25 under a valid 203.0.113.0/24; the `irr` `file` source has a route object for 198.51.100.0/25. With Packeteer in observe, the job checks that 198.51.100.0/25 raises `rpki.only_invalid` classed `stale_roa` with the evidence and 203.0.113.128/25 raises nothing, that a proposal writes nothing, that after approval the file holds the entry, Routinator serves the route as valid, and the case clears with `rpki.only_invalid_cleared`, that the audit log has the proposal, approval, and write, and that the edge receives no route from Packeteer. Hijack feeds, the AS0 filter, removal, and the review reminder are not in the lab.
+
+The `origin-agreement` CI job (`lab/e2e-origin-agreement.sh`, #671) runs the signal against `lab/collectorstub`, which stands in for RIS and RouteViews as two endpoints (and serves the lab ROAs) on a Docker network marked `internal`, so no live collector is reachable (the script checks that). The edge (`lab/frr-oi-edge`) is the same as in the registry lab and Packeteer runs in observe with only `rpki` and `rpki.only_invalid` (`lab/packeteer-origin-agreement.yaml`); transit-a (`lab/frr-oc-transit-a`) sends three /25s that are longer than the lab ROAs' maxLength, so each is invalid with nothing covering it. With both collectors up: 198.51.100.0/25 (both list AS64500: agreement, +2), 203.0.113.0/25 (RIS lists AS64501, RouteViews lists only AS64511: disagreement, -2), and 203.0.113.128/25 (neither has it: 0). With both stopped, every case is at 0 ("no answer from ris, routeviews") and has the score of a case with no collector. The job also checks that no case is classed `stale_roa` on agreement alone, that the stand-ins got only GET lookups for those three prefixes, that the edge receives no route from Packeteer, and that SIGTERM stops it cleanly.
