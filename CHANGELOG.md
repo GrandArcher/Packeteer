@@ -10,6 +10,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 - Settings forms for `rpki` (with `only_invalid`), `registry`, `mcp`, `verify`, `herd` and `preflight.router_check`; never mode, allowlist, announcer, SLURM, `push_enabled` or backout (#670).
 ### Changed
 
+- `registry.interval` may be 1m-168h while `registry.irr.source` is `TEST`; the `registry` CI job uses it to prove the stale-object delete push and its wrong-digest refusal in the lab (#673).
 - `upgrade-release` CI job starts from the v1.7.0 image, pinned by digest, instead of v1.6.0; the downgrade step still removes no key (#669).
 
 ## [1.7.0] - 2026-11-18

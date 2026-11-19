@@ -529,7 +529,7 @@ scorer:
 #   enabled: false
 #   asns: [64496]
 #   as_set: AS-EXAMPLE
-#   interval: 24h
+#   interval: 24h             # at least 1h; 1m only with irr.source: TEST (a lab)
 #   headroom_percent: 20
 #   irr:
 #     source: RIPE
