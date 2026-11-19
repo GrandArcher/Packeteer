@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	_ "embed"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -39,6 +38,7 @@ const (
 	SourceConfig   = "config"
 	SourceHub      = "hub"
 	SourceSnapshot = "snapshot"
+	SourceExchange = "exchange"
 )
 
 // HubList is the document the hub serves. It is unsigned: the hub is not
@@ -88,12 +88,15 @@ func BuildHubList(entries [][]byte, now time.Time) ([]byte, error) {
 	return json.MarshalIndent(l, "", "  ")
 }
 
-// HubPeer is a peer taken from the hub list.
+// HubPeer is a peer taken from the hub list or from peer exchange.
 type HubPeer struct {
 	URL    string
 	Key    ed25519.PublicKey
 	ASN    uint32
 	Source string
+	// Entry is the member's signed entry, which this node relays to its
+	// own peers once it has reached the node.
+	Entry []byte
 }
 
 // KeySet is the keys of the current hub peers, which may connect to the
@@ -159,7 +162,7 @@ func selectPeers(entries []Entry, self string, selfASN uint32, skip func(keyID, 
 				continue
 			}
 			seen[id] = true
-			out = append(out, HubPeer{URL: n.URL, Key: k, ASN: r.e.ASN, Source: source})
+			out = append(out, HubPeer{URL: n.URL, Key: k, ASN: r.e.ASN, Source: source, Entry: r.e.raw})
 		}
 	}
 	return out
@@ -232,15 +235,7 @@ func NewHub(o HubOptions) *Hub {
 		o.Snapshot = snapshot
 	}
 	if o.Client == nil {
-		o.Client = &http.Client{
-			Timeout: 30 * time.Second,
-			CheckRedirect: func(req *http.Request, via []*http.Request) error {
-				if req.URL.Scheme != "https" || len(via) > 3 {
-					return http.ErrUseLastResponse
-				}
-				return nil
-			},
-		}
+		o.Client = httpsClient()
 	}
 	h := &Hub{o: o, guard: newGuard(o.Log, o.Event), st: HubStatus{URL: statusURL(o.Cfg.URL)}, pins: map[uint32]pin{}}
 	// The release's snapshot was reviewed with the release, so its
@@ -308,6 +303,17 @@ func (h *Hub) pin(entries []Entry) ([]Entry, int) {
 	return out, refused
 }
 
+// agrees reports whether e may stand for its ASN under the pins: the ASN
+// is not pinned, or a key of its pinned entry signed e. Peer exchange
+// checks this and pins nothing, so only the hub decides who holds an ASN
+// it lists.
+func (h *Hub) agrees(e Entry) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	p, ok := h.pins[e.ASN]
+	return !ok || p.keys[e.Signer]
+}
+
 // statusURL is u without userinfo, query, or fragment, which may carry a
 // token and are shown to every API viewer.
 func statusURL(u string) string {
@@ -345,7 +351,7 @@ func (h *Hub) Run(ctx context.Context) {
 // Refresh fetches the list once and applies it.
 func (h *Hub) Refresh(ctx context.Context) {
 	now := h.o.Now()
-	raw, err := h.fetch(ctx)
+	raw, err := fetchDoc(ctx, h.o.Client, h.o.Cfg.URL, "hub", MaxHubBytes)
 	if err == nil {
 		var entries []Entry
 		var rejected int
@@ -404,27 +410,42 @@ func (h *Hub) apply(now time.Time) {
 	h.mu.Unlock()
 }
 
-func (h *Hub) fetch(ctx context.Context) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, h.o.Cfg.URL, nil)
+// httpsClient fetches a document and follows only https redirects.
+func httpsClient() *http.Client {
+	return &http.Client{
+		Timeout: 30 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if req.URL.Scheme != "https" || len(via) > 3 {
+				return http.ErrUseLastResponse
+			}
+			return nil
+		},
+	}
+}
+
+// fetchDoc GETs one JSON document of at most maxBytes; what names it in
+// errors.
+func fetchDoc(ctx context.Context, c *http.Client, url, what string, maxBytes int) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Accept", "application/json")
-	res, err := h.o.Client.Do(req)
+	res, err := c.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
 		_, _ = io.Copy(io.Discard, io.LimitReader(res.Body, 4096))
-		return nil, fmt.Errorf("hub answered %s", res.Status)
+		return nil, fmt.Errorf("%s answered %s", what, res.Status)
 	}
-	body, err := io.ReadAll(io.LimitReader(res.Body, MaxHubBytes+1))
+	body, err := io.ReadAll(io.LimitReader(res.Body, int64(maxBytes)+1))
 	if err != nil {
 		return nil, err
 	}
-	if len(body) > MaxHubBytes {
-		return nil, errors.New("hub list is larger than the size limit")
+	if len(body) > maxBytes {
+		return nil, fmt.Errorf("%s is larger than the size limit", what)
 	}
 	return body, nil
 }

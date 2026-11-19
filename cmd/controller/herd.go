@@ -13,6 +13,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/config"
 	"github.com/GrandArcher/Packeteer/internal/herd"
 	"github.com/GrandArcher/Packeteer/internal/pluginhost"
+	"github.com/GrandArcher/Packeteer/internal/plugins/source/herdhints"
 	"github.com/GrandArcher/Packeteer/internal/probe"
 	"github.com/GrandArcher/Packeteer/internal/rib"
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
@@ -28,6 +29,36 @@ func herdBatch(cfg *config.Config, h *atomic.Pointer[herd.Herd]) func([]probe.Re
 	return func(b []probe.Result) {
 		if hd := h.Load(); hd != nil {
 			hd.Offer(b)
+		}
+	}
+}
+
+// herdHints reads the hints of the running herd (#672): none before herd
+// is built or when it is off. It never blocks the probe engine, which
+// calls it through the herd_hints source.
+func herdHints(h *atomic.Pointer[herd.Herd]) func() []herdhints.Hint {
+	return func() []herdhints.Hint {
+		hd := h.Load()
+		if hd == nil {
+			return nil
+		}
+		hs := hd.Hints()
+		out := make([]herdhints.Hint, len(hs))
+		for i, x := range hs {
+			out[i] = herdhints.Hint{Prefix: x.Prefix, Vantages: x.Vantages}
+		}
+		return out
+	}
+}
+
+// wireHerdHints gives every herd_hints source the hint reader.
+func wireHerdHints(plugins *pluginhost.Set, hints func() []herdhints.Hint) {
+	if plugins == nil {
+		return
+	}
+	for _, src := range plugins.SourcesSnapshot() {
+		if s, ok := src.Plugin.(*herdhints.Source); ok {
+			s.SetHints(hints)
 		}
 	}
 }

@@ -90,11 +90,16 @@ func TestHerdValidation(t *testing.T) {
 		{"unknown source", func(s string) string { return strings.Replace(s, "classes:", "sources: [snmp]\n    classes:", 1) }, `"snmp" must be one of`},
 		{"flow at route level", func(s string) string {
 			return strings.Replace(s, "classes:", "granularity: route\n    sources: [flow]\n    classes:", 1)
-		}, "cannot be shared at route level"},
+		}, "need herd.identity"},
+		{"crowd_k range", func(s string) string { return strings.Replace(s, "classes:", "crowd_k: 65\n    classes:", 1) }, "herd.share.crowd_k 65"},
+		{"identity http", func(s string) string { return s + "  identity: {url: \"http://rpki.example.net/rsc.json\"}\n" }, "herd.identity.url"},
+		{"identity refresh", func(s string) string {
+			return s + "  identity: {url: \"https://rpki.example.net/rsc.json\", refresh: 1m}\n"
+		}, "herd.identity.refresh"},
 		{"limit range", func(s string) string { return s + "  limits: {max_conns: 0, page_records: 9999}\n" }, "page_records 9999"},
 		{"preview with listen", func(s string) string {
 			return strings.Replace(s, "enabled: true", "enabled: true\n  preview_only: true", 1)
-		}, "remove herd.listen, herd.peers, and herd.hub"},
+		}, "remove herd.listen, herd.peers, herd.hub, and herd.identity"},
 		{"duplicate peer", func(s string) string {
 			i := strings.Index(s, "    - url")
 			return s + s[i:]
@@ -107,6 +112,33 @@ func TestHerdValidation(t *testing.T) {
 				t.Fatalf("err = %v, want it to contain %q", err, tt.want)
 			}
 		})
+	}
+}
+
+// Phase 2 (#672): the identity source, the crowd threshold that lets flow
+// and span routes be shared at route level, and the herd_hints source,
+// which needs a herd that pulls.
+func TestHerdIdentityCrowdAndHints(t *testing.T) {
+	id := "  identity: {url: \"https://rpki.example.net/rsc.json\"}\n"
+	route := strings.Replace(herdOn, "classes:", "granularity: route\n    sources: [static, flow]\n    classes:", 1)
+	cfg, err := Parse([]byte(herdBase + route + id))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h := cfg.Herd; h.Identity.Refresh != time.Hour || h.Share.CrowdK != 2 {
+		t.Errorf("identity refresh %s crowd_k %d, want 1h and 2", h.Identity.Refresh, h.Share.CrowdK)
+	}
+	hints := "sources:\n  - type: herd_hints\n"
+	if _, err := Parse([]byte(herdBase + herdOn + hints)); err != nil {
+		t.Errorf("herd_hints with a serving herd: %v", err)
+	}
+	for name, y := range map[string]string{
+		"herd off":     herdBase + hints,
+		"preview only": herdBase + hints + "herd:\n  enabled: true\n  preview_only: true\n  share: {classes: [measurements]}\n  vantage: {country: DE}\n",
+	} {
+		if _, err := Parse([]byte(y)); err == nil || !strings.Contains(err.Error(), "type herd_hints needs herd enabled and serving") {
+			t.Errorf("%s: err = %v", name, err)
+		}
 	}
 }
 
@@ -161,8 +193,8 @@ func TestHerdHubDefaultsAndNoPeersNeeded(t *testing.T) {
 		t.Fatal(err)
 	}
 	h := cfg.Herd.Hub
-	if h == nil || h.URL != "https://hub.example.net/herd.json" || h.Refresh != 6*time.Hour || h.MaxPeers != 16 {
-		t.Errorf("hub = %+v, want url set, refresh 6h, max_peers 16", h)
+	if h == nil || h.URL != "https://hub.example.net/herd.json" || h.Refresh != 6*time.Hour || h.MaxPeers != 16 || h.ExchangePeers != 16 {
+		t.Errorf("hub = %+v, want url set, refresh 6h, max_peers and exchange_peers 16", h)
 	}
 	if cfg2, err := Parse([]byte(herdBase + herdOn)); err != nil || cfg2.Herd.Hub != nil {
 		t.Errorf("no hub block must stay off: %v %+v", err, cfg2.Herd.Hub)
@@ -177,6 +209,7 @@ func TestHerdHubValidation(t *testing.T) {
 		"fast refresh": {"  hub: {url: \"https://hub.example.net/h.json\", refresh: 1m}\n", "herd.hub.refresh"},
 		"slow refresh": {"  hub: {url: \"https://hub.example.net/h.json\", refresh: 240h}\n", "herd.hub.refresh"},
 		"many peers":   {"  hub: {url: \"https://hub.example.net/h.json\", max_peers: 65}\n", "herd.hub.max_peers 65"},
+		"exchange cap": {"  hub: {url: \"https://hub.example.net/h.json\", exchange_peers: 65}\n", "herd.hub.exchange_peers 65"},
 		"unknown key":  {"  hub: {url: \"https://hub.example.net/h.json\", trust: true}\n", "trust"},
 	} {
 		t.Run(name, func(t *testing.T) {

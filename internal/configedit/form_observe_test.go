@@ -4,6 +4,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/config"
 )
@@ -381,5 +382,21 @@ func TestRouterCheckEnvNames(t *testing.T) {
 		if got := EnvNameAllowed(c.place, c.name); got != c.want {
 			t.Errorf("EnvNameAllowed(%s, %s) = %v, want %v", c.place, c.name, got, c.want)
 		}
+	}
+}
+
+// The herd form writes the phase 2 keys (#672): the crowd threshold, the
+// exchange cap under hub, and the identity source.
+func TestHerdFormWritesExchangeIdentityAndCrowd(t *testing.T) {
+	_, cfg := observeEdit(t, observeBlocksYAML, func(f *Form) {
+		h := f.Blocks["herd"]
+		h["share.crowd_k"] = "3"
+		h["hub"] = Values{"url": "https://hub.example.net/herd.json", "exchange_peers": "8"}
+		h["identity"] = Values{"url": "https://rpki.example.net/herd-rsc.json", "refresh": "2h"}
+	})
+	h := cfg.Herd
+	if h.Share.CrowdK != 3 || h.Hub == nil || h.Hub.ExchangePeers != 8 || h.Identity == nil ||
+		h.Identity.URL != "https://rpki.example.net/herd-rsc.json" || h.Identity.Refresh != 2*time.Hour {
+		t.Fatalf("herd = crowd_k %d hub %+v identity %+v", h.Share.CrowdK, h.Hub, h.Identity)
 	}
 }

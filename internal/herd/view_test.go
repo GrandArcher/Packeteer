@@ -21,7 +21,7 @@ func TestVantagesAreListedSeparatelyNeverMerged(t *testing.T) {
 	b.seed(b.mkRecord("b1", 64510, 64503, "198.51.100.0/24", t0.Add(-time.Minute), 80, 90), route("198.51.100.0/24", 64503, 64510))
 	b.puller(a, 64510).Round(context.Background())
 
-	v, err := BuildView(context.Background(), b.store, "origin_asn=64510", 64502, map[string]uint32{a.node.ID(): 64501}, t0)
+	v, err := BuildView(context.Background(), b.store, "origin_asn=64510", 64502, map[string]uint32{a.node.ID(): 64501}, nil, t0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +46,7 @@ func TestVantagesAreListedSeparatelyNeverMerged(t *testing.T) {
 	}
 
 	// A member that is no longer a configured peer is not shown.
-	v, err = BuildView(context.Background(), b.store, "origin_asn=64510", 64502, map[string]uint32{}, t0)
+	v, err = BuildView(context.Background(), b.store, "origin_asn=64510", 64502, map[string]uint32{}, nil, t0)
 	if err != nil || len(v.Vantages) != 1 || !v.Vantages[0].Local {
 		t.Errorf("after the peer was removed: %+v, %v", v.Vantages, err)
 	}
@@ -64,7 +64,7 @@ func TestVantageQueryIsStrict(t *testing.T) {
 		"origin_asn=64510&from=yesterday":     "from",
 		"origin_asn=64510&%zz":                "malformed",
 	} {
-		_, err := BuildView(context.Background(), m.store, q, 64501, nil, t0)
+		_, err := BuildView(context.Background(), m.store, q, 64501, nil, nil, t0)
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%q: err = %v, want it to contain %q", q, err, want)
 		}
@@ -126,7 +126,7 @@ func TestVantageLatestIsTheNewestWhenTruncated(t *testing.T) {
 	if _, err := m.store.PutHerdRecords(context.Background(), rows); err != nil {
 		t.Fatal(err)
 	}
-	v, err := BuildView(context.Background(), m.store, "origin_asn=64510", 64501, nil, t0)
+	v, err := BuildView(context.Background(), m.store, "origin_asn=64510", 64501, nil, nil, t0)
 	if err != nil {
 		t.Fatal(err)
 	}

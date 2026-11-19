@@ -620,7 +620,7 @@ The sections that used to say "edit it in the YAML" are forms now. `GET /api/con
 | Registry hygiene (#670) | `registry`: an on switch, origin ASNs, `as_set`, `interval`, `headroom_percent`, the IRR database and maintainer, and a `sources` row each (`peeringdb`, `ripe`). `push_enabled` stays in the raw YAML. |
 | MCP (#670) | `mcp`: an on switch, `write_tools`, `rate_per_minute`. |
 | Steer verification (#670) | `verify`: an on switch, the two windows, the two thresholds, `min_mbps`, and the back-off. `backout` stays in the raw YAML. |
-| Herd (#670) | `herd`: an on switch, `preview_only`, what is shared (classes, granularity, target sources, discovery, excluded prefixes and ASNs), the declared country, retention, `listen`, `key_file`, a `peers` row each (https URL and pinned key), and the `hub`. Atlas, link-outs, and the resource limits stay in the raw YAML. |
+| Herd (#670) | `herd`: an on switch, `preview_only`, what is shared (classes, granularity, target sources, discovery, excluded prefixes and ASNs), the declared country, retention, `listen`, `key_file`, a `peers` row each (https URL and pinned key), the `hub` with `exchange_peers`, `identity`, and `crowd_k` (#672). Atlas, link-outs, and the resource limits stay in the raw YAML. |
 | Read-only router check (#670) | `preflight.router_check`: type `frr`, `bird`, or `routeros` and the names of the environment variables that hold the socket path or the login (never their values), and for `routeros` the URL and CA file. |
 | HTTP | `listen`, `config_editor`, `allow_from` (one prefix per row). These need a restart, and the help warns about lock-out. |
 

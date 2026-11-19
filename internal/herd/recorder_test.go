@@ -42,6 +42,15 @@ func (f *fakeRIB) Exact(p netip.Prefix) (rib.Route, bool) {
 	_, ok := f.paths[p]
 	return rib.Route{}, ok
 }
+func (f *fakeRIB) Routes() []rib.Route {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]rib.Route, 0, len(f.paths))
+	for p, path := range f.paths {
+		out = append(out, rib.Route{Prefix: p, ASPath: path})
+	}
+	return out
+}
 func (f *fakeRIB) ProviderPaths(p netip.Prefix, provider string) [][]uint32 {
 	f.mu.Lock()
 	defer f.mu.Unlock()

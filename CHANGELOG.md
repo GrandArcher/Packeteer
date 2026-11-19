@@ -7,6 +7,8 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 ### Added
 
 - Settings forms for `rpki` (with `only_invalid`), `registry`, `mcp`, `verify`, `herd` and `preflight.router_check`; never mode, allowlist, announcer, SLURM, `push_enabled` or backout (#670).
+- Herd phase 2 in the lab: peer exchange from hub peers, `herd.identity` RPKI checklist stand-in, `herd_hints` source, crowd threshold for route-level flow and span routes; still advisory (#672).
+
 ### Changed
 
 - `registry.interval` may be 1m-168h while `registry.irr.source` is `TEST`; the `registry` CI job uses it to prove the stale-object delete push and its wrong-digest refusal in the lab (#673).

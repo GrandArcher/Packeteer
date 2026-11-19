@@ -62,6 +62,7 @@ func (stubRIB) Exact(netip.Prefix) (rib.Route, bool) { return rib.Route{}, false
 func (stubRIB) ProviderPaths(netip.Prefix, string) [][]uint32 {
 	return nil
 }
+func (stubRIB) Routes() []rib.Route { return nil }
 
 func TestHerdChangeNeedsRestart(t *testing.T) {
 	dir := t.TempDir()

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/netip"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/config"
@@ -65,6 +66,15 @@ type Herd struct {
 	srv   *Server
 	pull  *Puller
 	hub   *Hub
+	// ids verifies member identities; nil without herd.identity.
+	ids *Identities
+	// exch and exKeys are peer exchange, on with a hub.
+	exch   *Exchange
+	exKeys *KeySet
+	hints  atomic.Pointer[[]Hint]
+
+	crowdMu sync.Mutex
+	crowdAt map[netip.Prefix]crowdEntry
 
 	mu     sync.Mutex
 	cancel context.CancelFunc
@@ -84,7 +94,7 @@ func New(o Options) (*Herd, error) {
 	if err != nil {
 		return nil, err
 	}
-	h := &Herd{o: o, node: node, trips: &Trips{}}
+	h := &Herd{o: o, node: node, trips: &Trips{}, crowdAt: map[netip.Prefix]crowdEntry{}}
 	h.rec = NewRecorder(RecorderOptions{
 		Cfg: o.Cfg, Node: node, Store: o.Store, RIB: o.RIB, Rules: o.Rules, Methods: o.Methods,
 		FirstMethod: o.FirstMethod, SourceTypes: o.SourceTypes, Now: o.Now, Log: o.Log, Event: o.Event,
@@ -93,37 +103,70 @@ func New(o Options) (*Herd, error) {
 	if err != nil {
 		return nil, err
 	}
+	serving := o.Cfg.Serving()
+	if serving && o.Cfg.Identity != nil {
+		h.ids = NewIdentities(o.Cfg.Identity, o.Now, o.Log, o.Event)
+	}
 	var hubKeys *KeySet
-	if o.Cfg.Serving() && o.Cfg.Hub != nil {
-		hubKeys = &KeySet{}
+	static := map[string]bool{}
+	for _, p := range o.Cfg.Peers {
+		static[p.URL] = true
 	}
-	h.srv = NewServer(ServerOptions{
-		Cfg: o.Cfg, ASN: o.ASN, Node: node, Store: o.Store, RIB: o.RIB, Rules: o.Rules, Peers: keys, Hub: hubKeys, Now: o.Now,
-		Log: o.Log, Trips: h.trips, Active: o.Active, Audit: o.Audit,
-	})
-	if o.Cfg.Serving() {
-		if h.pull, err = NewPuller(PullerOptions{
-			Cfg: o.Cfg, Node: node, Store: o.Store, Origins: h.rec.Origins, Now: o.Now, Log: o.Log,
-			Trips: h.trips, Event: o.Event, Active: o.Active,
-		}); err != nil {
-			return nil, err
-		}
-	}
-	if hubKeys != nil {
-		static := map[string]bool{}
-		for _, p := range o.Cfg.Peers {
-			static[p.URL] = true
-		}
+	isStatic := func(id, url string) bool { _, ok := keys[id]; return ok || static[url] }
+	if serving && o.Cfg.Hub != nil {
+		hubKeys, h.exKeys = &KeySet{}, &KeySet{}
 		h.hub = NewHub(HubOptions{
 			Cfg: o.Cfg.Hub, Self: node.ID(), ASN: o.ASN, Now: o.Now, Log: o.Log, Event: o.Event,
-			Skip: func(id, url string) bool { _, ok := keys[id]; return ok || static[url] },
+			Skip: isStatic,
 			Apply: func(peers []HubPeer) {
 				h.pull.SetHub(peers)
 				hubKeys.Set(peers)
+				h.applyExchange()
 			},
 		})
+		h.exch = NewExchange(ExchangeOptions{
+			Max: o.Cfg.Hub.ExchangePeers, Self: node.ID(), SelfASN: o.ASN,
+			Skip:   func(id, url string) bool { return isStatic(id, url) || hubKeys.Has(id) },
+			Agrees: h.hub.agrees, Verified: h.ids.Verified, Life: exchangeLife * o.Cfg.Limits.PullInterval, Trips: h.trips, Log: o.Log,
+		})
+	}
+	so := ServerOptions{
+		Cfg: o.Cfg, ASN: o.ASN, Node: node, Store: o.Store, RIB: o.RIB, Rules: o.Rules, Peers: keys, Hub: hubKeys, Exchange: h.exKeys,
+		Now: o.Now, Log: o.Log, Trips: h.trips, Active: o.Active, Audit: o.Audit, Crowd: h.crowd,
+	}
+	if h.exch != nil {
+		so.Relay = func() []Relayed { return h.pull.Relay(o.Now(), relayWindow*o.Cfg.Limits.PullInterval) }
+	}
+	h.srv = NewServer(so)
+	if serving {
+		po := PullerOptions{
+			Cfg: o.Cfg, Node: node, Store: o.Store, Origins: h.rec.Origins, Now: o.Now, Log: o.Log,
+			Trips: h.trips, Event: o.Event, Active: o.Active, Exchange: h.exch, Learned: h.applyExchange,
+		}
+		if h.pull, err = NewPuller(po); err != nil {
+			return nil, err
+		}
 	}
 	return h, nil
+}
+
+// Peer exchange timing, in pull intervals: a node relays the peers it
+// reached within relayWindow, and drops a learned entry no relayer listed
+// within exchangeLife.
+const (
+	relayWindow  = 3
+	exchangeLife = 6
+)
+
+// applyExchange hands the peers learned by exchange to the puller and the
+// pull API.
+func (h *Herd) applyExchange() {
+	if h.exch == nil {
+		return
+	}
+	peers := h.exch.Peers(h.o.Now())
+	h.pull.SetExchange(peers)
+	h.exKeys.Set(peers)
 }
 
 // Offer hands a probe round to herd. It never blocks.
@@ -150,8 +193,12 @@ func (h *Herd) Start(ctx context.Context) error {
 		go func() { defer wg.Done(); f(ctx) }()
 	}
 	run(h.rec.Run)
+	if h.ids != nil {
+		run(h.ids.Run)
+	}
 	if h.pull != nil {
 		run(h.pull.Run)
+		run(h.runHints)
 	}
 	if h.hub != nil {
 		run(h.hub.Run)
@@ -194,19 +241,37 @@ func (h *Herd) PreviewStatus() []byte {
 
 // board is the dashboard reader over this node's store.
 func (h *Herd) board() Board {
-	peers := map[string]uint32{}
-	if h.pull != nil {
-		for _, p := range h.pull.Peers() {
-			peers[p.KeyID] = p.ASN
+	b := Board{Store: h.o.Store, Self: h.o.ASN, Peers: map[string]uint32{}, Retention: time.Duration(h.o.Cfg.RetentionDays) * 24 * time.Hour, Now: h.o.Now()}
+	if h.ids != nil {
+		b.Verified = map[string]bool{"local": h.ids.Verified(h.o.ASN, h.node.ID())}
+	}
+	for _, p := range h.peers() {
+		b.Peers[p.KeyID] = p.ASN
+		if b.Verified != nil && p.Verified {
+			b.Verified[p.KeyID] = true
 		}
 	}
-	return Board{Store: h.o.Store, Self: h.o.ASN, Peers: peers, Retention: time.Duration(h.o.Cfg.RetentionDays) * 24 * time.Hour, Now: h.o.Now()}
+	return b
+}
+
+// peers is the puller's peers with Verified read from the identity source
+// now, so a peer whose checklist expired stops counting even while its
+// pulls fail.
+func (h *Herd) peers() []PeerStatus {
+	if h.pull == nil {
+		return nil
+	}
+	ps := h.pull.Peers()
+	for i := range ps {
+		ps[i].Verified = h.ids.Verified(ps[i].ASN, ps[i].KeyID)
+	}
+	return ps
 }
 
 // Vantages is the per-vantage view of own and pulled records.
 func (h *Herd) Vantages(ctx context.Context, raw string) (VantageView, error) {
 	b := h.board()
-	return BuildView(ctx, b.Store, raw, b.Self, b.Peers, b.Now)
+	return BuildView(ctx, b.Store, raw, b.Self, b.Peers, b.Verified, b.Now)
 }
 
 // Overview is the dashboard's member list and own sharing status.
@@ -241,23 +306,30 @@ func (h *Herd) Search(ctx context.Context, raw string) (Search, error) {
 
 // NodeStatus is what the status API reports.
 type NodeStatus struct {
-	Enabled       bool         `json:"enabled"`
-	PreviewOnly   bool         `json:"preview_only"`
-	Serving       bool         `json:"serving"`
-	KeyID         string       `json:"key_id"`
-	PublicKey     string       `json:"public_key"`
-	ASN           uint32       `json:"asn"`
-	Country       string       `json:"country"`
-	Granularity   string       `json:"granularity"`
-	Classes       []string     `json:"classes"`
-	Sources       []string     `json:"sources"`
-	Discovery     string       `json:"discovery"`
-	RetentionDays int          `json:"retention_days"`
-	Peers         []PeerStatus `json:"peers"`
-	Hub           *HubStatus   `json:"hub,omitempty"`
-	Limits        []TripCount  `json:"limit_trips"`
-	Queue         QueueStatus  `json:"queue"`
-	Store         StoreStatus  `json:"store"`
+	Enabled       bool     `json:"enabled"`
+	PreviewOnly   bool     `json:"preview_only"`
+	Serving       bool     `json:"serving"`
+	KeyID         string   `json:"key_id"`
+	PublicKey     string   `json:"public_key"`
+	ASN           uint32   `json:"asn"`
+	Country       string   `json:"country"`
+	Granularity   string   `json:"granularity"`
+	Classes       []string `json:"classes"`
+	Sources       []string `json:"sources"`
+	Discovery     string   `json:"discovery"`
+	RetentionDays int      `json:"retention_days"`
+	// Verified is set when the identity source binds this node's key to
+	// its ASN.
+	Verified bool            `json:"verified"`
+	Identity *IdentityStatus `json:"identity,omitempty"`
+	CrowdK   int             `json:"crowd_k"`
+	// Hints are the routes the herd_hints source may probe (#672).
+	Hints  []Hint       `json:"hints"`
+	Peers  []PeerStatus `json:"peers"`
+	Hub    *HubStatus   `json:"hub,omitempty"`
+	Limits []TripCount  `json:"limit_trips"`
+	Queue  QueueStatus  `json:"queue"`
+	Store  StoreStatus  `json:"store"`
 }
 
 // QueueStatus is the recorder's hand-off queue.
@@ -283,17 +355,22 @@ func (h *Herd) Status(ctx context.Context) NodeStatus {
 	st := NodeStatus{
 		Enabled: true, PreviewOnly: c.PreviewOnly, Serving: c.Serving(), KeyID: h.node.ID(), PublicKey: h.node.PublicKey(),
 		ASN: h.o.ASN, Country: c.Vantage.Country, Granularity: c.Share.Granularity, Classes: c.Share.Classes,
-		Sources: c.Share.Sources, Discovery: c.Share.Discovery, RetentionDays: c.RetentionDays,
-		Peers: []PeerStatus{}, Limits: h.trips.Snapshot(),
+		Sources: c.Share.Sources, Discovery: c.Share.Discovery, RetentionDays: c.RetentionDays, CrowdK: c.Share.CrowdK,
+		Peers: []PeerStatus{}, Hints: append([]Hint{}, h.Hints()...), Limits: h.trips.Snapshot(),
 		Queue: QueueStatus{Dropped: h.rec.Dropped(), Stored: h.rec.Stored(), Restarts: h.rec.Restarts()},
 	}
 	if h.pull != nil {
-		st.Peers = h.pull.Peers()
+		st.Peers = h.peers()
 		st.Queue.Restarts += h.pull.Restarts()
 	}
 	if h.hub != nil {
 		hs := h.hub.Status()
 		st.Hub = &hs
+	}
+	if h.ids != nil {
+		is := h.ids.Status()
+		st.Identity = &is
+		st.Verified = h.ids.Verified(h.o.ASN, h.node.ID())
 	}
 	if s, err := h.o.Store.HerdStats(ctx); err == nil {
 		st.Store = StoreStatus{
