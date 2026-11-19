@@ -7,7 +7,6 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 ### Added
 
 - `rpki.only_invalid.origin_collectors` (`origin_collector` plugin `json`) adds an `origin_agreement` signal; the `origin-agreement` CI job proves it on RIS and RouteViews stand-ins (#671).
-
 - Settings forms for `rpki` (with `only_invalid`), `registry`, `mcp`, `verify`, `herd` and `preflight.router_check`; never mode, allowlist, announcer, SLURM, `push_enabled` or backout (#670).
 ### Changed
 
