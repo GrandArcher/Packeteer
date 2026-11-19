@@ -432,10 +432,10 @@ v1.7.0 added no capability row and no config key. The flow-based target discover
 
 Nothing is field-proven (#54). The shipped config stays `mode: observe`, and injection stays off by default ([CHANGELOG](CHANGELOG.md#170---2026-11-18)).
 
-v1.8.0 (this release) adds no capability row; the counts stay at 138 done. It adds opt-in config keys, all off by default, and moves lab proof and Settings forms forward. What an operator will look for:
+v1.8.0 (this release) adds no capability row; the counts stay at 138 done. It adds config keys, off unless you set them except for one herd change (the first bullet below), and moves lab proof and Settings forms forward. What an operator will look for:
 
-- `rpki.only_invalid.origin_collectors` (an `origin_collector` plugin, `json`) adds an `origin_agreement` signal to an RPKI-invalid only case: whether the origins a public collector set (RIS, RouteViews) sees agree. Packeteer ships no client for a public service; the key points at an endpoint you run or trust. The `origin-agreement` CI job proves it against stand-ins ([docs/only-invalid.md](docs/only-invalid.md), [docs/CONFIG.md](docs/CONFIG.md#origin-collector-json), #671). That row stays partial.
-- Herd phase 2 runs in the lab: peer exchange from the hub's peers (`herd.hub.exchange_peers`), a `herd.identity` source of RPKI checklists, the `herd_hints` probe source, and the crowd threshold `herd.share.crowd_k`. It stays advisory: herd data never reaches a decision, and nothing is announced. There is no public hub, and the node does not validate RPKI objects itself ([docs/herd.md](docs/herd.md), [docs/herd-hub.md](docs/herd-hub.md), #672).
+- `rpki.only_invalid.origin_collectors` (an `origin_collector` plugin, `json`) adds an `origin_agreement` signal to an RPKI-invalid only case (#401): whether the origins a public collector set (RIS, RouteViews) sees agree. Packeteer ships no client for a public service; the key points at an endpoint you run or trust. The `origin-agreement` CI job proves it against stand-ins ([docs/only-invalid.md](docs/only-invalid.md), [docs/CONFIG.md](docs/CONFIG.md#origin-collector-json), #671). That row stays partial.
+- Herd phase 2 runs in the lab: peer exchange from the hub's peers (`herd.hub.exchange_peers`), a `herd.identity` source of RPKI checklists, the `herd_hints` target source, and the crowd threshold `herd.share.crowd_k`. With `herd.hub` set, peer exchange is on by default: the node reads its peers' peer lists and learns up to 16 more members (`exchange_peers`, 1 to 64; no off switch), and `crowd_k` defaults to 2 and holds only routes that `flow` or `span` alone listed. It stays advisory: herd data never reaches a decision, and nothing is announced. There is no public hub, and the node does not validate RPKI objects itself ([docs/herd.md](docs/herd.md), [docs/herd-hub.md](docs/herd-hub.md), #672).
 - The Settings page has forms for `rpki` (with `only_invalid`), `registry`, `mcp`, `verify`, `herd`, and `preflight.router_check`. Each is off until switched on and needs a restart; none edits `mode`, the allowlist, the announcer, SLURM exceptions, `registry.push_enabled`, or `verify.backout` ([docs/ui.md](docs/ui.md), #670).
 - The `registry` CI job now proves the stale-object delete push and its wrong-digest refusal against the in-lab stand-ins. To allow that, `registry.interval` may be 1m to 168h while `registry.irr.source` is `TEST`; otherwise it stays 1h to 168h ([docs/registry.md](docs/registry.md), #673).
 - The `upgrade-release` CI job now starts from the v1.7.0 image, pinned by digest, instead of v1.6.0 (#669).
@@ -451,7 +451,8 @@ The Settings page can also upgrade in place (#196). It is off by default. It nee
 
 ### From 1.7.0 to 1.8.0
 
-- No existing config key changed and no existing config behaves differently. The new keys are off or absent by default: `rpki.only_invalid.origin_collectors`, `herd.hub.exchange_peers`, `herd.identity`, `herd.share.crowd_k`, and the `herd_hints` source. Before a downgrade to 1.7.0 remove any of them you set, because 1.7.0 refuses unknown keys.
+- No existing config key changed. One behavior did: with `herd.hub` set, peer exchange is now on, so the node reads each peer's peer list and learns up to `herd.hub.exchange_peers` (default 16) more members; it is advisory and changes no decision. Lower `exchange_peers` to limit it.
+- New keys: `rpki.only_invalid.origin_collectors`, `herd.identity`, the `herd_hints` source, and the optional `herd.hub.exchange_peers` and `herd.share.crowd_k`. Before a downgrade to 1.7.0 remove any of them you set, because 1.7.0 refuses unknown keys.
 - A `registry.interval` under 1h is valid only with `registry.irr.source: TEST`; 1.7.0 refused it either way.
 
 ### From 1.6.0 to 1.7.0

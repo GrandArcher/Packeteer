@@ -16,6 +16,7 @@ The v1.8 release adds an RIS and RouteViews origin signal for RPKI-invalid only 
 
 ### Changed
 
+- With `herd.hub` set, the node now reads peers' peer lists and learns up to `herd.hub.exchange_peers` (default 16) members; advisory only (#672).
 - `registry.interval` may be 1m-168h while `registry.irr.source` is `TEST`; the `registry` CI job uses it to prove the stale-object delete push and its wrong-digest refusal in the lab (#673).
 - `upgrade-release` CI job starts from the v1.7.0 image, pinned by digest, instead of v1.6.0; the downgrade step still removes no key (#669).
 
