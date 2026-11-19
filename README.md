@@ -78,17 +78,17 @@ The image is `ghcr.io/grandarcher/packeteer`, linux/amd64 and linux/arm64. It ru
 
 | Tag | What it is |
 |---|---|
-| `1.7.0` | The last release. Pin this one. |
+| `1.8.0` | The last release. Pin this one. |
 | `latest` | The same release, updated when a release tag is published. |
 | `edge` | The build from `main`. |
 
 **Step by step: [docs/quickstart.md](docs/quickstart.md).** It goes from an empty directory to a running instance in observe, with a first run on loopback, `docker run` and Compose, and the stop. CI runs every command on that page against the image built from the same commit.
 
-The short version, pinned to 1.7.0, the last release. Take the example config from the same tag as the image: the file on `main` can carry keys a release does not know yet, and unknown keys refuse startup. For `:edge`, use `main` in both places.
+The short version, pinned to 1.8.0, the last release. Take the example config from the same tag as the image: the file on `main` can carry keys a release does not know yet, and unknown keys refuse startup. For `:edge`, use `main` in both places.
 
 ```sh
-IMAGE=ghcr.io/grandarcher/packeteer:1.7.0
-curl -fsSLo config.yaml https://raw.githubusercontent.com/GrandArcher/Packeteer/v1.7.0/config.example.yaml
+IMAGE=ghcr.io/grandarcher/packeteer:1.8.0
+curl -fsSLo config.yaml https://raw.githubusercontent.com/GrandArcher/Packeteer/v1.8.0/config.example.yaml
 # Edit providers and source IPs. Leave mode: observe.
 mkdir -p plugins
 
@@ -109,7 +109,7 @@ docker run -d --name packeteer --network host \
 
 ```sh
 docker run --rm -e PACKETEER_CONFIG=/etc/packeteer/config.example.yaml \
-  ghcr.io/grandarcher/packeteer:1.7.0 -check
+  ghcr.io/grandarcher/packeteer:1.8.0 -check
 ```
 
 The default config path inside the container is `/etc/packeteer/config.yaml` (`PACKETEER_CONFIG`, or `-config`).
@@ -120,7 +120,7 @@ Without `NET_RAW`, or where ICMP is filtered, the probe falls back to TCP port 4
 
 The `packeteer-data` volume keeps report history (`storage: {type: sqlite}`, file `/var/lib/packeteer/packeteer.db`) across container restarts and upgrades, and the open billing period of SNMP 95th-percentile samples when telemetry is configured. Without the volume, reports and that window start empty after the container is recreated. Leave out `storage` to turn history off; the probe and decision loop does not depend on it, and the 95th window then lives in memory only. Sign-in on by default (no `auth.enabled`, no `PACKETEER_HTTP_USER`) adds `sqlite` when `storage` is left out.
 
-[docker-compose.yml](docker-compose.yml) runs the same container with Compose: host networking, the two capabilities, the mounts, and `restart: unless-stopped` ([quickstart, step 5](docs/quickstart.md#5-or-run-it-with-compose)). Its `image` line pins `ghcr.io/grandarcher/packeteer:1.7.0`; use `:edge` for the build from `main`. There is no `ports:` map: with host networking, `http.listen` is already an address on the host. Stop with `docker compose stop -t 30` (see [Rollback](#rollback)).
+[docker-compose.yml](docker-compose.yml) runs the same container with Compose: host networking, the two capabilities, the mounts, and `restart: unless-stopped` ([quickstart, step 5](docs/quickstart.md#5-or-run-it-with-compose)). Its `image` line pins `ghcr.io/grandarcher/packeteer:1.8.0`; use `:edge` for the build from `main`. There is no `ports:` map: with host networking, `http.listen` is already an address on the host. Stop with `docker compose stop -t 30` (see [Rollback](#rollback)).
 
 ## Minimum config
 
@@ -352,7 +352,7 @@ Symptoms, log lines, and fixes: [docs/troubleshooting.md](docs/troubleshooting.m
 
 ## Features
 
-Status on main after the 1.7.0 release, capability rows per milestone and how many are done, from the summary in [docs/FEATURES.md](docs/FEATURES.md#summary):
+Status on main after the 1.8.0 release, capability rows per milestone and how many are done, from the summary in [docs/FEATURES.md](docs/FEATURES.md#summary):
 
 | Milestone | Rows | Done |
 |---|---|---|
@@ -421,7 +421,7 @@ v1.6.0 added no capability row and no new top-level config key; the shared IX po
 
 Nothing is field-proven (#54). The shipped config stays `mode: observe`, and injection stays off by default ([CHANGELOG](CHANGELOG.md#160---2026-11-17)).
 
-v1.7.0 (this release) adds no capability row and no config key. The flow-based target discovery row moved from partial to done (138 done, up from 137 at 1.6.0); it is a status change only, no behavior changed. What an operator will look for:
+v1.7.0 added no capability row and no config key. The flow-based target discovery row moved from partial to done (138 done, up from 137 at 1.6.0); it was a status change only, no behavior changed. What an operator looked for:
 
 - The `federation` block (peers, `accept_settings_from`, certificate paths, timing) and the Push of `thresholds` and `policies` have a form on the Settings page; it never edits `mode`, the allowlist, or the announcer, and a change needs a restart ([docs/ui.md](docs/ui.md), [docs/multi-pop.md](docs/multi-pop.md), #658).
 - The `chr` CI job runs non-BGP mode with the `mikrotik` steerer on a throwaway RouterOS CHR: the tagged static route is installed, removed on SIGTERM, and swept after `kill -9`. The steerer now sends the RouterOS row id unescaped, because RouterOS rejected the percent-encoded `*` and SIGTERM left the route ([docs/nonbgp.md](docs/nonbgp.md), [docs/mikrotik.md](docs/mikrotik.md), #655).
@@ -432,11 +432,27 @@ v1.7.0 (this release) adds no capability row and no config key. The flow-based t
 
 Nothing is field-proven (#54). The shipped config stays `mode: observe`, and injection stays off by default ([CHANGELOG](CHANGELOG.md#170---2026-11-18)).
 
+v1.8.0 (this release) adds no capability row; the counts stay at 138 done. It adds opt-in config keys, all off by default, and moves lab proof and Settings forms forward. What an operator will look for:
+
+- `rpki.only_invalid.origin_collectors` (an `origin_collector` plugin, `json`) adds an `origin_agreement` signal to an RPKI-invalid only case: whether the origins a public collector set (RIS, RouteViews) sees agree. Packeteer ships no client for a public service; the key points at an endpoint you run or trust. The `origin-agreement` CI job proves it against stand-ins ([docs/only-invalid.md](docs/only-invalid.md), [docs/CONFIG.md](docs/CONFIG.md#origin-collector-json), #671). That row stays partial.
+- Herd phase 2 runs in the lab: peer exchange from the hub's peers (`herd.hub.exchange_peers`), a `herd.identity` source of RPKI checklists, the `herd_hints` probe source, and the crowd threshold `herd.share.crowd_k`. It stays advisory: herd data never reaches a decision, and nothing is announced. There is no public hub, and the node does not validate RPKI objects itself ([docs/herd.md](docs/herd.md), [docs/herd-hub.md](docs/herd-hub.md), #672).
+- The Settings page has forms for `rpki` (with `only_invalid`), `registry`, `mcp`, `verify`, `herd`, and `preflight.router_check`. Each is off until switched on and needs a restart; none edits `mode`, the allowlist, the announcer, SLURM exceptions, `registry.push_enabled`, or `verify.backout` ([docs/ui.md](docs/ui.md), #670).
+- The `registry` CI job now proves the stale-object delete push and its wrong-digest refusal against the in-lab stand-ins. To allow that, `registry.interval` may be 1m to 168h while `registry.irr.source` is `TEST`; otherwise it stays 1h to 168h ([docs/registry.md](docs/registry.md), #673).
+- The `upgrade-release` CI job now starts from the v1.7.0 image, pinned by digest, instead of v1.6.0 (#669).
+- Docker Desktop on macOS and Windows stays "allowed, not verified": no `scripts/demo.sh --report` result has been recorded ([docs/demo.md](docs/demo.md#platforms)).
+
+Nothing is field-proven (#54). The shipped config stays `mode: observe`, and injection stays off by default ([CHANGELOG](CHANGELOG.md#180---2026-11-19)).
+
 ## Upgrades
 
 Pulling a newer image and recreating the container is the plain upgrade. Your config and the `packeteer-data` volume carry over.
 
 The Settings page can also upgrade in place (#196). It is off by default. It needs `upgrade.enabled: true`, the release public key in `upgrade.public_key` ([CONFIG.md](docs/CONFIG.md#upgrade)), an admin login (auth or basic auth), and the `packeteer-data` volume to keep the new version across restarts. The public key is printed in the [v0.6.0 release notes](https://github.com/GrandArcher/Packeteer/releases/tag/v0.6.0). Every route is withdrawn before the switch, and a release whose signature or checksum does not match is refused. Details: [docs/ui.md](docs/ui.md#upgrade-from-the-ui).
+
+### From 1.7.0 to 1.8.0
+
+- No existing config key changed and no existing config behaves differently. The new keys are off or absent by default: `rpki.only_invalid.origin_collectors`, `herd.hub.exchange_peers`, `herd.identity`, `herd.share.crowd_k`, and the `herd_hints` source. Before a downgrade to 1.7.0 remove any of them you set, because 1.7.0 refuses unknown keys.
+- A `registry.interval` under 1h is valid only with `registry.irr.source: TEST`; 1.7.0 refused it either way.
 
 ### From 1.6.0 to 1.7.0
 

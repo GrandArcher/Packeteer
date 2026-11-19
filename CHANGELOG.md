@@ -4,6 +4,10 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-11-19
+
+The v1.8 release adds an RIS and RouteViews origin signal for RPKI-invalid only paths, Settings forms for six more blocks, herd phase 2 in the lab, and lab proof of the registry delete push, with no new capability row (138 done); the shipped config stays `mode: observe` and injection stays off by default.
+
 ### Added
 
 - `rpki.only_invalid.origin_collectors` (`origin_collector` plugin `json`) adds an `origin_agreement` signal; the `origin-agreement` CI job proves it on RIS and RouteViews stand-ins (#671).
@@ -596,7 +600,8 @@ First release. An observe-first BGP path performance controller in one container
 - Communities are RFC 1997 (two 16-bit integers). `router_id` is IPv4.
 - RouterOS, Junos, and IOS snippets are documentation. The automated BGP test is the FRR lab.
 
-[Unreleased]: https://github.com/GrandArcher/Packeteer/compare/v1.7.0...HEAD
+[Unreleased]: https://github.com/GrandArcher/Packeteer/compare/v1.8.0...HEAD
+[1.8.0]: https://github.com/GrandArcher/Packeteer/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/GrandArcher/Packeteer/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/GrandArcher/Packeteer/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/GrandArcher/Packeteer/compare/v1.4.1...v1.5.0
