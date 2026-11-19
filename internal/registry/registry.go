@@ -27,6 +27,10 @@ import (
 const (
 	DefaultInterval = 24 * time.Hour
 	MinInterval     = time.Hour
+	// MinTestInterval is the shortest interval, allowed only while the
+	// IRR database is TEST (the RIPE test database): it lets a lab see a
+	// second scan, which offers a delete, without waiting an hour.
+	MinTestInterval = time.Minute
 	MaxInterval     = 7 * 24 * time.Hour
 	DefaultHeadroom = 20
 	MaxHeadroom     = 1000

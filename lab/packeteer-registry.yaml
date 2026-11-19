@@ -1,4 +1,4 @@
-# Lab only (#657). Documentation prefixes and ASNs. Observe: nothing is
+# Lab only (#657, #673). Documentation prefixes and ASNs. Observe: nothing is
 # announced. Registry hygiene reads the learned RIB from the edge and
 # compares it with the in-lab registry stand-in (lab/registrystub): its
 # whois IRR, VRP JSON, PeeringDB, and RIPE REST API. Every registry address
@@ -54,9 +54,12 @@ lookup:
     base_url: "https://registry-stub:8443/peeringdb"
     exchanges:
       - {name: ix-lab, ix_id: 7}
+# The 3m interval (allowed only with irr.source TEST) gives the lab a
+# second scan, which is what offers the delete of the stale object (#673).
 registry:
   enabled: true
   asns: [64501]
+  interval: 3m
   irr: {source: TEST, mnt_by: MAINT-LAB}
   push_enabled: true
   sources:

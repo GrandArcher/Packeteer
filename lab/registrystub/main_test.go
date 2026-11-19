@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -331,5 +332,47 @@ func TestStandInRefusesWritesWithoutCredentials(t *testing.T) {
 		if strings.Contains(raw, secret) {
 			t.Errorf("the request record holds a credential: %s", raw)
 		}
+	}
+}
+
+// #673: the delete is offered by the second scan only. A wrong digest is
+// refused and leaves the object on the stand-in; the shown digest deletes
+// exactly that object, with the lab credentials.
+func TestStaleDeleteNeedsSecondScanAndShownDigest(t *testing.T) {
+	l := newLab(t)
+	svc := l.service(t, true, getenv)
+	ctx := context.Background()
+	svc.Scan(ctx)
+	first := find(t, svc.Report(), "irr_stale")
+	if first.Pushable || first.Digest != "" {
+		t.Fatalf("the first sighting is offered: %+v", first)
+	}
+	if _, err := svc.Push(ctx, first.ID, ""); err == nil {
+		t.Fatal("the delete was pushed on the first sighting")
+	}
+
+	svc.Scan(ctx)
+	stale := find(t, svc.Report(), "irr_stale")
+	if !stale.Pushable || stale.Change == nil || stale.Change.Op != "delete_object" || stale.Digest == "" || stale.Note != "" {
+		t.Fatalf("the second sighting is not offered: %+v", stale)
+	}
+	if _, err := svc.Push(ctx, stale.ID, "0000000000000000"); !errors.Is(err, registry.ErrDigestChanged) {
+		t.Fatalf("a wrong digest: err = %v, want ErrDigestChanged", err)
+	}
+	if got := strings.Join(l.s.state().Routes, "|"); !strings.Contains(got, "192.0.2.0/24") {
+		t.Fatalf("a refused delete removed the object: %q", got)
+	}
+	if a, refused := l.writes(); a != 0 || refused != 0 {
+		t.Fatalf("a refused delete reached the stand-in: authorized %d refused %d", a, refused)
+	}
+
+	if _, err := svc.Push(ctx, stale.ID, stale.Digest); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(l.s.state().Routes, "|"); strings.Contains(got, "192.0.2.0/24") || len(l.s.state().Routes) != 1 {
+		t.Fatalf("routes after the delete: %q", got)
+	}
+	if a, refused := l.writes(); a != 1 || refused != 0 {
+		t.Fatalf("authorized writes %d, refused %d", a, refused)
 	}
 }
