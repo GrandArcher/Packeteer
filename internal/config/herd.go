@@ -211,10 +211,6 @@ func (c *Config) HerdOn() bool { return c.Herd != nil && c.Herd.Enabled }
 // Serving reports whether the pull API listens and peers are pulled.
 func (h *Herd) Serving() bool { return h.Enabled && !h.PreviewOnly }
 
-// HerdHintsSource is the target source type that probes what verified herd
-// members see degraded (#672).
-const HerdHintsSource = "herd_hints"
-
 // HerdSourceTypes are the target source types a record may come from.
 var HerdSourceTypes = []string{"static", "vip", "outage", "flow", "span"}
 
@@ -329,7 +325,7 @@ func ParseHerdKey(s string) ([]byte, error) {
 func (c *Config) validateHerd(add func(string, ...any)) {
 	h := c.Herd
 	for i, s := range c.Sources {
-		if s.Type == HerdHintsSource && (h == nil || !h.Serving()) {
+		if s.Type == "herd_hints" && (h == nil || !h.Serving()) {
 			add("sources[%d]: type %s needs herd enabled and serving: its hints come from pulled records", i, s.Type)
 		}
 	}

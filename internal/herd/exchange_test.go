@@ -24,10 +24,10 @@ func newExchange(self *Node, selfASN uint32, max int, agrees func(Entry) bool) (
 	}), trips
 }
 
-func raws(docs ...[]byte) []json.RawMessage {
-	out := make([]json.RawMessage, len(docs))
+func relayed(docs ...[]byte) []Relayed {
+	out := make([]Relayed, len(docs))
 	for i, d := range docs {
-		out[i] = d
+		out[i] = Relayed{Entry: d}
 	}
 	return out
 }
@@ -46,7 +46,7 @@ func TestExchangeRefusesTamperedExpiredOversizedAndPinBreakingEntries(t *testing
 	_, pinned := entryFor(t, 64504, "https://192.0.2.34:9444")
 
 	x, _ := newExchange(self, 64500, 8, func(e Entry) bool { return e.ASN != 64504 })
-	refused := x.Offer("relayer", raws(own, a, b, tampered, expired, oversized, pinned), t0.Add(time.Hour))
+	refused := x.Offer("relayer", relayed(own, a, b, tampered, expired, oversized, pinned), t0.Add(time.Hour))
 	if refused != 4 {
 		t.Errorf("refused %d entries, want 4 (tampered, expired, oversized, pinned elsewhere)", refused)
 	}
@@ -83,10 +83,10 @@ func TestExchangeKeepsOneEntryPerASNCapsAndAgesOut(t *testing.T) {
 
 	x, trips := newExchange(self, 64500, 2, nil)
 	now := t0.Add(time.Hour)
-	if n := x.Offer("r1", raws(first, stranger), now); n != 1 {
+	if n := x.Offer("r1", relayed(first, stranger), now); n != 1 {
 		t.Errorf("an entry for a known ASN signed by an unrelated key: refused %d, want 1", n)
 	}
-	x.Offer("r1", raws(rotated, second, third), now)
+	x.Offer("r1", relayed(rotated, second, third), now)
 	peers := x.Peers(now)
 	urls := map[uint32]string{}
 	for _, p := range peers {
@@ -98,11 +98,38 @@ func TestExchangeKeepsOneEntryPerASNCapsAndAgesOut(t *testing.T) {
 	if !hasTrip(trips, "exchange_peers") {
 		t.Errorf("the exchange_peers cap did not trip: %+v", trips.Snapshot())
 	}
-	// 64502 is listed again later; 64501 is not and ages out.
-	x.Offer("r2", raws(second), now.Add(50*time.Minute))
-	peers = x.Peers(now.Add(70 * time.Minute))
-	if len(peers) != 1 || peers[0].ASN != 64502 {
-		t.Errorf("after an hour without a relay: %+v, want only 64502", peers)
+	// 64502 is listed again later, reached 10 minutes before; 64501 is not
+	// and ages out. A relay of an old contact does not refresh an entry.
+	x.Offer("r2", []Relayed{{Entry: second, AgeSeconds: 600}}, now.Add(50*time.Minute))
+	x.Offer("r3", []Relayed{{Entry: rotated, AgeSeconds: 3000}}, now.Add(50*time.Minute))
+	if peers = x.Peers(now.Add(70 * time.Minute)); len(peers) != 1 || peers[0].ASN != 64502 {
+		t.Errorf("after an hour without a fresh relay: %+v, want only 64502", peers)
+	}
+	if peers = x.Peers(now.Add(101 * time.Minute)); len(peers) != 0 {
+		t.Errorf("64502 was last reached 91 minutes ago: %+v, want none", peers)
+	}
+}
+
+// For an ASN the hub does not pin, an unverified entry that was relayed
+// first cannot keep the verified member out.
+func TestExchangeVerifiedEntryReplacesAnUnverifiedOne(t *testing.T) {
+	self := testNode(t)
+	_, squat := entryFor(t, 64501, "https://192.0.2.39:9444")
+	owner, real := entryFor(t, 64501, "https://192.0.2.31:9444")
+	_, other := entryFor(t, 64501, "https://192.0.2.40:9444")
+	x := NewExchange(ExchangeOptions{
+		Max: 4, Self: self.ID(), SelfASN: 64500, Skip: func(string, string) bool { return false }, Life: time.Hour,
+		Verified: func(asn uint32, id string) bool { return asn == 64501 && id == owner.ID() }, Trips: &Trips{}, Log: quietLog(),
+	})
+	now := t0.Add(time.Hour)
+	if n := x.Offer("r1", relayed(squat, real), now); n != 0 {
+		t.Errorf("refused %d, want the verified entry to replace the squatter", n)
+	}
+	if n := x.Offer("r1", relayed(other), now); n != 1 {
+		t.Errorf("an unverified entry replaced a verified one (refused %d)", n)
+	}
+	if peers := x.Peers(now); len(peers) != 1 || peers[0].URL != "https://192.0.2.31:9444" {
+		t.Errorf("peers = %+v, want the verified member", peers)
 	}
 }
 
@@ -179,9 +206,7 @@ func TestMembersFindEachOtherByPeerExchangeFromASeed(t *testing.T) {
 	}
 	ra, rb, rs := entryAt(a), entryAt(b), entryAt(seed)
 	tampered := []byte(strings.Replace(string(rb), "192.0.2.32", "192.0.2.39", 1))
-	seed.relay = func() []Relayed {
-		return []Relayed{{Entry: ra}, {Entry: rb}, {Entry: tampered}}
-	}
+	seed.relay = func() []Relayed { return relayed(ra, rb, tampered) }
 	seed.serve(a.node, b.node)
 	at[seed.node.ID()] = seed.url()
 	now := t0.Add(time.Hour)
@@ -266,7 +291,7 @@ func TestHerdWiresExchangeAndIdentity(t *testing.T) {
 
 	learned, raw := entryFor(t, 64502, "https://192.0.2.32:9444")
 	_, static := entryFor(t, 64503, cfg.Peers[0].URL)
-	h.exch.Offer("relayer", raws(raw, hubRaw, static), t0)
+	h.exch.Offer("relayer", relayed(raw, hubRaw, static), t0)
 	h.applyExchange()
 	src := map[string]string{}
 	for _, p := range h.pull.Peers() {

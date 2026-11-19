@@ -97,7 +97,7 @@ var rows = rowsOf(members);
 assert(rows.length === 4 && rows[0][0] === "this node" && rows[0][3] === "no", "member rows: " + JSON.stringify(rows));
 assert(rows.every(function (r) { return r[3] === "no"; }), "no member is shown verified");
 assert(rows[2][10].indexOf("stale: timeout") === 0 && rows[3][8] === "-" && rows[3][9] === "never", "stale and never-pulled peers: " + JSON.stringify(rows));
-assert(members.textContent.indexOf("without one nobody is verified. Unverified members are listed and never counted.") >= 0, "the verified column is explained");
+assert(members.textContent.indexOf("With one, unverified members are listed and not counted; without one, nobody is verified and every member counts.") >= 0, "the verified column is explained");
 assert(rows[1][2] === "pinned key", "identity of a pinned peer: " + JSON.stringify(rows[1]));
 var verified = box();
 context.renderHerdOverview(box(), verified, {sharing: load("overview").sharing, members: [

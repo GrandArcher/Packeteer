@@ -33,12 +33,12 @@ func hintRIB() *fakeRIB {
 // names only routes in the local RIB view, never a default route.
 func TestHintsCountOtherCountedMembersAndNameOnlyLocalRoutes(t *testing.T) {
 	events := Events{Events: []EventRow{
-		ev(kindOrigin, "64511", vantage(64500, true, true, true), vantage(64601, false, true, true),
-			vantage(64601, false, true, true), vantage(64602, false, true, true), vantage(64603, false, false, true)),
-		ev(kindPrefix, "198.51.100.0/24", vantage(64601, false, true, true)),
-		ev(kindPrefix, "192.0.2.128/26", vantage(64601, false, true, true), vantage(64602, false, true, false)),
-		ev(kindOrigin, "64510", vantage(64601, false, true, false)),
-		ev(kindOrigin, "64512", vantage(64500, true, true, true), vantage(64603, false, false, true)),
+		ev(kindOrigin, "64511", vantage(64500, true, true, true), vantage(65537, false, true, true),
+			vantage(65537, false, true, true), vantage(65538, false, true, true), vantage(65539, false, false, true)),
+		ev(kindPrefix, "198.51.100.0/24", vantage(65537, false, true, true)),
+		ev(kindPrefix, "192.0.2.128/26", vantage(65537, false, true, true), vantage(65538, false, true, false)),
+		ev(kindOrigin, "64510", vantage(65537, false, true, false)),
+		ev(kindOrigin, "65541", vantage(64500, true, true, true), vantage(65539, false, false, true)),
 	}}
 	got := hintsFrom(events, hintRIB())
 	want := []Hint{{netip.MustParsePrefix("192.0.2.192/27"), 2}, {netip.MustParsePrefix("192.0.2.128/26"), 1}}
@@ -54,7 +54,7 @@ func TestHintsCountOtherCountedMembersAndNameOnlyLocalRoutes(t *testing.T) {
 func TestHintsNeverSteerWithoutALocalMeasurement(t *testing.T) {
 	p := netip.MustParsePrefix("192.0.2.192/27")
 	hints := hintsFrom(Events{Events: []EventRow{
-		ev(kindOrigin, "64511", vantage(64601, false, true, true), vantage(64602, false, true, true), vantage(64603, false, true, true)),
+		ev(kindOrigin, "64511", vantage(65537, false, true, true), vantage(65538, false, true, true), vantage(65539, false, true, true)),
 	}}, hintRIB())
 	if len(hints) != 1 || hints[0].Prefix != p || hints[0].Vantages != 3 {
 		t.Fatalf("hints = %v", hints)

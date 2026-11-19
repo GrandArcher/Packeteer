@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/netip"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -65,21 +66,62 @@ func TestCrowdCountIsVerifiedDistinctOtherASNsForTheExactRoute(t *testing.T) {
 		}
 	}
 	peers := []PeerStatus{
-		{KeyID: "k1", ASN: 64601, Verified: true},
-		{KeyID: "k2", ASN: 64601, Verified: true},
-		{KeyID: "k3", ASN: 64602},
+		{KeyID: "k1", ASN: 65537, Verified: true},
+		{KeyID: "k2", ASN: 65537, Verified: true},
+		{KeyID: "k3", ASN: 65538},
 		{KeyID: "k4", ASN: 64500, Verified: true},
-		{KeyID: "k5", ASN: 64603, Verified: true},
-		{KeyID: "k6", ASN: 64604, Verified: true},
+		{KeyID: "k5", ASN: 65539, Verified: true},
+		{KeyID: "k6", ASN: 65540, Verified: true},
 	}
 	for _, k := range []string{"k1", "k2", "k3", "k4", "k5"} {
 		put(k, "198.51.100.0/24")
 	}
 	put("k6", "198.51.100.0/23")
 	if n := crowdCount(context.Background(), st, peers, 64500, p, t0.Add(-time.Hour)); n != 2 {
-		t.Errorf("crowd = %d, want 2 (AS64601 once and AS64603)", n)
+		t.Errorf("crowd = %d, want 2 (AS65537 once and AS65539)", n)
 	}
 	if n := crowdCount(context.Background(), st, peers, 64500, p, t0.Add(time.Hour)); n != 0 {
 		t.Errorf("crowd before floor = %d, want 0", n)
+	}
+}
+
+// The crowd count reads verification live and is kept for one pull
+// interval.
+func TestHerdCrowdReadsVerificationLiveAndCachesAPullInterval(t *testing.T) {
+	now := t0
+	cfg := testCfg(t, func(c *config.Herd) {
+		c.KeyFile = filepath.Join(t.TempDir(), "node.key")
+		c.Identity = &config.HerdIdentity{URL: "https://127.0.0.1:1/rsc.json", Refresh: time.Hour}
+	})
+	st := testStore(t)
+	h, err := New(Options{Cfg: cfg, ASN: 64496, Store: st, RIB: &fakeRIB{ready: true}, Rules: defaultRules(), Now: func() time.Time { return now }, Log: quietLog()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pe := h.pull.list()[0]
+	pe.st.ASN = 64502
+	p := netip.MustParsePrefix("198.51.100.0/24")
+	rec := plugin.HerdRecord{Member: pe.id, ID: "x", Granularity: config.HerdRoute, Prefix: p, OriginASN: 64510, ProviderASN: 64501, Time: t0, Body: []byte(`{}`)}
+	if _, err := st.PutHerdRecords(context.Background(), []plugin.HerdRecord{rec}); err != nil {
+		t.Fatal(err)
+	}
+	if n := h.crowd(p); n != 0 {
+		t.Fatalf("crowd before verification = %d", n)
+	}
+	h.crowdAt = map[netip.Prefix]crowdEntry{}
+	h.ids.set = map[binding]time.Time{{64502, pe.id}: t0.Add(time.Hour)}
+	if n := h.crowd(p); n != 1 {
+		t.Fatalf("crowd of one verified peer = %d", n)
+	}
+	h.ids.set = nil
+	if n := h.crowd(p); n != 1 {
+		t.Errorf("crowd within the pull interval = %d, want the kept 1", n)
+	}
+	now = now.Add(cfg.Limits.PullInterval)
+	if n := h.crowd(p); n != 0 {
+		t.Errorf("crowd after the peer's binding went and the interval passed = %d, want 0", n)
+	}
+	if h.Status(context.Background()).Peers[0].Verified {
+		t.Error("status still shows the peer verified")
 	}
 }

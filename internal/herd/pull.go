@@ -47,12 +47,10 @@ type PullerOptions struct {
 	// Jitter returns a number in [0, 1). Nil uses math/rand.
 	Jitter func() float64
 	// Exchange, when set, takes the entries in each peer's peer list, and
-	// Learned is called after a list changed what it holds.
+	// Learned is called after every round, so learned peers are applied and
+	// silent ones age out.
 	Exchange *Exchange
 	Learned  func()
-	// Verified reports whether a node key is bound to an ASN by the
-	// identity source. Nil verifies nobody.
-	Verified func(asn uint32, keyID string) bool
 }
 
 // PeerStatus is the state of one peer for the status API.
@@ -71,7 +69,8 @@ type PeerStatus struct {
 	Pulled      uint64    `json:"records_pulled"`
 	Rejected    uint64    `json:"records_rejected"`
 	// Verified is set when the identity source binds the peer's key to the
-	// ASN its status reports.
+	// ASN its status reports. Herd fills it from the identity source each
+	// time it reads the peers; the puller leaves it false.
 	Verified bool `json:"verified"`
 	// Relayed and RelayRefused count the entries of the peer's last peer
 	// list and how many of them were refused.
@@ -348,6 +347,9 @@ func (p *Puller) Round(ctx context.Context) {
 	}
 	close(jobs)
 	wg.Wait()
+	if p.o.Learned != nil {
+		p.o.Learned()
+	}
 }
 
 type retryError struct{ after time.Duration }
@@ -408,9 +410,8 @@ func (p *Puller) pull(ctx context.Context, pe *peer, budget *atomic.Int64) error
 	if pe.wantASN != 0 && st.ASN != pe.wantASN {
 		return fmt.Errorf("status says asn %d, the hub entry says %d", st.ASN, pe.wantASN)
 	}
-	verified := p.o.Verified != nil && p.o.Verified(st.ASN, pe.id)
 	pe.mu.Lock()
-	pe.st.ASN, pe.st.Country, pe.st.Granularity, pe.st.Discovery, pe.st.Verified = st.ASN, st.Vantage, st.Granularity, st.Discovery, verified
+	pe.st.ASN, pe.st.Country, pe.st.Granularity, pe.st.Discovery = st.ASN, st.Vantage, st.Granularity, st.Discovery
 	pe.mu.Unlock()
 	if p.o.Exchange != nil {
 		if err := take(); err != nil {
@@ -437,16 +438,13 @@ func (p *Puller) pull(ctx context.Context, pe *peer, budget *atomic.Int64) error
 // cannot be read is still pulled; the error shows in its status.
 func (p *Puller) exchange(ctx context.Context, pe *peer) {
 	raw, err := p.get(ctx, pe, PathPeers)
-	var entries []json.RawMessage
+	var entries []Relayed
 	if err == nil {
 		entries, err = openPeerList(raw, pe)
 	}
 	refused := 0
 	if err == nil {
 		refused = p.o.Exchange.Offer(pe.id, entries, p.o.Now())
-		if p.o.Learned != nil {
-			p.o.Learned()
-		}
 	} else {
 		p.o.Trips.Add("exchange_failed", pe.id)
 	}

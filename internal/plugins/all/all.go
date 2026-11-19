@@ -55,7 +55,7 @@ import (
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/scorer/cost"              // cost scorer
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/scorer/weighted"          // weighted scorer
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/source/flow"              // netflow/ipfix/sflow target source
-	_ "github.com/GrandArcher/Packeteer/internal/plugins/source/herdhints"         // routes verified herd members see degraded
+	_ "github.com/GrandArcher/Packeteer/internal/plugins/source/herdhints"         // routes other herd members see degraded
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/source/outage"            // AS-path and circuit outage detector
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/source/span"              // SPAN/mirror passive problem detector
 	_ "github.com/GrandArcher/Packeteer/internal/plugins/source/static"            // static target source

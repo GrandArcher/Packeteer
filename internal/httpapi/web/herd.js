@@ -94,7 +94,7 @@ function renderHerdOverview(sharing, members, d) {
       ixpCell(m.last_error ? state + ": " + m.last_error : state, m.stale ? "bad" : "")];
   });
   members.appendChild(ixpTable(["Member", "ASN", "Identity", "Verified", "Source", "Countries", "Vantages", "Records (24 h)", "Newest record", "Last pulled", "State"], rows));
-  members.appendChild(el("p", "tag", "Verified means the identity source (herd.identity) binds the member's key to its ASN; without one nobody is verified. Unverified members are listed and never counted."));
+  members.appendChild(el("p", "tag", "Verified means the identity source (herd.identity) binds the member's key to its ASN. With one, unverified members are listed and not counted; without one, nobody is verified and every member counts."));
 }
 
 function herdIdentity(id) {

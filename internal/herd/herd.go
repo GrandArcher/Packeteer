@@ -73,6 +73,9 @@ type Herd struct {
 	exKeys *KeySet
 	hints  atomic.Pointer[[]Hint]
 
+	crowdMu sync.Mutex
+	crowdAt map[netip.Prefix]crowdEntry
+
 	mu     sync.Mutex
 	cancel context.CancelFunc
 	done   chan struct{}
@@ -91,7 +94,7 @@ func New(o Options) (*Herd, error) {
 	if err != nil {
 		return nil, err
 	}
-	h := &Herd{o: o, node: node, trips: &Trips{}}
+	h := &Herd{o: o, node: node, trips: &Trips{}, crowdAt: map[netip.Prefix]crowdEntry{}}
 	h.rec = NewRecorder(RecorderOptions{
 		Cfg: o.Cfg, Node: node, Store: o.Store, RIB: o.RIB, Rules: o.Rules, Methods: o.Methods,
 		FirstMethod: o.FirstMethod, SourceTypes: o.SourceTypes, Now: o.Now, Log: o.Log, Event: o.Event,
@@ -124,7 +127,7 @@ func New(o Options) (*Herd, error) {
 		h.exch = NewExchange(ExchangeOptions{
 			Max: o.Cfg.Hub.ExchangePeers, Self: node.ID(), SelfASN: o.ASN,
 			Skip:   func(id, url string) bool { return isStatic(id, url) || hubKeys.Has(id) },
-			Agrees: h.hub.agrees, Life: exchangeLife * o.Cfg.Limits.PullInterval, Trips: h.trips, Log: o.Log,
+			Agrees: h.hub.agrees, Verified: h.ids.Verified, Life: exchangeLife * o.Cfg.Limits.PullInterval, Trips: h.trips, Log: o.Log,
 		})
 	}
 	so := ServerOptions{
@@ -139,9 +142,6 @@ func New(o Options) (*Herd, error) {
 		po := PullerOptions{
 			Cfg: o.Cfg, Node: node, Store: o.Store, Origins: h.rec.Origins, Now: o.Now, Log: o.Log,
 			Trips: h.trips, Event: o.Event, Active: o.Active, Exchange: h.exch, Learned: h.applyExchange,
-		}
-		if h.ids != nil {
-			po.Verified = h.ids.Verified
 		}
 		if h.pull, err = NewPuller(po); err != nil {
 			return nil, err
@@ -245,15 +245,27 @@ func (h *Herd) board() Board {
 	if h.ids != nil {
 		b.Verified = map[string]bool{"local": h.ids.Verified(h.o.ASN, h.node.ID())}
 	}
-	if h.pull != nil {
-		for _, p := range h.pull.Peers() {
-			b.Peers[p.KeyID] = p.ASN
-			if b.Verified != nil && p.Verified {
-				b.Verified[p.KeyID] = true
-			}
+	for _, p := range h.peers() {
+		b.Peers[p.KeyID] = p.ASN
+		if b.Verified != nil && p.Verified {
+			b.Verified[p.KeyID] = true
 		}
 	}
 	return b
+}
+
+// peers is the puller's peers with Verified read from the identity source
+// now, so a peer whose checklist expired stops counting even while its
+// pulls fail.
+func (h *Herd) peers() []PeerStatus {
+	if h.pull == nil {
+		return nil
+	}
+	ps := h.pull.Peers()
+	for i := range ps {
+		ps[i].Verified = h.ids.Verified(ps[i].ASN, ps[i].KeyID)
+	}
+	return ps
 }
 
 // Vantages is the per-vantage view of own and pulled records.
@@ -348,7 +360,7 @@ func (h *Herd) Status(ctx context.Context) NodeStatus {
 		Queue: QueueStatus{Dropped: h.rec.Dropped(), Stored: h.rec.Stored(), Restarts: h.rec.Restarts()},
 	}
 	if h.pull != nil {
-		st.Peers = h.pull.Peers()
+		st.Peers = h.peers()
 		st.Queue.Restarts += h.pull.Restarts()
 	}
 	if h.hub != nil {

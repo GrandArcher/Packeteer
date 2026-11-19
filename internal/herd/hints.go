@@ -11,8 +11,8 @@ import (
 	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
-// maxHints bounds the hints kept between refreshes; the herd_hints source
-// takes at most its own max_targets of them.
+// maxHints bounds the hints kept between refreshes. It equals the highest
+// max_targets the herd_hints source accepts.
 const maxHints = 1024
 
 // Hint is a route in this node's RIB view that other members see degraded
@@ -122,13 +122,35 @@ func hintsFrom(ev Events, view RIB) []Hint {
 
 // crowd counts the other verified ASNs this node pulled records from for
 // exactly prefix, inside its retention: the count the crowd threshold
-// compares with crowd_k. Without an identity source nobody counts.
+// compares with crowd_k. Without an identity source nobody counts. A count
+// is kept for one pull interval, the soonest it could change, so a peer
+// that asks for many routes costs at most one count per route per
+// interval.
 func (h *Herd) crowd(prefix netip.Prefix) int {
 	if h.pull == nil || h.ids == nil {
 		return 0
 	}
-	floor := h.o.Now().Add(-time.Duration(h.o.Cfg.RetentionDays) * 24 * time.Hour)
-	return crowdCount(context.Background(), h.o.Store, h.pull.Peers(), h.o.ASN, prefix, floor)
+	now := h.o.Now()
+	h.crowdMu.Lock()
+	defer h.crowdMu.Unlock()
+	if c, ok := h.crowdAt[prefix]; ok && now.Sub(c.at) < h.o.Cfg.Limits.PullInterval {
+		return c.n
+	}
+	if len(h.crowdAt) >= maxCrowd {
+		clear(h.crowdAt)
+	}
+	floor := now.Add(-time.Duration(h.o.Cfg.RetentionDays) * 24 * time.Hour)
+	n := crowdCount(context.Background(), h.o.Store, h.peers(), h.o.ASN, prefix, floor)
+	h.crowdAt[prefix] = crowdEntry{n: n, at: now}
+	return n
+}
+
+// maxCrowd bounds the cached crowd counts.
+const maxCrowd = 4096
+
+type crowdEntry struct {
+	n  int
+	at time.Time
 }
 
 // crowdCount counts the distinct ASNs other than self among the verified

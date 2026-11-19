@@ -31,8 +31,8 @@ const (
 // key, once per ASN, when no identity source is configured; otherwise only
 // the members it verified, once per ASN (#672).
 const (
-	BasisPinned = "pinned_key"
-	BasisRPKI   = "rpki"
+	BasisPinned = IdentityPinned
+	BasisRPKI   = IdentityRPKI
 )
 
 // QueryError is a dashboard request the caller can fix; any other error is
@@ -205,7 +205,8 @@ type MemberRow struct {
 	ASN      uint32 `json:"asn"`
 	Identity string `json:"identity"`
 	// Verified is set when the identity source binds the member's key to
-	// its ASN. An unverified member is shown and never counted.
+	// its ASN. With an identity source, an unverified member is shown and
+	// not counted.
 	Verified  bool     `json:"verified"`
 	Source    string   `json:"source"`
 	Countries []string `json:"countries"`

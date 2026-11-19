@@ -50,7 +50,9 @@
 #  5. the world view, mesh, map, monitors, and search on member-a list the
 #     same three members, and the rendered /herd.html shows them;
 #  6. hints: member-a, which has no static target in 192.0.2.224/28, probes
-#     it because verified member-b sees loss there, and steers nothing;
+#     it because verified member-b sees loss there, and steers nothing (in
+#     observe with one provider that holds anyway; that a hint never steers
+#     without a local measurement is TestHintsNeverSteerWithoutALocalMeasurement);
 #  7. crowd threshold: member-c measured its flow-only route but serves it
 #     to nobody while no other verified member serves it, and still serves
 #     its static route at route level;

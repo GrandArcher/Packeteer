@@ -35,11 +35,10 @@ type PeerList struct {
 	Signature   string    `json:"signature,omitempty"`
 }
 
-// learned is an entry taken from peer exchange: who relayed it and when it
-// was last relayed by anyone.
+// learned is an entry taken from peer exchange and the latest time a
+// relayer reached its node.
 type learned struct {
 	e    Entry
-	via  string
 	seen time.Time
 }
 
@@ -54,9 +53,12 @@ type ExchangeOptions struct {
 	Skip func(keyID, url string) bool
 	// Agrees refuses an entry for an ASN the hub pinned to other keys.
 	Agrees func(Entry) bool
-	// Life is how long an entry stays after the last relayer listed it. A
-	// relayer lists only nodes it reached recently, so a silent member
-	// ages out.
+	// Verified reports whether the identity source binds a node key to an
+	// ASN. Nil verifies nobody.
+	Verified func(asn uint32, keyID string) bool
+	// Life is how long an entry stays after a relayer last reached its
+	// node. A relayer lists only nodes it reached recently, so a silent
+	// member ages out.
 	Life  time.Duration
 	Trips *Trips
 	Log   *slog.Logger
@@ -81,10 +83,12 @@ func NewExchange(o ExchangeOptions) *Exchange {
 }
 
 // Offer checks the entries relayer via listed and keeps the usable ones.
-// It returns how many it refused: malformed, oversized, expired, badly
-// signed, against a hub pin, or for an ASN already held by unrelated
-// keys. This node's own entry and entries it already has are not refused.
-func (x *Exchange) Offer(via string, entries []json.RawMessage, now time.Time) int {
+// An entry counts as seen when the relayer last reached its node, its age
+// before now. Offer returns how many it refused: malformed, oversized,
+// expired, badly signed, against a hub pin, or for an ASN already held by
+// unrelated keys, unless the new entry is verified and the held one is
+// not. This node's own entry and entries it already has are not refused.
+func (x *Exchange) Offer(via string, list []Relayed, now time.Time) int {
 	refused := 0
 	refuse := func(err error) {
 		refused++
@@ -93,8 +97,8 @@ func (x *Exchange) Offer(via string, entries []json.RawMessage, now time.Time) i
 	}
 	x.mu.Lock()
 	defer x.mu.Unlock()
-	for _, raw := range entries {
-		e, err := CheckEntry(raw, now)
+	for _, r := range list {
+		e, err := CheckEntry(r.Entry, now)
 		if err != nil {
 			refuse(err)
 			continue
@@ -106,23 +110,34 @@ func (x *Exchange) Offer(via string, entries []json.RawMessage, now time.Time) i
 			refuse(fmt.Errorf("entry asn %d: the hub pinned this ASN to other keys", e.ASN))
 			continue
 		}
+		seen := now.Add(-time.Duration(max(r.AgeSeconds, 0)) * time.Second)
 		cur, ok := x.known[e.ASN]
 		switch {
 		case !ok && len(x.known) >= x.o.Max:
 			x.o.Trips.Add("exchange_peers", via)
 			continue
-		case !ok, cur.e.Signature == e.Signature:
+		case !ok:
+		case cur.e.Signature == e.Signature:
+			seen = latest(cur.seen, seen)
 		case !cur.e.hasKey(e.Signer):
-			refuse(fmt.Errorf("entry asn %d: signed by a key the known entry does not list", e.ASN))
-			continue
+			if !x.verified(e) || x.verified(cur.e) {
+				refuse(fmt.Errorf("entry asn %d: signed by a key the known entry does not list", e.ASN))
+				continue
+			}
 		case !e.Issued.After(cur.e.Issued):
-			cur.seen = now
+			cur.seen = latest(cur.seen, seen)
 			x.known[e.ASN] = cur
 			continue
 		}
-		x.known[e.ASN] = learned{e: e, via: via, seen: now}
+		x.known[e.ASN] = learned{e: e, seen: seen}
 	}
 	return refused
+}
+
+// verified reports whether the identity source binds e's signer to its ASN.
+func (x *Exchange) verified(e Entry) bool {
+	k, err := config.ParseHerdKey(e.Signer)
+	return err == nil && x.o.Verified != nil && x.o.Verified(e.ASN, KeyID(k))
 }
 
 // Peers drops the entries that expired or that no relayer listed within
@@ -162,7 +177,7 @@ func (e Entry) hasKey(key string) bool {
 
 // openPeerList checks a peer list from pe: its signature, member, and
 // size, and returns the entries.
-func openPeerList(raw []byte, pe *peer) ([]json.RawMessage, error) {
+func openPeerList(raw []byte, pe *peer) ([]Relayed, error) {
 	if err := verifyDocument(pe.pub, raw); err != nil {
 		return nil, fmt.Errorf("peers: %w", err)
 	}
@@ -178,9 +193,5 @@ func openPeerList(raw []byte, pe *peer) ([]json.RawMessage, error) {
 	case len(l.Entries) > MaxRelayed:
 		return nil, fmt.Errorf("peer list holds %d entries, over %d", len(l.Entries), MaxRelayed)
 	}
-	out := make([]json.RawMessage, len(l.Entries))
-	for i, r := range l.Entries {
-		out[i] = r.Entry
-	}
-	return out, nil
+	return l.Entries, nil
 }

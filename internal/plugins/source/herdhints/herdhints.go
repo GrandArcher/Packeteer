@@ -1,8 +1,9 @@
 // Package herdhints implements the "herd_hints" target source (#672).
 //
-// It probes routes that verified herd members see degraded: each hint is a
-// route in this node's learned RIB view and the number of other members
-// that see loss toward it. A hint only adds a probe target, within
+// It probes routes other herd members see degraded: each hint is a route in
+// this node's learned RIB view and the number of other members that see
+// loss toward it, counted as the herd world view counts (verified members
+// only when herd.identity is set). A hint only adds a probe target, within
 // max_targets and the probe engine's rate limits. Any improvement still
 // comes from this node's own measurements passing the normal thresholds,
 // hold time, allowlist, and cap; herd data never reaches a decision, and
@@ -26,7 +27,8 @@ const (
 	DefaultMinVantages = 2
 	MaxMinVantages     = 64
 	DefaultMaxTargets  = 16
-	MaxTargetsLimit    = 1024
+	// MaxTargetsLimit equals the most hints herd keeps.
+	MaxTargetsLimit = 1024
 )
 
 func init() { plugin.Sources.Register(TypeName, New) }
