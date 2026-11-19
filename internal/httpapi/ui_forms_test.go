@@ -3,6 +3,7 @@ package httpapi
 import (
 	"net/http"
 	"os"
+	"os/exec"
 	"slices"
 	"strings"
 	"testing"
@@ -388,7 +389,7 @@ func TestConfigPreviewAndSchema(t *testing.T) {
 	for _, b := range got["blocks"].([]any) {
 		ids[b.(map[string]any)["id"].(string)] = true
 	}
-	for _, id := range []string{"scorer", "bgp", "bmp", "maintenance", "inbound_announcer", "anomaly", "mitigation", "http", "inject", "federation"} {
+	for _, id := range []string{"scorer", "bgp", "bmp", "maintenance", "inbound_announcer", "anomaly", "mitigation", "http", "inject", "federation", "rpki", "rpki_only_invalid", "registry", "mcp", "verify", "herd", "router_check"} {
 		if !ids[id] {
 			t.Fatalf("schema lacks block %s: %s", id, rec.Body)
 		}
@@ -415,5 +416,28 @@ func TestConfigPreviewAndSchema(t *testing.T) {
 	types, _ := got["plugin_types"].(map[string]any)
 	if policies, _ := types["policies"].([]any); slices.Contains(policies, any("maintenance")) {
 		t.Fatalf("policies offer %v; the maintenance card owns that type", policies)
+	}
+}
+
+// Every block of the schema has a mount in the settings page, or the form
+// would be served and never drawn.
+func TestEverySettingsBlockHasAMount(t *testing.T) {
+	page, err := os.ReadFile("web/settings.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, b := range configedit.Blocks() {
+		if !strings.Contains(string(page), `data-block="`+b.ID+`"`) {
+			t.Errorf("settings.html has no mount for block %s", b.ID)
+		}
+	}
+}
+
+// TestBlocksFieldHelpers runs blocks_fields_test.js: an enabled switch that
+// starts on, and a whole-number list.
+func TestBlocksFieldHelpers(t *testing.T) {
+	out, err := exec.Command(nodeOrSkip(t), "blocks_fields_test.js").CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "ok") {
+		t.Fatalf("blocks fields: %v\n%s", err, out)
 	}
 }

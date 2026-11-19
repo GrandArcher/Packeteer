@@ -21,6 +21,8 @@ func TestEnvPrefixPlacesExist(t *testing.T) {
 		"auth.sso":           plugin.SSOs.Has,
 		"threat_feeds.feeds": plugin.ThreatFeeds.Has,
 		"nonbgp.steerer":     plugin.Steerers.Has,
+
+		"preflight.router_check": plugin.RouterChecks.Has,
 	}
 	for place, prefixes := range envPrefixes {
 		if len(prefixes) == 0 {
