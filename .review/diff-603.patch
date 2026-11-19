@@ -1,0 +1,1777 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index aac45b34..1183aa38 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -28,6 +28,8 @@ jobs:
+           fi
+       - name: test
+         run: go test ./...
++      - name: path-scoring harness fixture replay (#584; experimental, lab only; baseline vs a worse and a better variant)
++        run: go run ./lab/evolve -history lab/evolve/testdata/history.jsonl -base lab/evolve/testdata/baseline.yaml -variant lab/evolve/testdata/worse.yaml -variant lab/evolve/testdata/better.yaml
+       - name: fuzz the NetFlow v9 and IPFIX decoders (#502)
+         run: |
+           go test -run '^$' -fuzz '^FuzzDecodeIPFIX$' -fuzztime 15s ./internal/plugins/source/flow/
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 78c211aa..588f8dca 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -4,6 +4,10 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
+ 
+ ## [Unreleased]
+ 
++### Added
++
++- `lab/evolve` (experimental, lab only) replays recorded rounds under config variants and scores loss, RTT, and flaps against a baseline; writes no config, never enables inject (#584).
++
+ ## [1.3.0] - 2026-11-13
+ 
+ The v1.3 release makes the steering state from v1.2 durable and tightens first-run setup and the Settings and System pages, with no new config key; the shipped config stays `mode: observe` and injection stays off by default.
+diff --git a/README.md b/README.md
+index aee388bf..a6e80ebb 100644
+--- a/README.md
++++ b/README.md
+@@ -338,8 +338,9 @@ Status on main after the 1.3.0 release, capability rows per milestone and how ma
+ | v0.8 | 20 | 16 |
+ | v0.9 | 31 | 28 |
+ | v1.1 | 3 | 1 |
++| v1.4 | 1 | 1 |
+ | won't do | 2 | - |
+-| **Total** | 145 | 131 |
++| **Total** | 146 | 132 |
+ 
+ v0.1 is the outbound loop: probes, static and flow targets, an iBGP RIB, scoring with hysteresis, optional injection, the read-only UI and API, the container, and the FRR lab. v0.2 adds cost and commit control, SNMP, policies, alerts, and reports. v0.3 adds inbound optimization, BMP and add-path, multiple routers and IX, RTBH/FlowSpec mitigation, transit classification, and capped more-specific injection, all lab-proven. v0.4 adds multi-POP federation, active/standby HA and backup, RBAC/SSO/audit, flow-baseline anomaly detection that mitigates only on explicit rules, and the remaining UI rows. v0.5 is hardening on that matrix: dashboard clarity and a first-run checklist, CI-tested install and walkthrough docs, load and soak budgets, a MikroTik CHR lab in CI, and a scheduled router interop matrix. Field feedback from real observe-mode deployments (#54) is still open. v0.6 closes the gaps from the 2026-10-07 review of prefix selection, measurement, and the UI, adds flap quarantine, live apply, scale budgets up to multi-million path tables, upgrade from the UI, and a failure-mode e2e matrix. v0.7 adds exchange (IX) visibility for an edge network: an exchange view, IX LAN health probes, route-server vs bilateral prefix views, offload and potential-peers reports, dashboard widgets, Commit & Cost, Reports, search, System, and maintenance pages, and link-outs.
+ 
+diff --git a/cmd/controller/blast.go b/cmd/controller/blast.go
+index 51a68df8..0fe8e4ed 100644
+--- a/cmd/controller/blast.go
++++ b/cmd/controller/blast.go
+@@ -57,7 +57,7 @@ func (b blastSource) PreviewConfig(next *config.Config, online []string) (blast.
+ }
+ 
+ func (b blastSource) report(cfg *config.Config, changed []string) (blast.Report, error) {
+-	pc, err := policyConfig(cfg)
++	pc, err := policy.FromConfig(cfg)
+ 	if err != nil {
+ 		return blast.Report{}, err
+ 	}
+diff --git a/cmd/controller/decision.go b/cmd/controller/decision.go
+index b8a7a090..48ae407e 100644
+--- a/cmd/controller/decision.go
++++ b/cmd/controller/decision.go
+@@ -95,79 +95,11 @@ func standbyRound(now time.Time, ctl *announce.Controller, inb *inbound.Controll
+ 	return mitChanges, errors.Join(err, mitErr)
+ }
+ 
+-// policyConfig is the decision config for cfg. A reload builds a fresh one
+-// and installs it with SetConfig; the next Decide uses it. Prefixes here
+-// were already validated by config.Load.
+-func policyConfig(cfg *config.Config) (policy.Config, error) {
+-	if cfg == nil {
+-		return policy.Config{}, errors.New("no config")
+-	}
+-	max := 0
+-	if cfg.MaxImprovements != nil {
+-		max = *cfg.MaxImprovements
+-	}
+-	pc := policy.Config{
+-		Mode:            cfg.Mode,
+-		MinLossDeltaPct: cfg.Thresholds.MinLossDeltaPct,
+-		MinRTTDelta:     time.Duration(cfg.Thresholds.MinRTTDeltaMs * float64(time.Millisecond)),
+-		MinRTTDeltaPct:  cfg.Thresholds.MinRTTDeltaPct,
+-		ConfirmRounds:   cfg.Thresholds.ConfirmRounds,
+-		HoldTime:        cfg.HoldTime,
+-		MaxImprovements: max,
+-		// A result older than ~3 rounds is stale. The decision loop
+-		// re-checks this on a ticker even when no round completes.
+-		MaxResultAge:        maxResultAge(cfg),
+-		Excluded:            map[string]bool{},
+-		RPKIAvoidInvalid:    cfg.RPKIOn() && cfg.RPKI.AvoidInvalid,
+-		IRRPreferRegistered: cfg.IRROn() && cfg.IRR.PreferRegistered,
+-		RequireEvidence:     cfg.Thresholds.RequireEvidence,
+-		MEDTieBreak:         cfg.Thresholds.MEDOn(),
+-		MEDMargin:           cfg.Thresholds.MEDMarginOrDefault(),
+-	}
+-	if cfg.ImprovementTTL > 0 {
+-		pc.ImprovementTTL = cfg.ImprovementTTL
+-	}
+-	if f := cfg.FlapQuarantine; !f.Disabled {
+-		pc.Flap = policy.FlapConfig{MaxFlips: f.MaxFlips, Window: f.Window, Cooldown: f.Cooldown, MaxCooldown: f.MaxCooldown}
+-	}
+-	ported := map[string]bool{}
+-	for _, ex := range cfg.Exchanges {
+-		if ex.Port != nil {
+-			ported[ex.Name] = true
+-			pc.Ports = append(pc.Ports, policy.PortPolicy{Name: ex.Name, CapacityMbps: ex.Port.CapacityMbps, CommitMbps: ex.Port.CommitMbps})
+-		}
+-	}
+-	for _, p := range cfg.Providers {
+-		if p.Exclude {
+-			pc.Excluded[p.Name] = true
+-		}
+-		pp := policy.ProviderPolicy{
+-			Name: p.Name, Group: p.Group, Precedence: p.Precedence, CCDisable: p.CCDisable,
+-			CapacityThresholdPct: p.InterfaceCapacityThresholdPct,
+-		}
+-		if ported[p.Exchange] {
+-			pp.Port = p.Exchange
+-		}
+-		if p.Cost != nil {
+-			pp.Cost, pp.HasCost = *p.Cost, true
+-		}
+-		pc.Providers = append(pc.Providers, pp)
+-	}
+-	for _, s := range cfg.Allowlist.Prefixes {
+-		p, err := netip.ParsePrefix(s)
+-		if err != nil {
+-			return policy.Config{}, err
+-		}
+-		pc.Allowlist = append(pc.Allowlist, p)
+-	}
+-	return pc, nil
+-}
+-
+ func newDecider(cfg *config.Config, plugins *pluginhost.Set) (*policy.Engine, error) {
+ 	if plugins.Scorer == nil {
+ 		return nil, fmt.Errorf("no scorer configured")
+ 	}
+-	pc, err := policyConfig(cfg)
++	pc, err := policy.FromConfig(cfg)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+diff --git a/cmd/controller/evidence_test.go b/cmd/controller/evidence_test.go
+index 5e1ea2de..39b8c7e4 100644
+--- a/cmd/controller/evidence_test.go
++++ b/cmd/controller/evidence_test.go
+@@ -7,6 +7,7 @@ import (
+ 	"testing"
+ 
+ 	"github.com/GrandArcher/Packeteer/internal/pluginhost"
++	"github.com/GrandArcher/Packeteer/internal/policy"
+ 	"github.com/GrandArcher/Packeteer/pkg/plugin"
+ )
+ 
+@@ -42,14 +43,14 @@ func TestCollectPassive(t *testing.T) {
+ }
+ 
+ func TestPolicyConfigRequireEvidence(t *testing.T) {
+-	pc, err := policyConfig(mustParse(t, liveApplyConfig(179, "observe", "5m", "1h")))
++	pc, err := policy.FromConfig(mustParse(t, liveApplyConfig(179, "observe", "5m", "1h")))
+ 	if err != nil || pc.RequireEvidence {
+ 		t.Fatalf("default require_evidence = %v (%v)", pc.RequireEvidence, err)
+ 	}
+ 	on := strings.Replace(liveApplyConfig(179, "observe", "5m", "1h"),
+ 		"thresholds: {min_loss_delta_pct: 90, min_rtt_delta_ms: 5000}",
+ 		"thresholds: {min_loss_delta_pct: 90, min_rtt_delta_ms: 5000, require_evidence: true}", 1)
+-	if pc, _ := policyConfig(mustParse(t, on)); !pc.RequireEvidence {
++	if pc, _ := policy.FromConfig(mustParse(t, on)); !pc.RequireEvidence {
+ 		t.Fatal("require_evidence not passed to the decision config")
+ 	}
+ }
+diff --git a/cmd/controller/federation.go b/cmd/controller/federation.go
+index 94576971..d34aed52 100644
+--- a/cmd/controller/federation.go
++++ b/cmd/controller/federation.go
+@@ -72,7 +72,7 @@ func newFedState(cfg *config.Config, plugins *pluginhost.Set) *fedState {
+ 	}
+ 	return &fedState{
+ 		cfg: federationConfig(cfg), fed: plugins.Federation.Plugin, version: version, mode: cfg.Mode,
+-		maxAge: maxResultAge(cfg), maxImps: *cfg.MaxImprovements,
++		maxAge: cfg.MaxResultAge(), maxImps: *cfg.MaxImprovements,
+ 	}
+ }
+ 
+diff --git a/cmd/controller/inbound.go b/cmd/controller/inbound.go
+index 456ab7c6..2fbcafd0 100644
+--- a/cmd/controller/inbound.go
++++ b/cmd/controller/inbound.go
+@@ -54,7 +54,7 @@ func newInbound(cfg *config.Config, plugins *pluginhost.Set, view *rib.View, oth
+ 		TTL:             cfg.ImprovementTTL,
+ 		ReleasePct:      in.ReleasePct,
+ 		MaxAge:          inbound.DefaultMaxAge,
+-		PerfMaxAge:      maxResultAge(cfg),
++		PerfMaxAge:      cfg.MaxResultAge(),
+ 		Damping: inbound.Damping{
+ 			Disabled: in.Damping.Disabled, Confirm: in.Damping.Confirm,
+ 			Backoff: in.Damping.Backoff, MaxHold: in.Damping.MaxHold,
+diff --git a/cmd/controller/irr_test.go b/cmd/controller/irr_test.go
+index c00e409b..ad9a8493 100644
+--- a/cmd/controller/irr_test.go
++++ b/cmd/controller/irr_test.go
+@@ -95,7 +95,7 @@ func TestIRRFixtureThroughDecide(t *testing.T) {
+ 			t.Fatalf("labels = %+v", labels)
+ 		}
+ 
+-		pc, err := policyConfig(cfg)
++		pc, err := policy.FromConfig(cfg)
+ 		if err != nil {
+ 			t.Fatal(err)
+ 		}
+@@ -153,7 +153,7 @@ func TestIRROff(t *testing.T) {
+ 	if in.IRR != nil {
+ 		t.Fatalf("irr off labelled: %+v", in.IRR)
+ 	}
+-	if pc, _ := policyConfig(cfg); pc.IRRPreferRegistered {
++	if pc, _ := policy.FromConfig(cfg); pc.IRRPreferRegistered {
+ 		t.Fatal("prefer_registered on by default")
+ 	}
+ }
+diff --git a/cmd/controller/live_apply_test.go b/cmd/controller/live_apply_test.go
+index e9a81b16..86aff57d 100644
+--- a/cmd/controller/live_apply_test.go
++++ b/cmd/controller/live_apply_test.go
+@@ -20,6 +20,7 @@ import (
+ 	"github.com/GrandArcher/Packeteer/internal/config"
+ 	"github.com/GrandArcher/Packeteer/internal/mitigation"
+ 	"github.com/GrandArcher/Packeteer/internal/pluginhost"
++	"github.com/GrandArcher/Packeteer/internal/policy"
+ 	"github.com/GrandArcher/Packeteer/pkg/plugin"
+ )
+ 
+@@ -333,7 +334,7 @@ func TestReloadMitigationInjectRefusals(t *testing.T) {
+ 	if err := mit.SetRIB(ribGate{}); err != nil {
+ 		t.Fatal(err)
+ 	}
+-	pc, err := policyConfig(next)
++	pc, err := policy.FromConfig(next)
+ 	if err != nil {
+ 		t.Fatal(err)
+ 	}
+diff --git a/cmd/controller/main.go b/cmd/controller/main.go
+index 1953e92f..d261b735 100644
+--- a/cmd/controller/main.go
++++ b/cmd/controller/main.go
+@@ -1080,7 +1080,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
+ 			in.Synthesize = ctl.Synthesizable(in.Results)
+ 			fillOverloadInputs(loopCtx, &in, snap, plugins)
+ 			if reorderMon != nil {
+-				in.Reorder = reorderMon.Scored(now, maxResultAge(cfg))
++				in.Reorder = reorderMon.Scored(now, cfg.MaxResultAge())
+ 			}
+ 			verified, backedOut, revertedIn := verifier.check(loopCtx, now, ctl.Injected, in.Results)
+ 			changes, err := runDecision(now, decider, in, ctl, log, snap.Mode, engine)
+diff --git a/cmd/controller/main_test.go b/cmd/controller/main_test.go
+index 7267b24b..dd97144b 100644
+--- a/cmd/controller/main_test.go
++++ b/cmd/controller/main_test.go
+@@ -15,7 +15,6 @@ import (
+ 	"testing"
+ 	"time"
+ 
+-	"github.com/GrandArcher/Packeteer/internal/config"
+ 	"github.com/GrandArcher/Packeteer/internal/pluginhost"
+ 	"github.com/GrandArcher/Packeteer/internal/plugins/source/span"
+ 	"github.com/GrandArcher/Packeteer/internal/plugins/source/vip"
+@@ -496,37 +495,6 @@ func TestSnapsRateLimitRebuildsOnAChurningTable(t *testing.T) {
+ 	}
+ }
+ 
+-func TestDispersionRetryExtendsStalenessWindow(t *testing.T) {
+-	base := `mode: observe
+-asn: 64512
+-router_id: 192.0.2.10
+-providers:
+-  - {name: a, source_ip: 192.0.2.11, next_hop: 192.0.2.1}
+-`
+-	parse := func(extra string) *config.Config {
+-		t.Helper()
+-		cfg, err := config.Parse([]byte(base + extra))
+-		if err != nil {
+-			t.Fatal(err)
+-		}
+-		return cfg
+-	}
+-	plain := 3*30*time.Second + 10*2*time.Second
+-	if got := maxResultAge(parse("")); got != plain {
+-		t.Fatalf("plain window %s, want %s", got, plain)
+-	}
+-	if got := maxResultAge(parse("probe: {min_replies: 4}\n")); got != plain {
+-		t.Fatalf("min_replies window %s, want %s (replies alone do not extend it)", got, plain)
+-	}
+-	want := 3*30*time.Second + (10+30)*2*time.Second
+-	if got := maxResultAge(parse("probe: {dispersion_ms: 20}\n")); got != want {
+-		t.Fatalf("dispersion window %s, want %s", got, want)
+-	}
+-	if got := maxResultAge(parse("probe: {retry_loss_pct: 20}\n")); got != want {
+-		t.Fatalf("loss retry window %s, want %s", got, want)
+-	}
+-}
+-
+ func TestVIPIntervalMustFitStalenessWindow(t *testing.T) {
+ 	dir := t.TempDir()
+ 	write := func(interval string) string {
+diff --git a/cmd/controller/med_test.go b/cmd/controller/med_test.go
+index a6530cd7..20e8754c 100644
+--- a/cmd/controller/med_test.go
++++ b/cmd/controller/med_test.go
+@@ -65,14 +65,14 @@ func TestFillMEDAndPolicyConfig(t *testing.T) {
+ 		t.Fatalf("no MED = %+v", empty.MED)
+ 	}
+ 
+-	pc, err := policyConfig(mustParse(t, liveApplyConfig(179, "observe", "5m", "1h")))
++	pc, err := policy.FromConfig(mustParse(t, liveApplyConfig(179, "observe", "5m", "1h")))
+ 	if err != nil || !pc.MEDTieBreak || pc.MEDMargin != 20 {
+ 		t.Fatalf("default: tie break %v margin %v (%v)", pc.MEDTieBreak, pc.MEDMargin, err)
+ 	}
+ 	off := strings.Replace(liveApplyConfig(179, "observe", "5m", "1h"),
+ 		"thresholds: {min_loss_delta_pct: 90, min_rtt_delta_ms: 5000}",
+ 		"thresholds: {min_loss_delta_pct: 90, min_rtt_delta_ms: 5000, med_tie_break: false, med_margin: 5}", 1)
+-	if pc, _ := policyConfig(mustParse(t, off)); pc.MEDTieBreak || pc.MEDMargin != 5 {
++	if pc, _ := policy.FromConfig(mustParse(t, off)); pc.MEDTieBreak || pc.MEDMargin != 5 {
+ 		t.Fatalf("set: tie break %v margin %v", pc.MEDTieBreak, pc.MEDMargin)
+ 	}
+ }
+diff --git a/cmd/controller/overload_test.go b/cmd/controller/overload_test.go
+index ab687fbb..b9bc2b39 100644
+--- a/cmd/controller/overload_test.go
++++ b/cmd/controller/overload_test.go
+@@ -30,7 +30,7 @@ telemetry:
+ `
+ 
+ func TestPolicyConfigCarriesInterfaceCapacityThreshold(t *testing.T) {
+-	pc, err := policyConfig(mustParse(t, overloadConfig))
++	pc, err := policy.FromConfig(mustParse(t, overloadConfig))
+ 	if err != nil {
+ 		t.Fatal(err)
+ 	}
+diff --git a/cmd/controller/port_test.go b/cmd/controller/port_test.go
+index 6746451b..61c2ca51 100644
+--- a/cmd/controller/port_test.go
++++ b/cmd/controller/port_test.go
+@@ -32,7 +32,7 @@ bgp:
+ `
+ 
+ func TestPolicyConfigPorts(t *testing.T) {
+-	pc, err := policyConfig(mustParse(t, portConfigYAML))
++	pc, err := policy.FromConfig(mustParse(t, portConfigYAML))
+ 	if err != nil {
+ 		t.Fatal(err)
+ 	}
+diff --git a/cmd/controller/probing.go b/cmd/controller/probing.go
+index 127a1127..184480f0 100644
+--- a/cmd/controller/probing.go
++++ b/cmd/controller/probing.go
+@@ -130,7 +130,7 @@ func newEngine(cfg *config.Config, plugins *pluginhost.Set, log *slog.Logger, on
+ 		Workers:              cfg.Probe.Workers,
+ 		ProviderInflight:     cfg.Probe.ProviderInflight,
+ 		PerTargetConcurrency: cfg.Probe.PerTargetConcurrency,
+-		RoundTimeout:         maxResultAge(cfg),
++		RoundTimeout:         cfg.MaxResultAge(),
+ 		RetryLossPct:         cfg.Probe.RetryLossPct,
+ 		RetryPackets:         cfg.Probe.RetryPackets,
+ 		MinReplies:           cfg.Probe.MinReplies,
+@@ -260,20 +260,6 @@ func retainImprovedPrefixes(engine *probe.Engine, imps []policy.Improvement) {
+ 	engine.SetRetained(ps)
+ }
+ 
+-// maxResultAge is how old a measurement may be before Decide treats it as
+-// stale. It is also the overall probe-round deadline, so a stuck round
+-// cannot outlive the freshness window.
+-func maxResultAge(cfg *config.Config) time.Duration {
+-	pkts := cfg.Probe.Packets
+-	// Same condition as the probe engine: a second probe can run when
+-	// loss retry or dispersion escalation is on, and then the window is
+-	// 3*interval + (packets + retry_packets)*timeout.
+-	if cfg.Probe.RetryPackets > 0 && (cfg.Probe.RetryLossPct > 0 || cfg.Probe.DispersionMS > 0) {
+-		pkts += cfg.Probe.RetryPackets
+-	}
+-	return 3*cfg.Probe.Interval + time.Duration(pkts)*cfg.Probe.Timeout
+-}
+-
+ func logResult(log *slog.Logger, r probe.Result) {
+ 	if !r.OK() {
+ 		log.Warn("probe failed", "provider", r.Provider, "prefix", r.Prefix, "target", r.Target, "err", r.Err)
+diff --git a/cmd/controller/quarantine_test.go b/cmd/controller/quarantine_test.go
+index bfe741fe..5f9a02ee 100644
+--- a/cmd/controller/quarantine_test.go
++++ b/cmd/controller/quarantine_test.go
+@@ -15,7 +15,7 @@ import (
+ )
+ 
+ func TestPolicyConfigFlapQuarantine(t *testing.T) {
+-	on, err := policyConfig(mustParse(t, liveApplyConfig(179, "observe", "5m", "1h")+"flap_quarantine: {max_flips: 4, window: 30m, cooldown: 5m, max_cooldown: 1h}\n"))
++	on, err := policy.FromConfig(mustParse(t, liveApplyConfig(179, "observe", "5m", "1h")+"flap_quarantine: {max_flips: 4, window: 30m, cooldown: 5m, max_cooldown: 1h}\n"))
+ 	if err != nil {
+ 		t.Fatal(err)
+ 	}
+@@ -23,11 +23,11 @@ func TestPolicyConfigFlapQuarantine(t *testing.T) {
+ 	if on.Flap != want {
+ 		t.Fatalf("flap = %+v, want %+v", on.Flap, want)
+ 	}
+-	def, err := policyConfig(mustParse(t, liveApplyConfig(179, "observe", "5m", "1h")))
++	def, err := policy.FromConfig(mustParse(t, liveApplyConfig(179, "observe", "5m", "1h")))
+ 	if err != nil || def.Flap.MaxFlips == 0 {
+ 		t.Fatalf("quarantine is on by default: %+v %v", def.Flap, err)
+ 	}
+-	off, err := policyConfig(mustParse(t, liveApplyConfig(179, "observe", "5m", "1h")+"flap_quarantine: {disabled: true}\n"))
++	off, err := policy.FromConfig(mustParse(t, liveApplyConfig(179, "observe", "5m", "1h")+"flap_quarantine: {disabled: true}\n"))
+ 	if err != nil || off.Flap != (policy.FlapConfig{}) {
+ 		t.Fatalf("disabled flap = %+v %v", off.Flap, err)
+ 	}
+diff --git a/cmd/controller/reload.go b/cmd/controller/reload.go
+index 4007941d..d3e978f3 100644
+--- a/cmd/controller/reload.go
++++ b/cmd/controller/reload.go
+@@ -587,7 +587,7 @@ func (r *reloader) applyOnline(ctx context.Context, next *config.Config, online
+ 	if len(online) == 0 {
+ 		return nil
+ 	}
+-	pc, err := policyConfig(next)
++	pc, err := policy.FromConfig(next)
+ 	if err != nil {
+ 		return err
+ 	}
+@@ -662,7 +662,7 @@ func (r *reloader) applyOnline(ctx context.Context, next *config.Config, online
+ 		r.engine.SetTiming(probe.Timing{
+ 			Interval: next.Probe.Interval, Timeout: next.Probe.Timeout, Packets: next.Probe.Packets,
+ 			RetryLossPct: next.Probe.RetryLossPct, RetryPackets: next.Probe.RetryPackets,
+-			RoundTimeout: maxResultAge(next),
++			RoundTimeout: next.MaxResultAge(),
+ 		})
+ 	}
+ 	if r.decider != nil {
+@@ -679,7 +679,7 @@ func (r *reloader) applyOnline(ctx context.Context, next *config.Config, online
+ 		if next.MaxImprovements != nil {
+ 			max = *next.MaxImprovements
+ 		}
+-		r.fed.setRuntime(next.Mode, max, maxResultAge(next))
++		r.fed.setRuntime(next.Mode, max, next.MaxResultAge())
+ 	}
+ 	if r.col != nil {
+ 		r.col.SetMode(next.Mode)
+diff --git a/cmd/controller/sources.go b/cmd/controller/sources.go
+index 4bfc3270..127b75ef 100644
+--- a/cmd/controller/sources.go
++++ b/cmd/controller/sources.go
+@@ -345,7 +345,7 @@ func checkOutageSourceIntervals(cfg *config.Config, sources []pluginhost.Instanc
+ 	if cfg == nil {
+ 		return nil
+ 	}
+-	window := maxResultAge(cfg)
++	window := cfg.MaxResultAge()
+ 	var errs []error
+ 	for _, src := range sources {
+ 		s, ok := src.Plugin.(*outage.Source)
+@@ -382,7 +382,7 @@ func checkFlowTailSourceIntervals(cfg *config.Config, sources []pluginhost.Insta
+ 	if cfg == nil {
+ 		return nil
+ 	}
+-	window := maxResultAge(cfg)
++	window := cfg.MaxResultAge()
+ 	var errs []error
+ 	for _, src := range sources {
+ 		s, ok := src.Plugin.(*flow.Source)
+@@ -420,7 +420,7 @@ func checkVIPSourceIntervals(cfg *config.Config, sources []pluginhost.Instance[p
+ 	if cfg == nil {
+ 		return nil
+ 	}
+-	window := maxResultAge(cfg)
++	window := cfg.MaxResultAge()
+ 	var errs []error
+ 	for _, src := range sources {
+ 		v, ok := src.Plugin.(*vip.Source)
+diff --git a/cmd/controller/whatif.go b/cmd/controller/whatif.go
+index 5f317812..ba688ee2 100644
+--- a/cmd/controller/whatif.go
++++ b/cmd/controller/whatif.go
+@@ -21,32 +21,19 @@ import (
+ // whatIfTimeout bounds one replay run from the API.
+ const whatIfTimeout = 2 * time.Minute
+ 
+-// replaySide builds one side of a replay: the decision config of cfg and a
+-// scorer of its own. Nothing is started and no announcer is built.
+-func replaySide(name string, cfg *config.Config, log *slog.Logger, getenv func(string) string) (replay.Side, error) {
+-	pc, err := policyConfig(cfg)
+-	if err != nil {
+-		return replay.Side{}, err
+-	}
+-	sc, err := pluginhost.BuildScorer(cfg, pluginhost.Options{Logger: log, Getenv: getenv})
+-	if err != nil {
+-		return replay.Side{}, err
+-	}
+-	return replay.Side{Name: name, Cfg: pc, Scorer: sc}, nil
+-}
+-
+ // replayConfigs decides the stored rounds in [from, to) under the running
+ // config and, when next is set, under next as well, so the result carries a
+ // diff. It reads the store and nothing else.
+ func replayConfigs(ctx context.Context, store plugin.RoundStore, running, next *config.Config, from, to time.Time, log *slog.Logger, getenv func(string) string) (replay.Result, error) {
+ 	sides := make([]replay.Side, 0, 2)
+-	base, err := replaySide("running config", running, log, getenv)
++	opts := pluginhost.Options{Logger: log, Getenv: getenv}
++	base, err := replay.NewSide("running config", running, opts)
+ 	if err != nil {
+ 		return replay.Result{}, fmt.Errorf("running config: %w", err)
+ 	}
+ 	sides = append(sides, base)
+ 	if next != nil {
+-		cand, err := replaySide("candidate config", next, log, getenv)
++		cand, err := replay.NewSide("candidate config", next, opts)
+ 		if err != nil {
+ 			return replay.Result{}, fmt.Errorf("candidate config: %w", err)
+ 		}
+diff --git a/docs/FEATURES.md b/docs/FEATURES.md
+index 526ae53d..22704efc 100644
+--- a/docs/FEATURES.md
++++ b/docs/FEATURES.md
+@@ -23,6 +23,7 @@ Milestones:
+ - **v1.1**: assistant access, RPKI-invalid only paths, and non-BGP mode. An MCP server over the REST API for AI assistants (#302), RPKI-invalid only paths (#401), partial: public collector agreement is not a signal yet; report only, unit and integration tests, not lab-proven against a real Routinator. Non-BGP mode (#300), partial: opt-in static routes from flow data for a router with no BGP, an owner-approved exception to the learned-RIB rule; lab-proven with the `linux` steerer only. The counts below include all three rows.
+ - **v1.2**: no new rows. Steering over the REST API and as MCP write tools (#558): pin a prefix, pause and resume optimization, acknowledge an alert; it completes the MCP row above, so the counts below move from 130 to 131 done (v1.1: 1 of 3). Lab only; nothing is field-proven (#54).
+ - **v1.3**: no new rows. Pins, the pause, and alert acknowledgements survive a restart and HA takeover with `ha` or sqlite storage (#565) with a lost-state warning (#566), plus first-run setup, router config snippets, the guided inject step, the hold-time review dialog, and the System page probe-source check (#568, #569, #575, #576, #581). The counts below are unchanged. Lab only; nothing is field-proven (#54).
++- **v1.4**: an experimental, lab-only path-scoring harness (#584) that scores config variants against recorded history; it never changes a default. Lab only; nothing is field-proven (#54).
+ 
+ ## Summary
+ 
+@@ -37,12 +38,13 @@ Milestones:
+ | v0.8 | 20 | 16 |
+ | v0.9 | 31 | 28 |
+ | v1.1 | 3 | 1 |
++| v1.4 | 1 | 1 |
+ | won't do | 2 | - |
+-| **total** | 145 | 131 |
++| **total** | 146 | 132 |
+ 
+ | Status | Count |
+ |---|---|
+-| done | 131 |
++| done | 132 |
+ | partial | 12 |
+ | in progress | 0 |
+ | planned | 0 |
+@@ -366,6 +368,7 @@ Threat-intelligence feed ingest (#134, [threat-feeds.md](threat-feeds.md)): `thr
+ | Decision explanations: every decision lists its checks in order (RIB, freshness, thresholds with percent, confirm rounds, hold time, cap, policy, allowlist, route check, RPKI, IRR) with the value compared, the gate that held it back, the provider samples, and a counterfactual | done (#201: `GET /api/decisions/<prefix>`, a Why? panel on the prefix page, the gate list stored with each improvement in the `sqlite` history; read-only, changes no decision) | v0.9 | core (`internal/policy`, `internal/httpapi`) | #201 | no |
+ | Blast-radius preview: what inject would add, move, and withdraw before it is on, with traffic per provider, saturation, cap, allowlist, and stale-data warnings; a settings-editor save of an online change to mode, thresholds, timers, allowlist, policies, or sources needs a fresh preview first | done (#227: `GET /api/blast`, a Blast radius panel on Settings and in the guided inject step, `PUT /api/config` with `dry_run` and a `preview_token`, a Save review dialog with one confirm button (#576), a log line, not a confirmation, on SIGHUP and settings push; it decides the latest round again on a copy of the state, announces nothing, and never enables inject). Not covered: inbound and mitigation steers (including `inbound.mode` and `mitigation.mode`), a save that also changes a restart-only key (it applies on restart, with no preview), and the effect of changed policies or sources before the next round | v0.9 | core (`internal/blast`, `internal/policy`, `internal/httpapi`) ([onboarding.md](onboarding.md#blast-radius-preview)) | #227 | no |
+ | Replay stored history under new settings before leaving observe: moves, loss/RTT change weighted by flow, commit relief, flaps, cap pressure, and a diff against the running config | done (#204: `storage.round_retention` keeps each decision round; `packeteer whatif -config new.yaml -from <time> -to <time>`, `POST /api/whatif`, and a Settings panel decide them again with `Decide` on a state of its own; read-only, no announcer, works from observe-mode history). Not covered: state standing before the window, a RIB change or federation result between probe rounds that changed nothing live (kept at most twice per interval), a config change inside it, a quarantine released or a move backed out by verification, synthesized sub-ranges, inbound steers, and mitigation rules | v0.9 | core (`internal/replay`) + storage (`sqlite`, `plugin.RoundStore`) ([onboarding.md](onboarding.md#replay-history)) | #204 | no |
++| Lab-only path-scoring evolution harness: score scorer weights, thresholds, and hold and confirm knobs against recorded history by loss, RTT, and flaps | done (#584, experimental: `lab/evolve` replays a sqlite round history or a `.jsonl` round file through `Decide` under a baseline and variants; writes no config, links no announcer, refuses a variant that changes `mode`; CI replays a documentation-prefix fixture; a winner becomes a normal pull request with the report, never an automatic change) | v1.4 | - (lab tool, `internal/replay`) ([lab/evolve/README.md](../lab/evolve/README.md)) | #584 | no |
+ | Opt-in NLNOG RING looking-glass panel on the prefix page | done (#283: `ring_lg.enabled`, off by default; one cached, rate-capped read of the public `/api/prefix`, identifying User-Agent, best-effort "unavailable" state, private prefixes never sent; display only, no SSH or login) | v0.9 | core (`internal/ringlg`, `GET /api/ring_lg`, `ring_lg`) ([ui.md](ui.md#nlnog-ring-panel)) | #283 | no |
+ | Opt-in RIPE Atlas measurements of a prefix's test address with your own key | done (#213: `atlas.enabled` and `PACKETEER_ATLAS_API_KEY`, off by default; on-demand and one post-move ping or traceroute from a configured probe set, results beside the local measurements on the prefix page; hard credit-per-day and measurements-per-hour caps kept across restarts; own probe status, balance, and link on the System page; optional `atlas` Compose profile for the probe; display only) | v0.9 | core (`internal/atlas`, `GET /api/atlas`, `POST /api/atlas/measure`, `atlas`) ([atlas.md](atlas.md)) | #213 | no |
+ | Verify traffic actually moved after a steer (outbound and inbound) | done (lab-proven; #305: `verify.enabled`, off by default; after an announced improvement or inbound steer, interface counters (and for outbound the prefix flow volume) say verified, partial, or not moved after `outbound_window` (5m) or `inbound_window` (10m); on `/api/verification`, the Improvements page, and `steer.verified` / `steer.unverified` events; a new path that degrades under load leaves through the existing hold-time rule; `backout` (default `[inbound]`) reverts an inbound steer that moved nothing and holds it off with a growing back-off, outbound only warns unless listed). Lab jobs: verified outbound, verified inbound, inbound reverted | v0.9 | core (`internal/verify`, `GET /api/verification`, `verify`) ([CONFIG.md](CONFIG.md#verify), [inbound.md](inbound.md#verification)) | #305 | no (lab-proven) |
+diff --git a/internal/config/config.go b/internal/config/config.go
+index ecb2e756..5e32c7b5 100644
+--- a/internal/config/config.go
++++ b/internal/config/config.go
+@@ -870,3 +870,17 @@ func Parse(data []byte) (*Config, error) {
+ 	}
+ 	return &cfg, nil
+ }
++
++// MaxResultAge is how old a measurement may be before Decide treats it as
++// stale. It is also the overall probe-round deadline, so a stuck round
++// cannot outlive the freshness window.
++func (cfg *Config) MaxResultAge() time.Duration {
++	pkts := cfg.Probe.Packets
++	// Same condition as the probe engine: a second probe can run when
++	// loss retry or dispersion escalation is on, and then the window is
++	// 3*interval + (packets + retry_packets)*timeout.
++	if cfg.Probe.RetryPackets > 0 && (cfg.Probe.RetryLossPct > 0 || cfg.Probe.DispersionMS > 0) {
++		pkts += cfg.Probe.RetryPackets
++	}
++	return 3*cfg.Probe.Interval + time.Duration(pkts)*cfg.Probe.Timeout
++}
+diff --git a/internal/config/config_test.go b/internal/config/config_test.go
+index 39bb033c..ae95e5f9 100644
+--- a/internal/config/config_test.go
++++ b/internal/config/config_test.go
+@@ -964,3 +964,34 @@ func TestAllowlistRejectsDefaultRoute(t *testing.T) {
+ 		t.Fatalf("warnings for /24 and /48 entries: %q", w)
+ 	}
+ }
++
++func TestDispersionRetryExtendsStalenessWindow(t *testing.T) {
++	base := `mode: observe
++asn: 64512
++router_id: 192.0.2.10
++providers:
++  - {name: a, source_ip: 192.0.2.11, next_hop: 192.0.2.1}
++`
++	parse := func(extra string) *Config {
++		t.Helper()
++		cfg, err := Parse([]byte(base + extra))
++		if err != nil {
++			t.Fatal(err)
++		}
++		return cfg
++	}
++	plain := 3*30*time.Second + 10*2*time.Second
++	if got := parse("").MaxResultAge(); got != plain {
++		t.Fatalf("plain window %s, want %s", got, plain)
++	}
++	if got := parse("probe: {min_replies: 4}\n").MaxResultAge(); got != plain {
++		t.Fatalf("min_replies window %s, want %s (replies alone do not extend it)", got, plain)
++	}
++	want := 3*30*time.Second + (10+30)*2*time.Second
++	if got := parse("probe: {dispersion_ms: 20}\n").MaxResultAge(); got != want {
++		t.Fatalf("dispersion window %s, want %s", got, want)
++	}
++	if got := parse("probe: {retry_loss_pct: 20}\n").MaxResultAge(); got != want {
++		t.Fatalf("loss retry window %s, want %s", got, want)
++	}
++}
+diff --git a/internal/policy/fromconfig.go b/internal/policy/fromconfig.go
+new file mode 100644
+index 00000000..c4137701
+--- /dev/null
++++ b/internal/policy/fromconfig.go
+@@ -0,0 +1,77 @@
++package policy
++
++import (
++	"errors"
++	"net/netip"
++	"time"
++
++	"github.com/GrandArcher/Packeteer/internal/config"
++)
++
++// FromConfig is the decision config for cfg. A reload builds a fresh one
++// and installs it with SetConfig; the next Decide uses it. Prefixes here
++// were already validated by config.Load.
++func FromConfig(cfg *config.Config) (Config, error) {
++	if cfg == nil {
++		return Config{}, errors.New("no config")
++	}
++	max := 0
++	if cfg.MaxImprovements != nil {
++		max = *cfg.MaxImprovements
++	}
++	pc := Config{
++		Mode:            cfg.Mode,
++		MinLossDeltaPct: cfg.Thresholds.MinLossDeltaPct,
++		MinRTTDelta:     time.Duration(cfg.Thresholds.MinRTTDeltaMs * float64(time.Millisecond)),
++		MinRTTDeltaPct:  cfg.Thresholds.MinRTTDeltaPct,
++		ConfirmRounds:   cfg.Thresholds.ConfirmRounds,
++		HoldTime:        cfg.HoldTime,
++		MaxImprovements: max,
++		// A result older than ~3 rounds is stale. The decision loop
++		// re-checks this on a ticker even when no round completes.
++		MaxResultAge:        cfg.MaxResultAge(),
++		Excluded:            map[string]bool{},
++		RPKIAvoidInvalid:    cfg.RPKIOn() && cfg.RPKI.AvoidInvalid,
++		IRRPreferRegistered: cfg.IRROn() && cfg.IRR.PreferRegistered,
++		RequireEvidence:     cfg.Thresholds.RequireEvidence,
++		MEDTieBreak:         cfg.Thresholds.MEDOn(),
++		MEDMargin:           cfg.Thresholds.MEDMarginOrDefault(),
++	}
++	if cfg.ImprovementTTL > 0 {
++		pc.ImprovementTTL = cfg.ImprovementTTL
++	}
++	if f := cfg.FlapQuarantine; !f.Disabled {
++		pc.Flap = FlapConfig{MaxFlips: f.MaxFlips, Window: f.Window, Cooldown: f.Cooldown, MaxCooldown: f.MaxCooldown}
++	}
++	ported := map[string]bool{}
++	for _, ex := range cfg.Exchanges {
++		if ex.Port != nil {
++			ported[ex.Name] = true
++			pc.Ports = append(pc.Ports, PortPolicy{Name: ex.Name, CapacityMbps: ex.Port.CapacityMbps, CommitMbps: ex.Port.CommitMbps})
++		}
++	}
++	for _, p := range cfg.Providers {
++		if p.Exclude {
++			pc.Excluded[p.Name] = true
++		}
++		pp := ProviderPolicy{
++			Name: p.Name, Group: p.Group, Precedence: p.Precedence, CCDisable: p.CCDisable,
++			CapacityThresholdPct: p.InterfaceCapacityThresholdPct,
++		}
++		if ported[p.Exchange] {
++			pp.Port = p.Exchange
++		}
++		if p.Cost != nil {
++			pp.Cost, pp.HasCost = *p.Cost, true
++		}
++		pc.Providers = append(pc.Providers, pp)
++	}
++	for _, s := range cfg.Allowlist.Prefixes {
++		p, err := netip.ParsePrefix(s)
++		if err != nil {
++			return Config{}, err
++		}
++		pc.Allowlist = append(pc.Allowlist, p)
++	}
++	return pc, nil
++}
+diff --git a/internal/replay/replay.go b/internal/replay/replay.go
+index c68ed375..13c54047 100644
+--- a/internal/replay/replay.go
++++ b/internal/replay/replay.go
+@@ -25,10 +25,13 @@ const (
+ )
+ 
+ // Side is one configuration to replay. Its Decide state starts empty.
++// Observe, when set, sees the state and output of every round after
++// Decide, for a caller that scores more than Summary holds.
+ type Side struct {
+-	Name   string
+-	Cfg    policy.Config
+-	Scorer plugin.Scorer
++	Name    string
++	Cfg     policy.Config
++	Scorer  plugin.Scorer
++	Observe func(st policy.State, out policy.Output)
+ }
+ 
+ // Move is one change Decide made in the replay. From and To are the
+@@ -141,6 +144,9 @@ func newTracker(s Side) *tracker {
+ func (t *tracker) round(now time.Time, in policy.Input) {
+ 	st, out := policy.Decide(t.state, in, t.side.Cfg, t.side.Scorer, now)
+ 	t.state = st
++	if t.side.Observe != nil {
++		t.side.Observe(st, out)
++	}
+ 	byPrefix := make(map[netip.Prefix]*policy.Decision, len(out.Decisions))
+ 	cappedNow := false
+ 	for i := range out.Decisions {
+@@ -256,11 +262,17 @@ func (t *tracker) report() Report {
+ 	return Report{Name: t.side.Name, Summary: s, Moves: t.moves, MovesOmitted: t.omitted}
+ }
+ 
++// Source is what Run reads: at most limit rounds whose time is in
++// [from, to), oldest first. Every plugin.RoundStore is one.
++type Source interface {
++	Rounds(ctx context.Context, from, to time.Time, limit int) ([]plugin.RoundRecord, error)
++}
++
+ // Run replays the stored rounds in [from, to) through every side. The sides
+ // see the same rounds in order, each from an empty state, so the first
+ // hold time of the window is decided without what was standing before it.
+ // It stops with ctx.
+-func Run(ctx context.Context, store plugin.RoundStore, from, to time.Time, sides []Side) (Result, error) {
++func Run(ctx context.Context, store Source, from, to time.Time, sides []Side) (Result, error) {
+ 	if len(sides) == 0 {
+ 		return Result{}, errors.New("no settings to replay")
+ 	}
+diff --git a/internal/replay/replay_test.go b/internal/replay/replay_test.go
+index ac3fbdf4..5e2018ba 100644
+--- a/internal/replay/replay_test.go
++++ b/internal/replay/replay_test.go
+@@ -151,6 +151,35 @@ func TestEncodeDecodeKeepsTheDecision(t *testing.T) {
+ 	}
+ }
+ 
++// Observe sees every round of its side after Decide, with the state the
++// next round starts from.
++func TestObserveSeesEachRoundsStateAndOutput(t *testing.T) {
++	s := openStore(t)
++	record(t, s, cfg(), 12)
++	var rounds, steered int
++	side := Side{Name: "running", Cfg: cfg(), Scorer: scorer(t), Observe: func(st policy.State, out policy.Output) {
++		rounds++
++		if len(out.Decisions) != 3 {
++			t.Fatalf("round %d: %d decisions, want 3", rounds, len(out.Decisions))
++		}
++		if imp, ok := st.Improvements[pA]; ok && imp.Provider == "b" {
++			steered++
++		}
++	}}
++	res, err := Run(context.Background(), s, t0.Add(-time.Hour), t0.Add(time.Hour), []Side{side})
++	if err != nil {
++		t.Fatal(err)
++	}
++	if rounds != res.Rounds || rounds != 12 {
++		t.Fatalf("observed %d rounds of %d", rounds, res.Rounds)
++	}
++	// pA is lossy on a from round 0 and moved to b by that round's Decide,
++	// which an empty starting state shows only after Decide; it stays.
++	if steered != rounds {
++		t.Fatalf("pA on b in %d of %d rounds, summary %+v", steered, rounds, res.Sides[0].Summary)
++	}
++}
++
+ // The same config over the stored rounds makes the decisions the live
+ // engine made, in order (acceptance: a recorded run is reproduced).
+ func TestSameConfigReproducesTheLiveDecisions(t *testing.T) {
+diff --git a/internal/replay/side.go b/internal/replay/side.go
+new file mode 100644
+index 00000000..b2d438c2
+--- /dev/null
++++ b/internal/replay/side.go
+@@ -0,0 +1,21 @@
++package replay
++
++import (
++	"github.com/GrandArcher/Packeteer/internal/config"
++	"github.com/GrandArcher/Packeteer/internal/pluginhost"
++	"github.com/GrandArcher/Packeteer/internal/policy"
++)
++
++// NewSide builds one side of a replay: the decision config of cfg and a
++// scorer of its own. Nothing is started and no announcer is built.
++func NewSide(name string, cfg *config.Config, opts pluginhost.Options) (Side, error) {
++	pc, err := policy.FromConfig(cfg)
++	if err != nil {
++		return Side{}, err
++	}
++	sc, err := pluginhost.BuildScorer(cfg, opts)
++	if err != nil {
++		return Side{}, err
++	}
++	return Side{Name: name, Cfg: pc, Scorer: sc}, nil
++}
+diff --git a/lab/README.md b/lab/README.md
+index 9e85b698..9ec67b58 100644
+--- a/lab/README.md
++++ b/lab/README.md
+@@ -202,3 +202,7 @@ Surfaces are the files in `lab/failure-matrix/`. A new surface adds its file, wh
+ ## Running demo
+ 
+ The running demo is a separate checkout, not a compose file in this repo. It has two transit providers, one customer, and one IX peer. Telling those sessions apart (peer vs customer vs transit) and suggesting the role is still open (#103). A suggestion must not write itself into the running config.
++
++## Path-scoring harness (#584)
++
++`lab/evolve` is experimental and lab only: it scores config variants against recorded decision history by loss, RTT, and flaps, and never changes a default. See [evolve/README.md](evolve/README.md).
+diff --git a/lab/evolve/README.md b/lab/evolve/README.md
+new file mode 100644
+index 00000000..b6b7c30e
+--- /dev/null
++++ b/lab/evolve/README.md
+@@ -0,0 +1,44 @@
++Experimental and lab only: this harness never changes Packeteer's shipped defaults, and nothing in the product calls it.
++
++# Path-scoring evolution harness (#584)
++
++`lab/evolve` replays recorded decision rounds through the real `Decide` path, under a baseline config and under config variants, and scores each variant against the baseline by the loss, latency, and flap count of the paths it would have chosen. A variant is an ordinary config file that differs in scorer weights, thresholds, `hold_time`, `confirm_rounds`, or other decision knobs. It is not a new scorer type.
++
++## The contract
++
++- Shipped defaults (`config.example.yaml`, the image, the thresholds and weights in code) change only when a human opens a normal pull request with the score report attached. A winning variant is evidence for that pull request, nothing more.
++- Nothing is auto-merged or auto-applied. The harness writes no config, never writes `/etc/packeteer/config.yaml`, signals no process, and builds no announcer: it links no announcer or steerer package (`internal/announce`, `internal/plugins/announcer/*`, `internal/plugins/steerer/*`, `internal/plugins/all`), which `TestNoAnnouncerIsLinked` checks.
++- It exits 1 when a variant's `mode` differs from the base's (so a variant can never turn inject on), and when the base, a variant, `/etc/packeteer/config.yaml`, or the file `PACKETEER_CONFIG` names changed during the run. It exits 2 on bad usage.
++- Lab history only. No production or operator-supplied RIB or prefix goes in this directory. The checked-in fixture uses documentation prefixes only: 192.0.2.0/24, 198.51.100.0/24, and 203.0.113.0/24 (2001:db8::/32 is the IPv6 range to use), with providers `lab-a` and `lab-b` and private ASN 64512.
++
++## Run it
++
++```
++go run ./lab/evolve -history lab/evolve/testdata/history.jsonl \
++  -base lab/evolve/testdata/baseline.yaml \
++  -variant lab/evolve/testdata/worse.yaml -variant lab/evolve/testdata/better.yaml
++```
++
++```
++replayed 60 rounds from 2026-10-01T12:00:00Z to 2026-10-01T12:29:30Z; nothing was announced and no config was written
++side                     loss %     rtt ms  flaps  moves  samples  vs baseline
++baseline                  0.167      60.83      0      1      180
++worse                     2.222      61.67      5     12      180  worse
++better                    0.167      53.87      0      2      180  better
++```
++
++`-history` is a sqlite storage file with `round_retention` on (the store `packeteer whatif` reads, [onboarding.md](../../docs/onboarding.md#replay-history)), opened read-only, or a `.jsonl` round file: one `{"at": <RFC 3339 time>, "input": <policy.Input as JSON>}` per line, oldest first. Every round in the file is replayed. `-variant` repeats. `-json` prints the report as JSON for a driver.
++
++CI runs the fixture above in the `test` job and `go test ./lab/evolve` checks its verdicts. It runs no search.
++
++## Scores
++
++- `loss %` and `rtt ms` are means over every prefix and round of the measurement of the path the prefix was on during that round: the provider an improvement left it on after the round before, else the native provider. A move is scored by the rounds after it, not by the measurement that made it. A path without a usable measurement in a round is left out; `samples` counts the rest.
++- `flaps` is the replay's flap count: switches, plus new improvements of a prefix retired earlier in the history. `moves` is new, switched, and retired improvements.
++- `vs baseline` compares each metric alone, lower being better: `better` when none is worse and one is better, `worse` the reverse, `mixed` for a trade-off (a human weighs it), `same` otherwise.
++
++The replay limits of `packeteer whatif` apply: each side starts with no improvement standing, the measurements are those recorded (a path does not change because traffic moved onto it), and synthesized sub-ranges, inbound steers, and mitigation rules are not replayed. The means are not weighted by prefix volume.
++
++## External drivers
++
++A search tool such as OpenEvolve may write variant files, call the harness with `-json`, and read the `verdict` and the scores. It is optional: not vendored, not a Go module dependency, and not used by CI. Its output is a candidate for a pull request, under the contract above.
+diff --git a/lab/evolve/guard.go b/lab/evolve/guard.go
+new file mode 100644
+index 00000000..4dbd6b7b
+--- /dev/null
++++ b/lab/evolve/guard.go
+@@ -0,0 +1,55 @@
++package main
++
++import (
++	"crypto/sha256"
++	"errors"
++	"io/fs"
++	"os"
++	"sort"
++)
++
++// fileState is a watched file's content hash; absent is a file that did
++// not exist.
++type fileState struct {
++	absent bool
++	sum    [sha256.Size]byte
++}
++
++// snapshot is the state of the config files the harness must not change.
++type snapshot map[string]fileState
++
++func takeSnapshot(paths []string) (snapshot, error) {
++	s := snapshot{}
++	for _, p := range paths {
++		st, err := readState(p)
++		if err != nil {
++			return nil, err
++		}
++		s[p] = st
++	}
++	return s, nil
++}
++
++func readState(path string) (fileState, error) {
++	data, err := os.ReadFile(path)
++	if errors.Is(err, fs.ErrNotExist) {
++		return fileState{absent: true}, nil
++	}
++	if err != nil {
++		return fileState{}, err
++	}
++	return fileState{sum: sha256.Sum256(data)}, nil
++}
++
++// changed lists the watched files that were written, created, or removed
++// since the snapshot, or can no longer be read.
++func (s snapshot) changed() []string {
++	var out []string
++	for p, was := range s {
++		if now, err := readState(p); err != nil || now != was {
++			out = append(out, p)
++		}
++	}
++	sort.Strings(out)
++	return out
++}
+diff --git a/lab/evolve/main.go b/lab/evolve/main.go
+new file mode 100644
+index 00000000..7c95c635
+--- /dev/null
++++ b/lab/evolve/main.go
+@@ -0,0 +1,179 @@
++// Command evolve is an experimental, lab-only harness (#584). It replays
++// recorded decision rounds through the real Decide path under a baseline
++// config and under config variants (scorer weights, thresholds, hold and
++// confirm knobs), and scores each by the latency, loss, and flap count of
++// the paths it would have chosen:
++//
++//	evolve -history packeteer.db -base config.yaml -variant a.yaml -variant b.yaml [-json]
++//
++// -history is a sqlite storage file with round_retention on, opened
++// read-only, or a .jsonl round file such as testdata/history.jsonl. The
++// harness writes no config, signals no process, and builds no announcer.
++// It exits 1 when a variant changes the base's mode (so it can never turn
++// inject on) or when a watched config file changed during the run, and 2
++// on bad usage.
++package main
++
++import (
++	"context"
++	"encoding/json"
++	"flag"
++	"fmt"
++	"io"
++	"log/slog"
++	"os"
++	"path/filepath"
++	"strconv"
++	"strings"
++	"time"
++
++	"github.com/GrandArcher/Packeteer/internal/config"
++	"github.com/GrandArcher/Packeteer/internal/pluginhost"
++	_ "github.com/GrandArcher/Packeteer/internal/plugins/scorer/commit"
++	_ "github.com/GrandArcher/Packeteer/internal/plugins/scorer/cost"
++	_ "github.com/GrandArcher/Packeteer/internal/plugins/scorer/weighted"
++	"github.com/GrandArcher/Packeteer/internal/plugins/storage/sqlite"
++	"github.com/GrandArcher/Packeteer/internal/replay"
++	"github.com/GrandArcher/Packeteer/pkg/plugin"
++)
++
++// Where the controller reads its config (cmd/controller ConfigEnv and
++// DefaultConfigPath). The harness watches it so a run that changed it fails.
++const (
++	controllerConfigEnv  = "PACKETEER_CONFIG"
++	controllerConfigPath = "/etc/packeteer/config.yaml"
++)
++
++type list []string
++
++func (l *list) String() string     { return strings.Join(*l, ",") }
++func (l *list) Set(v string) error { *l = append(*l, v); return nil }
++
++func main() {
++	os.Exit(run(context.Background(), os.Args[1:], os.Getenv, os.Stdout, os.Stderr))
++}
++
++func run(ctx context.Context, args []string, getenv func(string) string, stdout, stderr io.Writer) int {
++	fs := flag.NewFlagSet("evolve", flag.ContinueOnError)
++	fs.SetOutput(stderr)
++	history := fs.String("history", "", "sqlite storage file or .jsonl round file to replay")
++	base := fs.String("base", "", "baseline config: the running or checked-in config")
++	var variants list
++	fs.Var(&variants, "variant", "config variant to score against the baseline (repeatable)")
++	asJSON := fs.Bool("json", false, "print the scores as JSON")
++	if err := fs.Parse(args); err != nil {
++		return 2
++	}
++	if *history == "" || *base == "" || len(variants) == 0 {
++		fmt.Fprintln(stderr, "evolve: -history, -base, and at least one -variant are required")
++		return 2
++	}
++	fail := func(err error) int {
++		fmt.Fprintf(stderr, "evolve: %v\n", err)
++		return 1
++	}
++	before, err := takeSnapshot(watchedConfigs(*base, variants, getenv))
++	if err != nil {
++		return fail(err)
++	}
++	baseCfg, err := config.Load(*base)
++	if err != nil {
++		return fail(err)
++	}
++	cfgs := []*config.Config{baseCfg}
++	names := []string{"baseline"}
++	for _, v := range variants {
++		cfg, err := config.Load(v)
++		if err != nil {
++			return fail(err)
++		}
++		if err := sameMode(baseCfg, cfg, v); err != nil {
++			return fail(err)
++		}
++		cfgs = append(cfgs, cfg)
++		names = append(names, strings.TrimSuffix(filepath.Base(v), filepath.Ext(v)))
++	}
++	store, closeStore, err := openHistory(ctx, *history)
++	if err != nil {
++		return fail(err)
++	}
++	defer closeStore()
++	log := slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
++	sides := make([]replay.Side, len(cfgs))
++	paths := make([]*pathScore, len(cfgs))
++	for i, cfg := range cfgs {
++		s, err := replay.NewSide(names[i], cfg, pluginhost.Options{Logger: log, Getenv: getenv})
++		if err != nil {
++			return fail(fmt.Errorf("%s: %w", names[i], err))
++		}
++		paths[i] = &pathScore{}
++		s.Observe = paths[i].observe
++		sides[i] = s
++	}
++	res, err := replay.Run(ctx, store, time.Unix(0, 0), time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC), sides)
++	if err != nil {
++		return fail(err)
++	}
++	if changed := before.changed(); len(changed) > 0 {
++		return fail(fmt.Errorf("config changed during the run, which the harness must never do: %s", strings.Join(changed, ", ")))
++	}
++	rep := newReport(res, paths)
++	if *asJSON {
++		enc := json.NewEncoder(stdout)
++		enc.SetIndent("", "  ")
++		if err := enc.Encode(rep); err != nil {
++			return fail(err)
++		}
++		return 0
++	}
++	rep.format(stdout)
++	return 0
++}
++
++// watchedConfigs is every config file a run must leave as it found it:
++// the controller's, the base, and the variants.
++func watchedConfigs(base string, variants []string, getenv func(string) string) []string {
++	out := []string{controllerConfigPath, base}
++	if p := getenv(controllerConfigEnv); p != "" {
++		out = append(out, p)
++	}
++	return append(out, variants...)
++}
++
++// sameMode refuses a variant whose mode differs from the base's. Mode is
++// not a scoring knob, and refusing a change is what keeps a variant from
++// turning inject on.
++func sameMode(base, v *config.Config, path string) error {
++	if v.Mode == base.Mode {
++		return nil
++	}
++	if v.Mode == "inject" {
++		return fmt.Errorf("%s: mode inject where the base is %s: a variant may not enable inject", path, base.Mode)
++	}
++	return fmt.Errorf("%s: mode %s where the base is %s: a variant may not change the mode", path, v.Mode, base.Mode)
++}
++
++// openHistory opens a .jsonl round file, or else a sqlite storage file
++// read-only.
++func openHistory(ctx context.Context, path string) (replay.Source, func(), error) {
++	if strings.HasSuffix(path, ".jsonl") {
++		rf, err := loadRoundFile(path)
++		return rf, func() {}, err
++	}
++	abs, err := filepath.Abs(path)
++	if err != nil {
++		return nil, nil, err
++	}
++	c, err := plugin.ConfigFromYAML("path: " + strconv.Quote(abs))
++	if err != nil {
++		return nil, nil, err
++	}
++	st, err := sqlite.New(c, plugin.Env{Name: "history"})
++	if err != nil {
++		return nil, nil, err
++	}
++	if err := st.OpenReadOnly(ctx); err != nil {
++		return nil, nil, err
++	}
++	return st, func() { _ = st.Stop(context.Background()) }, nil
++}
+diff --git a/lab/evolve/main_test.go b/lab/evolve/main_test.go
+new file mode 100644
+index 00000000..5ae7e161
+--- /dev/null
++++ b/lab/evolve/main_test.go
+@@ -0,0 +1,333 @@
++package main
++
++import (
++	"bytes"
++	"context"
++	"encoding/json"
++	"os"
++	"os/exec"
++	"path/filepath"
++	"reflect"
++	"strconv"
++	"strings"
++	"testing"
++	"time"
++
++	"github.com/GrandArcher/Packeteer/internal/plugins/storage/sqlite"
++	"github.com/GrandArcher/Packeteer/pkg/plugin"
++)
++
++const (
++	fixture  = "testdata/history.jsonl"
++	baseline = "testdata/baseline.yaml"
++	worse    = "testdata/worse.yaml"
++	better   = "testdata/better.yaml"
++)
++
++func noEnv(string) string { return "" }
++
++func runJSON(t *testing.T, history string) Report {
++	t.Helper()
++	var out, errb bytes.Buffer
++	if rc := run(context.Background(), []string{"-history", history, "-base", baseline, "-variant", worse, "-variant", better, "-json"}, noEnv, &out, &errb); rc != 0 {
++		t.Fatalf("exit %d: %s", rc, errb.String())
++	}
++	var rep Report
++	if err := json.Unmarshal(out.Bytes(), &rep); err != nil {
++		t.Fatalf("%v: %s", err, out.String())
++	}
++	return rep
++}
++
++// The fixture: 198.51.100.0/24 loses 10% on its native lab-a in rounds
++// 10-49, 203.0.113.0/24 is 22 ms faster on lab-b throughout, and
++// 192.0.2.0/24 swaps which provider is 25 ms faster every round. worse
++// ignores the loss and chases the swaps; better also takes the 22 ms.
++func TestFixtureScoresBaselineWorseAndBetter(t *testing.T) {
++	rep := runJSON(t, fixture)
++	if rep.Rounds != 60 {
++		t.Fatalf("rounds %d, want 60", rep.Rounds)
++	}
++	b := rep.Baseline
++	if len(rep.Variants) != 2 {
++		t.Fatalf("variants %+v", rep.Variants)
++	}
++	w, g := rep.Variants[0], rep.Variants[1]
++	if w.Name != "worse" || g.Name != "better" || b.Name != "baseline" {
++		t.Fatalf("names %q %q %q", b.Name, w.Name, g.Name)
++	}
++	// 3 prefixes in each of 60 rounds, every path measured.
++	for _, s := range []Score{b, w, g} {
++		if s.Samples != 180 {
++			t.Fatalf("%s: %d samples, want 180", s.Name, s.Samples)
++		}
++	}
++	// The baseline takes 198.51.100.0/24 off the loss after confirm_rounds
++	// 3 and stays: 3 lossy rounds of 10% on one of three prefixes.
++	if b.Flaps != 0 || b.Moves != 1 || !near(b.LossPct, 3*10.0/180) {
++		t.Fatalf("baseline %+v", b)
++	}
++	if w.Verdict != verdictWorse || w.LossPct <= b.LossPct || w.RTTMs <= b.RTTMs || w.Flaps <= b.Flaps {
++		t.Fatalf("worse %+v against baseline %+v", w, b)
++	}
++	// better also moves 203.0.113.0/24 after round 2 and keeps it: 22 ms
++	// lower in the 57 rounds after.
++	if g.Verdict != verdictBetter || g.LossPct != b.LossPct || g.Flaps != 0 || !near(b.RTTMs-g.RTTMs, 22.0*57/180) {
++		t.Fatalf("better %+v against baseline %+v", g, b)
++	}
++}
++
++func near(a, b float64) bool { return a-b < 1e-6 && b-a < 1e-6 }
++
++// The same rounds stored in a sqlite file, as a controller with
++// round_retention keeps them, score the same as the round file.
++func TestSqliteHistoryScoresLikeTheRoundFile(t *testing.T) {
++	rf, err := loadRoundFile(fixture)
++	if err != nil {
++		t.Fatal(err)
++	}
++	db := filepath.Join(t.TempDir(), "packeteer.db")
++	c, err := plugin.ConfigFromYAML("path: " + strconv.Quote(db) + "\nround_retention: 24h")
++	if err != nil {
++		t.Fatal(err)
++	}
++	st, err := sqlite.New(c, plugin.Env{})
++	if err != nil {
++		t.Fatal(err)
++	}
++	last := rf.rounds[len(rf.rounds)-1].At
++	st.SetClock(func() time.Time { return last })
++	ctx := context.Background()
++	if err := st.Start(ctx); err != nil {
++		t.Fatal(err)
++	}
++	if err := st.PutRounds(ctx, rf.rounds); err != nil {
++		t.Fatal(err)
++	}
++	if err := st.Stop(ctx); err != nil {
++		t.Fatal(err)
++	}
++	before, err := os.ReadFile(db)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if got, want := runJSON(t, db), runJSON(t, fixture); !reflect.DeepEqual(got, want) {
++		t.Fatalf("sqlite report %+v\nround file report %+v", got, want)
++	}
++	after, err := os.ReadFile(db)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if !bytes.Equal(before, after) {
++		t.Fatal("the replay wrote to the history file")
++	}
++}
++
++func TestTextReportListsEverySide(t *testing.T) {
++	var out, errb bytes.Buffer
++	if rc := run(context.Background(), []string{"-history", fixture, "-base", baseline, "-variant", worse, "-variant", better}, noEnv, &out, &errb); rc != 0 {
++		t.Fatalf("exit %d: %s", rc, errb.String())
++	}
++	t.Log("\n" + out.String())
++	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
++	if len(lines) != 5 || !strings.Contains(lines[0], "replayed 60 rounds") || !strings.Contains(lines[0], "no config was written") {
++		t.Fatalf("report:\n%s", out.String())
++	}
++	for i, want := range [][]string{{"baseline"}, {"worse", verdictWorse}, {"better", verdictBetter}} {
++		f := strings.Fields(lines[2+i])
++		if f[0] != want[0] || (len(want) > 1 && f[len(f)-1] != want[1]) {
++			t.Fatalf("line %q, want %v", lines[2+i], want)
++		}
++	}
++}
++
++func setMode(t *testing.T, path, mode string) {
++	t.Helper()
++	data, err := os.ReadFile(path)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := os.WriteFile(path, bytes.Replace(data, []byte("mode: observe"), []byte("mode: "+mode), 1), 0o600); err != nil {
++		t.Fatal(err)
++	}
++}
++
++func writeConfig(t *testing.T, dir, name, extra string) string {
++	t.Helper()
++	data, err := os.ReadFile(baseline)
++	if err != nil {
++		t.Fatal(err)
++	}
++	p := filepath.Join(dir, name)
++	if err := os.WriteFile(p, append(data, extra...), 0o600); err != nil {
++		t.Fatal(err)
++	}
++	return p
++}
++
++// A variant that would turn inject on is refused before any round is
++// replayed, and so is any other mode change.
++func TestVariantMayNotChangeTheMode(t *testing.T) {
++	dir := t.TempDir()
++	inject := writeConfig(t, dir, "inject.yaml", `packeteer_community: "64512:666"
++local_pref: 250
++allowlist: {prefixes: [198.51.100.0/24]}
++bgp: {neighbors: [{address: 192.0.2.254}]}
++announcer: {type: gobgp}
++`)
++	setMode(t, inject, "inject")
++	suggest := writeConfig(t, dir, "suggest.yaml", "")
++	setMode(t, suggest, "suggest")
++	for v, want := range map[string]string{inject: "a variant may not enable inject", suggest: "a variant may not change the mode"} {
++		var out, errb bytes.Buffer
++		rc := run(context.Background(), []string{"-history", fixture, "-base", baseline, "-variant", better, "-variant", v}, noEnv, &out, &errb)
++		if rc == 0 || !strings.Contains(errb.String(), want) || out.Len() != 0 {
++			t.Fatalf("%s: exit %d, stdout %q, stderr %q", filepath.Base(v), rc, out.String(), errb.String())
++		}
++	}
++}
++
++func TestUsageErrors(t *testing.T) {
++	for _, args := range [][]string{
++		{"-base", baseline, "-variant", worse},
++		{"-history", fixture, "-variant", worse},
++		{"-history", fixture, "-base", baseline},
++		{"-nope"},
++	} {
++		var out, errb bytes.Buffer
++		if rc := run(context.Background(), args, noEnv, &out, &errb); rc != 2 {
++			t.Fatalf("%v: exit %d, want 2", args, rc)
++		}
++	}
++}
++
++func TestSnapshotReportsWrittenCreatedAndRemovedConfigs(t *testing.T) {
++	dir := t.TempDir()
++	kept, written, removed, created := filepath.Join(dir, "kept.yaml"), filepath.Join(dir, "written.yaml"), filepath.Join(dir, "removed.yaml"), filepath.Join(dir, "created.yaml")
++	for _, p := range []string{kept, written, removed} {
++		if err := os.WriteFile(p, []byte("mode: observe\n"), 0o600); err != nil {
++			t.Fatal(err)
++		}
++	}
++	s, err := takeSnapshot([]string{kept, written, removed, created})
++	if err != nil {
++		t.Fatal(err)
++	}
++	if got := s.changed(); len(got) != 0 {
++		t.Fatalf("changed before any write: %v", got)
++	}
++	if err := os.WriteFile(written, []byte("mode: inject\n"), 0o600); err != nil {
++		t.Fatal(err)
++	}
++	if err := os.Remove(removed); err != nil {
++		t.Fatal(err)
++	}
++	if err := os.WriteFile(created, []byte("mode: observe\n"), 0o600); err != nil {
++		t.Fatal(err)
++	}
++	if got, want := s.changed(), []string{created, removed, written}; !reflect.DeepEqual(got, want) {
++		t.Fatalf("changed %v, want %v", got, want)
++	}
++}
++
++func TestWatchedConfigsCoverTheControllerBaseAndVariants(t *testing.T) {
++	getenv := func(k string) string {
++		if k == controllerConfigEnv {
++			return "/run/packeteer/config.yaml"
++		}
++		return ""
++	}
++	got := watchedConfigs("base.yaml", []string{"a.yaml", "b.yaml"}, getenv)
++	want := []string{controllerConfigPath, "base.yaml", "/run/packeteer/config.yaml", "a.yaml", "b.yaml"}
++	if !reflect.DeepEqual(got, want) {
++		t.Fatalf("watched %v, want %v", got, want)
++	}
++	if got := watchedConfigs("base.yaml", nil, noEnv); !reflect.DeepEqual(got, []string{controllerConfigPath, "base.yaml"}) {
++		t.Fatalf("without the env: %v", got)
++	}
++}
++
++func TestRoundFileRejectsBadHistory(t *testing.T) {
++	dir := t.TempDir()
++	for name, body := range map[string]string{
++		"order":   `{"at":"2026-10-01T12:00:30Z","input":{}}` + "\n" + `{"at":"2026-10-01T12:00:00Z","input":{}}`,
++		"unknown": `{"at":"2026-10-01T12:00:00Z","input":{},"extra":1}`,
++		"no time": `{"input":{}}`,
++	} {
++		p := filepath.Join(dir, strings.ReplaceAll(name, " ", "")+".jsonl")
++		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
++			t.Fatal(err)
++		}
++		if _, err := loadRoundFile(p); err == nil {
++			t.Fatalf("%s: loaded", name)
++		}
++	}
++}
++
++func TestRoundFileWindowAndLimit(t *testing.T) {
++	rf, err := loadRoundFile(fixture)
++	if err != nil {
++		t.Fatal(err)
++	}
++	from := rf.rounds[10].At
++	got, err := rf.Rounds(context.Background(), from, rf.rounds[20].At, 4)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if len(got) != 4 || !got[0].At.Equal(from) || !got[3].At.Equal(rf.rounds[13].At) {
++		t.Fatalf("got %d rounds from %v", len(got), got[0].At)
++	}
++	got, _ = rf.Rounds(context.Background(), from, rf.rounds[12].At, 100)
++	if len(got) != 2 {
++		t.Fatalf("[10, 12) gave %d rounds, want 2", len(got))
++	}
++	if _, err := rf.Rounds(context.Background(), from, from, 0); err == nil {
++		t.Fatal("limit 0 accepted")
++	}
++}
++
++// The harness links the scorers and the history store, never an announcer
++// or a steerer. The gobgp library itself is linked: the RIB view's types
++// come from it.
++func TestNoAnnouncerIsLinked(t *testing.T) {
++	gobin, err := exec.LookPath("go")
++	if err != nil {
++		t.Skip("go is not on PATH")
++	}
++	out, err := exec.Command(gobin, "list", "-deps", ".").Output()
++	if err != nil {
++		t.Fatal(err)
++	}
++	const mod = "github.com/GrandArcher/Packeteer/"
++	linked := false
++	for _, dep := range strings.Fields(string(out)) {
++		if dep == mod+"internal/plugins/scorer/weighted" {
++			linked = true
++		}
++		for _, banned := range []string{"internal/plugins/announcer/", "internal/plugins/steerer/", "internal/plugins/all", "internal/announce"} {
++			if strings.HasPrefix(dep, mod+banned) {
++				t.Fatalf("%s is linked", dep)
++			}
++		}
++	}
++	if !linked {
++		t.Fatalf("the weighted scorer is not linked:\n%s", out)
++	}
++}
++
++func TestVerdictWeighsNoMetricAgainstAnother(t *testing.T) {
++	base := Score{LossPct: 1, RTTMs: 50, Flaps: 2}
++	for _, c := range []struct {
++		v    Score
++		want string
++	}{
++		{Score{LossPct: 1, RTTMs: 50, Flaps: 2}, verdictSame},
++		{Score{LossPct: 0.5, RTTMs: 50, Flaps: 2}, verdictBetter},
++		{Score{LossPct: 1, RTTMs: 50, Flaps: 3}, verdictWorse},
++		{Score{LossPct: 0, RTTMs: 70, Flaps: 0}, verdictMixed},
++	} {
++		if got := verdict(base, c.v); got != c.want {
++			t.Fatalf("%+v: %s, want %s", c.v, got, c.want)
++		}
++	}
++}
+diff --git a/lab/evolve/roundfile.go b/lab/evolve/roundfile.go
+new file mode 100644
+index 00000000..69a8c091
+--- /dev/null
++++ b/lab/evolve/roundfile.go
+@@ -0,0 +1,73 @@
++package main
++
++import (
++	"bytes"
++	"context"
++	"encoding/json"
++	"errors"
++	"fmt"
++	"io"
++	"os"
++	"sort"
++	"time"
++
++	"github.com/GrandArcher/Packeteer/internal/policy"
++	"github.com/GrandArcher/Packeteer/internal/replay"
++	"github.com/GrandArcher/Packeteer/pkg/plugin"
++)
++
++// fileRound is one line of a round file: the time of a decision round and
++// its input, as policy.Input marshals to JSON.
++type fileRound struct {
++	At    time.Time    `json:"at"`
++	Input policy.Input `json:"input"`
++}
++
++// roundFile is a recorded history in text form. Each round is encoded the
++// way the controller stores it, so the replay decodes it like a stored one.
++type roundFile struct {
++	rounds []plugin.RoundRecord
++}
++
++func loadRoundFile(path string) (*roundFile, error) {
++	data, err := os.ReadFile(path)
++	if err != nil {
++		return nil, err
++	}
++	dec := json.NewDecoder(bytes.NewReader(data))
++	dec.DisallowUnknownFields()
++	rf := &roundFile{}
++	for n := 1; ; n++ {
++		var r fileRound
++		if err := dec.Decode(&r); errors.Is(err, io.EOF) {
++			break
++		} else if err != nil {
++			return nil, fmt.Errorf("%s: round %d: %w", path, n, err)
++		}
++		if r.At.IsZero() {
++			return nil, fmt.Errorf("%s: round %d has no time", path, n)
++		}
++		if k := len(rf.rounds); k > 0 && !r.At.After(rf.rounds[k-1].At) {
++			return nil, fmt.Errorf("%s: round %d at %s is not after the round before it", path, n, r.At.Format(time.RFC3339))
++		}
++		enc, err := replay.Encode(r.At, r.Input)
++		if err != nil {
++			return nil, fmt.Errorf("%s: round %d: %w", path, n, err)
++		}
++		rf.rounds = append(rf.rounds, plugin.RoundRecord{At: r.At, Input: enc})
++	}
++	return rf, nil
++}
++
++// Rounds implements replay.Source.
++func (f *roundFile) Rounds(_ context.Context, from, to time.Time, limit int) ([]plugin.RoundRecord, error) {
++	if limit <= 0 {
++		return nil, fmt.Errorf("limit %d must be positive", limit)
++	}
++	i := sort.Search(len(f.rounds), func(i int) bool { return !f.rounds[i].At.Before(from) })
++	var out []plugin.RoundRecord
++	for ; i < len(f.rounds) && f.rounds[i].At.Before(to) && len(out) < limit; i++ {
++		out = append(out, f.rounds[i])
++	}
++	return out, nil
++}
+diff --git a/lab/evolve/score.go b/lab/evolve/score.go
+new file mode 100644
+index 00000000..5e1003f9
+--- /dev/null
++++ b/lab/evolve/score.go
+@@ -0,0 +1,128 @@
++package main
++
++import (
++	"fmt"
++	"io"
++	"net/netip"
++	"strings"
++	"time"
++
++	"github.com/GrandArcher/Packeteer/internal/policy"
++	"github.com/GrandArcher/Packeteer/internal/replay"
++)
++
++// pathScore sums the loss and RTT of the path each prefix was on during
++// each round: the provider an improvement left it on after the round
++// before, else the native provider. A move is scored by the rounds after
++// it, not by the measurement that made it. Only a usable measurement
++// counts, so a stale or failed probe adds nothing for that prefix and round.
++type pathScore struct {
++	samples   int
++	loss, rtt float64
++	steered   map[netip.Prefix]string
++}
++
++func (p *pathScore) observe(st policy.State, out policy.Output) {
++	for _, d := range out.Decisions {
++		on, ok := p.steered[d.Prefix]
++		if !ok {
++			on = d.Native
++		}
++		for _, c := range d.Candidates {
++			if c.Provider == on && c.Usable {
++				p.samples++
++				p.loss += c.LossPct
++				p.rtt += float64(c.RTTAvg) / float64(time.Millisecond)
++				break
++			}
++		}
++	}
++	p.steered = make(map[netip.Prefix]string, len(st.Improvements))
++	for pfx, imp := range st.Improvements {
++		p.steered[pfx] = imp.Provider
++	}
++}
++
++// Verdicts of a variant against the baseline, over loss, RTT, and flaps.
++const (
++	verdictBetter = "better" // none worse, at least one better
++	verdictWorse  = "worse"  // none better, at least one worse
++	verdictMixed  = "mixed"  // some better, some worse
++	verdictSame   = "same"
++)
++
++// epsilon absorbs float rounding when two means are compared.
++const epsilon = 1e-9
++
++// Score is one side's result. LossPct and RTTMs are means over Samples, the
++// prefix rounds whose path had a usable measurement.
++type Score struct {
++	Name    string  `json:"name"`
++	LossPct float64 `json:"loss_pct"`
++	RTTMs   float64 `json:"rtt_ms"`
++	Flaps   int     `json:"flaps"`
++	Moves   int     `json:"moves"`
++	Samples int     `json:"samples"`
++	Verdict string  `json:"verdict,omitempty"`
++}
++
++// Report is the baseline and every variant over the same rounds.
++type Report struct {
++	Rounds   int       `json:"rounds"`
++	From     time.Time `json:"from"`
++	To       time.Time `json:"to"`
++	Baseline Score     `json:"baseline"`
++	Variants []Score   `json:"variants"`
++}
++
++func newReport(res replay.Result, paths []*pathScore) Report {
++	scores := make([]Score, len(res.Sides))
++	for i, side := range res.Sides {
++		s, p := side.Summary, paths[i]
++		sc := Score{Name: side.Name, Flaps: s.Flaps, Moves: s.Improves + s.Switches + s.Retires, Samples: p.samples}
++		if p.samples > 0 {
++			sc.LossPct, sc.RTTMs = p.loss/float64(p.samples), p.rtt/float64(p.samples)
++		}
++		scores[i] = sc
++	}
++	for i := 1; i < len(scores); i++ {
++		scores[i].Verdict = verdict(scores[0], scores[i])
++	}
++	return Report{Rounds: res.Rounds, From: res.From, To: res.To, Baseline: scores[0], Variants: scores[1:]}
++}
++
++// verdict compares v with base on each metric alone, lower being better,
++// and weighs none against another: a trade-off is mixed, for a human.
++func verdict(base, v Score) string {
++	better, worse := false, false
++	cmp := func(b, x float64) {
++		switch {
++		case x < b-epsilon:
++			better = true
++		case x > b+epsilon:
++			worse = true
++		}
++	}
++	cmp(base.LossPct, v.LossPct)
++	cmp(base.RTTMs, v.RTTMs)
++	cmp(float64(base.Flaps), float64(v.Flaps))
++	switch {
++	case better && worse:
++		return verdictMixed
++	case better:
++		return verdictBetter
++	case worse:
++		return verdictWorse
++	}
++	return verdictSame
++}
++
++func (r Report) format(w io.Writer) {
++	fmt.Fprintf(w, "replayed %d rounds from %s to %s; nothing was announced and no config was written\n",
++		r.Rounds, r.From.UTC().Format(time.RFC3339), r.To.UTC().Format(time.RFC3339))
++	fmt.Fprintf(w, "%-20s %10s %10s %6s %6s %8s  %s\n", "side", "loss %", "rtt ms", "flaps", "moves", "samples", "vs baseline")
++	for _, s := range append([]Score{r.Baseline}, r.Variants...) {
++		line := fmt.Sprintf("%-20s %10.3f %10.2f %6d %6d %8d  %s", s.Name, s.LossPct, s.RTTMs, s.Flaps, s.Moves, s.Samples, s.Verdict)
++		fmt.Fprintln(w, strings.TrimRight(line, " "))
++	}
++}
+diff --git a/lab/evolve/testdata/baseline.yaml b/lab/evolve/testdata/baseline.yaml
+new file mode 100644
+index 00000000..83ffbc4d
+--- /dev/null
++++ b/lab/evolve/testdata/baseline.yaml
+@@ -0,0 +1,8 @@
++mode: observe
++asn: 64512
++router_id: 192.0.2.10
++hold_time: 5m
++thresholds: {min_loss_delta_pct: 2, min_rtt_delta_ms: 30, confirm_rounds: 3}
++providers:
++  - {name: lab-a, source_ip: 192.0.2.11, next_hop: 192.0.2.1}
++  - {name: lab-b, source_ip: 192.0.2.12, next_hop: 192.0.2.2}
+diff --git a/lab/evolve/testdata/better.yaml b/lab/evolve/testdata/better.yaml
+new file mode 100644
+index 00000000..61794a55
+--- /dev/null
++++ b/lab/evolve/testdata/better.yaml
+@@ -0,0 +1,8 @@
++mode: observe
++asn: 64512
++router_id: 192.0.2.10
++hold_time: 5m
++thresholds: {min_loss_delta_pct: 2, min_rtt_delta_ms: 20, confirm_rounds: 3}
++providers:
++  - {name: lab-a, source_ip: 192.0.2.11, next_hop: 192.0.2.1}
++  - {name: lab-b, source_ip: 192.0.2.12, next_hop: 192.0.2.2}
+diff --git a/lab/evolve/testdata/history.jsonl b/lab/evolve/testdata/history.jsonl
+new file mode 100644
+index 00000000..dd8622c1
+--- /dev/null
++++ b/lab/evolve/testdata/history.jsonl
+@@ -0,0 +1,60 @@
++{"at":"2026-10-01T12:00:00Z","input":{"Results":[{"provider":"lab-a","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:00:00Z","round":"2026-10-01T12:00:00Z"},{"provider":"lab-b","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:00:00Z","round":"2026-10-01T12:00:00Z"},{"provider":"lab-a","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":80000000},"time":"2026-10-01T12:00:00Z","round":"2026-10-01T12:00:00Z"},{"provider":"lab-b","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":58000000},"time":"2026-10-01T12:00:00Z","round":"2026-10-01T12:00:00Z"},{"provider":"lab-a","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":50000000},"time":"2026-10-01T12:00:00Z","round":"2026-10-01T12:00:00Z"},{"provider":"lab-b","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":75000000},"time":"2026-10-01T12:00:00Z","round":"2026-10-01T12:00:00Z"}],"ProviderUp":{"lab-a":true,"lab-b":true},"RIBEnabled":true,"RIBReady":true,"Native":{"192.0.2.0/24":"lab-a","198.51.100.0/24":"lab-a","203.0.113.0/24":"lab-a"}}}
++{"at":"2026-10-01T12:00:30Z","input":{"Results":[{"provider":"lab-a","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:00:30Z","round":"2026-10-01T12:00:30Z"},{"provider":"lab-b","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:00:30Z","round":"2026-10-01T12:00:30Z"},{"provider":"lab-a","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":80000000},"time":"2026-10-01T12:00:30Z","round":"2026-10-01T12:00:30Z"},{"provider":"lab-b","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":58000000},"time":"2026-10-01T12:00:30Z","round":"2026-10-01T12:00:30Z"},{"provider":"lab-a","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":75000000},"time":"2026-10-01T12:00:30Z","round":"2026-10-01T12:00:30Z"},{"provider":"lab-b","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":50000000},"time":"2026-10-01T12:00:30Z","round":"2026-10-01T12:00:30Z"}],"ProviderUp":{"lab-a":true,"lab-b":true},"RIBEnabled":true,"RIBReady":true,"Native":{"192.0.2.0/24":"lab-a","198.51.100.0/24":"lab-a","203.0.113.0/24":"lab-a"}}}
++{"at":"2026-10-01T12:01:00Z","input":{"Results":[{"provider":"lab-a","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:01:00Z","round":"2026-10-01T12:01:00Z"},{"provider":"lab-b","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:01:00Z","round":"2026-10-01T12:01:00Z"},{"provider":"lab-a","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":80000000},"time":"2026-10-01T12:01:00Z","round":"2026-10-01T12:01:00Z"},{"provider":"lab-b","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":58000000},"time":"2026-10-01T12:01:00Z","round":"2026-10-01T12:01:00Z"},{"provider":"lab-a","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":50000000},"time":"2026-10-01T12:01:00Z","round":"2026-10-01T12:01:00Z"},{"provider":"lab-b","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":75000000},"time":"2026-10-01T12:01:00Z","round":"2026-10-01T12:01:00Z"}],"ProviderUp":{"lab-a":true,"lab-b":true},"RIBEnabled":true,"RIBReady":true,"Native":{"192.0.2.0/24":"lab-a","198.51.100.0/24":"lab-a","203.0.113.0/24":"lab-a"}}}
++{"at":"2026-10-01T12:01:30Z","input":{"Results":[{"provider":"lab-a","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:01:30Z","round":"2026-10-01T12:01:30Z"},{"provider":"lab-b","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:01:30Z","round":"2026-10-01T12:01:30Z"},{"provider":"lab-a","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":80000000},"time":"2026-10-01T12:01:30Z","round":"2026-10-01T12:01:30Z"},{"provider":"lab-b","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":58000000},"time":"2026-10-01T12:01:30Z","round":"2026-10-01T12:01:30Z"},{"provider":"lab-a","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":75000000},"time":"2026-10-01T12:01:30Z","round":"2026-10-01T12:01:30Z"},{"provider":"lab-b","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":50000000},"time":"2026-10-01T12:01:30Z","round":"2026-10-01T12:01:30Z"}],"ProviderUp":{"lab-a":true,"lab-b":true},"RIBEnabled":true,"RIBReady":true,"Native":{"192.0.2.0/24":"lab-a","198.51.100.0/24":"lab-a","203.0.113.0/24":"lab-a"}}}
++{"at":"2026-10-01T12:02:00Z","input":{"Results":[{"provider":"lab-a","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:02:00Z","round":"2026-10-01T12:02:00Z"},{"provider":"lab-b","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:02:00Z","round":"2026-10-01T12:02:00Z"},{"provider":"lab-a","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":80000000},"time":"2026-10-01T12:02:00Z","round":"2026-10-01T12:02:00Z"},{"provider":"lab-b","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":58000000},"time":"2026-10-01T12:02:00Z","round":"2026-10-01T12:02:00Z"},{"provider":"lab-a","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":50000000},"time":"2026-10-01T12:02:00Z","round":"2026-10-01T12:02:00Z"},{"provider":"lab-b","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":75000000},"time":"2026-10-01T12:02:00Z","round":"2026-10-01T12:02:00Z"}],"ProviderUp":{"lab-a":true,"lab-b":true},"RIBEnabled":true,"RIBReady":true,"Native":{"192.0.2.0/24":"lab-a","198.51.100.0/24":"lab-a","203.0.113.0/24":"lab-a"}}}
++{"at":"2026-10-01T12:02:30Z","input":{"Results":[{"provider":"lab-a","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:02:30Z","round":"2026-10-01T12:02:30Z"},{"provider":"lab-b","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:02:30Z","round":"2026-10-01T12:02:30Z"},{"provider":"lab-a","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":80000000},"time":"2026-10-01T12:02:30Z","round":"2026-10-01T12:02:30Z"},{"provider":"lab-b","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":58000000},"time":"2026-10-01T12:02:30Z","round":"2026-10-01T12:02:30Z"},{"provider":"lab-a","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":75000000},"time":"2026-10-01T12:02:30Z","round":"2026-10-01T12:02:30Z"},{"provider":"lab-b","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":50000000},"time":"2026-10-01T12:02:30Z","round":"2026-10-01T12:02:30Z"}],"ProviderUp":{"lab-a":true,"lab-b":true},"RIBEnabled":true,"RIBReady":true,"Native":{"192.0.2.0/24":"lab-a","198.51.100.0/24":"lab-a","203.0.113.0/24":"lab-a"}}}
++{"at":"2026-10-01T12:03:00Z","input":{"Results":[{"provider":"lab-a","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:03:00Z","round":"2026-10-01T12:03:00Z"},{"provider":"lab-b","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:03:00Z","round":"2026-10-01T12:03:00Z"},{"provider":"lab-a","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":80000000},"time":"2026-10-01T12:03:00Z","round":"2026-10-01T12:03:00Z"},{"provider":"lab-b","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":58000000},"time":"2026-10-01T12:03:00Z","round":"2026-10-01T12:03:00Z"},{"provider":"lab-a","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":50000000},"time":"2026-10-01T12:03:00Z","round":"2026-10-01T12:03:00Z"},{"provider":"lab-b","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":75000000},"time":"2026-10-01T12:03:00Z","round":"2026-10-01T12:03:00Z"}],"ProviderUp":{"lab-a":true,"lab-b":true},"RIBEnabled":true,"RIBReady":true,"Native":{"192.0.2.0/24":"lab-a","198.51.100.0/24":"lab-a","203.0.113.0/24":"lab-a"}}}
++{"at":"2026-10-01T12:03:30Z","input":{"Results":[{"provider":"lab-a","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:03:30Z","round":"2026-10-01T12:03:30Z"},{"provider":"lab-b","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:03:30Z","round":"2026-10-01T12:03:30Z"},{"provider":"lab-a","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":80000000},"time":"2026-10-01T12:03:30Z","round":"2026-10-01T12:03:30Z"},{"provider":"lab-b","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":58000000},"time":"2026-10-01T12:03:30Z","round":"2026-10-01T12:03:30Z"},{"provider":"lab-a","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":75000000},"time":"2026-10-01T12:03:30Z","round":"2026-10-01T12:03:30Z"},{"provider":"lab-b","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":50000000},"time":"2026-10-01T12:03:30Z","round":"2026-10-01T12:03:30Z"}],"ProviderUp":{"lab-a":true,"lab-b":true},"RIBEnabled":true,"RIBReady":true,"Native":{"192.0.2.0/24":"lab-a","198.51.100.0/24":"lab-a","203.0.113.0/24":"lab-a"}}}
++{"at":"2026-10-01T12:04:00Z","input":{"Results":[{"provider":"lab-a","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:04:00Z","round":"2026-10-01T12:04:00Z"},{"provider":"lab-b","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:04:00Z","round":"2026-10-01T12:04:00Z"},{"provider":"lab-a","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":80000000},"time":"2026-10-01T12:04:00Z","round":"2026-10-01T12:04:00Z"},{"provider":"lab-b","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":58000000},"time":"2026-10-01T12:04:00Z","round":"2026-10-01T12:04:00Z"},{"provider":"lab-a","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":50000000},"time":"2026-10-01T12:04:00Z","round":"2026-10-01T12:04:00Z"},{"provider":"lab-b","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":75000000},"time":"2026-10-01T12:04:00Z","round":"2026-10-01T12:04:00Z"}],"ProviderUp":{"lab-a":true,"lab-b":true},"RIBEnabled":true,"RIBReady":true,"Native":{"192.0.2.0/24":"lab-a","198.51.100.0/24":"lab-a","203.0.113.0/24":"lab-a"}}}
++{"at":"2026-10-01T12:04:30Z","input":{"Results":[{"provider":"lab-a","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:04:30Z","round":"2026-10-01T12:04:30Z"},{"provider":"lab-b","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:04:30Z","round":"2026-10-01T12:04:30Z"},{"provider":"lab-a","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":80000000},"time":"2026-10-01T12:04:30Z","round":"2026-10-01T12:04:30Z"},{"provider":"lab-b","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":58000000},"time":"2026-10-01T12:04:30Z","round":"2026-10-01T12:04:30Z"},{"provider":"lab-a","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":75000000},"time":"2026-10-01T12:04:30Z","round":"2026-10-01T12:04:30Z"},{"provider":"lab-b","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":50000000},"time":"2026-10-01T12:04:30Z","round":"2026-10-01T12:04:30Z"}],"ProviderUp":{"lab-a":true,"lab-b":true},"RIBEnabled":true,"RIBReady":true,"Native":{"192.0.2.0/24":"lab-a","198.51.100.0/24":"lab-a","203.0.113.0/24":"lab-a"}}}
++{"at":"2026-10-01T12:05:00Z","input":{"Results":[{"provider":"lab-a","prefix":"198.51.100.0/24","stats":{"sent":10,"received":9,"loss_pct":10,"rtt_avg":40000000},"time":"2026-10-01T12:05:00Z","round":"2026-10-01T12:05:00Z"},{"provider":"lab-b","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:05:00Z","round":"2026-10-01T12:05:00Z"},{"provider":"lab-a","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":80000000},"time":"2026-10-01T12:05:00Z","round":"2026-10-01T12:05:00Z"},{"provider":"lab-b","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":58000000},"time":"2026-10-01T12:05:00Z","round":"2026-10-01T12:05:00Z"},{"provider":"lab-a","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":50000000},"time":"2026-10-01T12:05:00Z","round":"2026-10-01T12:05:00Z"},{"provider":"lab-b","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":75000000},"time":"2026-10-01T12:05:00Z","round":"2026-10-01T12:05:00Z"}],"ProviderUp":{"lab-a":true,"lab-b":true},"RIBEnabled":true,"RIBReady":true,"Native":{"192.0.2.0/24":"lab-a","198.51.100.0/24":"lab-a","203.0.113.0/24":"lab-a"}}}
++{"at":"2026-10-01T12:05:30Z","input":{"Results":[{"provider":"lab-a","prefix":"198.51.100.0/24","stats":{"sent":10,"received":9,"loss_pct":10,"rtt_avg":40000000},"time":"2026-10-01T12:05:30Z","round":"2026-10-01T12:05:30Z"},{"provider":"lab-b","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:05:30Z","round":"2026-10-01T12:05:30Z"},{"provider":"lab-a","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":80000000},"time":"2026-10-01T12:05:30Z","round":"2026-10-01T12:05:30Z"},{"provider":"lab-b","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":58000000},"time":"2026-10-01T12:05:30Z","round":"2026-10-01T12:05:30Z"},{"provider":"lab-a","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":75000000},"time":"2026-10-01T12:05:30Z","round":"2026-10-01T12:05:30Z"},{"provider":"lab-b","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":50000000},"time":"2026-10-01T12:05:30Z","round":"2026-10-01T12:05:30Z"}],"ProviderUp":{"lab-a":true,"lab-b":true},"RIBEnabled":true,"RIBReady":true,"Native":{"192.0.2.0/24":"lab-a","198.51.100.0/24":"lab-a","203.0.113.0/24":"lab-a"}}}
++{"at":"2026-10-01T12:06:00Z","input":{"Results":[{"provider":"lab-a","prefix":"198.51.100.0/24","stats":{"sent":10,"received":9,"loss_pct":10,"rtt_avg":40000000},"time":"2026-10-01T12:06:00Z","round":"2026-10-01T12:06:00Z"},{"provider":"lab-b","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:06:00Z","round":"2026-10-01T12:06:00Z"},{"provider":"lab-a","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":80000000},"time":"2026-10-01T12:06:00Z","round":"2026-10-01T12:06:00Z"},{"provider":"lab-b","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":58000000},"time":"2026-10-01T12:06:00Z","round":"2026-10-01T12:06:00Z"},{"provider":"lab-a","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":50000000},"time":"2026-10-01T12:06:00Z","round":"2026-10-01T12:06:00Z"},{"provider":"lab-b","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":75000000},"time":"2026-10-01T12:06:00Z","round":"2026-10-01T12:06:00Z"}],"ProviderUp":{"lab-a":true,"lab-b":true},"RIBEnabled":true,"RIBReady":true,"Native":{"192.0.2.0/24":"lab-a","198.51.100.0/24":"lab-a","203.0.113.0/24":"lab-a"}}}
++{"at":"2026-10-01T12:06:30Z","input":{"Results":[{"provider":"lab-a","prefix":"198.51.100.0/24","stats":{"sent":10,"received":9,"loss_pct":10,"rtt_avg":40000000},"time":"2026-10-01T12:06:30Z","round":"2026-10-01T12:06:30Z"},{"provider":"lab-b","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:06:30Z","round":"2026-10-01T12:06:30Z"},{"provider":"lab-a","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":80000000},"time":"2026-10-01T12:06:30Z","round":"2026-10-01T12:06:30Z"},{"provider":"lab-b","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":58000000},"time":"2026-10-01T12:06:30Z","round":"2026-10-01T12:06:30Z"},{"provider":"lab-a","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":75000000},"time":"2026-10-01T12:06:30Z","round":"2026-10-01T12:06:30Z"},{"provider":"lab-b","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":50000000},"time":"2026-10-01T12:06:30Z","round":"2026-10-01T12:06:30Z"}],"ProviderUp":{"lab-a":true,"lab-b":true},"RIBEnabled":true,"RIBReady":true,"Native":{"192.0.2.0/24":"lab-a","198.51.100.0/24":"lab-a","203.0.113.0/24":"lab-a"}}}
++{"at":"2026-10-01T12:07:00Z","input":{"Results":[{"provider":"lab-a","prefix":"198.51.100.0/24","stats":{"sent":10,"received":9,"loss_pct":10,"rtt_avg":40000000},"time":"2026-10-01T12:07:00Z","round":"2026-10-01T12:07:00Z"},{"provider":"lab-b","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:07:00Z","round":"2026-10-01T12:07:00Z"},{"provider":"lab-a","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":80000000},"time":"2026-10-01T12:07:00Z","round":"2026-10-01T12:07:00Z"},{"provider":"lab-b","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":58000000},"time":"2026-10-01T12:07:00Z","round":"2026-10-01T12:07:00Z"},{"provider":"lab-a","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":50000000},"time":"2026-10-01T12:07:00Z","round":"2026-10-01T12:07:00Z"},{"provider":"lab-b","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":75000000},"time":"2026-10-01T12:07:00Z","round":"2026-10-01T12:07:00Z"}],"ProviderUp":{"lab-a":true,"lab-b":true},"RIBEnabled":true,"RIBReady":true,"Native":{"192.0.2.0/24":"lab-a","198.51.100.0/24":"lab-a","203.0.113.0/24":"lab-a"}}}
++{"at":"2026-10-01T12:07:30Z","input":{"Results":[{"provider":"lab-a","prefix":"198.51.100.0/24","stats":{"sent":10,"received":9,"loss_pct":10,"rtt_avg":40000000},"time":"2026-10-01T12:07:30Z","round":"2026-10-01T12:07:30Z"},{"provider":"lab-b","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:07:30Z","round":"2026-10-01T12:07:30Z"},{"provider":"lab-a","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":80000000},"time":"2026-10-01T12:07:30Z","round":"2026-10-01T12:07:30Z"},{"provider":"lab-b","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":58000000},"time":"2026-10-01T12:07:30Z","round":"2026-10-01T12:07:30Z"},{"provider":"lab-a","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":75000000},"time":"2026-10-01T12:07:30Z","round":"2026-10-01T12:07:30Z"},{"provider":"lab-b","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":50000000},"time":"2026-10-01T12:07:30Z","round":"2026-10-01T12:07:30Z"}],"ProviderUp":{"lab-a":true,"lab-b":true},"RIBEnabled":true,"RIBReady":true,"Native":{"192.0.2.0/24":"lab-a","198.51.100.0/24":"lab-a","203.0.113.0/24":"lab-a"}}}
++{"at":"2026-10-01T12:08:00Z","input":{"Results":[{"provider":"lab-a","prefix":"198.51.100.0/24","stats":{"sent":10,"received":9,"loss_pct":10,"rtt_avg":40000000},"time":"2026-10-01T12:08:00Z","round":"2026-10-01T12:08:00Z"},{"provider":"lab-b","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:08:00Z","round":"2026-10-01T12:08:00Z"},{"provider":"lab-a","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":80000000},"time":"2026-10-01T12:08:00Z","round":"2026-10-01T12:08:00Z"},{"provider":"lab-b","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":58000000},"time":"2026-10-01T12:08:00Z","round":"2026-10-01T12:08:00Z"},{"provider":"lab-a","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":50000000},"time":"2026-10-01T12:08:00Z","round":"2026-10-01T12:08:00Z"},{"provider":"lab-b","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":75000000},"time":"2026-10-01T12:08:00Z","round":"2026-10-01T12:08:00Z"}],"ProviderUp":{"lab-a":true,"lab-b":true},"RIBEnabled":true,"RIBReady":true,"Native":{"192.0.2.0/24":"lab-a","198.51.100.0/24":"lab-a","203.0.113.0/24":"lab-a"}}}
++{"at":"2026-10-01T12:08:30Z","input":{"Results":[{"provider":"lab-a","prefix":"198.51.100.0/24","stats":{"sent":10,"received":9,"loss_pct":10,"rtt_avg":40000000},"time":"2026-10-01T12:08:30Z","round":"2026-10-01T12:08:30Z"},{"provider":"lab-b","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:08:30Z","round":"2026-10-01T12:08:30Z"},{"provider":"lab-a","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":80000000},"time":"2026-10-01T12:08:30Z","round":"2026-10-01T12:08:30Z"},{"provider":"lab-b","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":58000000},"time":"2026-10-01T12:08:30Z","round":"2026-10-01T12:08:30Z"},{"provider":"lab-a","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":75000000},"time":"2026-10-01T12:08:30Z","round":"2026-10-01T12:08:30Z"},{"provider":"lab-b","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":50000000},"time":"2026-10-01T12:08:30Z","round":"2026-10-01T12:08:30Z"}],"ProviderUp":{"lab-a":true,"lab-b":true},"RIBEnabled":true,"RIBReady":true,"Native":{"192.0.2.0/24":"lab-a","198.51.100.0/24":"lab-a","203.0.113.0/24":"lab-a"}}}
++{"at":"2026-10-01T12:09:00Z","input":{"Results":[{"provider":"lab-a","prefix":"198.51.100.0/24","stats":{"sent":10,"received":9,"loss_pct":10,"rtt_avg":40000000},"time":"2026-10-01T12:09:00Z","round":"2026-10-01T12:09:00Z"},{"provider":"lab-b","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:09:00Z","round":"2026-10-01T12:09:00Z"},{"provider":"lab-a","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":80000000},"time":"2026-10-01T12:09:00Z","round":"2026-10-01T12:09:00Z"},{"provider":"lab-b","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":58000000},"time":"2026-10-01T12:09:00Z","round":"2026-10-01T12:09:00Z"},{"provider":"lab-a","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":50000000},"time":"2026-10-01T12:09:00Z","round":"2026-10-01T12:09:00Z"},{"provider":"lab-b","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":75000000},"time":"2026-10-01T12:09:00Z","round":"2026-10-01T12:09:00Z"}],"ProviderUp":{"lab-a":true,"lab-b":true},"RIBEnabled":true,"RIBReady":true,"Native":{"192.0.2.0/24":"lab-a","198.51.100.0/24":"lab-a","203.0.113.0/24":"lab-a"}}}
++{"at":"2026-10-01T12:09:30Z","input":{"Results":[{"provider":"lab-a","prefix":"198.51.100.0/24","stats":{"sent":10,"received":9,"loss_pct":10,"rtt_avg":40000000},"time":"2026-10-01T12:09:30Z","round":"2026-10-01T12:09:30Z"},{"provider":"lab-b","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:09:30Z","round":"2026-10-01T12:09:30Z"},{"provider":"lab-a","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":80000000},"time":"2026-10-01T12:09:30Z","round":"2026-10-01T12:09:30Z"},{"provider":"lab-b","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":58000000},"time":"2026-10-01T12:09:30Z","round":"2026-10-01T12:09:30Z"},{"provider":"lab-a","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":75000000},"time":"2026-10-01T12:09:30Z","round":"2026-10-01T12:09:30Z"},{"provider":"lab-b","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":50000000},"time":"2026-10-01T12:09:30Z","round":"2026-10-01T12:09:30Z"}],"ProviderUp":{"lab-a":true,"lab-b":true},"RIBEnabled":true,"RIBReady":true,"Native":{"192.0.2.0/24":"lab-a","198.51.100.0/24":"lab-a","203.0.113.0/24":"lab-a"}}}
++{"at":"2026-10-01T12:10:00Z","input":{"Results":[{"provider":"lab-a","prefix":"198.51.100.0/24","stats":{"sent":10,"received":9,"loss_pct":10,"rtt_avg":40000000},"time":"2026-10-01T12:10:00Z","round":"2026-10-01T12:10:00Z"},{"provider":"lab-b","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:10:00Z","round":"2026-10-01T12:10:00Z"},{"provider":"lab-a","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":80000000},"time":"2026-10-01T12:10:00Z","round":"2026-10-01T12:10:00Z"},{"provider":"lab-b","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":58000000},"time":"2026-10-01T12:10:00Z","round":"2026-10-01T12:10:00Z"},{"provider":"lab-a","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":50000000},"time":"2026-10-01T12:10:00Z","round":"2026-10-01T12:10:00Z"},{"provider":"lab-b","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":75000000},"time":"2026-10-01T12:10:00Z","round":"2026-10-01T12:10:00Z"}],"ProviderUp":{"lab-a":true,"lab-b":true},"RIBEnabled":true,"RIBReady":true,"Native":{"192.0.2.0/24":"lab-a","198.51.100.0/24":"lab-a","203.0.113.0/24":"lab-a"}}}
++{"at":"2026-10-01T12:10:30Z","input":{"Results":[{"provider":"lab-a","prefix":"198.51.100.0/24","stats":{"sent":10,"received":9,"loss_pct":10,"rtt_avg":40000000},"time":"2026-10-01T12:10:30Z","round":"2026-10-01T12:10:30Z"},{"provider":"lab-b","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:10:30Z","round":"2026-10-01T12:10:30Z"},{"provider":"lab-a","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":80000000},"time":"2026-10-01T12:10:30Z","round":"2026-10-01T12:10:30Z"},{"provider":"lab-b","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":58000000},"time":"2026-10-01T12:10:30Z","round":"2026-10-01T12:10:30Z"},{"provider":"lab-a","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":75000000},"time":"2026-10-01T12:10:30Z","round":"2026-10-01T12:10:30Z"},{"provider":"lab-b","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":50000000},"time":"2026-10-01T12:10:30Z","round":"2026-10-01T12:10:30Z"}],"ProviderUp":{"lab-a":true,"lab-b":true},"RIBEnabled":true,"RIBReady":true,"Native":{"192.0.2.0/24":"lab-a","198.51.100.0/24":"lab-a","203.0.113.0/24":"lab-a"}}}
++{"at":"2026-10-01T12:11:00Z","input":{"Results":[{"provider":"lab-a","prefix":"198.51.100.0/24","stats":{"sent":10,"received":9,"loss_pct":10,"rtt_avg":40000000},"time":"2026-10-01T12:11:00Z","round":"2026-10-01T12:11:00Z"},{"provider":"lab-b","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:11:00Z","round":"2026-10-01T12:11:00Z"},{"provider":"lab-a","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":80000000},"time":"2026-10-01T12:11:00Z","round":"2026-10-01T12:11:00Z"},{"provider":"lab-b","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":58000000},"time":"2026-10-01T12:11:00Z","round":"2026-10-01T12:11:00Z"},{"provider":"lab-a","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":50000000},"time":"2026-10-01T12:11:00Z","round":"2026-10-01T12:11:00Z"},{"provider":"lab-b","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":75000000},"time":"2026-10-01T12:11:00Z","round":"2026-10-01T12:11:00Z"}],"ProviderUp":{"lab-a":true,"lab-b":true},"RIBEnabled":true,"RIBReady":true,"Native":{"192.0.2.0/24":"lab-a","198.51.100.0/24":"lab-a","203.0.113.0/24":"lab-a"}}}
++{"at":"2026-10-01T12:11:30Z","input":{"Results":[{"provider":"lab-a","prefix":"198.51.100.0/24","stats":{"sent":10,"received":9,"loss_pct":10,"rtt_avg":40000000},"time":"2026-10-01T12:11:30Z","round":"2026-10-01T12:11:30Z"},{"provider":"lab-b","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:11:30Z","round":"2026-10-01T12:11:30Z"},{"provider":"lab-a","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":80000000},"time":"2026-10-01T12:11:30Z","round":"2026-10-01T12:11:30Z"},{"provider":"lab-b","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":58000000},"time":"2026-10-01T12:11:30Z","round":"2026-10-01T12:11:30Z"},{"provider":"lab-a","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":75000000},"time":"2026-10-01T12:11:30Z","round":"2026-10-01T12:11:30Z"},{"provider":"lab-b","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":50000000},"time":"2026-10-01T12:11:30Z","round":"2026-10-01T12:11:30Z"}],"ProviderUp":{"lab-a":true,"lab-b":true},"RIBEnabled":true,"RIBReady":true,"Native":{"192.0.2.0/24":"lab-a","198.51.100.0/24":"lab-a","203.0.113.0/24":"lab-a"}}}
++{"at":"2026-10-01T12:12:00Z","input":{"Results":[{"provider":"lab-a","prefix":"198.51.100.0/24","stats":{"sent":10,"received":9,"loss_pct":10,"rtt_avg":40000000},"time":"2026-10-01T12:12:00Z","round":"2026-10-01T12:12:00Z"},{"provider":"lab-b","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:12:00Z","round":"2026-10-01T12:12:00Z"},{"provider":"lab-a","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":80000000},"time":"2026-10-01T12:12:00Z","round":"2026-10-01T12:12:00Z"},{"provider":"lab-b","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":58000000},"time":"2026-10-01T12:12:00Z","round":"2026-10-01T12:12:00Z"},{"provider":"lab-a","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":50000000},"time":"2026-10-01T12:12:00Z","round":"2026-10-01T12:12:00Z"},{"provider":"lab-b","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":75000000},"time":"2026-10-01T12:12:00Z","round":"2026-10-01T12:12:00Z"}],"ProviderUp":{"lab-a":true,"lab-b":true},"RIBEnabled":true,"RIBReady":true,"Native":{"192.0.2.0/24":"lab-a","198.51.100.0/24":"lab-a","203.0.113.0/24":"lab-a"}}}
++{"at":"2026-10-01T12:12:30Z","input":{"Results":[{"provider":"lab-a","prefix":"198.51.100.0/24","stats":{"sent":10,"received":9,"loss_pct":10,"rtt_avg":40000000},"time":"2026-10-01T12:12:30Z","round":"2026-10-01T12:12:30Z"},{"provider":"lab-b","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:12:30Z","round":"2026-10-01T12:12:30Z"},{"provider":"lab-a","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":80000000},"time":"2026-10-01T12:12:30Z","round":"2026-10-01T12:12:30Z"},{"provider":"lab-b","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":58000000},"time":"2026-10-01T12:12:30Z","round":"2026-10-01T12:12:30Z"},{"provider":"lab-a","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":75000000},"time":"2026-10-01T12:12:30Z","round":"2026-10-01T12:12:30Z"},{"provider":"lab-b","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":50000000},"time":"2026-10-01T12:12:30Z","round":"2026-10-01T12:12:30Z"}],"ProviderUp":{"lab-a":true,"lab-b":true},"RIBEnabled":true,"RIBReady":true,"Native":{"192.0.2.0/24":"lab-a","198.51.100.0/24":"lab-a","203.0.113.0/24":"lab-a"}}}
++{"at":"2026-10-01T12:13:00Z","input":{"Results":[{"provider":"lab-a","prefix":"198.51.100.0/24","stats":{"sent":10,"received":9,"loss_pct":10,"rtt_avg":40000000},"time":"2026-10-01T12:13:00Z","round":"2026-10-01T12:13:00Z"},{"provider":"lab-b","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:13:00Z","round":"2026-10-01T12:13:00Z"},{"provider":"lab-a","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":80000000},"time":"2026-10-01T12:13:00Z","round":"2026-10-01T12:13:00Z"},{"provider":"lab-b","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":58000000},"time":"2026-10-01T12:13:00Z","round":"2026-10-01T12:13:00Z"},{"provider":"lab-a","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":50000000},"time":"2026-10-01T12:13:00Z","round":"2026-10-01T12:13:00Z"},{"provider":"lab-b","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":75000000},"time":"2026-10-01T12:13:00Z","round":"2026-10-01T12:13:00Z"}],"ProviderUp":{"lab-a":true,"lab-b":true},"RIBEnabled":true,"RIBReady":true,"Native":{"192.0.2.0/24":"lab-a","198.51.100.0/24":"lab-a","203.0.113.0/24":"lab-a"}}}
++{"at":"2026-10-01T12:13:30Z","input":{"Results":[{"provider":"lab-a","prefix":"198.51.100.0/24","stats":{"sent":10,"received":9,"loss_pct":10,"rtt_avg":40000000},"time":"2026-10-01T12:13:30Z","round":"2026-10-01T12:13:30Z"},{"provider":"lab-b","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:13:30Z","round":"2026-10-01T12:13:30Z"},{"provider":"lab-a","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":80000000},"time":"2026-10-01T12:13:30Z","round":"2026-10-01T12:13:30Z"},{"provider":"lab-b","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":58000000},"time":"2026-10-01T12:13:30Z","round":"2026-10-01T12:13:30Z"},{"provider":"lab-a","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":75000000},"time":"2026-10-01T12:13:30Z","round":"2026-10-01T12:13:30Z"},{"provider":"lab-b","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":50000000},"time":"2026-10-01T12:13:30Z","round":"2026-10-01T12:13:30Z"}],"ProviderUp":{"lab-a":true,"lab-b":true},"RIBEnabled":true,"RIBReady":true,"Native":{"192.0.2.0/24":"lab-a","198.51.100.0/24":"lab-a","203.0.113.0/24":"lab-a"}}}
++{"at":"2026-10-01T12:14:00Z","input":{"Results":[{"provider":"lab-a","prefix":"198.51.100.0/24","stats":{"sent":10,"received":9,"loss_pct":10,"rtt_avg":40000000},"time":"2026-10-01T12:14:00Z","round":"2026-10-01T12:14:00Z"},{"provider":"lab-b","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:14:00Z","round":"2026-10-01T12:14:00Z"},{"provider":"lab-a","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":80000000},"time":"2026-10-01T12:14:00Z","round":"2026-10-01T12:14:00Z"},{"provider":"lab-b","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":58000000},"time":"2026-10-01T12:14:00Z","round":"2026-10-01T12:14:00Z"},{"provider":"lab-a","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":50000000},"time":"2026-10-01T12:14:00Z","round":"2026-10-01T12:14:00Z"},{"provider":"lab-b","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":75000000},"time":"2026-10-01T12:14:00Z","round":"2026-10-01T12:14:00Z"}],"ProviderUp":{"lab-a":true,"lab-b":true},"RIBEnabled":true,"RIBReady":true,"Native":{"192.0.2.0/24":"lab-a","198.51.100.0/24":"lab-a","203.0.113.0/24":"lab-a"}}}
++{"at":"2026-10-01T12:14:30Z","input":{"Results":[{"provider":"lab-a","prefix":"198.51.100.0/24","stats":{"sent":10,"received":9,"loss_pct":10,"rtt_avg":40000000},"time":"2026-10-01T12:14:30Z","round":"2026-10-01T12:14:30Z"},{"provider":"lab-b","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:14:30Z","round":"2026-10-01T12:14:30Z"},{"provider":"lab-a","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":80000000},"time":"2026-10-01T12:14:30Z","round":"2026-10-01T12:14:30Z"},{"provider":"lab-b","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":58000000},"time":"2026-10-01T12:14:30Z","round":"2026-10-01T12:14:30Z"},{"provider":"lab-a","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":75000000},"time":"2026-10-01T12:14:30Z","round":"2026-10-01T12:14:30Z"},{"provider":"lab-b","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":50000000},"time":"2026-10-01T12:14:30Z","round":"2026-10-01T12:14:30Z"}],"ProviderUp":{"lab-a":true,"lab-b":true},"RIBEnabled":true,"RIBReady":true,"Native":{"192.0.2.0/24":"lab-a","198.51.100.0/24":"lab-a","203.0.113.0/24":"lab-a"}}}
++{"at":"2026-10-01T12:15:00Z","input":{"Results":[{"provider":"lab-a","prefix":"198.51.100.0/24","stats":{"sent":10,"received":9,"loss_pct":10,"rtt_avg":40000000},"time":"2026-10-01T12:15:00Z","round":"2026-10-01T12:15:00Z"},{"provider":"lab-b","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:15:00Z","round":"2026-10-01T12:15:00Z"},{"provider":"lab-a","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":80000000},"time":"2026-10-01T12:15:00Z","round":"2026-10-01T12:15:00Z"},{"provider":"lab-b","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":58000000},"time":"2026-10-01T12:15:00Z","round":"2026-10-01T12:15:00Z"},{"provider":"lab-a","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":50000000},"time":"2026-10-01T12:15:00Z","round":"2026-10-01T12:15:00Z"},{"provider":"lab-b","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":75000000},"time":"2026-10-01T12:15:00Z","round":"2026-10-01T12:15:00Z"}],"ProviderUp":{"lab-a":true,"lab-b":true},"RIBEnabled":true,"RIBReady":true,"Native":{"192.0.2.0/24":"lab-a","198.51.100.0/24":"lab-a","203.0.113.0/24":"lab-a"}}}
++{"at":"2026-10-01T12:15:30Z","input":{"Results":[{"provider":"lab-a","prefix":"198.51.100.0/24","stats":{"sent":10,"received":9,"loss_pct":10,"rtt_avg":40000000},"time":"2026-10-01T12:15:30Z","round":"2026-10-01T12:15:30Z"},{"provider":"lab-b","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:15:30Z","round":"2026-10-01T12:15:30Z"},{"provider":"lab-a","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":80000000},"time":"2026-10-01T12:15:30Z","round":"2026-10-01T12:15:30Z"},{"provider":"lab-b","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":58000000},"time":"2026-10-01T12:15:30Z","round":"2026-10-01T12:15:30Z"},{"provider":"lab-a","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":75000000},"time":"2026-10-01T12:15:30Z","round":"2026-10-01T12:15:30Z"},{"provider":"lab-b","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":50000000},"time":"2026-10-01T12:15:30Z","round":"2026-10-01T12:15:30Z"}],"ProviderUp":{"lab-a":true,"lab-b":true},"RIBEnabled":true,"RIBReady":true,"Native":{"192.0.2.0/24":"lab-a","198.51.100.0/24":"lab-a","203.0.113.0/24":"lab-a"}}}
++{"at":"2026-10-01T12:16:00Z","input":{"Results":[{"provider":"lab-a","prefix":"198.51.100.0/24","stats":{"sent":10,"received":9,"loss_pct":10,"rtt_avg":40000000},"time":"2026-10-01T12:16:00Z","round":"2026-10-01T12:16:00Z"},{"provider":"lab-b","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:16:00Z","round":"2026-10-01T12:16:00Z"},{"provider":"lab-a","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":80000000},"time":"2026-10-01T12:16:00Z","round":"2026-10-01T12:16:00Z"},{"provider":"lab-b","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":58000000},"time":"2026-10-01T12:16:00Z","round":"2026-10-01T12:16:00Z"},{"provider":"lab-a","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":50000000},"time":"2026-10-01T12:16:00Z","round":"2026-10-01T12:16:00Z"},{"provider":"lab-b","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":75000000},"time":"2026-10-01T12:16:00Z","round":"2026-10-01T12:16:00Z"}],"ProviderUp":{"lab-a":true,"lab-b":true},"RIBEnabled":true,"RIBReady":true,"Native":{"192.0.2.0/24":"lab-a","198.51.100.0/24":"lab-a","203.0.113.0/24":"lab-a"}}}
++{"at":"2026-10-01T12:16:30Z","input":{"Results":[{"provider":"lab-a","prefix":"198.51.100.0/24","stats":{"sent":10,"received":9,"loss_pct":10,"rtt_avg":40000000},"time":"2026-10-01T12:16:30Z","round":"2026-10-01T12:16:30Z"},{"provider":"lab-b","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:16:30Z","round":"2026-10-01T12:16:30Z"},{"provider":"lab-a","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":80000000},"time":"2026-10-01T12:16:30Z","round":"2026-10-01T12:16:30Z"},{"provider":"lab-b","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":58000000},"time":"2026-10-01T12:16:30Z","round":"2026-10-01T12:16:30Z"},{"provider":"lab-a","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":75000000},"time":"2026-10-01T12:16:30Z","round":"2026-10-01T12:16:30Z"},{"provider":"lab-b","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":50000000},"time":"2026-10-01T12:16:30Z","round":"2026-10-01T12:16:30Z"}],"ProviderUp":{"lab-a":true,"lab-b":true},"RIBEnabled":true,"RIBReady":true,"Native":{"192.0.2.0/24":"lab-a","198.51.100.0/24":"lab-a","203.0.113.0/24":"lab-a"}}}
++{"at":"2026-10-01T12:17:00Z","input":{"Results":[{"provider":"lab-a","prefix":"198.51.100.0/24","stats":{"sent":10,"received":9,"loss_pct":10,"rtt_avg":40000000},"time":"2026-10-01T12:17:00Z","round":"2026-10-01T12:17:00Z"},{"provider":"lab-b","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:17:00Z","round":"2026-10-01T12:17:00Z"},{"provider":"lab-a","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":80000000},"time":"2026-10-01T12:17:00Z","round":"2026-10-01T12:17:00Z"},{"provider":"lab-b","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":58000000},"time":"2026-10-01T12:17:00Z","round":"2026-10-01T12:17:00Z"},{"provider":"lab-a","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":50000000},"time":"2026-10-01T12:17:00Z","round":"2026-10-01T12:17:00Z"},{"provider":"lab-b","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":75000000},"time":"2026-10-01T12:17:00Z","round":"2026-10-01T12:17:00Z"}],"ProviderUp":{"lab-a":true,"lab-b":true},"RIBEnabled":true,"RIBReady":true,"Native":{"192.0.2.0/24":"lab-a","198.51.100.0/24":"lab-a","203.0.113.0/24":"lab-a"}}}
++{"at":"2026-10-01T12:17:30Z","input":{"Results":[{"provider":"lab-a","prefix":"198.51.100.0/24","stats":{"sent":10,"received":9,"loss_pct":10,"rtt_avg":40000000},"time":"2026-10-01T12:17:30Z","round":"2026-10-01T12:17:30Z"},{"provider":"lab-b","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:17:30Z","round":"2026-10-01T12:17:30Z"},{"provider":"lab-a","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":80000000},"time":"2026-10-01T12:17:30Z","round":"2026-10-01T12:17:30Z"},{"provider":"lab-b","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":58000000},"time":"2026-10-01T12:17:30Z","round":"2026-10-01T12:17:30Z"},{"provider":"lab-a","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":75000000},"time":"2026-10-01T12:17:30Z","round":"2026-10-01T12:17:30Z"},{"provider":"lab-b","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":50000000},"time":"2026-10-01T12:17:30Z","round":"2026-10-01T12:17:30Z"}],"ProviderUp":{"lab-a":true,"lab-b":true},"RIBEnabled":true,"RIBReady":true,"Native":{"192.0.2.0/24":"lab-a","198.51.100.0/24":"lab-a","203.0.113.0/24":"lab-a"}}}
++{"at":"2026-10-01T12:18:00Z","input":{"Results":[{"provider":"lab-a","prefix":"198.51.100.0/24","stats":{"sent":10,"received":9,"loss_pct":10,"rtt_avg":40000000},"time":"2026-10-01T12:18:00Z","round":"2026-10-01T12:18:00Z"},{"provider":"lab-b","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:18:00Z","round":"2026-10-01T12:18:00Z"},{"provider":"lab-a","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":80000000},"time":"2026-10-01T12:18:00Z","round":"2026-10-01T12:18:00Z"},{"provider":"lab-b","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":58000000},"time":"2026-10-01T12:18:00Z","round":"2026-10-01T12:18:00Z"},{"provider":"lab-a","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":50000000},"time":"2026-10-01T12:18:00Z","round":"2026-10-01T12:18:00Z"},{"provider":"lab-b","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":75000000},"time":"2026-10-01T12:18:00Z","round":"2026-10-01T12:18:00Z"}],"ProviderUp":{"lab-a":true,"lab-b":true},"RIBEnabled":true,"RIBReady":true,"Native":{"192.0.2.0/24":"lab-a","198.51.100.0/24":"lab-a","203.0.113.0/24":"lab-a"}}}
++{"at":"2026-10-01T12:18:30Z","input":{"Results":[{"provider":"lab-a","prefix":"198.51.100.0/24","stats":{"sent":10,"received":9,"loss_pct":10,"rtt_avg":40000000},"time":"2026-10-01T12:18:30Z","round":"2026-10-01T12:18:30Z"},{"provider":"lab-b","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:18:30Z","round":"2026-10-01T12:18:30Z"},{"provider":"lab-a","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":80000000},"time":"2026-10-01T12:18:30Z","round":"2026-10-01T12:18:30Z"},{"provider":"lab-b","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":58000000},"time":"2026-10-01T12:18:30Z","round":"2026-10-01T12:18:30Z"},{"provider":"lab-a","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":75000000},"time":"2026-10-01T12:18:30Z","round":"2026-10-01T12:18:30Z"},{"provider":"lab-b","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":50000000},"time":"2026-10-01T12:18:30Z","round":"2026-10-01T12:18:30Z"}],"ProviderUp":{"lab-a":true,"lab-b":true},"RIBEnabled":true,"RIBReady":true,"Native":{"192.0.2.0/24":"lab-a","198.51.100.0/24":"lab-a","203.0.113.0/24":"lab-a"}}}
++{"at":"2026-10-01T12:19:00Z","input":{"Results":[{"provider":"lab-a","prefix":"198.51.100.0/24","stats":{"sent":10,"received":9,"loss_pct":10,"rtt_avg":40000000},"time":"2026-10-01T12:19:00Z","round":"2026-10-01T12:19:00Z"},{"provider":"lab-b","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:19:00Z","round":"2026-10-01T12:19:00Z"},{"provider":"lab-a","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":80000000},"time":"2026-10-01T12:19:00Z","round":"2026-10-01T12:19:00Z"},{"provider":"lab-b","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":58000000},"time":"2026-10-01T12:19:00Z","round":"2026-10-01T12:19:00Z"},{"provider":"lab-a","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":50000000},"time":"2026-10-01T12:19:00Z","round":"2026-10-01T12:19:00Z"},{"provider":"lab-b","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":75000000},"time":"2026-10-01T12:19:00Z","round":"2026-10-01T12:19:00Z"}],"ProviderUp":{"lab-a":true,"lab-b":true},"RIBEnabled":true,"RIBReady":true,"Native":{"192.0.2.0/24":"lab-a","198.51.100.0/24":"lab-a","203.0.113.0/24":"lab-a"}}}
++{"at":"2026-10-01T12:19:30Z","input":{"Results":[{"provider":"lab-a","prefix":"198.51.100.0/24","stats":{"sent":10,"received":9,"loss_pct":10,"rtt_avg":40000000},"time":"2026-10-01T12:19:30Z","round":"2026-10-01T12:19:30Z"},{"provider":"lab-b","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:19:30Z","round":"2026-10-01T12:19:30Z"},{"provider":"lab-a","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":80000000},"time":"2026-10-01T12:19:30Z","round":"2026-10-01T12:19:30Z"},{"provider":"lab-b","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":58000000},"time":"2026-10-01T12:19:30Z","round":"2026-10-01T12:19:30Z"},{"provider":"lab-a","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":75000000},"time":"2026-10-01T12:19:30Z","round":"2026-10-01T12:19:30Z"},{"provider":"lab-b","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":50000000},"time":"2026-10-01T12:19:30Z","round":"2026-10-01T12:19:30Z"}],"ProviderUp":{"lab-a":true,"lab-b":true},"RIBEnabled":true,"RIBReady":true,"Native":{"192.0.2.0/24":"lab-a","198.51.100.0/24":"lab-a","203.0.113.0/24":"lab-a"}}}
++{"at":"2026-10-01T12:20:00Z","input":{"Results":[{"provider":"lab-a","prefix":"198.51.100.0/24","stats":{"sent":10,"received":9,"loss_pct":10,"rtt_avg":40000000},"time":"2026-10-01T12:20:00Z","round":"2026-10-01T12:20:00Z"},{"provider":"lab-b","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:20:00Z","round":"2026-10-01T12:20:00Z"},{"provider":"lab-a","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":80000000},"time":"2026-10-01T12:20:00Z","round":"2026-10-01T12:20:00Z"},{"provider":"lab-b","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":58000000},"time":"2026-10-01T12:20:00Z","round":"2026-10-01T12:20:00Z"},{"provider":"lab-a","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":50000000},"time":"2026-10-01T12:20:00Z","round":"2026-10-01T12:20:00Z"},{"provider":"lab-b","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":75000000},"time":"2026-10-01T12:20:00Z","round":"2026-10-01T12:20:00Z"}],"ProviderUp":{"lab-a":true,"lab-b":true},"RIBEnabled":true,"RIBReady":true,"Native":{"192.0.2.0/24":"lab-a","198.51.100.0/24":"lab-a","203.0.113.0/24":"lab-a"}}}
++{"at":"2026-10-01T12:20:30Z","input":{"Results":[{"provider":"lab-a","prefix":"198.51.100.0/24","stats":{"sent":10,"received":9,"loss_pct":10,"rtt_avg":40000000},"time":"2026-10-01T12:20:30Z","round":"2026-10-01T12:20:30Z"},{"provider":"lab-b","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:20:30Z","round":"2026-10-01T12:20:30Z"},{"provider":"lab-a","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":80000000},"time":"2026-10-01T12:20:30Z","round":"2026-10-01T12:20:30Z"},{"provider":"lab-b","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":58000000},"time":"2026-10-01T12:20:30Z","round":"2026-10-01T12:20:30Z"},{"provider":"lab-a","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":75000000},"time":"2026-10-01T12:20:30Z","round":"2026-10-01T12:20:30Z"},{"provider":"lab-b","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":50000000},"time":"2026-10-01T12:20:30Z","round":"2026-10-01T12:20:30Z"}],"ProviderUp":{"lab-a":true,"lab-b":true},"RIBEnabled":true,"RIBReady":true,"Native":{"192.0.2.0/24":"lab-a","198.51.100.0/24":"lab-a","203.0.113.0/24":"lab-a"}}}
++{"at":"2026-10-01T12:21:00Z","input":{"Results":[{"provider":"lab-a","prefix":"198.51.100.0/24","stats":{"sent":10,"received":9,"loss_pct":10,"rtt_avg":40000000},"time":"2026-10-01T12:21:00Z","round":"2026-10-01T12:21:00Z"},{"provider":"lab-b","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:21:00Z","round":"2026-10-01T12:21:00Z"},{"provider":"lab-a","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":80000000},"time":"2026-10-01T12:21:00Z","round":"2026-10-01T12:21:00Z"},{"provider":"lab-b","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":58000000},"time":"2026-10-01T12:21:00Z","round":"2026-10-01T12:21:00Z"},{"provider":"lab-a","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":50000000},"time":"2026-10-01T12:21:00Z","round":"2026-10-01T12:21:00Z"},{"provider":"lab-b","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":75000000},"time":"2026-10-01T12:21:00Z","round":"2026-10-01T12:21:00Z"}],"ProviderUp":{"lab-a":true,"lab-b":true},"RIBEnabled":true,"RIBReady":true,"Native":{"192.0.2.0/24":"lab-a","198.51.100.0/24":"lab-a","203.0.113.0/24":"lab-a"}}}
++{"at":"2026-10-01T12:21:30Z","input":{"Results":[{"provider":"lab-a","prefix":"198.51.100.0/24","stats":{"sent":10,"received":9,"loss_pct":10,"rtt_avg":40000000},"time":"2026-10-01T12:21:30Z","round":"2026-10-01T12:21:30Z"},{"provider":"lab-b","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:21:30Z","round":"2026-10-01T12:21:30Z"},{"provider":"lab-a","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":80000000},"time":"2026-10-01T12:21:30Z","round":"2026-10-01T12:21:30Z"},{"provider":"lab-b","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":58000000},"time":"2026-10-01T12:21:30Z","round":"2026-10-01T12:21:30Z"},{"provider":"lab-a","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":75000000},"time":"2026-10-01T12:21:30Z","round":"2026-10-01T12:21:30Z"},{"provider":"lab-b","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":50000000},"time":"2026-10-01T12:21:30Z","round":"2026-10-01T12:21:30Z"}],"ProviderUp":{"lab-a":true,"lab-b":true},"RIBEnabled":true,"RIBReady":true,"Native":{"192.0.2.0/24":"lab-a","198.51.100.0/24":"lab-a","203.0.113.0/24":"lab-a"}}}
++{"at":"2026-10-01T12:22:00Z","input":{"Results":[{"provider":"lab-a","prefix":"198.51.100.0/24","stats":{"sent":10,"received":9,"loss_pct":10,"rtt_avg":40000000},"time":"2026-10-01T12:22:00Z","round":"2026-10-01T12:22:00Z"},{"provider":"lab-b","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:22:00Z","round":"2026-10-01T12:22:00Z"},{"provider":"lab-a","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":80000000},"time":"2026-10-01T12:22:00Z","round":"2026-10-01T12:22:00Z"},{"provider":"lab-b","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":58000000},"time":"2026-10-01T12:22:00Z","round":"2026-10-01T12:22:00Z"},{"provider":"lab-a","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":50000000},"time":"2026-10-01T12:22:00Z","round":"2026-10-01T12:22:00Z"},{"provider":"lab-b","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":75000000},"time":"2026-10-01T12:22:00Z","round":"2026-10-01T12:22:00Z"}],"ProviderUp":{"lab-a":true,"lab-b":true},"RIBEnabled":true,"RIBReady":true,"Native":{"192.0.2.0/24":"lab-a","198.51.100.0/24":"lab-a","203.0.113.0/24":"lab-a"}}}
++{"at":"2026-10-01T12:22:30Z","input":{"Results":[{"provider":"lab-a","prefix":"198.51.100.0/24","stats":{"sent":10,"received":9,"loss_pct":10,"rtt_avg":40000000},"time":"2026-10-01T12:22:30Z","round":"2026-10-01T12:22:30Z"},{"provider":"lab-b","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:22:30Z","round":"2026-10-01T12:22:30Z"},{"provider":"lab-a","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":80000000},"time":"2026-10-01T12:22:30Z","round":"2026-10-01T12:22:30Z"},{"provider":"lab-b","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":58000000},"time":"2026-10-01T12:22:30Z","round":"2026-10-01T12:22:30Z"},{"provider":"lab-a","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":75000000},"time":"2026-10-01T12:22:30Z","round":"2026-10-01T12:22:30Z"},{"provider":"lab-b","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":50000000},"time":"2026-10-01T12:22:30Z","round":"2026-10-01T12:22:30Z"}],"ProviderUp":{"lab-a":true,"lab-b":true},"RIBEnabled":true,"RIBReady":true,"Native":{"192.0.2.0/24":"lab-a","198.51.100.0/24":"lab-a","203.0.113.0/24":"lab-a"}}}
++{"at":"2026-10-01T12:23:00Z","input":{"Results":[{"provider":"lab-a","prefix":"198.51.100.0/24","stats":{"sent":10,"received":9,"loss_pct":10,"rtt_avg":40000000},"time":"2026-10-01T12:23:00Z","round":"2026-10-01T12:23:00Z"},{"provider":"lab-b","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:23:00Z","round":"2026-10-01T12:23:00Z"},{"provider":"lab-a","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":80000000},"time":"2026-10-01T12:23:00Z","round":"2026-10-01T12:23:00Z"},{"provider":"lab-b","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":58000000},"time":"2026-10-01T12:23:00Z","round":"2026-10-01T12:23:00Z"},{"provider":"lab-a","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":50000000},"time":"2026-10-01T12:23:00Z","round":"2026-10-01T12:23:00Z"},{"provider":"lab-b","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":75000000},"time":"2026-10-01T12:23:00Z","round":"2026-10-01T12:23:00Z"}],"ProviderUp":{"lab-a":true,"lab-b":true},"RIBEnabled":true,"RIBReady":true,"Native":{"192.0.2.0/24":"lab-a","198.51.100.0/24":"lab-a","203.0.113.0/24":"lab-a"}}}
++{"at":"2026-10-01T12:23:30Z","input":{"Results":[{"provider":"lab-a","prefix":"198.51.100.0/24","stats":{"sent":10,"received":9,"loss_pct":10,"rtt_avg":40000000},"time":"2026-10-01T12:23:30Z","round":"2026-10-01T12:23:30Z"},{"provider":"lab-b","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:23:30Z","round":"2026-10-01T12:23:30Z"},{"provider":"lab-a","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":80000000},"time":"2026-10-01T12:23:30Z","round":"2026-10-01T12:23:30Z"},{"provider":"lab-b","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":58000000},"time":"2026-10-01T12:23:30Z","round":"2026-10-01T12:23:30Z"},{"provider":"lab-a","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":75000000},"time":"2026-10-01T12:23:30Z","round":"2026-10-01T12:23:30Z"},{"provider":"lab-b","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":50000000},"time":"2026-10-01T12:23:30Z","round":"2026-10-01T12:23:30Z"}],"ProviderUp":{"lab-a":true,"lab-b":true},"RIBEnabled":true,"RIBReady":true,"Native":{"192.0.2.0/24":"lab-a","198.51.100.0/24":"lab-a","203.0.113.0/24":"lab-a"}}}
++{"at":"2026-10-01T12:24:00Z","input":{"Results":[{"provider":"lab-a","prefix":"198.51.100.0/24","stats":{"sent":10,"received":9,"loss_pct":10,"rtt_avg":40000000},"time":"2026-10-01T12:24:00Z","round":"2026-10-01T12:24:00Z"},{"provider":"lab-b","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:24:00Z","round":"2026-10-01T12:24:00Z"},{"provider":"lab-a","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":80000000},"time":"2026-10-01T12:24:00Z","round":"2026-10-01T12:24:00Z"},{"provider":"lab-b","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":58000000},"time":"2026-10-01T12:24:00Z","round":"2026-10-01T12:24:00Z"},{"provider":"lab-a","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":50000000},"time":"2026-10-01T12:24:00Z","round":"2026-10-01T12:24:00Z"},{"provider":"lab-b","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":75000000},"time":"2026-10-01T12:24:00Z","round":"2026-10-01T12:24:00Z"}],"ProviderUp":{"lab-a":true,"lab-b":true},"RIBEnabled":true,"RIBReady":true,"Native":{"192.0.2.0/24":"lab-a","198.51.100.0/24":"lab-a","203.0.113.0/24":"lab-a"}}}
++{"at":"2026-10-01T12:24:30Z","input":{"Results":[{"provider":"lab-a","prefix":"198.51.100.0/24","stats":{"sent":10,"received":9,"loss_pct":10,"rtt_avg":40000000},"time":"2026-10-01T12:24:30Z","round":"2026-10-01T12:24:30Z"},{"provider":"lab-b","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:24:30Z","round":"2026-10-01T12:24:30Z"},{"provider":"lab-a","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":80000000},"time":"2026-10-01T12:24:30Z","round":"2026-10-01T12:24:30Z"},{"provider":"lab-b","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":58000000},"time":"2026-10-01T12:24:30Z","round":"2026-10-01T12:24:30Z"},{"provider":"lab-a","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":75000000},"time":"2026-10-01T12:24:30Z","round":"2026-10-01T12:24:30Z"},{"provider":"lab-b","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":50000000},"time":"2026-10-01T12:24:30Z","round":"2026-10-01T12:24:30Z"}],"ProviderUp":{"lab-a":true,"lab-b":true},"RIBEnabled":true,"RIBReady":true,"Native":{"192.0.2.0/24":"lab-a","198.51.100.0/24":"lab-a","203.0.113.0/24":"lab-a"}}}
++{"at":"2026-10-01T12:25:00Z","input":{"Results":[{"provider":"lab-a","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:25:00Z","round":"2026-10-01T12:25:00Z"},{"provider":"lab-b","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:25:00Z","round":"2026-10-01T12:25:00Z"},{"provider":"lab-a","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":80000000},"time":"2026-10-01T12:25:00Z","round":"2026-10-01T12:25:00Z"},{"provider":"lab-b","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":58000000},"time":"2026-10-01T12:25:00Z","round":"2026-10-01T12:25:00Z"},{"provider":"lab-a","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":50000000},"time":"2026-10-01T12:25:00Z","round":"2026-10-01T12:25:00Z"},{"provider":"lab-b","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":75000000},"time":"2026-10-01T12:25:00Z","round":"2026-10-01T12:25:00Z"}],"ProviderUp":{"lab-a":true,"lab-b":true},"RIBEnabled":true,"RIBReady":true,"Native":{"192.0.2.0/24":"lab-a","198.51.100.0/24":"lab-a","203.0.113.0/24":"lab-a"}}}
++{"at":"2026-10-01T12:25:30Z","input":{"Results":[{"provider":"lab-a","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:25:30Z","round":"2026-10-01T12:25:30Z"},{"provider":"lab-b","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:25:30Z","round":"2026-10-01T12:25:30Z"},{"provider":"lab-a","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":80000000},"time":"2026-10-01T12:25:30Z","round":"2026-10-01T12:25:30Z"},{"provider":"lab-b","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":58000000},"time":"2026-10-01T12:25:30Z","round":"2026-10-01T12:25:30Z"},{"provider":"lab-a","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":75000000},"time":"2026-10-01T12:25:30Z","round":"2026-10-01T12:25:30Z"},{"provider":"lab-b","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":50000000},"time":"2026-10-01T12:25:30Z","round":"2026-10-01T12:25:30Z"}],"ProviderUp":{"lab-a":true,"lab-b":true},"RIBEnabled":true,"RIBReady":true,"Native":{"192.0.2.0/24":"lab-a","198.51.100.0/24":"lab-a","203.0.113.0/24":"lab-a"}}}
++{"at":"2026-10-01T12:26:00Z","input":{"Results":[{"provider":"lab-a","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:26:00Z","round":"2026-10-01T12:26:00Z"},{"provider":"lab-b","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:26:00Z","round":"2026-10-01T12:26:00Z"},{"provider":"lab-a","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":80000000},"time":"2026-10-01T12:26:00Z","round":"2026-10-01T12:26:00Z"},{"provider":"lab-b","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":58000000},"time":"2026-10-01T12:26:00Z","round":"2026-10-01T12:26:00Z"},{"provider":"lab-a","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":50000000},"time":"2026-10-01T12:26:00Z","round":"2026-10-01T12:26:00Z"},{"provider":"lab-b","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":75000000},"time":"2026-10-01T12:26:00Z","round":"2026-10-01T12:26:00Z"}],"ProviderUp":{"lab-a":true,"lab-b":true},"RIBEnabled":true,"RIBReady":true,"Native":{"192.0.2.0/24":"lab-a","198.51.100.0/24":"lab-a","203.0.113.0/24":"lab-a"}}}
++{"at":"2026-10-01T12:26:30Z","input":{"Results":[{"provider":"lab-a","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:26:30Z","round":"2026-10-01T12:26:30Z"},{"provider":"lab-b","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:26:30Z","round":"2026-10-01T12:26:30Z"},{"provider":"lab-a","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":80000000},"time":"2026-10-01T12:26:30Z","round":"2026-10-01T12:26:30Z"},{"provider":"lab-b","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":58000000},"time":"2026-10-01T12:26:30Z","round":"2026-10-01T12:26:30Z"},{"provider":"lab-a","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":75000000},"time":"2026-10-01T12:26:30Z","round":"2026-10-01T12:26:30Z"},{"provider":"lab-b","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":50000000},"time":"2026-10-01T12:26:30Z","round":"2026-10-01T12:26:30Z"}],"ProviderUp":{"lab-a":true,"lab-b":true},"RIBEnabled":true,"RIBReady":true,"Native":{"192.0.2.0/24":"lab-a","198.51.100.0/24":"lab-a","203.0.113.0/24":"lab-a"}}}
++{"at":"2026-10-01T12:27:00Z","input":{"Results":[{"provider":"lab-a","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:27:00Z","round":"2026-10-01T12:27:00Z"},{"provider":"lab-b","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:27:00Z","round":"2026-10-01T12:27:00Z"},{"provider":"lab-a","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":80000000},"time":"2026-10-01T12:27:00Z","round":"2026-10-01T12:27:00Z"},{"provider":"lab-b","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":58000000},"time":"2026-10-01T12:27:00Z","round":"2026-10-01T12:27:00Z"},{"provider":"lab-a","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":50000000},"time":"2026-10-01T12:27:00Z","round":"2026-10-01T12:27:00Z"},{"provider":"lab-b","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":75000000},"time":"2026-10-01T12:27:00Z","round":"2026-10-01T12:27:00Z"}],"ProviderUp":{"lab-a":true,"lab-b":true},"RIBEnabled":true,"RIBReady":true,"Native":{"192.0.2.0/24":"lab-a","198.51.100.0/24":"lab-a","203.0.113.0/24":"lab-a"}}}
++{"at":"2026-10-01T12:27:30Z","input":{"Results":[{"provider":"lab-a","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:27:30Z","round":"2026-10-01T12:27:30Z"},{"provider":"lab-b","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:27:30Z","round":"2026-10-01T12:27:30Z"},{"provider":"lab-a","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":80000000},"time":"2026-10-01T12:27:30Z","round":"2026-10-01T12:27:30Z"},{"provider":"lab-b","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":58000000},"time":"2026-10-01T12:27:30Z","round":"2026-10-01T12:27:30Z"},{"provider":"lab-a","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":75000000},"time":"2026-10-01T12:27:30Z","round":"2026-10-01T12:27:30Z"},{"provider":"lab-b","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":50000000},"time":"2026-10-01T12:27:30Z","round":"2026-10-01T12:27:30Z"}],"ProviderUp":{"lab-a":true,"lab-b":true},"RIBEnabled":true,"RIBReady":true,"Native":{"192.0.2.0/24":"lab-a","198.51.100.0/24":"lab-a","203.0.113.0/24":"lab-a"}}}
++{"at":"2026-10-01T12:28:00Z","input":{"Results":[{"provider":"lab-a","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:28:00Z","round":"2026-10-01T12:28:00Z"},{"provider":"lab-b","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:28:00Z","round":"2026-10-01T12:28:00Z"},{"provider":"lab-a","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":80000000},"time":"2026-10-01T12:28:00Z","round":"2026-10-01T12:28:00Z"},{"provider":"lab-b","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":58000000},"time":"2026-10-01T12:28:00Z","round":"2026-10-01T12:28:00Z"},{"provider":"lab-a","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":50000000},"time":"2026-10-01T12:28:00Z","round":"2026-10-01T12:28:00Z"},{"provider":"lab-b","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":75000000},"time":"2026-10-01T12:28:00Z","round":"2026-10-01T12:28:00Z"}],"ProviderUp":{"lab-a":true,"lab-b":true},"RIBEnabled":true,"RIBReady":true,"Native":{"192.0.2.0/24":"lab-a","198.51.100.0/24":"lab-a","203.0.113.0/24":"lab-a"}}}
++{"at":"2026-10-01T12:28:30Z","input":{"Results":[{"provider":"lab-a","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:28:30Z","round":"2026-10-01T12:28:30Z"},{"provider":"lab-b","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:28:30Z","round":"2026-10-01T12:28:30Z"},{"provider":"lab-a","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":80000000},"time":"2026-10-01T12:28:30Z","round":"2026-10-01T12:28:30Z"},{"provider":"lab-b","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":58000000},"time":"2026-10-01T12:28:30Z","round":"2026-10-01T12:28:30Z"},{"provider":"lab-a","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":75000000},"time":"2026-10-01T12:28:30Z","round":"2026-10-01T12:28:30Z"},{"provider":"lab-b","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":50000000},"time":"2026-10-01T12:28:30Z","round":"2026-10-01T12:28:30Z"}],"ProviderUp":{"lab-a":true,"lab-b":true},"RIBEnabled":true,"RIBReady":true,"Native":{"192.0.2.0/24":"lab-a","198.51.100.0/24":"lab-a","203.0.113.0/24":"lab-a"}}}
++{"at":"2026-10-01T12:29:00Z","input":{"Results":[{"provider":"lab-a","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:29:00Z","round":"2026-10-01T12:29:00Z"},{"provider":"lab-b","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:29:00Z","round":"2026-10-01T12:29:00Z"},{"provider":"lab-a","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":80000000},"time":"2026-10-01T12:29:00Z","round":"2026-10-01T12:29:00Z"},{"provider":"lab-b","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":58000000},"time":"2026-10-01T12:29:00Z","round":"2026-10-01T12:29:00Z"},{"provider":"lab-a","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":50000000},"time":"2026-10-01T12:29:00Z","round":"2026-10-01T12:29:00Z"},{"provider":"lab-b","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":75000000},"time":"2026-10-01T12:29:00Z","round":"2026-10-01T12:29:00Z"}],"ProviderUp":{"lab-a":true,"lab-b":true},"RIBEnabled":true,"RIBReady":true,"Native":{"192.0.2.0/24":"lab-a","198.51.100.0/24":"lab-a","203.0.113.0/24":"lab-a"}}}
++{"at":"2026-10-01T12:29:30Z","input":{"Results":[{"provider":"lab-a","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:29:30Z","round":"2026-10-01T12:29:30Z"},{"provider":"lab-b","prefix":"198.51.100.0/24","stats":{"sent":10,"received":10,"rtt_avg":40000000},"time":"2026-10-01T12:29:30Z","round":"2026-10-01T12:29:30Z"},{"provider":"lab-a","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":80000000},"time":"2026-10-01T12:29:30Z","round":"2026-10-01T12:29:30Z"},{"provider":"lab-b","prefix":"203.0.113.0/24","stats":{"sent":10,"received":10,"rtt_avg":58000000},"time":"2026-10-01T12:29:30Z","round":"2026-10-01T12:29:30Z"},{"provider":"lab-a","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":75000000},"time":"2026-10-01T12:29:30Z","round":"2026-10-01T12:29:30Z"},{"provider":"lab-b","prefix":"192.0.2.0/24","stats":{"sent":10,"received":10,"rtt_avg":50000000},"time":"2026-10-01T12:29:30Z","round":"2026-10-01T12:29:30Z"}],"ProviderUp":{"lab-a":true,"lab-b":true},"RIBEnabled":true,"RIBReady":true,"Native":{"192.0.2.0/24":"lab-a","198.51.100.0/24":"lab-a","203.0.113.0/24":"lab-a"}}}
+diff --git a/lab/evolve/testdata/worse.yaml b/lab/evolve/testdata/worse.yaml
+new file mode 100644
+index 00000000..58d7df06
+--- /dev/null
++++ b/lab/evolve/testdata/worse.yaml
+@@ -0,0 +1,8 @@
++mode: observe
++asn: 64512
++router_id: 192.0.2.10
++hold_time: 30s
++thresholds: {min_loss_delta_pct: 15, min_rtt_delta_ms: 24, confirm_rounds: 1}
++providers:
++  - {name: lab-a, source_ip: 192.0.2.11, next_hop: 192.0.2.1}
++  - {name: lab-b, source_ip: 192.0.2.12, next_hop: 192.0.2.2}

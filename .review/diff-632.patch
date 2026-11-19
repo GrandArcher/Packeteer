@@ -1,0 +1,235 @@
+diff --git a/.gitattributes b/.gitattributes
+new file mode 100644
+index 00000000..d3ff2cd9
+--- /dev/null
++++ b/.gitattributes
+@@ -0,0 +1,5 @@
++# The demo lab bind-mounts these into Linux containers; CRLF from a Windows
++# checkout breaks the shell scripts and the FRR config.
++lab/** eol=lf
++scripts/** eol=lf
++*.bz2 binary
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 239b8468..aaf15cb3 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -7,6 +7,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
+ ### Changed
+ 
+ - Go toolchain moves to 1.27: `go.mod` and the Dockerfile builder digest, which supersedes the Dependabot bump (#623).
++- `scripts/demo.sh` allows Docker Desktop (macOS, Windows via WSL2) with a note, refuses native Windows shells and Windows containers; `.gitattributes` keeps lab files on LF (#630).
+ 
+ ## [1.4.1] - 2026-11-14
+ 
+diff --git a/README.md b/README.md
+index 705c636d..ae9a348e 100644
+--- a/README.md
++++ b/README.md
+@@ -70,7 +70,7 @@ cd Packeteer
+ ./scripts/demo.sh stop   # removes the containers
+ ```
+ 
+-About 30 seconds after the start, Overview recommends transit-b for `198.51.100.0/24` while the edge keeps transit-a and holds no route from Packeteer. [docs/demo.md](docs/demo.md) is a five-minute script to follow on screen, with the expected output of each step; CI runs it. For a host install, use [docs/quickstart.md](docs/quickstart.md). For observe, suggest, and inject on a simulated network, use [docs/walkthrough.md](docs/walkthrough.md).
++About 30 seconds after the start, Overview recommends transit-b for `198.51.100.0/24` while the edge keeps transit-a and holds no route from Packeteer. [docs/demo.md](docs/demo.md) is a five-minute script to follow on screen, with the expected output of each step; CI runs it on Linux with Docker Engine; Docker Desktop on macOS and Windows (WSL2) is allowed but unverified, see [Platforms](docs/demo.md#platforms). For a host install, use [docs/quickstart.md](docs/quickstart.md). For observe, suggest, and inject on a simulated network, use [docs/walkthrough.md](docs/walkthrough.md).
+ 
+ ## Install
+ 
+diff --git a/docs/demo.md b/docs/demo.md
+index d713fb8b..ec84e121 100644
+--- a/docs/demo.md
++++ b/docs/demo.md
+@@ -2,9 +2,9 @@
+ 
+ A short script to follow on screen, about five minutes. It starts the one-command lab ([lab/README.md](../lab/README.md#one-command-demo-586)), shows what Packeteer recommends in `observe`, shows that the edge router has accepted nothing from Packeteer, previews what inject would do without making any change, and stops the lab. For the long version that goes on to suggest and inject, read [walkthrough.md](walkthrough.md). For a host install, read [quickstart.md](quickstart.md).
+ 
+-Nothing here touches a real network. The routers are containers on a Docker bridge, the addresses are documentation ranges (RFC 5737), and the ASNs are the private-use 64512 and the documentation values 64496 and 64497. The mode stays `observe` from start to stop. Every command block after the clone runs in CI, in order, in the `e2e` job (`lab/e2e-docs.sh docs/demo.md`).
++Nothing here touches a real network. The routers are containers on a Docker bridge, the addresses are documentation ranges (RFC 5737), and the ASNs are the private-use 64512 and the documentation values 64496 and 64497. The mode stays `observe` from start to stop. Every command block after the clone, except the manual check under [Platforms](#platforms), runs in CI, in order, in the `e2e` job (`lab/e2e-docs.sh docs/demo.md`).
+ 
+-You need Linux with Docker Engine, the Compose plugin, `git`, `curl`, and nothing else on `127.0.0.1:18080` or the `192.0.2.0/24` bridge (stop the walkthrough lab first). `./scripts/demo.sh` checks this before it builds anything and stops with a one-line fix when Docker is Docker Desktop or the Compose plugin is missing, when `127.0.0.1:18080` is taken, or when another Docker network already uses `192.0.2.0/24`.
++You need Docker with the Compose plugin and Linux containers, `git`, `curl`, `bash`, and nothing else on `127.0.0.1:18080` or the `192.0.2.0/24` bridge (stop the walkthrough lab first). Platforms are listed under [Platforms](#platforms). `./scripts/demo.sh` checks the host before it builds anything and stops with a one-line fix when the shell is a native Windows one, Docker is missing, down, or in Windows containers mode, the Compose plugin is missing, `127.0.0.1:18080` is taken, or another Docker network already uses `192.0.2.0/24`.
+ 
+ | Lab | Address | AS | Role |
+ |---|---|---|---|
+@@ -138,6 +138,31 @@ docker ps -a --filter name=pkd- --format '{{.Names}}'
+ 
+ Every container and the lab network are gone. Nothing was ever announced, so there is nothing to withdraw.
+ 
++## Platforms
++
++| Platform | Status |
++|---|---|
++| Linux with Docker Engine and the Compose plugin | Supported. CI runs `scripts/demo.sh` and this guide on it. |
++| Docker Desktop on Linux | Allowed, not run in CI, not verified. |
++| Docker Desktop on macOS | Allowed, not run in CI (GitHub macOS runners have no Docker), not verified. Docker on macOS without Docker Desktop (for example Colima) gets the same note. |
++| Docker Desktop on Windows, from a WSL2 terminal | Allowed, not run in CI, not verified. |
++| Windows Git Bash, MSYS, Cygwin, PowerShell, cmd | Refused by the script. Use a WSL2 terminal. |
++| Docker Desktop in Windows containers mode | Refused by the script. Switch to Linux containers. |
++
++On Docker Desktop the script prints one note and goes on. The containers run in Docker Desktop's Linux VM, the lab network `192.0.2.0/24` exists only there, and the dashboard is published on the host's `127.0.0.1:18080`, so the lab needs no host networking. This is why the demo can work where the host [quickstart](quickstart.md), which needs host networking and is Linux only, cannot. That is the reasoning; no one has yet run it on Docker Desktop and recorded the result.
++
++Manual check on macOS or Windows (WSL2). On Windows, run everything in a WSL2 terminal with Docker Desktop's WSL integration on for that distro, and clone inside the WSL filesystem, not under `/mnt/c`. The repository's `.gitattributes` keeps the lab files on LF line endings. None of this is run in CI.
++
++Run `docker info --format '{{.OperatingSystem}} {{.OSType}}'`; expect `Docker Desktop linux`. Then run the guide above from step 1 and check each of these:
++
++1. `./scripts/demo.sh` prints the Docker Desktop note and then `Packeteer demo is up (mode: observe; nothing is announced).`
++2. The iBGP wait command in step 1 reaches `BGP state = Established` within about two minutes. If the edge never comes up, `docker compose -f lab/docker-compose-demo.yml logs edge` shows why; FRR reading its config from a bind mount is the part most likely to differ on Docker Desktop.
++3. <http://127.0.0.1:18080/> opens in a browser on the host, and you can sign in as `admin`.
++4. The `api` calls in steps 2 to 4 give the expected output: mode `observe`, `198.51.100.0/24` in the RIB on `transit-a` with `transit-b` recommended, and no route from `192.0.2.10` on the edge.
++5. `./scripts/demo.sh stop` leaves no `pkd-` container.
++
++Record the operating system and version, the Docker Desktop version, the CPU (Intel or Apple silicon), and which of the five checks passed, and file it as a GitHub issue. A failed step with its log is as useful as a pass. Until such a result is recorded here, treat Docker Desktop as unverified.
++
+ ## Where next
+ 
+ - Host install, observe only: [quickstart.md](quickstart.md).
+diff --git a/docs/quickstart.md b/docs/quickstart.md
+index 159451c7..48b92add 100644
+--- a/docs/quickstart.md
++++ b/docs/quickstart.md
+@@ -6,7 +6,7 @@ Every command block on this page runs in CI, in order, against the image built f
+ 
+ You need:
+ 
+-- Linux with Docker Engine and the Compose plugin (`docker compose`). Packeteer uses host networking, which Docker Desktop on macOS and Windows does not give you.
++- Linux with Docker Engine and the Compose plugin (`docker compose`). This quickstart is Linux only: Packeteer uses host networking, which Docker Desktop on macOS and Windows does not give you. To try Packeteer on macOS or Windows, use the bridge-network [demo](demo.md#platforms).
+ - `curl`.
+ - Nothing else on the host listening on `127.0.0.1:8080`.
+ 
+diff --git a/lab/README.md b/lab/README.md
+index 66832b20..af236241 100644
+--- a/lab/README.md
++++ b/lab/README.md
+@@ -107,7 +107,7 @@ It checks: (1) every member pulls both peers without failures and the edge holds
+ ./scripts/demo.sh stop   # remove the containers
+ ```
+ 
+-It starts the walkthrough's topology in `lab/docker-compose-demo.yml`: the FRR edge from `lab/frr-walkthrough`, the BMP lab's two transits, and Packeteer reading `lab/packeteer-demo.yaml` (`mode: observe`, the `fixed` prober, so no probe packet leaves the bridge). The dashboard is on <http://127.0.0.1:18080/>, published on loopback only. Sign in as `admin` with the password the script prints: it generates one per run, or uses `PACKETEER_DEMO_PASSWORD` when you set it. Without the script, `docker compose -f lab/docker-compose-demo.yml up --build` makes Packeteer generate a first-run password (`docker exec pkd-packeteer cat /var/lib/packeteer/first-run-admin-password`, [docs/auth.md](../docs/auth.md)). About 30 seconds after the start, Overview and `/api/improvements` recommend transit-b for `198.51.100.0/24` while the edge keeps transit-a, and the edge holds no route from Packeteer. The lab uses the same 192.0.2.0/24 bridge as the walkthrough, so stop one before starting the other (the script checks the port and the bridge first and stops with a one-line fix); [docs/demo.md](../docs/demo.md) is a script to follow on screen over it, and the walkthrough ([docs/walkthrough.md](../docs/walkthrough.md)) goes on to suggest and inject.
++It starts the walkthrough's topology in `lab/docker-compose-demo.yml`: the FRR edge from `lab/frr-walkthrough`, the BMP lab's two transits, and Packeteer reading `lab/packeteer-demo.yaml` (`mode: observe`, the `fixed` prober, so no probe packet leaves the bridge). The dashboard is on <http://127.0.0.1:18080/>, published on loopback only. Sign in as `admin` with the password the script prints: it generates one per run, or uses `PACKETEER_DEMO_PASSWORD` when you set it. Without the script, `docker compose -f lab/docker-compose-demo.yml up --build` makes Packeteer generate a first-run password (`docker exec pkd-packeteer cat /var/lib/packeteer/first-run-admin-password`, [docs/auth.md](../docs/auth.md)). About 30 seconds after the start, Overview and `/api/improvements` recommend transit-b for `198.51.100.0/24` while the edge keeps transit-a, and the edge holds no route from Packeteer. The lab uses the same 192.0.2.0/24 bridge as the walkthrough, so stop one before starting the other (the script checks the host, the port, and the bridge first and stops with a one-line fix). The script also allows Docker Desktop with a note; that is not run in CI and not verified, see [docs/demo.md](../docs/demo.md#platforms); [docs/demo.md](../docs/demo.md) is a script to follow on screen over the lab, and the walkthrough ([docs/walkthrough.md](../docs/walkthrough.md)) goes on to suggest and inject.
+ 
+ `lab/e2e-demo.sh` (CI, `e2e` job) runs that command and checks the iBGP session, the learned prefix and recommendation, `mode` observe, no route from Packeteer on the edge, a `401` without credentials, the dashboard published on loopback only, and that `stop` removes every container. The `e2e` job also runs every command block of `docs/demo.md` (`lab/e2e-docs.sh docs/demo.md`).
+ 
+diff --git a/scripts/demo.sh b/scripts/demo.sh
+index 604f4b5b..2cfbeefb 100755
+--- a/scripts/demo.sh
++++ b/scripts/demo.sh
+@@ -9,8 +9,11 @@
+ # without it one is generated for this run and printed once.
+ #
+ # Before it builds anything, "up" checks the host and stops with a one-line
+-# fix when Docker is not Docker Engine on Linux, when 127.0.0.1:18080 is
+-# taken, or when another Docker network already uses 192.0.2.0/24.
++# fix when the shell is a native Windows one, Docker is missing, down, or in
++# Windows containers mode, the Compose plugin is missing, 127.0.0.1:18080 is
++# taken, or another Docker network already uses 192.0.2.0/24. Docker Desktop
++# (macOS, or Windows through WSL2) is allowed with a one-line note; CI runs
++# only Docker Engine on Linux. See docs/demo.md#platforms.
+ set -euo pipefail
+ 
+ root=$(cd "$(dirname "$0")/.." && pwd)
+@@ -35,19 +38,30 @@ fail() {
+ }
+ 
+ preflight() {
+-	[ "$(uname -s)" = Linux ] || fail "Linux is required; the lab needs Docker Engine on Linux. Fix: run it on a Linux host."
+-	command -v docker >/dev/null 2>&1 || fail "docker is not installed. Fix: install Docker Engine, https://docs.docker.com/engine/install/"
+-	docker info >/dev/null 2>&1 || fail "cannot talk to the Docker daemon. Fix: start Docker and add your user to the docker group, or use sudo."
++	local os desktop=no
++	os=$(uname -s)
++	case "$os" in
++	Linux) ;;
++	Darwin) desktop=yes ;;
++	MINGW* | MSYS* | CYGWIN*) fail "this is a native Windows shell. Fix: run it from a WSL2 terminal with Docker Desktop's WSL integration, see docs/demo.md#platforms." ;;
++	*) fail "$os is not supported. Fix: run it on Linux with Docker Engine, or on macOS or Windows (WSL2) with Docker Desktop, see docs/demo.md#platforms." ;;
++	esac
++	command -v docker >/dev/null 2>&1 || fail "docker is not installed. Fix: install Docker Engine (Linux), https://docs.docker.com/engine/install/, or Docker Desktop (macOS, Windows)."
++	docker info >/dev/null 2>&1 || fail "cannot talk to the Docker daemon. Fix: start Docker (Docker Desktop, or the engine and your user in the docker group, or sudo)."
++	[ "$(docker info --format '{{.OSType}}' 2>/dev/null)" = linux ] || fail "Docker is not running Linux containers. Fix: switch Docker Desktop to Linux containers."
+ 	case "$(docker info --format '{{.OperatingSystem}}' 2>/dev/null)" in
+-	*"Docker Desktop"*) fail "this is Docker Desktop, not Docker Engine on Linux. Fix: run it on a Linux host with Docker Engine." ;;
++	*"Docker Desktop"*) desktop=yes ;;
+ 	esac
+-	docker compose version >/dev/null 2>&1 || fail "the Docker Compose plugin is missing. Fix: install docker-compose-plugin, so that 'docker compose version' works."
++	docker compose version >/dev/null 2>&1 || fail "the Docker Compose plugin is missing. Fix: install docker-compose-plugin (Docker Desktop includes it), so that 'docker compose version' works."
++	if [ "$desktop" = yes ]; then
++		echo "demo.sh: note: Docker Desktop and Docker on macOS are not run in CI and are not verified; if the demo fails, see docs/demo.md#platforms." >&2
++	fi
+ 	# A lab that is already up is a no-op for compose; do not call it a clash.
+ 	if [ -n "$(docker ps -q --filter name='^pkd-packeteer$')" ]; then
+ 		return 0
+ 	fi
+ 	if (exec 3<>/dev/tcp/127.0.0.1/18080) 2>/dev/null; then
+-		fail "127.0.0.1:18080 is already in use. Fix: stop what listens there (ss -ltnp 'sport = :18080'), then rerun."
++		fail "127.0.0.1:18080 is already in use. Fix: stop what listens there (ss -ltnp 'sport = :18080', or lsof -iTCP:18080 -sTCP:LISTEN on macOS), then rerun."
+ 	fi
+ 	local ids net
+ 	ids=$(docker network ls -q)
+diff --git a/scripts/demo_test.go b/scripts/demo_test.go
+index 8d7eee92..cd93f802 100644
+--- a/scripts/demo_test.go
++++ b/scripts/demo_test.go
+@@ -16,7 +16,10 @@ const demoFakeDocker = `#!/bin/sh
+ echo "docker $*" >> "$FAKE_LOG"
+ case "$1" in
+ info)
+-	[ "$2" = "--format" ] && echo "${FAKE_OS:-Ubuntu 24.04 LTS}"
++	case "$3" in
++	*OSType*) echo "${FAKE_OSTYPE:-linux}" ;;
++	*OperatingSystem*) echo "${FAKE_OS:-Ubuntu 24.04 LTS}" ;;
++	esac
+ 	exit "${FAKE_INFO_RC:-0}" ;;
+ compose)
+ 	case "$*" in
+@@ -92,8 +95,11 @@ func TestDemoPreflightFailsFastWithOneLineFix(t *testing.T) {
+ 		extra []string
+ 		want  string
+ 	}{
+-		{"not linux", []string{"FAKE_UNAME=Darwin"}, "Linux is required"},
+-		{"docker desktop", []string{"FAKE_OS=Docker Desktop"}, "Docker Desktop, not Docker Engine"},
++		{"git bash", []string{"FAKE_UNAME=MINGW64_NT-10.0-22631"}, "native Windows shell"},
++		{"msys", []string{"FAKE_UNAME=MSYS_NT-10.0"}, "native Windows shell"},
++		{"cygwin", []string{"FAKE_UNAME=CYGWIN_NT-10.0"}, "native Windows shell"},
++		{"unknown os", []string{"FAKE_UNAME=FreeBSD"}, "FreeBSD is not supported"},
++		{"windows containers", []string{"FAKE_OSTYPE=windows"}, "not running Linux containers"},
+ 		{"daemon down", []string{"FAKE_INFO_RC=1"}, "cannot talk to the Docker daemon"},
+ 		{"no compose plugin", []string{"FAKE_COMPOSE_RC=1"}, "Compose plugin is missing"},
+ 		{"bridge in use", []string{"FAKE_NETWORKS=walkthrough_lab 192.0.2.0/24 "}, "walkthrough_lab already uses 192.0.2.0/24"},
+@@ -152,6 +158,39 @@ func TestDemoPreflightPassesOnACleanHost(t *testing.T) {
+ 	if !strings.Contains(out, "Packeteer demo is up (mode: observe; nothing is announced).") || !strings.Contains(log(), "up -d --build") {
+ 		t.Errorf("the lab was not started:\n%s\n%s", out, log())
+ 	}
++	if strings.Contains(out, "note:") {
++		t.Errorf("Docker Engine on Linux got a Docker Desktop note:\n%s", out)
++	}
++}
++
++// Docker Desktop is allowed, on macOS and on Windows through WSL2 (where uname
++// says Linux and the daemon says Docker Desktop), with a one-line note on
++// stderr that it is not run in CI. The lab still starts.
++func TestDemoPreflightAllowsDockerDesktopWithANote(t *testing.T) {
++	port18080Free(t)
++	cases := []struct {
++		name  string
++		extra []string
++	}{
++		{"macos", []string{"FAKE_UNAME=Darwin", "FAKE_OS=Docker Desktop"}},
++		{"macos other daemon", []string{"FAKE_UNAME=Darwin"}},
++		{"wsl2", []string{"FAKE_OS=Docker Desktop"}},
++	}
++	for _, c := range cases {
++		t.Run(c.name, func(t *testing.T) {
++			run, log := demoEnv(t, false)
++			out, err := run(c.extra...)
++			if err != nil {
++				t.Fatalf("demo.sh: %v\n%s", err, out)
++			}
++			if n := strings.Count(out, "demo.sh: note: Docker Desktop and Docker on macOS are not run in CI"); n != 1 || !strings.Contains(out, "docs/demo.md#platforms") {
++				t.Errorf("want one note naming docs/demo.md#platforms, got %d:\n%s", n, out)
++			}
++			if !strings.Contains(out, "Packeteer demo is up (mode: observe; nothing is announced).") || !strings.Contains(log(), "up -d --build") {
++				t.Errorf("the lab was not started:\n%s\n%s", out, log())
++			}
++		})
++	}
+ }
+ 
+ // A lab that is already up owns the port and the bridge; rerunning "up" is

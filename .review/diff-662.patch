@@ -1,0 +1,111 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 1670ec67..9201eacf 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -3053,7 +3053,7 @@ jobs:
+     timeout-minutes: 30
+     steps:
+       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+-      - name: release upgrade lab (#644; v1.5.0 by digest then the PR build on one volume, -check, pin, pause, ack, users, history restored, observe, nothing announced, downgrade, SIGTERM exit 0)
++      - name: release upgrade lab (#644; v1.6.0 by digest then the PR build on one volume, -check, pin, pause, ack, users, history restored, observe, nothing announced, downgrade, SIGTERM exit 0)
+         run: bash lab/e2e-upgrade-release.sh
+ 
+   only-invalid:
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 1b33acc3..f26afd4f 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -4,6 +4,10 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
+ 
+ ## [Unreleased]
+ 
++### Changed
++
++- `upgrade-release` CI job starts from the v1.6.0 image, pinned by digest, instead of v1.5.0; the downgrade step no longer needs the `routeros` key, which v1.6.0 accepts (#656).
++
+ ## [1.6.0] - 2026-11-17
+ 
+ The v1.6 release finishes the shared IX port check (#151) and adds a read-only RouterOS router check, an upgrade test between real releases, a demo report mode, and a paragraph-length doc lint, with no new capability row or top-level config key; the shipped config stays `mode: observe` and injection stays off by default.
+diff --git a/lab/README.md b/lab/README.md
+index 4b48c6f5..d2cd545d 100644
+--- a/lab/README.md
++++ b/lab/README.md
+@@ -122,7 +122,7 @@ The `e2e` job runs [docs/walkthrough.md](../docs/walkthrough.md) on its own topo
+ 
+ `lab/e2e-only-invalid.sh` is RPKI-invalid only paths (#401) against a real Routinator (#627) on its own topology (`lab/docker-compose-only-invalid.yml`): Routinator (192.0.2.40) with no trust anchor and no repository fetch, serving only the ROAs in `lab/only-invalid/roas.json` (SLURM assertions) and the exceptions file the script shares with Packeteer; an FRR edge (`lab/frr-oi-edge`); transit-a (`lab/frr-oi-transit-a`), which sends `198.51.100.0/25` from AS64500 and `203.0.113.0/24` and `203.0.113.128/25` from AS64501; and Packeteer in observe (`lab/packeteer-only-invalid.yaml`, with an `irr` `file` route object in `lab/only-invalid/irr.db`). It checks: (1) `198.51.100.0/25` raises `rpki.only_invalid` classed `stale_roa` with the evidence, and the invalid `203.0.113.128/25` under the valid /24 raises nothing. (2) A proposal writes nothing. (3) After approval the file holds the entry, Routinator serves the route as valid, and the case clears. (4) The audit log has the proposal, approval, and write. (5) The edge receives no route from Packeteer on any sample, and SIGTERM stops it cleanly. It runs as the `only-invalid` CI job.
+ 
+-`lab/e2e-upgrade-release.sh` is the upgrade between real releases (#644) on `lab/docker-compose-upgrade-release.yml` (the FRR edge of `lab/frr` and one Packeteer container) with `lab/packeteer-upgrade-release.yaml` (observe, sqlite, sign-in on). It runs the v1.5.0 image, pinned by digest in the script (`PREV_IMAGE` must contain `@sha256:`), and writes a second user, a pin, a pause, and an acknowledged `provider.down` alert. It stops that container and starts the image built from this tree on the same `packeteer-data` volume (named per compose project, so a local run cannot touch a real one), and checks that `-check` passes, that the pin, pause, acknowledgement, users, event history, and audit log are restored, that the mode is still observe, that no `steering.lost` fired, and that the edge holds no route from Packeteer. Then it does the downgrade the README upgrade notes describe (remove the keys the older release refuses, then start it): the release's `-check` refuses `preflight.router_check` type `routeros`, accepts the config without it, and the release image started again on the volume shows the same state. Container exit codes are 0 on SIGTERM. It complements `lab/e2e-upgrade.sh`, which upgrades a build of this tree against a fake release server. CI runs it as the `upgrade-release` job.
++`lab/e2e-upgrade-release.sh` is the upgrade between real releases (#644) on `lab/docker-compose-upgrade-release.yml` (the FRR edge of `lab/frr` and one Packeteer container) with `lab/packeteer-upgrade-release.yaml` (observe, sqlite, sign-in on). It runs the v1.6.0 image, pinned by digest in the script (`PREV_IMAGE` must contain `@sha256:`), and writes a second user, a pin, a pause, and an acknowledged `provider.down` alert. It stops that container and starts the image built from this tree on the same `packeteer-data` volume (named per compose project, so a local run cannot touch a real one), and checks that `-check` passes, that the pin, pause, acknowledgement, users, event history, and audit log are restored, that the mode is still observe, that no `steering.lost` fired, and that the edge holds no route from Packeteer. Then it does the downgrade: the v1.6.0 image started again on the volume shows the same state (no config key is newer than that release, so none is removed; the README upgrade notes say to remove such keys first). Container exit codes are 0 on SIGTERM. It complements `lab/e2e-upgrade.sh`, which upgrades a build of this tree against a fake release server. CI runs it as the `upgrade-release` job.
+ 
+ GitHub Actions runs the scripts above (except the Routinator lab, which is the `only-invalid` job, and the release upgrade lab, which is the `upgrade-release` job), the walkthrough, and the demo as the `e2e` job. Docker and Go are required (the scripts build `lab/checkroute`, `lab/checkpath`, `lab/checkms`, `lab/checkpop`, `lab/checklease`, and `lab/mkcerts`); they do not run in the unit-test job. `go test ./lab/checkroute ./lab/checkpath ./lab/checkms ./lab/checkpop ./lab/checklease ./lab/doccmds` covers the checks themselves.
+ 
+diff --git a/lab/e2e-upgrade-release.sh b/lab/e2e-upgrade-release.sh
+index 27f01ddb..725b7709 100755
+--- a/lab/e2e-upgrade-release.sh
++++ b/lab/e2e-upgrade-release.sh
+@@ -3,8 +3,9 @@
+ # (pinned by digest) with sqlite history, a second user, a pin, a pause and an
+ # acknowledged alert, stops it, starts the image built from this tree on the
+ # same packeteer-data volume, and checks what the 1.2 to 1.3 upgrade notes
+-# promise. Then it does the documented downgrade (remove the keys the release
+-# does not know, start the release image) on that volume. Complements
++# promise. Then it does the documented downgrade on that volume: it starts the
++# release image again (no config key is newer than the release, so none is
++# removed). Complements
+ # lab/e2e-upgrade.sh, which upgrades a build of this tree against a fake
+ # release server.
+ #
+@@ -22,8 +23,8 @@ set -euo pipefail
+ root=$(cd "$(dirname "$0")/.." && pwd)
+ cd "$root"
+ 
+-prev_version=1.5.0
+-prev_image="${PREV_IMAGE:-ghcr.io/grandarcher/packeteer@sha256:fc4a335ec25ca63e4fb7c1709480704174b4cf3fae100d5a12d0451c183e074a}"
++prev_version=1.6.0
++prev_image="${PREV_IMAGE:-ghcr.io/grandarcher/packeteer@sha256:324c39af4efc17c0e755e2348664fc502ac083ba8cc02518a11baf2c5d13ffaf}"
+ case "$prev_image" in
+ *@sha256:????????????????????????????????????????????????????????????????) ;;
+ *)
+@@ -134,11 +135,9 @@ stop() {
+ }
+ 
+ # check_cfg IMAGE FILE: the image's -check on a config file, with no data
+-# volume, so it cannot touch the shared one. The two variables are fake
+-# values for the routeros key; -check reads no router.
++# volume, so it cannot touch the shared one.
+ check_cfg() {
+ 	docker run --rm -v "$2:/etc/packeteer/config.yaml:ro" -v "$root/lab/probes:/etc/packeteer/probes:ro" \
+-		-e PACKETEER_ROUTER_READ_USER=lab -e PACKETEER_ROUTER_READ_PASSWORD=lab-only \
+ 		"$1" -check >"$work/check.out" 2>&1
+ }
+ 
+@@ -210,24 +209,11 @@ n=$(api 'events?limit=1000' | jq '[.events[] | select(.kind == "controller.start
+ [ "$n" -gt "$(cat "$work/started.txt")" ] || fail "no new controller.started event after the upgrade (before $(cat "$work/started.txt"), now $n)"
+ echo "e2e-upgrade-release: upgrade kept pin, pause, ack, users, history; mode observe; nothing announced"
+ 
+-echo "== downgrade: remove the keys the release does not know, start the release image"
+-# preflight.router_check type routeros (#637) is newer than the release.
+-cp "$work/config.yaml" "$work/config-new.yaml"
+-cat >>"$work/config-new.yaml" <<'EOF'
+-preflight:
+-  router_check:
+-    type: routeros
+-    config:
+-      url: https://192.0.2.254
+-      username_env: PACKETEER_ROUTER_READ_USER
+-      password_env: PACKETEER_ROUTER_READ_PASSWORD
+-EOF
+-chmod 644 "$work/config-new.yaml"
+-check_cfg "$new_image" "$work/config-new.yaml" || { cat "$work/check.out" >&2; fail "-check refused the routeros key on the build"; }
+-if check_cfg "$prev_image" "$work/config-new.yaml"; then fail "the release accepted a key it should refuse"; fi
+-grep -q routeros "$work/check.out" || { cat "$work/check.out" >&2; fail "the release refused the config, but not for the routeros type"; }
+-echo "e2e-upgrade-release: the release refuses the new key, as the notes say: $(grep -m1 routeros "$work/check.out")"
+-check_cfg "$prev_image" "$work/config.yaml" || { cat "$work/check.out" >&2; fail "-check failed on the release after the key was removed"; }
++echo "== downgrade: start the release image on the same volume"
++# No config key is newer than the release (v1.6.0 accepts everything the build
++# does), so the downgrade removes nothing. When the build adds a key, write it
++# into a copy of the config here, check that the release refuses it, and start
++# the release with the original config, as the README upgrade notes say.
+ stop
+ start "$prev_image" "$prev_version"
+ state_is_kept "release $prev_version after the downgrade"

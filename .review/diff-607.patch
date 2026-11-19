@@ -1,0 +1,321 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 6baf4c3c..5597e2ef 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -3032,6 +3032,12 @@ jobs:
+         run: bash lab/e2e-docs.sh docs/walkthrough.md
+       - name: One-command demo lab (#586; scripts/demo.sh brings up the FRR edge, two transits, and Packeteer in observe with sign-in, learned prefix, recommendation, no Packeteer route on the edge, stop removes it)
+         run: bash lab/e2e-demo.sh
++      - name: Demo script guide, every command (#590; docs/demo.md against scripts/demo.sh, observe)
++        env:
++          PACKETEER_DOCS_DIR: .
++          PACKETEER_DOCS_ON_FAIL: docker compose -f lab/docker-compose-demo.yml logs --no-color; docker exec pkd-edge vtysh -c 'show bgp summary' -c 'show bgp ipv4 unicast'
++          PACKETEER_DOCS_CLEANUP: ./scripts/demo.sh stop
++        run: bash lab/e2e-docs.sh docs/demo.md
+ 
+   failure-matrix:
+     # Failure-mode matrix (#234): each injection surface against SIGKILL,
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 90f3a1d8..ea42971e 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -6,6 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
+ 
+ ### Added
+ 
++- `docs/demo.md`: a five-minute observe-only script for the demo lab, run in CI, and a README "Try the demo" section (#590).
+ - `scripts/demo.sh`: one command starts an FRR edge, two simulated transits, and Packeteer in observe with sign-in on and the dashboard on loopback; CI runs it (#586).
+ - Settings Host policy routing panel: shows the `ip rule`/`ip route` plan, applies it after a confirm and verifies each source leaves via its next hop; `GET /api/pbr`, `POST /api/pbr/apply` (#582).
+ - The Overview checklist says "Setup complete, still observe" once the session is up, a prefix is learned, every provider answered, egress not failing; `setup_complete` in `/api/overview` (#582).
+diff --git a/README.md b/README.md
+index bf0bcec1..c4623e13 100644
+--- a/README.md
++++ b/README.md
+@@ -59,6 +59,19 @@ Read this before you change `mode`.
+ 
+ Threat model: [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md). Agent rules: [AGENTS.md](AGENTS.md).
+ 
++## Try the demo
++
++To see Packeteer work without touching a router, run the one-command lab from a clone. It starts an FRR edge, two simulated transits, and Packeteer in `observe` with sign-in on, all on a Docker bridge with documentation addresses; no probe packet leaves it.
++
++```sh
++git clone https://github.com/GrandArcher/Packeteer.git
++cd Packeteer
++./scripts/demo.sh        # prints the dashboard URL (127.0.0.1:18080) and a generated admin password
++./scripts/demo.sh stop   # removes the containers
++```
++
++About 30 seconds after the start, Overview recommends transit-b for `198.51.100.0/24` while the edge keeps transit-a and holds no route from Packeteer. [docs/demo.md](docs/demo.md) is a five-minute script to follow on screen, with the expected output of each step; CI runs it. For a host install, use [docs/quickstart.md](docs/quickstart.md). For observe, suggest, and inject on a simulated network, use [docs/walkthrough.md](docs/walkthrough.md).
++
+ ## Install
+ 
+ The image is `ghcr.io/grandarcher/packeteer`, linux/amd64 and linux/arm64. It runs as root inside the container so it can open raw ICMP sockets and, if you ask it to, TCP port 179. Give it `NET_RAW` and `NET_ADMIN`. It needs host networking: probes must leave from each provider's source address, the iBGP session must reach the router, and a flow collector binds host UDP ports.
+diff --git a/docs/FEATURES.md b/docs/FEATURES.md
+index dcab65f7..9efc015b 100644
+--- a/docs/FEATURES.md
++++ b/docs/FEATURES.md
+@@ -23,7 +23,7 @@ Milestones:
+ - **v1.1**: assistant access, RPKI-invalid only paths, and non-BGP mode. An MCP server over the REST API for AI assistants (#302), RPKI-invalid only paths (#401), partial: public collector agreement is not a signal yet; report only, unit and integration tests, not lab-proven against a real Routinator. Non-BGP mode (#300), partial: opt-in static routes from flow data for a router with no BGP, an owner-approved exception to the learned-RIB rule; lab-proven with the `linux` steerer only. The counts below include all three rows.
+ - **v1.2**: no new rows. Steering over the REST API and as MCP write tools (#558): pin a prefix, pause and resume optimization, acknowledge an alert; it completes the MCP row above, so the counts below move from 130 to 131 done (v1.1: 1 of 3). Lab only; nothing is field-proven (#54).
+ - **v1.3**: no new rows. Pins, the pause, and alert acknowledgements survive a restart and HA takeover with `ha` or sqlite storage (#565) with a lost-state warning (#566), plus first-run setup, router config snippets, the guided inject step, the hold-time review dialog, and the System page probe-source check (#568, #569, #575, #576, #581). The counts below are unchanged. Lab only; nothing is field-proven (#54).
+-- **v1.4**: an experimental, lab-only path-scoring harness (#584) that scores config variants against recorded history and never changes a default, and a one-command observe-only demo lab (`scripts/demo.sh`, #586). The counts below are unchanged. Lab only; nothing is field-proven (#54).
++- **v1.4**: an experimental, lab-only path-scoring harness (#584) that scores config variants against recorded history and never changes a default, and a one-command observe-only demo lab (`scripts/demo.sh`, #586) with a five-minute script to follow on screen (`docs/demo.md`, #590). The counts below are unchanged. Lab only; nothing is field-proven (#54).
+ 
+ ## Summary
+ 
+diff --git a/docs/demo.md b/docs/demo.md
+new file mode 100644
+index 00000000..48764a98
+--- /dev/null
++++ b/docs/demo.md
+@@ -0,0 +1,145 @@
++# Demo script: observe on a simulated edge
++
++A short script to follow on screen, about five minutes. It starts the one-command lab ([lab/README.md](../lab/README.md#one-command-demo-586)), shows what Packeteer recommends in `observe`, shows that the edge router has accepted nothing from Packeteer, previews what inject would do without making any change, and stops the lab. For the long version that goes on to suggest and inject, read [walkthrough.md](walkthrough.md). For a host install, read [quickstart.md](quickstart.md).
++
++Nothing here touches a real network. The routers are containers on a Docker bridge, the addresses are documentation ranges (RFC 5737), and the ASNs are the private-use 64512 and the documentation values 64496 and 64497. The mode stays `observe` from start to stop. Every command block after the clone runs in CI, in order, in the `e2e` job (`lab/e2e-docs.sh docs/demo.md`).
++
++You need Linux with Docker Engine, the Compose plugin, `git`, `curl`, and nothing else on `127.0.0.1:18080` or the `192.0.2.0/24` bridge (stop the walkthrough lab first).
++
++| Lab | Address | AS | Role |
++|---|---|---|---|
++| `edge` | 192.0.2.254 | 64512 | FRR edge router |
++| `transit-a` | 192.0.2.21 | 64496 | sends `198.51.100.0/24`; the edge's native exit |
++| `transit-b` | 192.0.2.22 | 64497 | sends the same prefix, prepended, so it is not best |
++| `packeteer` | 192.0.2.10 | 64512 | iBGP to the edge; dashboard on <http://127.0.0.1:18080/> |
++
++The lab has no real transits to measure, so Packeteer uses the `fixed` prober: transit-a answers in 60 ms and transit-b in 20 ms. No probe packet leaves the bridge.
++
++## 1. Start the lab (1 minute)
++
++Say: one command starts a router, two transits, and Packeteer, in observe.
++
++```sh
++git clone https://github.com/GrandArcher/Packeteer.git
++cd Packeteer
++```
++<!-- ci-skip: CI runs the guide from its own checkout -->
++
++Pick a password for this run. The script uses it for the `admin` account and never prints it. Generate one rather than typing one on camera:
++
++```sh
++PACKETEER_DEMO_PASSWORD=$(head -c 18 /dev/urandom | od -An -tx1 | tr -d ' \n')
++export PACKETEER_DEMO_PASSWORD
++./scripts/demo.sh
++```
++<!-- ci-expect: Packeteer demo is up (mode: observe; nothing is announced). -->
++<!-- ci-expect: dashboard: http://127.0.0.1:18080/ -->
++
++The calls below use this helper. It sends the password through standard input, so it is not on a command line or in the shell history:
++
++```sh
++api() { printf 'user = "admin:%s"\n' "$PACKETEER_DEMO_PASSWORD" | curl -fsS -K - "http://127.0.0.1:18080$1"; }
++```
++
++Wait for the edge's iBGP session to Packeteer, about 30 seconds:
++
++```sh
++docker exec pkd-edge vtysh -c 'show bgp neighbors 192.0.2.10'
++```
++<!-- ci-retry: 120 -->
++<!-- ci-expect: BGP state = Established -->
++
++## 2. Sign in and show Overview (1 minute)
++
++Say: sign-in is on by default. Open <http://127.0.0.1:18080/>, sign in as `admin`, and paste the password from `printenv PACKETEER_DEMO_PASSWORD` (keep that terminal off screen). Overview shows the mode, observe. The same fact over the API:
++
++```sh
++api /api/overview
++```
++<!-- ci-expect: "mode":"observe" -->
++
++Without credentials the API refuses:
++
++```sh
++curl -sS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:18080/api/prefixes
++```
++<!-- ci-expect: 401 -->
++
++## 3. Show a recommendation (1 minute)
++
++Say: Packeteer learned `198.51.100.0/24` over iBGP. Today's exit is transit-a. It measured both providers, and transit-b is 40 ms faster, past the 15 ms threshold. On the dashboard this is the prefix card and the Improvements page.
++
++```sh
++api "/api/prefixes?limit=500"
++```
++<!-- ci-retry: 60 -->
++<!-- ci-expect: "prefix":"198.51.100.0/24" -->
++<!-- ci-expect: "in_rib":true -->
++<!-- ci-expect: "rib_provider":"transit-a" -->
++<!-- ci-expect: "recommended":"transit-b" -->
++
++```sh
++api /api/improvements
++```
++<!-- ci-retry: 30 -->
++<!-- ci-expect: "provider":"transit-b" -->
++
++Say: it is a recommendation and nothing more. The edge has no route from Packeteer, and the prefix still goes out transit-a, with no Packeteer community on it:
++
++```sh
++docker exec pkd-edge vtysh -c 'show bgp ipv4 unicast neighbors 192.0.2.10 routes'
++```
++<!-- ci-absent: 198.51.100.0/24 -->
++
++```sh
++docker exec pkd-edge vtysh -c 'show bgp ipv4 unicast 198.51.100.0/24'
++```
++<!-- ci-expect: 192.0.2.21 from 192.0.2.21 -->
++<!-- ci-absent: 64512:666 -->
++
++## 4. Preview what inject would do (1 minute)
++
++Say: before anyone turns inject on, the blast-radius preview shows what it would do. On the dashboard it is Settings, Blast radius. `GET /api/blast` decides the latest round again on a copy, as if the mode were inject, and compares that with what is on the wire ([onboarding.md](onboarding.md#blast-radius-preview)). The running mode does not change and nothing is announced. This lab has no allowlist, so inject would add no route, and the report warns about it:
++
++```sh
++api /api/blast
++```
++<!-- ci-retry: 60 -->
++<!-- ci-expect: "add":[] -->
++<!-- ci-expect: "code":"no_allowlist" -->
++<!-- ci-expect: the allowlist is empty, so inject announces nothing -->
++
++Overview still says observe:
++
++```sh
++api /api/overview
++```
++<!-- ci-expect: "mode":"observe" -->
++
++The preflight checks that gate inject are on the same Settings page, and the API says they are available:
++
++```sh
++api /api/preflight
++```
++<!-- ci-expect: "available":true -->
++
++Say: turning inject on is a config change that Packeteer refuses until those checks pass, and it needs an allowlist. This demo never does either; the walkthrough does, in the lab.
++
++## 5. Stop the lab (under 1 minute)
++
++```sh
++./scripts/demo.sh stop
++```
++
++```sh
++docker ps -a --filter name=pkd- --format '{{.Names}}'
++```
++<!-- ci-absent: pkd- -->
++
++Every container and the lab network are gone. Nothing was ever announced, so there is nothing to withdraw.
++
++## Where next
++
++- Host install, observe only: [quickstart.md](quickstart.md).
++- Observe, suggest, inject, and the rollback, on a simulated network: [walkthrough.md](walkthrough.md).
++- What the lab contains: [lab/README.md](../lab/README.md#one-command-demo-586).
+diff --git a/lab/README.md b/lab/README.md
+index 06327c73..e1f1f8c9 100644
+--- a/lab/README.md
++++ b/lab/README.md
+@@ -107,9 +107,9 @@ It checks: (1) every member pulls both peers without failures and the edge holds
+ ./scripts/demo.sh stop   # remove the containers
+ ```
+ 
+-It starts the walkthrough's topology in `lab/docker-compose-demo.yml`: the FRR edge from `lab/frr-walkthrough`, the BMP lab's two transits, and Packeteer reading `lab/packeteer-demo.yaml` (`mode: observe`, the `fixed` prober, so no probe packet leaves the bridge). The dashboard is on <http://127.0.0.1:18080/>, published on loopback only. Sign in as `admin` with the password the script prints: it generates one per run, or uses `PACKETEER_DEMO_PASSWORD` when you set it. Without the script, `docker compose -f lab/docker-compose-demo.yml up --build` makes Packeteer generate a first-run password (`docker exec pkd-packeteer cat /var/lib/packeteer/first-run-admin-password`, [docs/auth.md](../docs/auth.md)). About 30 seconds after the start, Overview and `/api/improvements` recommend transit-b for `198.51.100.0/24` while the edge keeps transit-a, and the edge holds no route from Packeteer. The lab uses the same 192.0.2.0/24 bridge as the walkthrough, so stop one before starting the other; the walkthrough ([docs/walkthrough.md](../docs/walkthrough.md)) goes on to suggest and inject.
++It starts the walkthrough's topology in `lab/docker-compose-demo.yml`: the FRR edge from `lab/frr-walkthrough`, the BMP lab's two transits, and Packeteer reading `lab/packeteer-demo.yaml` (`mode: observe`, the `fixed` prober, so no probe packet leaves the bridge). The dashboard is on <http://127.0.0.1:18080/>, published on loopback only. Sign in as `admin` with the password the script prints: it generates one per run, or uses `PACKETEER_DEMO_PASSWORD` when you set it. Without the script, `docker compose -f lab/docker-compose-demo.yml up --build` makes Packeteer generate a first-run password (`docker exec pkd-packeteer cat /var/lib/packeteer/first-run-admin-password`, [docs/auth.md](../docs/auth.md)). About 30 seconds after the start, Overview and `/api/improvements` recommend transit-b for `198.51.100.0/24` while the edge keeps transit-a, and the edge holds no route from Packeteer. The lab uses the same 192.0.2.0/24 bridge as the walkthrough, so stop one before starting the other; [docs/demo.md](../docs/demo.md) is a script to follow on screen over it, and the walkthrough ([docs/walkthrough.md](../docs/walkthrough.md)) goes on to suggest and inject.
+ 
+-`lab/e2e-demo.sh` (CI, `e2e` job) runs that command and checks the iBGP session, the learned prefix and recommendation, `mode` observe, no route from Packeteer on the edge, a `401` without credentials, the dashboard published on loopback only, and that `stop` removes every container.
++`lab/e2e-demo.sh` (CI, `e2e` job) runs that command and checks the iBGP session, the learned prefix and recommendation, `mode` observe, no route from Packeteer on the edge, a `401` without credentials, the dashboard published on loopback only, and that `stop` removes every container. The `e2e` job also runs every command block of `docs/demo.md` (`lab/e2e-docs.sh docs/demo.md`).
+ 
+ `lab/e2e-docs.sh` runs a guide's shell blocks, in order, as CI steps (#50). `lab/doccmds` turns the blocks and the hidden `<!-- ci-expect: ... -->`, `ci-absent`, `ci-retry`, `ci-fails`, and `ci-skip` comments after them into a bash script. The docker job runs [docs/quickstart.md](../docs/quickstart.md) and [docs/troubleshooting.md](../docs/troubleshooting.md) against the image it built (tagged as `:edge` and as every release version the guide or `docker-compose.yml` pins, with `raw.githubusercontent.com` downloads of `main` or a `v<version>` tag read from the checkout and `docker pull` refused).
+ 
+diff --git a/lab/doccmds/demo_test.go b/lab/doccmds/demo_test.go
+index e613216f..fcb17fd1 100644
+--- a/lab/doccmds/demo_test.go
++++ b/lab/doccmds/demo_test.go
+@@ -82,3 +82,61 @@ func TestDemoComposeAndScripts(t *testing.T) {
+ 		}
+ 	}
+ }
++
++// The camera script (#590) runs the one-command demo and stays in observe:
++// no mode change, no announcer, no committed or printed password, and only
++// the clone is skipped in CI.
++func TestDemoGuideStaysObserve(t *testing.T) {
++	steps, err := Parse(strings.NewReader(repoFile(t, "docs/demo.md")))
++	if err != nil {
++		t.Fatal(err)
++	}
++	all := ""
++	for _, s := range steps {
++		if s.Skip != "" && !strings.Contains(s.Body, "git clone") {
++			t.Errorf("demo step at line %d is skipped (%s); only the clone may be", s.Line, s.Skip)
++		}
++		all += s.Body + "\n"
++	}
++	for _, bad := range []string{"mode: inject", "mode: suggest", "sed ", "announcer", "echo \"$PACKETEER_DEMO_PASSWORD", "printenv", "admin:admin", "-u admin"} {
++		if strings.Contains(all, bad) {
++			t.Errorf("demo commands contain %q", bad)
++		}
++	}
++	for _, want := range []string{"./scripts/demo.sh\n", "./scripts/demo.sh stop", "/api/overview", "/api/prefixes", "/api/improvements", "/api/blast", "neighbors 192.0.2.10 routes"} {
++		if !strings.Contains(all, want) {
++			t.Errorf("demo commands lack %q", want)
++		}
++	}
++	var checks []string
++	for _, s := range steps {
++		checks = append(checks, s.Expect...)
++		checks = append(checks, s.Absent...)
++	}
++	joined := strings.Join(checks, "\n")
++	for _, want := range []string{`"mode":"observe"`, `"recommended":"transit-b"`, "64512:666", "198.51.100.0/24", `"code":"no_allowlist"`} {
++		if !strings.Contains(joined, want) {
++			t.Errorf("demo checks lack %q", want)
++		}
++	}
++}
++
++// README points a clone at the demo, its script, the host install, and the
++// inject walkthrough.
++func TestReadmePointsAtDemo(t *testing.T) {
++	readme := repoFile(t, "README.md")
++	i := strings.Index(readme, "## Try the demo")
++	j := strings.Index(readme, "## Install")
++	if i < 0 || j < i {
++		t.Fatal("README has no Try the demo section before Install")
++	}
++	section := readme[i:j]
++	for _, want := range []string{"./scripts/demo.sh", "./scripts/demo.sh stop", "docs/demo.md", "docs/quickstart.md", "docs/walkthrough.md"} {
++		if !strings.Contains(section, want) {
++			t.Errorf("README demo section lacks %q", want)
++		}
++	}
++	if strings.Contains(section, "mode: inject") {
++		t.Error("README demo section shows inject")
++	}
++}
+diff --git a/lab/doccmds/main_test.go b/lab/doccmds/main_test.go
+index 42d1a056..4aad4284 100644
+--- a/lab/doccmds/main_test.go
++++ b/lab/doccmds/main_test.go
+@@ -129,7 +129,7 @@ func repoFile(t *testing.T, rel string) string {
+ }
+ 
+ // guides are the pages CI runs, and where (workflow job) it runs them.
+-var guides = []string{"docs/quickstart.md", "docs/walkthrough.md", "docs/troubleshooting.md"}
++var guides = []string{"docs/quickstart.md", "docs/walkthrough.md", "docs/troubleshooting.md", "docs/demo.md"}
+ 
+ func TestGuidesParseAndRunInCI(t *testing.T) {
+ 	ci := repoFile(t, ".github/workflows/ci.yml")
+@@ -259,7 +259,7 @@ func docASN(n uint64) bool {
+ // and documentation or private ASNs only.
+ func TestGuidesUseDocumentationNumbers(t *testing.T) {
+ 	files := []string{
+-		"docs/quickstart.md", "docs/walkthrough.md", "docs/troubleshooting.md",
++		"docs/quickstart.md", "docs/walkthrough.md", "docs/troubleshooting.md", "docs/demo.md",
+ 		"docs/frr.md", "docs/junos.md", "docs/cisco.md", "docs/routers.md", "docs/mikrotik.md",
+ 		"lab/frr-walkthrough/frr.conf", "lab/packeteer-walkthrough.yaml", "lab/docker-compose-walkthrough.yml",
+ 		"lab/chr/edge.rsc", "lab/chr/packeteer.yaml", "lab/e2e-chr.sh",

@@ -1,0 +1,53 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 7296e698..b38ed4f1 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -53,11 +53,12 @@ jobs:
+         run: |
+           go test -c -o span.test ./internal/plugins/source/span/
+           sudo ./span.test -test.run AFPacket -test.v
+-      - name: eBPF data path on a veth pair (#229; root, kernel 6.6 or newer, burst unsampled flow count, same span metrics as AF_PACKET, fallback, CPU per Gbit)
++      - name: eBPF data path on a veth pair (#229; root, kernel 6.6 or newer, burst unsampled flow count, 20 runs of the burst test (#651), same span metrics as AF_PACKET, fallback, CPU per Gbit)
+         run: |
+           sudo ./span.test -test.run 'EBPF' -test.v
+           go test -c -o flow.test ./internal/plugins/source/flow/
+           sudo ./flow.test -test.run 'EBPF' -test.v
++          sudo ./flow.test -test.run '^TestEBPFSeesBurstThatSampledFlowMisses$' -test.count=20
+ 
+   race:
+     runs-on: ubuntu-latest
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 716d9f27..69a55568 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -11,6 +11,10 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
+ - `scripts/demo.sh --report` runs the whole demo and prints an address-free pass/fail block for a field report, to record a Docker Desktop run (#646).
+ - Performance moves, static rules, and `/api/pins` onto an exchange peer need `exchanges[].port` headroom; a pin that does not fit is refused naming the port; `over_commit` flag (#643).
+ 
++### Fixed
++
++- eBPF lab veth pair gets fixed MACs, so udev's persistent MAC no longer flushes the burst test's static neighbor mid-test; CI runs that test 20 times (#651).
++
+ ## [1.5.0] - 2026-11-16
+ 
+ The v1.5 release adds a field-report kit, an opt-in read-only router check, and kernel-side tracking in the eBPF span path, and proves RPKI-invalid only paths and federation push in lab jobs; the two new config keys, `preflight.router_check` and `span` `ebpf_track`, are off by default, and the shipped config stays `mode: observe` with injection off by default.
+diff --git a/internal/ebpfpath/labtest/labtest.go b/internal/ebpfpath/labtest/labtest.go
+index 83199271..a2beff32 100644
+--- a/internal/ebpfpath/labtest/labtest.go
++++ b/internal/ebpfpath/labtest/labtest.go
+@@ -37,7 +37,14 @@ func Veth(t *testing.T, addr string) (string, string) {
+ 	t.Helper()
+ 	a, b := "pkv0", "pkv1"
+ 	_ = exec.Command("ip", "link", "del", a).Run()
+-	ip(t, "link", "add", a, "type", "veth", "peer", "name", b)
++	// Fixed addresses, not the kernel's random ones: udev on the CI runners
++	// replaces a random MAC (MACAddressPolicy=persistent) some time after
++	// the link appears, and the address change flushes the device's
++	// neighbor table, permanent entries included (#651). The second end
++	// must not own the span fixtures' destination MAC (02:00:00:00:00:02),
++	// or their injected frames would enter its IP stack instead of being
++	// dropped there.
++	ip(t, "link", "add", a, "address", "02:00:00:00:01:01", "type", "veth", "peer", "name", b, "address", "02:00:00:00:01:02")
+ 	t.Cleanup(func() { _ = exec.Command("ip", "link", "del", a).Run() })
+ 	ip(t, "addr", "add", addr, "dev", a)
+ 	ip(t, "link", "set", a, "up")
