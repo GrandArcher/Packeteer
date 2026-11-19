@@ -4,10 +4,6 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ## [Unreleased]
 
-### Fixed
-
-- `TestOneActiveAndStandbyNeverActive` runs at a 3s lease ttl so a stalled renewal under `-race` on a shared runner no longer steps the holder down; elector unchanged (#681).
-
 ## [1.8.0] - 2026-11-19
 
 The v1.8 release adds an RIS and RouteViews origin signal for RPKI-invalid only paths, Settings forms for six more blocks, herd phase 2 in the lab, and lab proof of the registry delete push, with no new capability row (138 done); the shipped config stays `mode: observe` and injection stays off by default.
@@ -23,6 +19,10 @@ The v1.8 release adds an RIS and RouteViews origin signal for RPKI-invalid only 
 - With `herd.hub` set, the node now relays a peer list and learns up to `herd.hub.exchange_peers` (default 16) members, whose keys may pull shared records; advisory only (#672).
 - `registry.interval` may be 1m-168h while `registry.irr.source` is `TEST`; the `registry` CI job uses it to prove the stale-object delete push and its wrong-digest refusal in the lab (#673).
 - `upgrade-release` CI job starts from the v1.7.0 image, pinned by digest, instead of v1.6.0; the downgrade step still removes no key (#669).
+
+### Fixed
+
+- `TestOneActiveAndStandbyNeverActive` runs at a 3s lease ttl so a stalled renewal under `-race` on a shared runner no longer steps the holder down; elector unchanged (#681).
 
 ## [1.7.0] - 2026-11-18
 
