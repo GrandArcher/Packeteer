@@ -110,7 +110,10 @@ func (x *Exchange) Offer(via string, list []Relayed, now time.Time) int {
 			refuse(fmt.Errorf("entry asn %d: the hub pinned this ASN to other keys", e.ASN))
 			continue
 		}
-		seen := now.Add(-time.Duration(max(r.AgeSeconds, 0)) * time.Second)
+		// A larger age than Life ages the entry out anyway; the clamp also
+		// keeps a huge age_s from overflowing into the future.
+		age := min(max(r.AgeSeconds, 0), int64(x.o.Life/time.Second)+1)
+		seen := now.Add(-time.Duration(age) * time.Second)
 		cur, ok := x.known[e.ASN]
 		switch {
 		case !ok && len(x.known) >= x.o.Max:
