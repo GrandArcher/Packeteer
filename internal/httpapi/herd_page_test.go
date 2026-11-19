@@ -47,12 +47,12 @@ func (fixtureHerd) Overview(context.Context) (herd.Overview, error) {
 }
 
 func (fixtureHerd) Events(context.Context, string) (herd.Events, error) {
-	local := herd.EventVantage{VantageRef: pageRef("local", 64501, "US", 64520), LossPct: 40, RTTAvgMs: f64(90), AgeSeconds: 120, Degraded: true}
-	a := herd.EventVantage{VantageRef: pageRef("key-a", 64502, "DE", 64520), LossPct: 25, RTTAvgMs: f64(120), AgeSeconds: 180, Degraded: true}
-	b := herd.EventVantage{VantageRef: pageRef("key-b", 64503, "JP", 64521), LossPct: 30, RTTAvgMs: f64(200), AgeSeconds: 240, Degraded: true}
-	c := herd.EventVantage{VantageRef: pageRef("key-c", 64504, "BR", 64521), LossPct: 1, RTTAvgMs: f64(80), AgeSeconds: 300}
-	route := herd.EventVantage{VantageRef: pageRef("key-a", 64502, "DE", 64520), LossPct: 50, RTTAvgMs: f64(70), AgeSeconds: 120, Degraded: true}
-	return herd.Events{Enabled: true, AsOf: pageNow, WindowSeconds: 900, LossPct: 5, Basis: herd.Basis, Targets: 3, Events: []herd.EventRow{
+	local := herd.EventVantage{VantageRef: pageRef("local", 64501, "US", 64520), LossPct: 40, RTTAvgMs: f64(90), AgeSeconds: 120, Degraded: true, Counted: true}
+	a := herd.EventVantage{VantageRef: pageRef("key-a", 64502, "DE", 64520), LossPct: 25, RTTAvgMs: f64(120), AgeSeconds: 180, Degraded: true, Counted: true}
+	b := herd.EventVantage{VantageRef: pageRef("key-b", 64503, "JP", 64521), LossPct: 30, RTTAvgMs: f64(200), AgeSeconds: 240, Degraded: true, Counted: true}
+	c := herd.EventVantage{VantageRef: pageRef("key-c", 64504, "BR", 64521), LossPct: 1, RTTAvgMs: f64(80), AgeSeconds: 300, Counted: true}
+	route := herd.EventVantage{VantageRef: pageRef("key-a", 64502, "DE", 64520), LossPct: 50, RTTAvgMs: f64(70), AgeSeconds: 120, Degraded: true, Counted: true}
+	return herd.Events{Enabled: true, AsOf: pageNow, WindowSeconds: 900, LossPct: 5, Basis: herd.BasisPinned, Targets: 3, Events: []herd.EventRow{
 		{Target: herd.Target{Kind: "origin_asn", Value: "64510"}, Reporting: 4, Degraded: 3,
 			ByProvider: []herd.ProviderCount{{ProviderASN: 64520, Reporting: 3, Degraded: 2}, {ProviderASN: 64521, Reporting: 2, Degraded: 1}},
 			Vantages:   []herd.EventVantage{local, a, b, c}},

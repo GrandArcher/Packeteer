@@ -117,7 +117,10 @@ type obs struct {
 	member   string
 	asn      uint32
 	identity string
-	time     time.Time
+	// counted is false for a member the identity source did not verify:
+	// its rows are shown and never counted.
+	counted bool
+	time    time.Time
 	// fetched and generated are set for a pulled record only.
 	fetched, generated *time.Time
 }
@@ -156,13 +159,37 @@ func (o obs) row(now time.Time) VantageRow {
 	}
 }
 
+// Identity labels of a member in the views.
+const (
+	IdentityLocal      = "local"
+	IdentityPinned     = "pinned_key"
+	IdentityRPKI       = "rpki"
+	IdentityUnverified = "unverified"
+)
+
+// identityOf labels member ("local" for this node). verified is nil when
+// no identity source is configured: every peer is then a pinned key.
+func identityOf(member string, verified map[string]bool) string {
+	switch {
+	case member == "local":
+		return IdentityLocal
+	case verified == nil:
+		return IdentityPinned
+	case verified[member]:
+		return IdentityRPKI
+	}
+	return IdentityUnverified
+}
+
 // decodeRows reads the stored rows. self is this node's ASN; peers maps key
-// id to the peer's claimed ASN. Rows that do not decode, and rows from a
-// member that is not a configured peer (a removed one), are left out.
-func decodeRows(rows []plugin.HerdRecord, self uint32, peers map[string]uint32) []obs {
+// id to the peer's claimed ASN; verified is the members the identity
+// source verified ("local" for this node), nil without one. Rows that do
+// not decode, and rows from a member that is not a configured peer (a
+// removed one), are left out.
+func decodeRows(rows []plugin.HerdRecord, self uint32, peers map[string]uint32, verified map[string]bool) []obs {
 	out := make([]obs, 0, len(rows))
 	for _, row := range rows {
-		o := obs{member: "local", asn: self, identity: "local", time: row.Time}
+		o := obs{member: "local", asn: self, identity: IdentityLocal, counted: verified == nil || verified["local"], time: row.Time}
 		if row.Member == "" {
 			if json.Unmarshal(row.Body, &o.rec) != nil {
 				continue
@@ -176,7 +203,8 @@ func decodeRows(rows []plugin.HerdRecord, self uint32, peers map[string]uint32) 
 			if json.Unmarshal(row.Body, &pb) != nil {
 				continue
 			}
-			o.rec, o.member, o.asn, o.identity = pb.Record, row.Member, peerASN, "pinned_key"
+			o.rec, o.member, o.asn = pb.Record, row.Member, peerASN
+			o.identity, o.counted = identityOf(row.Member, verified), verified == nil || verified[row.Member]
 			o.fetched, o.generated = &pb.FetchedAt, &pb.GeneratedAt
 		}
 		out = append(out, o)
@@ -184,10 +212,10 @@ func decodeRows(rows []plugin.HerdRecord, self uint32, peers map[string]uint32) 
 	return out
 }
 
-// BuildView groups the stored records that match raw by vantage. self is
-// this node's ASN; peers maps key id to the peer's claimed ASN. Rows from a
-// member that is not a configured peer (a removed one) are left out.
-func BuildView(ctx context.Context, st plugin.HerdStore, raw string, self uint32, peers map[string]uint32, now time.Time) (VantageView, error) {
+// BuildView groups the stored records that match raw by vantage. self,
+// peers, and verified are as for decodeRows. Rows from a member that is
+// not a configured peer (a removed one) are left out.
+func BuildView(ctx context.Context, st plugin.HerdStore, raw string, self uint32, peers map[string]uint32, verified map[string]bool, now time.Time) (VantageView, error) {
 	v := VantageView{Enabled: true, AsOf: now, Vantages: []Vantage{}}
 	vals, err := url.ParseQuery(raw)
 	if err != nil {
@@ -220,7 +248,7 @@ func BuildView(ctx context.Context, st plugin.HerdStore, raw string, self uint32
 		rows, v.Truncated = rows[:viewRows], true
 	}
 	groups := map[vkey]*Vantage{}
-	for _, o := range decodeRows(rows, self, peers) {
+	for _, o := range decodeRows(rows, self, peers, verified) {
 		vr := o.row(now)
 		k := o.vkey()
 		g := groups[k]

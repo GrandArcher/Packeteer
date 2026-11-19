@@ -53,6 +53,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/plugins/scorer/weighted"
 	"github.com/GrandArcher/Packeteer/internal/plugins/scorer/weights"
 	"github.com/GrandArcher/Packeteer/internal/plugins/source/flow"
+	"github.com/GrandArcher/Packeteer/internal/plugins/source/herdhints"
 	"github.com/GrandArcher/Packeteer/internal/plugins/source/outage"
 	"github.com/GrandArcher/Packeteer/internal/plugins/source/span"
 	"github.com/GrandArcher/Packeteer/internal/plugins/source/static"
@@ -151,6 +152,7 @@ func TestConfigDocCoversStructs(t *testing.T) {
 		config.Registry{},
 		config.RegistryIRR{},
 		invcommon.Common{},
+		herdhints.Config{},
 	) {
 		if !strings.Contains(text, "`"+key+"`") {
 			missing = append(missing, key)

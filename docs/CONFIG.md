@@ -655,8 +655,9 @@ herd:
   share:
     granularity: origin_asn         # default; "route" names exact learned prefixes
     classes: [measurements]         # required; "paths" adds the AS path
-    sources: [static, vip, outage]  # default; flow and span need an explicit entry and cannot be shared at route level
+    sources: [static, vip, outage]  # default; flow and span need an explicit entry, and identity at route level
     discovery: query_only           # default; "listing" lets a puller page through everything
+    crowd_k: 2                      # route level: a flow or span only route waits for this many verified ASNs
     exclude:
       prefixes: [203.0.113.0/24]    # equal, inside, or covering routes are never shared
       asns: [64501]                 # as origin or anywhere in the AS path
@@ -671,6 +672,10 @@ herd:
     url: https://hub.example.net/herd.json
     refresh: 6h                     # 10m to 168h
     max_peers: 16                   # 1 to 64
+    exchange_peers: 16              # peers learned by peer exchange, 1 to 64
+  identity:                         # optional RPKI checklist source, see herd.md
+    url: https://rpki.example.net/herd-rsc.json
+    refresh: 1h                     # 10m to 24h
   outside:                          # optional, each source off until chosen; dashboard only
     atlas: {enabled: true, measurements: [1001], probes: [6001], refresh: 15m}
     ris: true                       # needs leak_watch with a rislive source
@@ -679,6 +684,8 @@ herd:
 ```
 
 `share` chooses what leaves the box: `granularity` (`origin_asn` or `route`), `classes` (`measurements`, `paths`), `sources` (target source types), `discovery` (`query_only` or `listing`), and `exclude` with `prefixes` and `asns`. `retention_days` is how long records are kept and served. `vantage.country` is the code you declare. `key_file` is this node's Ed25519 key. Each of `peers` has a `url` and the `key` you pin. With `preview_only` set to `true` it stores records and serves the preview on `GET /api/herd/preview`, but listens and pulls nothing; it takes no `listen` or `peers`. Otherwise `listen` and either 1 to 16 `peers` or a `hub` are required. `hub.url` is an https address of a hub list ([herd-hub.md](herd-hub.md)); its entries are verified here and added as peers (at most `max_peers`) next to the static ones, and their keys may connect to the pull API (trust: herd-hub.md). `hub` is refused with `preview_only`. `GET /api/herd` shows this node's `public_key` to give to the peers that pin it. Private-use and reserved ASNs are removed from shared AS paths. The operator's own and customer prefixes (the `inbound` prefixes, the `flow` source's `transit.customers` and `problems.local`, and the `span` source's `local`) are never shared.
+
+Phase 2 (#672): with a hub, each peer's peer list is read and up to `exchange_peers` more members under `hub` are learned from it ([peer exchange](herd.md#peer-exchange)). `identity.url` is an https address of validated RPKI Signed Checklists ([identity](herd.md#identity)), fetched every `refresh`; only the members it verifies are counted, and it is refused with `preview_only`. `crowd_k` under `share` (default 2, 1 to 64) is the crowd threshold for routes only `flow` or `span` listed at route level, which needs `identity`.
 
 `outside` picks the outside intelligence on the [herd page](herd.md#dashboard), each source on its own switch and off by default. `atlas` reads public RIPE Atlas data without an API key: up to 4 public `measurements` (ping results only) and up to 4 of your own hosted `probes`, every `refresh` (default 15m, 15m to 24h); it needs `enabled: true` and at least one id. `ris` shows what the `leak_watch` `rislive` sources saw and needs one; `rpki` shows the origin validation of a route from the `rpki` block and needs it; `links` shows the `linkouts` sites for the chosen prefix or ASN. A source whose block is missing is a config error. None of this is herd data, a vantage, or an input to `Decide`.
 
@@ -1444,6 +1451,20 @@ Off unless this source is listed. Critical prefixes, and prefixes whose learned 
 | `max_targets` | 100 | 1-100000. Cap on configured prefixes plus ASN matches. The list is truncated and a warning is logged. The expansion is rebuilt only when the RIB changes. |
 
 At least one prefix or ASN is required. The prefix list cannot be longer than `max_targets`. A prefix that is also returned by an earlier source keeps that source's host. A later interval wins only when it is shorter than the interval already chosen, and an unset interval means `probe.interval`. Listing a transit ASN does not turn the whole table into targets.
+
+### Source `herd_hints`
+
+Probes the routes other herd members see degraded (#672, [herd.md](herd.md#hints)). It needs `herd` enabled and serving. It only adds probe targets: herd data never reaches `Decide`, and a hinted route moves only on this node's own measurements under the normal thresholds, allowlist, and cap.
+
+```yaml
+sources:
+  - type: herd_hints
+    config:
+      min_vantages: 2   # other members (verified ones with herd.identity) that see loss, 1 to 64
+      max_targets: 16   # hinted routes probed at once, 1 to 1024
+```
+
+`min_vantages` is how many other members must see a route degraded before it is probed; `max_targets` caps the hinted routes.
 
 ### Source `outage`
 

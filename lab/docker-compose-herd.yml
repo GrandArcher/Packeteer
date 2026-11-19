@@ -1,16 +1,19 @@
-# Herd lab (#260, #659). Three members, each a Packeteer instance in observe
-# mode in its own AS (64496, 64497, 64498) behind its own FRR edge. Each edge
-# learns 192.0.2.128/26 (path "64501 64510") and 192.0.2.192/27 (path
-# "64501 64511") from one simulated upstream. The upstream owns 192.0.2.130,
-# so probes of the first are answered; dark owns 192.0.2.200 in the second
-# and answers no ping, so every member sees loss there. herd-hub is the
-# local hub (lab/herdhub), not a public repository: members find each other
-# only through the list it serves over https, trusted through the lab CA in
-# SSL_CERT_FILE. Documentation addresses (RFC 5737) and documentation ASNs
-# only. Brought up by lab/e2e-herd.sh, which sets PACKETEER_LAB_DIR: keys/
-# holds each member's herd key (from lab/mkherdkeys), a.yaml, b.yaml, c.yaml
-# the rendered configs, certs/ the lab CA and hub certificate (lab/mkcerts),
-# and hub/ the hub binary and its list.
+# Herd lab (#260, #659, #672). Three members, each a Packeteer instance in
+# observe mode in its own AS (64496, 64497, 64498) behind its own FRR edge.
+# Each edge learns 192.0.2.128/26 (path "64501 64510"), 192.0.2.192/27
+# (path "64501 64511"), and 192.0.2.224/28 (path "64501 64509") from one
+# simulated upstream. The upstream owns 192.0.2.130, so probes of the first
+# are answered; dark owns 192.0.2.200 in the second and answers no ping, and
+# nothing owns the third, so every member that probes them sees loss.
+# herd-hub is the local hub (lab/herdhub), not a public repository: it
+# serves the hub list and the RPKI stand-in over https, trusted through the
+# lab CA in SSL_CERT_FILE, and runs the seed node (AS64499) the list names,
+# whose peer list is how members find each other. Documentation addresses
+# (RFC 5737) and documentation ASNs only. Brought up by lab/e2e-herd.sh,
+# which sets PACKETEER_LAB_DIR: keys/ holds the herd keys (from
+# lab/mkherdkeys), a.yaml to d.yaml the rendered configs, certs/ the lab CA
+# and hub certificate (lab/mkcerts), hub/ the hub binary, list, and
+# checklists, and relay/ the entries the seed relays.
 name: packeteer-e2e-herd
 x-frr: &frr
   image: quay.io/frrouting/frr:10.2.4
@@ -33,10 +36,14 @@ x-member: &member
 services:
   herd-hub:
     image: alpine:3.22
-    command: ["/hub/herdhub", "-cert", "/certs/herd-hub.crt", "-key", "/certs/herd-hub.key", "-list", "/hub/herd.json"]
+    command: ["/hub/herdhub", "-cert", "/certs/herd-hub.crt", "-key", "/certs/herd-hub.key", "-list", "/hub/herd.json",
+      "-rsc", "/hub/rsc.json", "-relay-config", "/etc/packeteer/config.yaml", "-relay", "/relay"]
     volumes:
       - ${PACKETEER_LAB_DIR}/hub:/hub:ro
       - ${PACKETEER_LAB_DIR}/certs:/certs:ro
+      - ${PACKETEER_LAB_DIR}/d.yaml:/etc/packeteer/config.yaml:ro
+      - ${PACKETEER_LAB_DIR}/keys:/etc/packeteer/herd:ro
+      - ${PACKETEER_LAB_DIR}/relay:/relay:ro
     networks:
       lab:
         ipv4_address: 192.0.2.20
@@ -53,7 +60,7 @@ services:
     hostname: upstream
     entrypoint: ["/bin/sh", "-c", "ip addr add 192.0.2.130/32 dev lo && exec /bin/sh /lab/frr-start.sh"]
     environment:
-      FRR_EXPECT: "router bgp 64501;network 192.0.2.128/26;network 192.0.2.192/27;route-map behind-origin out"
+      FRR_EXPECT: "router bgp 64501;network 192.0.2.128/26;network 192.0.2.192/27;network 192.0.2.224/28;route-map behind-origin out"
     volumes:
       - ./frr-herd-upstream:/etc/frr
       - ./frr-start.sh:/lab/frr-start.sh:ro

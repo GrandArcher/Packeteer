@@ -46,6 +46,11 @@ type PullerOptions struct {
 	Active func() bool
 	// Jitter returns a number in [0, 1). Nil uses math/rand.
 	Jitter func() float64
+	// Exchange, when set, takes the entries in each peer's peer list, and
+	// Learned is called after every round, so learned peers are applied and
+	// silent ones age out.
+	Exchange *Exchange
+	Learned  func()
 }
 
 // PeerStatus is the state of one peer for the status API.
@@ -63,6 +68,15 @@ type PeerStatus struct {
 	RetryAt     time.Time `json:"retry_at,omitzero"`
 	Pulled      uint64    `json:"records_pulled"`
 	Rejected    uint64    `json:"records_rejected"`
+	// Verified is set when the identity source binds the peer's key to the
+	// ASN its status reports. Herd fills it from the identity source each
+	// time it reads the peers; the puller leaves it false.
+	Verified bool `json:"verified"`
+	// Relayed and RelayRefused count the entries of the peer's last peer
+	// list and how many of them were refused.
+	Relayed       int    `json:"relayed"`
+	RelayRefused  int    `json:"relay_refused"`
+	ExchangeError string `json:"exchange_error,omitempty"`
 }
 
 type peer struct {
@@ -73,6 +87,8 @@ type peer struct {
 	// wantASN, when set, is the ASN the hub entry claims; the peer's own
 	// status must say the same.
 	wantASN uint32
+	// entry is the peer's signed entry, relayed once the peer answered.
+	entry []byte
 
 	mu     sync.Mutex
 	st     PeerStatus
@@ -143,12 +159,12 @@ func NewPuller(o PullerOptions) (*Puller, error) {
 		if err != nil {
 			return nil, fmt.Errorf("herd peer %s: %w", cp.URL, err)
 		}
-		p.peers = append(p.peers, p.newPeer(cp.URL, ed25519.PublicKey(raw), SourceConfig, 0))
+		p.peers = append(p.peers, p.newPeer(cp.URL, ed25519.PublicKey(raw), SourceConfig, 0, nil))
 	}
 	return p, nil
 }
 
-func (p *Puller) newPeer(url string, pub ed25519.PublicKey, source string, wantASN uint32) *peer {
+func (p *Puller) newPeer(url string, pub ed25519.PublicKey, source string, wantASN uint32, entry []byte) *peer {
 	id := KeyID(pub)
 	tr := &http.Transport{
 		TLSClientConfig: &tls.Config{
@@ -169,7 +185,7 @@ func (p *Puller) newPeer(url string, pub ed25519.PublicKey, source string, wantA
 		tr.DialContext = (&net.Dialer{Timeout: p.lim.PullTimeout, Control: p.hubDial}).DialContext
 	}
 	return &peer{
-		url: url, id: id, pub: pub, wantASN: wantASN, since: map[uint32]time.Time{}, resume: map[uint32]resume{},
+		url: url, id: id, pub: pub, wantASN: wantASN, entry: entry, since: map[uint32]time.Time{}, resume: map[uint32]resume{},
 		client: &http.Client{
 			Transport:     tr,
 			Timeout:       p.lim.PullTimeout,
@@ -182,30 +198,68 @@ func (p *Puller) newPeer(url string, pub ed25519.PublicKey, source string, wantA
 // SetHub replaces the hub peers. A peer that stays keeps its state and
 // connection; one that leaves is closed.
 func (p *Puller) SetHub(hub []HubPeer) {
+	p.replace(func(source string) bool { return source == SourceHub || source == SourceSnapshot }, hub)
+}
+
+// SetExchange replaces the peers learned by peer exchange, the same way.
+func (p *Puller) SetExchange(peers []HubPeer) {
+	p.replace(func(source string) bool { return source == SourceExchange }, peers)
+}
+
+// replace swaps the peers whose source mine accepts for list.
+func (p *Puller) replace(mine func(source string) bool, list []HubPeer) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	old := map[[3]string]*peer{}
 	next := []*peer{}
 	for _, pe := range p.peers {
-		if pe.wantASN == 0 {
+		if !mine(pe.st.Source) {
 			next = append(next, pe)
 		} else {
 			old[[3]string{pe.id, pe.url, strconv.FormatUint(uint64(pe.wantASN), 10)}] = pe
 		}
 	}
-	for _, hp := range hub {
+	for _, hp := range list {
 		k := [3]string{KeyID(hp.Key), hp.URL, strconv.FormatUint(uint64(hp.ASN), 10)}
 		if pe, ok := old[k]; ok && pe.st.Source == hp.Source {
 			delete(old, k)
+			pe.mu.Lock()
+			pe.entry = hp.Entry
+			pe.mu.Unlock()
 			next = append(next, pe)
 		} else {
-			next = append(next, p.newPeer(hp.URL, hp.Key, hp.Source, hp.ASN))
+			next = append(next, p.newPeer(hp.URL, hp.Key, hp.Source, hp.ASN, hp.Entry))
 		}
 	}
 	for _, pe := range old {
 		pe.client.CloseIdleConnections()
 	}
 	p.peers = next
+}
+
+// Relay is this node's peer list: the signed entries of the peers that
+// answered within window, newest contact first, at most MaxRelayed.
+func (p *Puller) Relay(now time.Time, window time.Duration) []Relayed {
+	type item struct {
+		r  Relayed
+		ok time.Time
+	}
+	var items []item
+	for _, pe := range p.list() {
+		pe.mu.Lock()
+		ok, entry := pe.st.LastOK, pe.entry
+		pe.mu.Unlock()
+		if entry == nil || ok.IsZero() || now.Sub(ok) > window {
+			continue
+		}
+		items = append(items, item{Relayed{Entry: entry, AgeSeconds: int64(max(now.Sub(ok), 0) / time.Second)}, ok})
+	}
+	slices.SortStableFunc(items, func(a, b item) int { return b.ok.Compare(a.ok) })
+	out := make([]Relayed, 0, min(len(items), MaxRelayed))
+	for _, it := range items[:min(len(items), MaxRelayed)] {
+		out = append(out, it.r)
+	}
+	return out
 }
 
 func (p *Puller) list() []*peer {
@@ -293,6 +347,9 @@ func (p *Puller) Round(ctx context.Context) {
 	}
 	close(jobs)
 	wg.Wait()
+	if p.o.Learned != nil {
+		p.o.Learned()
+	}
 }
 
 type retryError struct{ after time.Duration }
@@ -356,6 +413,12 @@ func (p *Puller) pull(ctx context.Context, pe *peer, budget *atomic.Int64) error
 	pe.mu.Lock()
 	pe.st.ASN, pe.st.Country, pe.st.Granularity, pe.st.Discovery = st.ASN, st.Vantage, st.Granularity, st.Discovery
 	pe.mu.Unlock()
+	if p.o.Exchange != nil {
+		if err := take(); err != nil {
+			return err
+		}
+		p.exchange(ctx, pe)
+	}
 	pulled := 0
 	for _, a := range p.targets(pe, st) {
 		n, err := p.pullQuery(ctx, pe, a, take, p.lim.PeerRecordsPerPull-pulled)
@@ -369,6 +432,28 @@ func (p *Puller) pull(ctx context.Context, pe *peer, budget *atomic.Int64) error
 		}
 	}
 	return nil
+}
+
+// exchange reads pe's peer list and offers its entries. A peer whose list
+// cannot be read is still pulled; the error shows in its status.
+func (p *Puller) exchange(ctx context.Context, pe *peer) {
+	raw, err := p.get(ctx, pe, PathPeers)
+	var entries []Relayed
+	if err == nil {
+		entries, err = openPeerList(raw, pe)
+	}
+	refused := 0
+	if err == nil {
+		refused = p.o.Exchange.Offer(pe.id, entries, p.o.Now())
+	} else {
+		p.o.Trips.Add("exchange_failed", pe.id)
+	}
+	pe.mu.Lock()
+	pe.st.Relayed, pe.st.RelayRefused, pe.st.ExchangeError = len(entries), refused, ""
+	if err != nil {
+		pe.st.ExchangeError = err.Error()
+	}
+	pe.mu.Unlock()
 }
 
 // targets are the origin ASNs to query this pull. A listing peer is

@@ -28,7 +28,7 @@ func (b *boardHerd) Overview(context.Context) (herd.Overview, error) {
 
 func (b *boardHerd) Events(_ context.Context, raw string) (herd.Events, error) {
 	b.raw = raw
-	return herd.Events{Enabled: true, Basis: herd.Basis, Events: []herd.EventRow{{Target: herd.Target{Kind: "origin_asn", Value: "64510"}, Reporting: 4, Degraded: 3}}}, b.err
+	return herd.Events{Enabled: true, Basis: herd.BasisPinned, Events: []herd.EventRow{{Target: herd.Target{Kind: "origin_asn", Value: "64510"}, Reporting: 4, Degraded: 3}}}, b.err
 }
 
 func (b *boardHerd) Mesh(_ context.Context, raw string) (herd.Mesh, error) {

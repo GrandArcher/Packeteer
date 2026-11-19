@@ -89,6 +89,53 @@ func (f *fleet) seed() {
 	f.put("key-gone", "FR", 64520, 64510, "", min, 90, 10)
 }
 
+// With an identity source (#672) only verified members count: an
+// unverified member's rows are still listed, marked uncounted, and its
+// members row says it is not verified.
+func TestUnverifiedMembersAreShownAndNotCounted(t *testing.T) {
+	f := newFleet(t)
+	f.seed()
+	b := f.board()
+	b.Verified = map[string]bool{"local": true, peerA: true, peerC: true}
+	ev, err := b.Events(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ev.Basis != BasisRPKI || len(ev.Events) != 2 {
+		t.Fatalf("basis %q, events %+v", ev.Basis, ev.Events)
+	}
+	e := ev.Events[0]
+	// B (AS64503) sees loss but is not verified: 2 of 3, not 3 of 4.
+	if e.Value != "64510" || e.Reporting != 3 || e.Degraded != 2 || len(e.Vantages) != 5 {
+		t.Errorf("AS64510 = %d of %d with %d rows, want 2 of 3 with all 5 rows", e.Degraded, e.Reporting, len(e.Vantages))
+	}
+	for _, v := range e.Vantages {
+		if v.Counted == (v.ASN == 64503) {
+			t.Errorf("vantage %+v: counted must be false only for the unverified member", v)
+		}
+		if want := map[uint32]string{selfASN: IdentityLocal, 64503: IdentityUnverified}[v.ASN]; want != "" && v.Identity != want || want == "" && v.Identity != IdentityRPKI {
+			t.Errorf("vantage AS%d identity %q", v.ASN, v.Identity)
+		}
+	}
+	// Only unverified members see it: still listed, counted by nobody.
+	b.Verified = map[string]bool{"local": true}
+	ev, _ = b.Events(context.Background(), "")
+	for _, e := range ev.Events {
+		if e.Value == "198.51.100.0/24" && (e.Reporting != 0 || e.Degraded != 0 || len(e.Vantages) != 2) {
+			t.Errorf("route seen only by unverified members = %+v", e)
+		}
+	}
+	o, err := b.Overview(context.Background(), NodeStatus{Peers: []PeerStatus{{KeyID: peerA, ASN: 64502}, {KeyID: peerB, ASN: 64503}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range o.Members {
+		if m.Verified != m.Local || (!m.Local && m.Identity != IdentityUnverified) {
+			t.Errorf("member %+v", m)
+		}
+	}
+}
+
 func TestEventsCountMembersNotRecords(t *testing.T) {
 	f := newFleet(t)
 	f.seed()
@@ -96,7 +143,7 @@ func TestEventsCountMembersNotRecords(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ev.Basis != Basis || ev.LossPct != 5 || ev.WindowSeconds != 900 {
+	if ev.Basis != BasisPinned || ev.LossPct != 5 || ev.WindowSeconds != 900 {
 		t.Fatalf("header = %+v", ev)
 	}
 	if len(ev.Events) != 2 {

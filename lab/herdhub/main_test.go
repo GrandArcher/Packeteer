@@ -13,8 +13,9 @@ import (
 
 func TestHandlerServesTheListAndLogsEachRequest(t *testing.T) {
 	list := filepath.Join(t.TempDir(), "herd.json")
+	rsc := filepath.Join(t.TempDir(), "rsc.json")
 	var logs bytes.Buffer
-	h := handler(list, log.New(&logs, "", 0))
+	h := handler(map[string]string{"/herd.json": list, "/rsc.json": rsc}, log.New(&logs, "", 0))
 
 	get := func(method, path string) *httptest.ResponseRecorder {
 		rec := httptest.NewRecorder()
@@ -47,7 +48,13 @@ func TestHandlerServesTheListAndLogsEachRequest(t *testing.T) {
 	if rec := get(http.MethodGet, "/entries/64496.json"); rec.Code != http.StatusNotFound {
 		t.Fatalf("other path: status %d, want 404", rec.Code)
 	}
-	if !strings.Contains(logs.String(), "herdhub: GET /herd.json from 192.0.2.10:40000") || strings.Count(logs.String(), "\n") != 5 {
+	if err := os.WriteFile(rsc, []byte(`{"schema":"packeteer-herd-rsc/1","checklists":[]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if rec := get(http.MethodGet, "/rsc.json"); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "packeteer-herd-rsc/1") {
+		t.Fatalf("GET /rsc.json: %d %q", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(logs.String(), "herdhub: GET /herd.json from 192.0.2.10:40000") || strings.Count(logs.String(), "\n") != 6 {
 		t.Fatalf("every request is logged with its client:\n%s", logs.String())
 	}
 }

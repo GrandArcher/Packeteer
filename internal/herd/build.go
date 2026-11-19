@@ -26,6 +26,8 @@ type RIB interface {
 	Ready() bool
 	Exact(netip.Prefix) (rib.Route, bool)
 	ProviderPaths(netip.Prefix, string) [][]uint32
+	// Routes is every selected route, read by the hints refresh only.
+	Routes() []rib.Route
 }
 
 // maxOrigins bounds the origin ASNs a node remembers to ask peers about.
