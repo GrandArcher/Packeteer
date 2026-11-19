@@ -160,9 +160,10 @@ wait_for 60 "packeteer learned $new_net" learned "$new_net"
 scanned() { api registry | jq -e '.scanned != null and (.sections | length) > 0' >/dev/null; }
 echo "waiting for the first scan"
 wait_for 240 "the first registry scan" scanned
-# The scan runs a minute after Packeteer starts and the next one an hour
-# later. A slow runner can start it before the learned RIB is ready; the
-# scan then skips the network, and a restart gives a new first scan.
+# The scan runs a minute after Packeteer starts and the next one
+# registry.interval later (3m in the lab config). A slow runner can start it
+# before the learned RIB is ready; the scan then skips the network, and a
+# restart gives a new first scan.
 for _ in 1 2; do
 	api registry | jq -e '[.sections[] | select(.name == "network" and .status == "skipped")] | length == 0' >/dev/null && break
 	echo "the first scan ran before the RIB was ready; restarting packeteer for a new first scan"
