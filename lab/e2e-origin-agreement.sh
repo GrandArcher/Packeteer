@@ -52,8 +52,17 @@ base=http://192.0.2.10:8080/api
 auth=(-u lab:lab-only)
 api() { curl -sS "${auth[@]}" "$base/$1" 2>/dev/null || true; }
 api_up() { curl -sf -o /dev/null "${auth[@]}" "$base/rpki/only-invalid"; }
-# state STUB: what the stand-in recorded.
-state() { curl -sS "http://$1:8080/_lab/state" 2>/dev/null || true; }
+# state STUB: what the stand-in recorded. The script runs on the host, which
+# cannot resolve compose service names, so it reads the stand-in's address.
+state() {
+	local ip
+	case $1 in
+	ris-stub) ip=192.0.2.50 ;;
+	routeviews-stub) ip=192.0.2.51 ;;
+	*) ip=$1 ;;
+	esac
+	curl -sS "http://$ip:8080/_lab/state" 2>/dev/null || true
+}
 
 vty() { "${compose[@]}" exec -T edge vtysh -c "$1" 2>/dev/null || true; }
 edge_path() {
