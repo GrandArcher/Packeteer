@@ -34,7 +34,7 @@ const (
 	firstScanDelay = time.Minute
 	// maxCases bounds the invalid selected routes one scan inspects.
 	maxCases = 1000
-	// feedTimeout bounds one hijack feed lookup.
+	// feedTimeout bounds one hijack feed or origin collector lookup.
 	feedTimeout = 10 * time.Second
 )
 
