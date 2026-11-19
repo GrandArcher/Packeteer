@@ -99,8 +99,12 @@ func (c *Config) validateRegistry(add func(string, ...any)) {
 	if r.ASSet != "" && !c.IRROn() {
 		add("registry.as_set needs irr.enabled with an irr.sources entry to read the as-set from")
 	}
-	if r.Interval < registry.MinInterval || r.Interval > registry.MaxInterval {
-		add("registry.interval %s must be between %s and %s", r.Interval, registry.MinInterval, registry.MaxInterval)
+	minInterval := registry.MinInterval
+	if r.IRR.Source == "TEST" {
+		minInterval = registry.MinTestInterval
+	}
+	if r.Interval < minInterval || r.Interval > registry.MaxInterval {
+		add("registry.interval %s must be between %s and %s (the minimum is %s unless registry.irr.source is TEST)", r.Interval, minInterval, registry.MaxInterval, registry.MinInterval)
 	}
 	if r.HeadroomPercent < 1 || r.HeadroomPercent > registry.MaxHeadroom {
 		add("registry.headroom_percent %d must be between 1 and %d", r.HeadroomPercent, registry.MaxHeadroom)

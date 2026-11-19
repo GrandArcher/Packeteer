@@ -1,5 +1,5 @@
 #!/bin/bash
-# Registry hygiene (#289) proved in the lab (#657) against in-lab registry
+# Registry hygiene (#289) proved in the lab (#657, #673) against in-lab registry
 # stand-ins only. Documentation prefixes and documentation/private ASNs
 # only. lab/registrystub is the IRR (whois), VRP JSON, PeeringDB, and RIPE
 # REST stand-in; the lab network is internal, so nothing can reach RADB,
@@ -22,6 +22,11 @@
 #    fields change on the stand-in, with the lab credentials from the
 #    environment, and each push is in the audit log without a credential;
 #  - a ROA finding and the not-yet-offered delete cannot be pushed;
+#  - the config scans every 3m (irr.source TEST allows it), so a second scan
+#    runs in the lab: it offers the delete of the stale object, a delete
+#    with a digest other than the shown one is refused and the object stays,
+#    and with the shown digest the object is deleted on the stand-in only,
+#    with the lab credentials, and the delete is audit-logged;
 #  - the edge receives no route from Packeteer, the mode stays observe, and
 #    SIGTERM stops it cleanly.
 set -euo pipefail
@@ -215,6 +220,9 @@ resp=$(push "$(f irr_stale | jq -r .id)" "")
 st=$(state)
 jq -e '[.requests[] | select(.method != "GET" and .method != "QUERY")] | length == 0' <<<"$st" >/dev/null || fail "a refused push wrote to the stand-in: $st"
 [ "$(jq -c .routes <<<"$st")" = "$routes_before" ] || fail "a refused push changed the route objects"
+# The delete is offered by the next scan, 3m after the first. This check
+# is only about the first one.
+[ "$(api registry | jq -r .scanned)" = "$(jq -r .scanned <<<"$rep")" ] || fail "the second scan ran before the not-yet-offered checks finished; the runner is too slow for registry.interval"
 
 echo "confirmed pushes reach the stand-in with the lab credentials"
 resp=$(push "$id_missing" "$digest_missing")
@@ -246,6 +254,44 @@ jq -e 'any(.records[]; .action == "POST /api/registry/push" and .result == "fail
 for secret in lab-ripe-password-not-a-secret lab-peeringdb-key-not-a-secret; do
 	if grep -q "$secret" <<<"$audit$(api registry)"; then fail "the audit log or the API holds a credential"; fi
 	if "${compose[@]}" logs --no-color packeteer | grep -q "$secret"; then fail "the Packeteer log holds a credential"; fi
+done
+
+echo "second scan: the delete of the stale object is offered"
+first_scan=$(jq -r .scanned <<<"$rep")
+second_scan() { api registry | jq -e --arg t "$first_scan" '.scanned != $t and ([.sections[] | select(.status != "ok" and .name != "as-set")] | length == 0)' >/dev/null; }
+wait_for 300 "the second registry scan" second_scan
+rep=$(api registry)
+f irr_stale | jq -e '.pushable == true and .change.op == "delete_object" and .change.class == "route" and .change.key == "192.0.2.0/24AS64501" and (.digest | length > 0) and (.note // "") == "" and
+	(.diff | contains("- route:          192.0.2.0/24") and contains("AS64501"))' >/dev/null || fail "irr_stale after the second scan: $(f irr_stale)"
+f rpki_maxlength | jq -e '.pushable == false and .change == null' >/dev/null || fail "the ROA finding is pushable after the second scan"
+id_stale=$(f irr_stale | jq -r .id)
+digest_stale=$(f irr_stale | jq -r .digest)
+
+echo "a wrong digest does not delete; the shown digest does, on the stand-in only"
+writes_before=$(jq -c '[.requests[] | select(.method != "GET" and .method != "QUERY")] | length' <<<"$(state)")
+resp=$(push "$id_stale" 0000000000000000)
+[ "$(code_of "$resp")" = 409 ] || fail "a wrong digest for the delete answered $(code_of "$resp"): $resp"
+st=$(state)
+jq -e '.routes | any(contains("route:          192.0.2.0/24") and contains("origin:         AS64501"))' <<<"$st" >/dev/null || fail "a refused delete removed the object: $(jq -c .routes <<<"$st")"
+[ "$(jq -c '[.requests[] | select(.method != "GET" and .method != "QUERY")] | length' <<<"$st")" = "$writes_before" ] || fail "a refused delete reached the stand-in: $st"
+resp=$(push "$id_stale" "$digest_stale")
+[ "$(code_of "$resp")" = 200 ] || fail "the delete answered $(code_of "$resp"): $resp"
+resp=$(push "$id_stale" "$digest_stale")
+[ "$(code_of "$resp")" = 409 ] || fail "the same delete pushed twice answered $(code_of "$resp"): $resp"
+st=$(state)
+jq -e '.routes | length == 2 and all(contains("192.0.2.0/24") | not) and any(contains("route:          203.0.113.128/25"))' <<<"$st" >/dev/null || fail "route objects after the delete: $(jq -c .routes <<<"$st")"
+jq -e '[.requests[] | select(.method == "DELETE")] | length == 1 and all(.service == "ripe" and .authorized == true)' <<<"$st" >/dev/null || fail "stand-in deletes: $(jq -c '[.requests[] | select(.method == "DELETE")]' <<<"$st")"
+jq -e '[.requests[] | select(.method != "GET" and .method != "QUERY")] | length == 4 and all(.authorized == true)' <<<"$st" >/dev/null || fail "stand-in writes: $(jq -c '[.requests[] | select(.method != "GET" and .method != "QUERY")]' <<<"$st")"
+
+echo "audit log: the delete and the refused digest, no credential"
+audit=$(api "audit?limit=1000")
+jq -e 'any(.records[]; .action == "POST /api/registry/push" and .result == "ok" and .target == "ripe route 192.0.2.0/24AS64501" and (.detail | contains("registry push delete_object") and contains("192.0.2.0/24") and contains("origin:         AS64501")))' <<<"$audit" >/dev/null ||
+	fail "no audit record for the delete: $audit"
+jq -e '[.records[] | select(.action == "POST /api/registry/push" and .result == "failed" and (.detail | contains("differs from the one shown")))] | length >= 2' <<<"$audit" >/dev/null ||
+	fail "no audit record for the refused delete digest: $audit"
+for secret in lab-ripe-password-not-a-secret lab-peeringdb-key-not-a-secret; do
+	if grep -q "$secret" <<<"$audit$(api registry)"; then fail "the audit log or the API holds a credential after the delete"; fi
+	if "${compose[@]}" logs --no-color packeteer | grep -q "$secret"; then fail "the Packeteer log holds a credential after the delete"; fi
 done
 
 quiet

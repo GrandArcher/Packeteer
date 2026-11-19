@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -26,6 +27,11 @@ func TestLabConfigOnlyNamesTheStandIn(t *testing.T) {
 	}
 	if cfg.Mode != "observe" || !cfg.RegistryOn() || !cfg.Registry.PushEnabled {
 		t.Fatalf("mode %q registry %v push %v", cfg.Mode, cfg.RegistryOn(), cfg.Registry.PushEnabled)
+	}
+	// #673: the second scan that offers the delete comes from a short
+	// interval, which validation allows for the TEST database only.
+	if cfg.Registry.Interval != 3*time.Minute || cfg.Registry.IRR.Source != "TEST" {
+		t.Fatalf("interval %s source %s", cfg.Registry.Interval, cfg.Registry.IRR.Source)
 	}
 	set, err := pluginhost.Build(cfg, pluginhost.Options{Getenv: getenv, CheckOnly: true})
 	if err != nil {

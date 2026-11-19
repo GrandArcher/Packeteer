@@ -53,7 +53,7 @@ registry:
     - type: peeringdb
 ```
 
-Default interval is 24h; the first scan runs a minute after start so the RIB can learn. `registry` cannot be combined with `ixp`.
+Default interval is 24h, at least 1h; the first scan runs a minute after start so the RIB can learn. With `registry.irr.source: TEST` (the RIPE test database) the interval may be as short as 1m, which a lab uses to get the second scan that offers a delete; keep 1h or more elsewhere. `registry` cannot be combined with `ixp`.
 
 ## UI and API
 
@@ -61,7 +61,7 @@ The Registry page (`/registry.html`, [ui.md](ui.md#registry)) lists the scan sec
 
 ## Lab proof
 
-`lab/e2e-registry.sh` (the `registry` CI job, #657) runs the scan and the pushes against `lab/registrystub`, a stand-in for a whois IRR, a VRP JSON document, PeeringDB, and the RIPE REST API, on a Docker network marked `internal`, so no live RADB, ARIN, RIPE, PeeringDB, or other registry is reachable and no registry credential is used. It checks the five findings (missing route object, stale route object, ROA maxLength gap, PeeringDB max-prefix drift, port-speed drift), that a wrong digest changes nothing, that confirmed pushes land on the stand-in only with the lab credentials from the environment, and that each is audit-logged without a credential. The delete of the stale object is not pushed: it is offered only when a second scan shows it again, and the shortest interval is an hour. A push to RADB or ARIN is still not provided. See [lab/README.md](../lab/README.md).
+`lab/e2e-registry.sh` (the `registry` CI job, #657) runs the scan and the pushes against `lab/registrystub`, a stand-in for a whois IRR, a VRP JSON document, PeeringDB, and the RIPE REST API, on a Docker network marked `internal`, so no live RADB, ARIN, RIPE, PeeringDB, or other registry is reachable and no registry credential is used. It checks the five findings (missing route object, stale route object, ROA maxLength gap, PeeringDB max-prefix drift, port-speed drift), that a wrong digest changes nothing, that confirmed pushes land on the stand-in only with the lab credentials from the environment, and that each is audit-logged without a credential. The lab config scans every 3 minutes, so a second scan runs inside the job (#673). The delete of the stale object is not offered after the first scan and a push of it is refused. After the second scan a delete with a wrong digest is refused and the object stays on the stand-in; with the shown digest it is deleted there only, and both are audit-logged without a credential. A push to RADB or ARIN is still not provided. See [lab/README.md](../lab/README.md).
 
 ## Rollback
 
