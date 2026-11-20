@@ -57,3 +57,29 @@ providers:
 		t.Fatalf("err = %v, want the admin password name refused", err)
 	}
 }
+
+// A collector row is part of the rpki block: adding one is a restart key, so
+// the Settings preview lists it and a reload refuses it.
+func TestOriginCollectorChangeNeedsRestart(t *testing.T) {
+	const base = `mode: observe
+asn: 64512
+router_id: 192.0.2.10
+providers:
+  - {name: transit-a, source_ip: 192.0.2.11, next_hop: 192.0.2.1}
+rpki:
+  enabled: true
+  sources:
+    - type: rtr
+      config: {address: "192.0.2.20:3323"}
+  only_invalid:
+    enabled: true
+`
+	next := base + "    origin_collectors:\n      - type: json\n        config: {url: \"http://192.0.2.50:8080/ris\"}\n"
+	restart, online := classify(mustParse(t, base), mustParse(t, next))
+	if !slices.Equal(restart, []string{"rpki"}) || len(online) != 0 {
+		t.Fatalf("restart %v online %v, want only rpki in restart", restart, online)
+	}
+	if _, err := planReload(mustParse(t, base), mustParse(t, next), nil); err == nil || !strings.Contains(err.Error(), "restart required: changed rpki") {
+		t.Fatalf("planReload: %v", err)
+	}
+}

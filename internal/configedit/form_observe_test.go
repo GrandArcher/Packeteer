@@ -1,8 +1,13 @@
 package configedit
 
 import (
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -52,6 +57,15 @@ rpki:
         name: incidents
         config:
           path: /etc/packeteer/hijacks.json
+    origin_collectors:
+      - type: json
+        name: ris-standin
+        config:
+          url: http://192.0.2.40:8080/origins
+          rate_per_minute: 30
+      - type: json
+        config:
+          url: https://192.0.2.41/origins
     slurm:
       path: /var/lib/packeteer/slurm.json
       prefixes: [203.0.113.0/24]
@@ -118,6 +132,11 @@ func TestObserveBlocksReadTheFile(t *testing.T) {
 	oi := b["rpki_only_invalid"]
 	if oi["enabled"] != true || oi["stable_after"] != "720h" || oi["hijack_feeds"].([]Values)[0]["config.path"] != "/etc/packeteer/hijacks.json" {
 		t.Fatalf("only_invalid = %+v", oi)
+	}
+	oc := oi["origin_collectors"].([]Values)
+	if len(oc) != 2 || oc[0]["type"] != "json" || oc[0]["name"] != "ris-standin" || oc[0]["config.url"] != "http://192.0.2.40:8080/origins" ||
+		oc[0]["config.rate_per_minute"] != "30" || oc[1]["config.url"] != "https://192.0.2.41/origins" || oc[1]["config.rate_per_minute"] != "" {
+		t.Fatalf("origin_collectors = %+v", oc)
 	}
 	if got := b["registry"]["asns"].([]string); len(got) != 1 || got[0] != "64496" {
 		t.Fatalf("registry asns = %v", got)
@@ -230,7 +249,7 @@ storage:
 `
 	out, cfg := observeEdit(t, base, func(f *Form) {
 		f.Blocks["rpki"] = Values{"enabled": true, "sources": []Values{{"type": "rtr", "config.address": "192.0.2.20:3323"}}}
-		f.Blocks["rpki_only_invalid"] = Values{"enabled": true}
+		f.Blocks["rpki_only_invalid"] = Values{"enabled": true, "origin_collectors": []Values{{"type": "json", "config.url": "http://192.0.2.40:8080/o"}}}
 		f.Blocks["registry"] = Values{"enabled": true, "asns": []string{"64496"}, "sources": []Values{{"type": "peeringdb"}}}
 		f.Blocks["mcp"] = Values{"enabled": true}
 		f.Blocks["verify"] = Values{"enabled": true}
@@ -248,6 +267,9 @@ storage:
 	}
 	if o := cfg.Herd.Outside; !o.Atlas.Enabled || !o.RPKI || !o.Links || cfg.Herd.Limits.RateGlobal != 900 || len(cfg.Linkouts.Custom) != 1 {
 		t.Fatalf("the herd outside and limits or link-outs were not written: %s", out)
+	}
+	if oc := cfg.RPKI.OnlyInvalid.OriginCollectors; len(oc) != 1 || oc[0].Type != "json" {
+		t.Fatalf("the collector row was not written: %s", out)
 	}
 	if cfg.Synthesize != nil || cfg.NonBGP != nil || cfg.Registry.PushEnabled || cfg.MCP.WriteTools || cfg.RPKI.AvoidInvalid || cfg.RPKI.OnlyInvalid.SLURM != nil {
 		t.Fatalf("a form switched on something it does not offer: %s", out)
@@ -317,6 +339,13 @@ func TestObserveBlocksRefusals(t *testing.T) {
 		{"refresh", "rpki", func(v Values) { v["sources"].([]Values)[0]["config.refresh"] = "0s" }, "config.refresh"},
 		{"stable after", "rpki_only_invalid", func(v Values) { v["stable_after"] = "1m" }, "stable_after"},
 		{"feed path", "rpki_only_invalid", func(v Values) { v["hijack_feeds"].([]Values)[0]["config.path"] = "hijacks.json" }, "absolute path"},
+		{"collector without url", "rpki_only_invalid", func(v Values) { v["origin_collectors"].([]Values)[0]["config.url"] = "" }, "origin_collectors[0].config.url: is required"},
+		{"collector url scheme", "rpki_only_invalid", func(v Values) { v["origin_collectors"].([]Values)[0]["config.url"] = "ftp://192.0.2.40/o" }, "http:// or https://"},
+		{"collector url login", "rpki_only_invalid", func(v Values) { v["origin_collectors"].([]Values)[1]["config.url"] = "https://user:pw@192.0.2.41/o" }, "no login"},
+		{"collector url query", "rpki_only_invalid", func(v Values) { v["origin_collectors"].([]Values)[1]["config.url"] = "https://192.0.2.41/o?prefix=x" }, "no login or query"},
+		{"collector rate zero", "rpki_only_invalid", func(v Values) { v["origin_collectors"].([]Values)[0]["config.rate_per_minute"] = "0" }, "origin_collectors[0].config.rate_per_minute"},
+		{"collector rate high", "rpki_only_invalid", func(v Values) { v["origin_collectors"].([]Values)[0]["config.rate_per_minute"] = "601" }, "config.rate_per_minute"},
+		{"collector type", "rpki_only_invalid", func(v Values) { v["origin_collectors"].([]Values)[0]["type"] = "ris" }, "origin_collectors[0].type"},
 		{"asn zero", "registry", func(v Values) { v["asns"] = []string{"0"} }, "asns[0]"},
 		{"asn text", "registry", func(v Values) { v["asns"] = []string{"AS64496"} }, "whole number"},
 		{"asn missing", "registry", func(v Values) { v["asns"] = []string{} }, "needs at least one value"},
@@ -408,5 +437,79 @@ func TestHerdFormWritesExchangeIdentityAndCrowd(t *testing.T) {
 	if h.Share.CrowdK != 3 || h.Hub == nil || h.Hub.ExchangePeers != 8 || h.Identity == nil ||
 		h.Identity.URL != "https://rpki.example.net/herd-rsc.json" || h.Identity.Refresh != 2*time.Hour {
 		t.Fatalf("herd = crowd_k %d hub %+v identity %+v", h.Share.CrowdK, h.Hub, h.Identity)
+	}
+}
+
+// Collector rows are read, edited, added, and removed through the form. A
+// feed and the SLURM block next to them keep their text, and the saved file
+// loads with the rows the form set.
+func TestObserveOriginCollectorRows(t *testing.T) {
+	out, cfg := observeEdit(t, observeBlocksYAML, func(f *Form) {
+		oc := f.Blocks["rpki_only_invalid"]["origin_collectors"].([]Values)
+		oc[0]["config.url"] = "http://192.0.2.42:8080/origins"
+		oc[0]["config.rate_per_minute"] = "120"
+		f.Blocks["rpki_only_invalid"]["origin_collectors"] = append(oc[:1], Values{"type": "json", "name": "rv-standin", "config.url": "https://198.51.100.9/o"})
+	})
+	got := cfg.RPKI.OnlyInvalid.OriginCollectors
+	if len(got) != 2 || got[0].Name != "ris-standin" || got[1].Name != "rv-standin" || got[1].Type != "json" {
+		t.Fatalf("collectors = %+v\n%s", got, out)
+	}
+	for _, want := range []string{"url: http://192.0.2.42:8080/origins", "rate_per_minute: 120", "url: https://198.51.100.9/o", "path: /etc/packeteer/hijacks.json", "path: /var/lib/packeteer/slurm.json"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("%q missing:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "192.0.2.41") {
+		t.Errorf("a removed row stayed:\n%s", out)
+	}
+
+	none, cfg := observeEdit(t, observeBlocksYAML, func(f *Form) { f.Blocks["rpki_only_invalid"]["origin_collectors"] = []Values{} })
+	if len(cfg.RPKI.OnlyInvalid.OriginCollectors) != 0 || strings.Contains(none, "origin_collectors") || !strings.Contains(none, "hijack_feeds:") {
+		t.Fatalf("emptied rows:\n%s", none)
+	}
+}
+
+// Reading, previewing, and saving collector rows never touches the network:
+// the form only edits text, and a collector is read when a case is scored.
+func TestObserveOriginCollectorsNeverContactTheEndpoint(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { hits.Add(1) }))
+	defer srv.Close()
+
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(observeBlocksYAML), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	running, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, err := New(path, running, parse, func(a, b *config.Config) ([]string, []string) { return nil, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := e.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := ParseForm([]byte(file.YAML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Blocks["rpki_only_invalid"]["origin_collectors"] = append(f.Blocks["rpki_only_invalid"]["origin_collectors"].([]Values),
+		Values{"type": "json", "name": "lab-standin", "config.url": srv.URL + "/origins"})
+	out, err := ApplyForm([]byte(file.YAML), roundTripJSON(t, f))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := e.Preview(out)
+	if err != nil || !p.Result.Valid || !strings.Contains(p.Diff, "+           url: "+srv.URL+"/origins") {
+		t.Fatalf("preview: %v %+v\n%s", err, p.Result, p.Diff)
+	}
+	if _, res, err := e.Save(out, file.SHA256, false); err != nil || !res.Valid {
+		t.Fatalf("save: %v %+v", err, res)
+	}
+	if n := hits.Load(); n != 0 {
+		t.Fatalf("the endpoint got %d requests; the form must not contact a collector", n)
 	}
 }

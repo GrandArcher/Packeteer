@@ -6,6 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Added
 
+- Settings form rows for `rpki.only_invalid.origin_collectors` (type `json`, name, URL, rate); never mode, allowlist, or announcer, and no collector is contacted (#695).
 - Settings form fields for `herd.block` and `herd.down_weight` (ASNs, key ids, endpoints), with Preview and Save; this node's view only, never mode, allowlist, or announcer (#694).
 ### Changed
 
