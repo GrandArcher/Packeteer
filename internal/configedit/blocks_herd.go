@@ -82,11 +82,14 @@ func checkHerd(v Values) error {
 func checkHerdView(v Values) error {
 	seen := map[string]string{}
 	for _, list := range []string{"block", "down_weight"} {
-		total := 0
+		total, at := 0, ""
 		for _, part := range []string{"asns", "keys", "endpoints"} {
 			key := list + "." + part
 			items, _ := v[key].([]string)
 			total += len(items)
+			if at == "" && len(items) > 0 {
+				at = "herd." + key
+			}
 			for i, s := range items {
 				id := part + ":" + s
 				if prev, dup := seen[id]; dup {
@@ -96,10 +99,10 @@ func checkHerdView(v Values) error {
 			}
 		}
 		if total > config.MaxHerdViewEntries {
-			return fieldErr("herd."+list+".asns", "at most %d entries in all three lists", config.MaxHerdViewEntries)
+			return fieldErr(at, "at most %d entries in all three lists", config.MaxHerdViewEntries)
 		}
 		if on, _ := v["preview_only"].(bool); on && total > 0 {
-			return fieldErr("herd."+list+".asns", "preview_only serves and pulls nothing: leave block and down_weight empty")
+			return fieldErr(at, "preview_only serves and pulls nothing: leave block and down_weight empty")
 		}
 	}
 	return nil

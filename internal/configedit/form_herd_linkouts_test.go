@@ -388,8 +388,8 @@ func TestHerdViewFieldsRefusals(t *testing.T) {
 		{"key in both", func(v Values) {
 			v["block.keys"], v["down_weight.keys"] = []string{herdKeyID}, []string{herdKeyID}
 		}, "herd.down_weight.keys[0]: already listed in herd.block"},
-		{"too many", func(v Values) { v["block.asns"], v["block.keys"] = many, []string{herdKeyID} }, "herd.block"},
-		{"preview only", func(v Values) { v["preview_only"] = true }, "preview_only serves and pulls nothing"},
+		{"too many", func(v Values) { v["block.asns"], v["block.keys"] = many, []string{herdKeyID} }, "herd.block.asns: at most 256 entries"},
+		{"preview only", func(v Values) { v["preview_only"] = true }, "herd.block.asns: preview_only serves and pulls nothing"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
