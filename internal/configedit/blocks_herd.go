@@ -68,6 +68,43 @@ func durText(ns int64) string {
 	return fmt.Sprintf("%ds", d/time.Second)
 }
 
+// checkHerd runs the cross-field checks of the herd form.
+func checkHerd(v Values) error {
+	if err := checkHerdView(v); err != nil {
+		return err
+	}
+	return checkHerdOutside(v)
+}
+
+// checkHerdView gives block and down_weight the loader's rules with the
+// field named: a member listed in both is refused (block already hides it),
+// the lists are capped together, and preview_only serves and pulls nothing.
+func checkHerdView(v Values) error {
+	seen := map[string]string{}
+	for _, list := range []string{"block", "down_weight"} {
+		total := 0
+		for _, part := range []string{"asns", "keys", "endpoints"} {
+			key := list + "." + part
+			items, _ := v[key].([]string)
+			total += len(items)
+			for i, s := range items {
+				id := part + ":" + s
+				if prev, dup := seen[id]; dup {
+					return fieldErr("herd."+key+"["+strconv.Itoa(i)+"]", "already listed in herd.%s", prev)
+				}
+				seen[id] = list
+			}
+		}
+		if total > config.MaxHerdViewEntries {
+			return fieldErr("herd."+list+".asns", "at most %d entries in all three lists", config.MaxHerdViewEntries)
+		}
+		if on, _ := v["preview_only"].(bool); on && total > 0 {
+			return fieldErr("herd."+list+".asns", "preview_only serves and pulls nothing: leave block and down_weight empty")
+		}
+	}
+	return nil
+}
+
 // checkHerdOutside gives the Atlas settings the loader's checks with the
 // field named: ids and a refresh need the switch, and the switch needs an id.
 func checkHerdOutside(v Values) error {
