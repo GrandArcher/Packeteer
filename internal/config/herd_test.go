@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -100,7 +101,7 @@ func TestHerdValidation(t *testing.T) {
 		{"limit range", func(s string) string { return s + "  limits: {max_conns: 0, page_records: 9999}\n" }, "page_records 9999"},
 		{"preview with listen", func(s string) string {
 			return strings.Replace(s, "enabled: true", "enabled: true\n  preview_only: true", 1)
-		}, "remove herd.listen, herd.peers, herd.hub, and herd.identity"},
+		}, "remove herd.listen, herd.peers, herd.hub, herd.identity, herd.block, and herd.down_weight"},
 		{"duplicate peer", func(s string) string {
 			i := strings.Index(s, "    - url")
 			return s + s[i:]
@@ -113,6 +114,45 @@ func TestHerdValidation(t *testing.T) {
 				t.Fatalf("err = %v, want it to contain %q", err, tt.want)
 			}
 		})
+	}
+}
+
+const herdKeyID = "8a39d2abd3999ab73c34db2476849cddf303ce389b35826850f9a700589b4a90"
+
+// Block and down_weight (#686) name members by ASN, key id, or endpoint;
+// one member is in one list at most.
+func TestHerdLocalView(t *testing.T) {
+	ok := herdOn + "  block: {asns: [64502], keys: [" + herdKeyID + "]}\n  down_weight: {endpoints: [\"https://192.0.2.31:9444\"]}\n"
+	cfg, err := Parse([]byte(herdBase + ok))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h := cfg.Herd; h.Block.ASNs[0] != 64502 || h.Block.Keys[0] != herdKeyID || h.DownWeight.Endpoints[0] != "https://192.0.2.31:9444" {
+		t.Errorf("block %+v down_weight %+v", h.Block, h.DownWeight)
+	}
+	tests := []struct{ name, yaml, want string }{
+		{"zero asn", "  block: {asns: [0]}\n", "herd.block.asns[0]: must be a non-zero ASN"},
+		{"public key", "  block: {keys: [\"" + herdKey + "\"]}\n", "herd.block.keys[0]"},
+		{"upper hex", "  down_weight: {keys: [" + strings.ToUpper(herdKeyID) + "]}\n", "herd.down_weight.keys[0]"},
+		{"endpoint path", "  block: {endpoints: [\"https://192.0.2.31:9444/x\"]}\n", "herd.block.endpoints[0]"},
+		{"both lists", "  block: {asns: [64502]}\n  down_weight: {asns: [64503, 64502]}\n", "herd.down_weight.asns[1]: already listed in herd.block"},
+		{"twice in one", "  block: {keys: [" + herdKeyID + ", " + herdKeyID + "]}\n", "herd.block.keys[1]: already listed in herd.block"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Parse([]byte(herdBase + herdOn + tt.yaml))
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("err = %v, want it to contain %q", err, tt.want)
+			}
+		})
+	}
+	var many strings.Builder
+	many.WriteString("  block:\n    keys:\n")
+	for i := range MaxHerdViewEntries + 1 {
+		fmt.Fprintf(&many, "      - %064x\n", i)
+	}
+	if _, err := Parse([]byte(herdBase + herdOn + many.String())); err == nil || !strings.Contains(err.Error(), "herd.block: at most 256 entries") {
+		t.Errorf("err = %v, want the entry cap", err)
 	}
 }
 

@@ -41,3 +41,34 @@ func TestOnlyTheDaemonAndTheOpsAPIImportHerd(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Herd itself reaches nothing that decides or announces (#686): of this
+// module's packages it imports only the config, the probe results it
+// records, the RIB view it reads, and the plugin interfaces of its store.
+func TestHerdImportsNothingThatDecidesOrAnnounces(t *testing.T) {
+	allowed := map[string]bool{
+		`"github.com/GrandArcher/Packeteer/internal/config"`: true,
+		`"github.com/GrandArcher/Packeteer/internal/probe"`:  true,
+		`"github.com/GrandArcher/Packeteer/internal/rib"`:    true,
+		`"github.com/GrandArcher/Packeteer/pkg/plugin"`:      true,
+	}
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fset := token.NewFileSet()
+	for _, path := range files {
+		if strings.HasSuffix(path, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, path, nil, parser.ImportsOnly)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, imp := range f.Imports {
+			if strings.HasPrefix(imp.Path.Value, `"github.com/GrandArcher/Packeteer/`) && !allowed[imp.Path.Value] {
+				t.Errorf("%s imports %s: herd may only read config, probe results, the RIB view, and its store", path, imp.Path.Value)
+			}
+		}
+	}
+}

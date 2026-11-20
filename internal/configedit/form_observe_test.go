@@ -80,6 +80,7 @@ herd:
     - url: https://192.0.2.30:9444
       key: ed25519:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
   limits: {rate_global: 700}
+  block: {asns: [64502]}
   outside:
     atlas: {enabled: true, measurements: [1001]}
 preflight:
@@ -147,9 +148,9 @@ func TestObserveBlocksUnchangedFormWritesNothing(t *testing.T) {
 }
 
 // An edit of each block keeps the keys the forms do not show: the SLURM
-// exceptions, push_enabled, the backout list, and an rtr source's TLS
-// settings. The herd limits and Atlas have fields (#687) and keep their text
-// while they are not edited.
+// exceptions, push_enabled, the backout list, the herd block, and an rtr
+// source's TLS settings. The herd limits and Atlas have fields (#687) and
+// keep their text while they are not edited.
 func TestObserveBlocksKeepTheRestOfTheFile(t *testing.T) {
 	out, cfg := observeEdit(t, observeBlocksYAML, func(f *Form) {
 		f.Blocks["rpki"]["avoid_invalid"] = true
@@ -167,7 +168,7 @@ func TestObserveBlocksKeepTheRestOfTheFile(t *testing.T) {
 	}
 	for _, keep := range []string{
 		"slurm:\n      path: /var/lib/packeteer/slurm.json\n", "push_enabled: false\n", "backout: [inbound, outbound]\n",
-		"limits: {rate_global: 700}\n", "atlas: {enabled: true, measurements: [1001]}\n", "ca_file: /etc/packeteer/rtr-ca.pem\n", "# lab edge\n",
+		"limits: {rate_global: 700}\n", "block: {asns: [64502]}\n", "atlas: {enabled: true, measurements: [1001]}\n", "ca_file: /etc/packeteer/rtr-ca.pem\n", "# lab edge\n",
 	} {
 		if !strings.Contains(out, keep) {
 			t.Errorf("%q changed or vanished:\n%s", keep, out)

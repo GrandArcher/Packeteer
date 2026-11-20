@@ -39,7 +39,13 @@ type Herd struct {
 	// Identity is where member identities are checked (#672). Nil means
 	// none: no member is verified.
 	Identity *HerdIdentity `yaml:"identity"`
-	Limits   HerdLimits    `yaml:"limits"`
+	// Block and DownWeight are this node's own view of other members
+	// (#686): a blocked member is neither pulled nor shown, a down-weighted
+	// one is shown in rows and left out of every count. Neither changes
+	// what other nodes see.
+	Block      HerdMembers `yaml:"block"`
+	DownWeight HerdMembers `yaml:"down_weight"`
+	Limits     HerdLimits  `yaml:"limits"`
 	// Outside is the opt-in outside intelligence on the herd dashboard
 	// (#296). Each source is off until chosen. It is shown apart from herd
 	// data, never counted as a vantage, and never read by Decide.
@@ -99,6 +105,15 @@ type HerdIdentity struct {
 	URL string `yaml:"url"`
 	// Refresh is how often it is fetched again (default 1h).
 	Refresh time.Duration `yaml:"refresh"`
+}
+
+// HerdMembers names members by identity (ASN), node key id (the hex
+// SHA-256 of the public key, key_id in GET /api/herd), or pull API
+// endpoint (https://host:port).
+type HerdMembers struct {
+	ASNs      []uint32 `yaml:"asns"`
+	Keys      []string `yaml:"keys"`
+	Endpoints []string `yaml:"endpoints"`
 }
 
 // HerdShare chooses what leaves the box.
@@ -193,6 +208,7 @@ const (
 	MinHerdAtlasRefresh      = 15 * time.Minute
 	MaxHerdAtlasRefresh      = 24 * time.Hour
 	MaxHerdAtlasIDs          = 4
+	MaxHerdViewEntries       = 256
 )
 
 // Herd values.
@@ -414,11 +430,12 @@ func (c *Config) validateHerd(add func(string, ...any)) {
 	})
 	c.validateHerdOutside(add)
 	if h.PreviewOnly {
-		if h.Listen != "" || len(h.Peers) > 0 || h.Hub != nil || h.Identity != nil {
-			add("herd.preview_only serves and pulls nothing: remove herd.listen, herd.peers, herd.hub, and herd.identity")
+		if h.Listen != "" || len(h.Peers) > 0 || h.Hub != nil || h.Identity != nil || !h.Block.empty() || !h.DownWeight.empty() {
+			add("herd.preview_only serves and pulls nothing: remove herd.listen, herd.peers, herd.hub, herd.identity, herd.block, and herd.down_weight")
 		}
 		return
 	}
+	h.validateView(add)
 	if _, _, err := net.SplitHostPort(h.Listen); err != nil {
 		add("herd.listen %q must be host:port (or set herd.preview_only)", h.Listen)
 	}
@@ -452,6 +469,64 @@ func (c *Config) validateHerd(add func(string, ...any)) {
 		}
 		urls[p.URL], keys[p.Key] = true, true
 	}
+}
+
+func (m HerdMembers) empty() bool { return len(m.ASNs)+len(m.Keys)+len(m.Endpoints) == 0 }
+
+// validateView checks block and down_weight. A member named in both is an
+// error: block already hides it.
+func (h *Herd) validateView(add func(string, ...any)) {
+	seen := map[string]string{}
+	for _, l := range []struct {
+		name string
+		m    HerdMembers
+	}{{"block", h.Block}, {"down_weight", h.DownWeight}} {
+		if n := len(l.m.ASNs) + len(l.m.Keys) + len(l.m.Endpoints); n > MaxHerdViewEntries {
+			add("herd.%s: at most %d entries", l.name, MaxHerdViewEntries)
+		}
+		note := func(field string, i int, key string) {
+			if prev, dup := seen[key]; dup {
+				add("herd.%s.%s[%d]: already listed in herd.%s", l.name, field, i, prev)
+				return
+			}
+			seen[key] = l.name
+		}
+		for i, a := range l.m.ASNs {
+			if a == 0 {
+				add("herd.%s.asns[%d]: must be a non-zero ASN", l.name, i)
+				continue
+			}
+			note("asns", i, "asn:"+strconv.FormatUint(uint64(a), 10))
+		}
+		for i, k := range l.m.Keys {
+			if !isHerdKeyID(k) {
+				add("herd.%s.keys[%d]: %q must be a key id, 64 lowercase hex digits (key_id in GET /api/herd)", l.name, i, k)
+				continue
+			}
+			note("keys", i, "key:"+k)
+		}
+		for i, e := range l.m.Endpoints {
+			if err := CheckHerdURL(e); err != nil {
+				add("herd.%s.endpoints[%d]: %q %s", l.name, i, e, err)
+				continue
+			}
+			note("endpoints", i, "url:"+e)
+		}
+	}
+}
+
+// isHerdKeyID reports whether s is a node key id: the lowercase hex
+// SHA-256 of an Ed25519 public key.
+func isHerdKeyID(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	for _, c := range s {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func (b *HerdHub) validate(add func(string, ...any)) {

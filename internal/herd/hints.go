@@ -33,13 +33,15 @@ func (h *Herd) Hints() []Hint {
 	return nil
 }
 
-// runHints refreshes the hints every pull interval on herd's own
-// goroutine, so the probe loop never reads the herd store.
-func (h *Herd) runHints(ctx context.Context) {
+// runRefresh refreshes the hints and the outage opinions every pull
+// interval on herd's own goroutine, so neither the probe loop nor the
+// outage source ever reads the herd store.
+func (h *Herd) runRefresh(ctx context.Context) {
 	h.pull.guard.run(ctx, "hints", func(ctx context.Context) {
 		t := time.NewTicker(h.o.Cfg.Limits.PullInterval)
 		defer t.Stop()
 		for {
+			h.refreshOpinions(ctx)
 			h.refreshHints(ctx)
 			select {
 			case <-ctx.Done():
@@ -48,6 +50,27 @@ func (h *Herd) runHints(ctx context.Context) {
 			}
 		}
 	})
+}
+
+// Opinion is what the other members see of asn as of the last refresh
+// (#686). ok is false before the first refresh.
+func (h *Herd) Opinion(asn uint32) (op Opinion, ok bool) {
+	p := h.opinions.Load()
+	if p == nil {
+		return Opinion{}, false
+	}
+	return (*p)[asn], true
+}
+
+// refreshOpinions stores the outage opinions of the current rows. A store
+// that fails keeps the last ones.
+func (h *Herd) refreshOpinions(ctx context.Context) {
+	ops, err := h.board().opinions(ctx)
+	if err != nil {
+		h.o.Log.Warn("herd outage opinions", "err", err)
+		return
+	}
+	h.opinions.Store(&ops)
 }
 
 // refreshHints stores the hints of the current world view.
@@ -140,7 +163,8 @@ func (h *Herd) crowd(prefix netip.Prefix) int {
 		clear(h.crowdAt)
 	}
 	floor := now.Add(-time.Duration(h.o.Cfg.RetentionDays) * 24 * time.Hour)
-	n := crowdCount(context.Background(), h.o.Store, h.peers(), h.o.ASN, prefix, floor)
+	shown, _ := h.peers()
+	n := crowdCount(context.Background(), h.o.Store, shown, h.o.ASN, prefix, floor)
 	h.crowdAt[prefix] = crowdEntry{n: n, at: now}
 	return n
 }
@@ -154,11 +178,12 @@ type crowdEntry struct {
 }
 
 // crowdCount counts the distinct ASNs other than self among the verified
-// peers that have a record for exactly prefix since floor.
+// peers this node does not down-weight that have a record for exactly
+// prefix since floor.
 func crowdCount(ctx context.Context, st plugin.HerdStore, peers []PeerStatus, self uint32, prefix netip.Prefix, floor time.Time) int {
 	asns := map[uint32]bool{}
 	for _, p := range peers {
-		if !p.Verified || p.ASN == self || asns[p.ASN] {
+		if !p.Verified || p.DownWeighted || p.ASN == self || asns[p.ASN] {
 			continue
 		}
 		rows, err := st.HerdRecords(ctx, plugin.HerdQuery{Member: p.KeyID, Prefix: prefix, Match: MatchExact, From: floor, Limit: 1})

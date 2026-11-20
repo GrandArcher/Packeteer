@@ -1121,6 +1121,8 @@ plugin_dir: /etc/packeteer/plugins
 #     exchange_peers: 16               # more members learned from the hub peers' peer lists
 #   identity:                          # optional: only members verified here are counted
 #     url: https://rpki.example.net/herd-rsc.json
+#   block: {asns: [64502]}             # optional, this node's view: never pulled or shown
+#   down_weight: {endpoints: ["https://192.0.2.31:9444"]}   # shown, never counted
 #   outside:                           # optional dashboard extras, each off until chosen
 #     atlas: {enabled: true, measurements: [1001], probes: [6001]}
 #     links: true                      # needs no other block; ris needs leak_watch, rpki needs rpki

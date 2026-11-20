@@ -35,8 +35,8 @@ The same object is the `generic` webhook body and the `exec` `notify` params.
 | `commit.cleared` | info | 11 | `provider` | The billable 95th percentile is back at or below the commit. |
 | `announce.failed` | critical | 12 | | Syncing improvements to the announcer failed. Sent once per failure streak. |
 | `announce.recovered` | info | 13 | | Sync succeeded after a failure. |
-| `outage.as` | critical | 14 | `asn` | The `outage` source found several prefixes crossing one ASN degraded together. The ASN may be on the native path, on another provider's learned path, or the origin of a traceroute hop. `providers` lists who saw it. |
-| `outage.circuit` | critical | 15 | `provider` | The `outage` source found several prefixes degraded on one provider only. |
+| `outage.as` | critical | 14 | `asn` | The `outage` source found several prefixes crossing one ASN degraded together. The ASN may be on the native path, on another provider's learned path, or the origin of a traceroute hop. `providers` lists who saw it. With herd on, `herd_asn`, `herd_reporting`, and `herd_degraded` say how many other herd members see that ASN degraded ([herd.md](herd.md#outage-second-opinion), #686). |
+| `outage.circuit` | critical | 15 | `provider` | The `outage` source found several prefixes degraded on one provider only. With herd on and the provider's `asn` set, the same herd fields as `outage.as` for that ASN. |
 | `outage.cleared` | warning | 16 | `asn` or `provider` | The AS or circuit incident recovered. |
 | `notifier.test` | info | 17 | | Sent only by `packeteer -notify-test`, to check delivery. |
 | `inbound.steered` | warning | 18 | `provider` | Inbound optimization ([inbound.md](inbound.md)) steers inbound traffic away from a provider whose inbound 95th is over commit (`trigger` `commit`) or that is the worst-performing provider (`trigger` `performance`). Fields: `trigger`, `in_mbps_95`, `commit_mbps`, `action`, `prepend`, `withhold` (selective announcement), `med` (a MED action, #303), `communities`, `hold`, `flaps`, `moderated`, `mode`, `reason`. In `observe` and `suggest`, and when `moderated` is `true`, it is a suggestion; nothing is announced. |

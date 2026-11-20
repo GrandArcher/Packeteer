@@ -1,9 +1,11 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"log/slog"
+	"maps"
 	"net/netip"
 	"strconv"
 	"sync/atomic"
@@ -48,6 +50,63 @@ func herdHints(h *atomic.Pointer[herd.Herd]) func() []herdhints.Hint {
 			out[i] = herdhints.Hint{Prefix: x.Prefix, Vantages: x.Vantages}
 		}
 		return out
+	}
+}
+
+// herdOpinion reads the outage opinions of the running herd (#686): none
+// before herd is built. It never blocks.
+func herdOpinion(h *atomic.Pointer[herd.Herd]) func(uint32) (herd.Opinion, bool) {
+	return func(asn uint32) (herd.Opinion, bool) {
+		if hd := h.Load(); hd != nil {
+			return hd.Opinion(asn)
+		}
+		return herd.Opinion{}, false
+	}
+}
+
+// herdOutageNote annotates an outage.as or outage.circuit event with what
+// the other herd members see of the same ASN (#686): herd_asn,
+// herd_reporting, and herd_degraded from herd's last refresh. A circuit
+// incident's ASN is its provider's asn. Without one, or before herd's first
+// refresh, the event goes out as it is. It runs after the outage source
+// decided and only adds fields, so it never opens, closes, or changes an
+// incident. Nil when herd is off.
+func herdOutageNote(cfg *config.Config, opinion func(asn uint32) (herd.Opinion, bool)) func(plugin.Event) plugin.Event {
+	if !cfg.HerdOn() {
+		return nil
+	}
+	providerASN := map[string]uint32{}
+	for _, p := range cfg.Providers {
+		if a := cmp.Or(p.ASN, p.PeerASN); a != 0 {
+			providerASN[p.Name] = a
+		}
+	}
+	return func(ev plugin.Event) plugin.Event {
+		var asn uint32
+		switch ev.Kind {
+		case plugin.EventOutageAS:
+			if n, err := strconv.ParseUint(ev.Fields["asn"], 10, 32); err == nil {
+				asn = uint32(n)
+			}
+		case plugin.EventOutageCircuit:
+			asn = providerASN[ev.Fields["provider"]]
+		}
+		if asn == 0 {
+			return ev
+		}
+		op, ok := opinion(asn)
+		if !ok {
+			return ev
+		}
+		fields := maps.Clone(ev.Fields)
+		if fields == nil {
+			fields = map[string]string{}
+		}
+		fields["herd_asn"] = strconv.FormatUint(uint64(asn), 10)
+		fields["herd_reporting"] = strconv.Itoa(op.Reporting)
+		fields["herd_degraded"] = strconv.Itoa(op.Degraded)
+		ev.Fields = fields
+		return ev
 	}
 }
 

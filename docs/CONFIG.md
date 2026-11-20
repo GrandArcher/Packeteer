@@ -676,6 +676,11 @@ herd:
   identity:                         # optional RPKI checklist source, see herd.md
     url: https://rpki.example.net/herd-rsc.json
     refresh: 1h                     # 10m to 24h
+  block:                            # this node's view only: neither pulled nor shown
+    asns: [64502]
+    endpoints: ["https://192.0.2.31:9444"]
+  down_weight:                      # this node's view only: shown, never counted
+    keys: [<key_id from GET /api/herd>]
   outside:                          # optional, each source off until chosen; dashboard only
     atlas: {enabled: true, measurements: [1001], probes: [6001], refresh: 15m}
     ris: true                       # needs leak_watch with a rislive source
@@ -686,6 +691,8 @@ herd:
 `share` chooses what leaves the box: `granularity` (`origin_asn` or `route`), `classes` (`measurements`, `paths`), `sources` (target source types), `discovery` (`query_only` or `listing`), and `exclude` with `prefixes` and `asns`. `retention_days` is how long records are kept and served. `vantage.country` is the code you declare. `key_file` is this node's Ed25519 key. Each of `peers` has a `url` and the `key` you pin. With `preview_only` set to `true` it stores records and serves the preview on `GET /api/herd/preview`, but listens and pulls nothing; it takes no `listen` or `peers`. Otherwise `listen` and either 1 to 16 `peers` or a `hub` are required. `hub.url` is an https address of a hub list ([herd-hub.md](herd-hub.md)); its entries are verified here and added as peers (at most `max_peers`) next to the static ones, and their keys may connect to the pull API (trust: herd-hub.md). `hub` is refused with `preview_only`. `GET /api/herd` shows this node's `public_key` to give to the peers that pin it. Private-use and reserved ASNs are removed from shared AS paths. The operator's own and customer prefixes (the `inbound` prefixes, the `flow` source's `transit.customers` and `problems.local`, and the `span` source's `local`) are never shared.
 
 Phase 2 (#672): with a hub, each peer's peer list is read and up to `exchange_peers` more members under `hub` are learned from it ([peer exchange](herd.md#peer-exchange)). `identity.url` is an https address of validated RPKI Signed Checklists ([identity](herd.md#identity)), fetched every `refresh`; only the members it verifies are counted, and it is refused with `preview_only`. `crowd_k` under `share` (default 2, 1 to 64) is the crowd threshold for routes only `flow` or `span` listed at route level, which needs `identity`.
+
+`block` and `down_weight` (#686) are this node's own view of other members, each by `asns`, `keys` (key ids, 64 lowercase hex digits), and `endpoints` (https://host:port), at most 256 entries per list; a member in both lists is an error, and both are refused with `preview_only` ([local view](herd.md#local-view)).
 
 `outside` picks the outside intelligence on the [herd page](herd.md#dashboard), each source on its own switch and off by default. `atlas` reads public RIPE Atlas data without an API key: up to 4 public `measurements` (ping results only) and up to 4 of your own hosted `probes`, every `refresh` (default 15m, 15m to 24h); it needs `enabled: true` and at least one id. `ris` shows what the `leak_watch` `rislive` sources saw and needs one; `rpki` shows the origin validation of a route from the `rpki` block and needs it; `links` shows the `linkouts` sites for the chosen prefix or ASN. A source whose block is missing is a config error. None of this is herd data, a vantage, or an input to `Decide`.
 

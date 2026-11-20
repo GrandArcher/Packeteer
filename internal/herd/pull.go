@@ -51,6 +51,9 @@ type PullerOptions struct {
 	// silent ones age out.
 	Exchange *Exchange
 	Learned  func()
+	// Blocked, when set, names the members this node neither pulls nor
+	// shows (herd.block, #686). asn is 0 until the peer's status is read.
+	Blocked func(asn uint32, id, url string) bool
 }
 
 // PeerStatus is the state of one peer for the status API.
@@ -72,6 +75,9 @@ type PeerStatus struct {
 	// ASN its status reports. Herd fills it from the identity source each
 	// time it reads the peers; the puller leaves it false.
 	Verified bool `json:"verified"`
+	// DownWeighted is set when herd.down_weight names the peer (#686): its
+	// rows are shown and never counted. Herd fills it like Verified.
+	DownWeighted bool `json:"down_weighted"`
 	// Relayed and RelayRefused count the entries of the peer's last peer
 	// list and how many of them were refused.
 	Relayed       int    `json:"relayed"`
@@ -191,7 +197,9 @@ func (p *Puller) newPeer(url string, pub ed25519.PublicKey, source string, wantA
 			Timeout:       p.lim.PullTimeout,
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		},
-		st: PeerStatus{URL: url, KeyID: id, Source: source},
+		// A hub or exchange entry names the peer's ASN before its status is
+		// read, so a block by ASN applies to it from the start.
+		st: PeerStatus{URL: url, KeyID: id, Source: source, ASN: wantASN},
 	}
 }
 
@@ -366,7 +374,7 @@ func (p *Puller) pullPeer(ctx context.Context, pe *peer, budget *atomic.Int64) {
 		pe.st.LastOK, pe.st.LastError, pe.st.Failures, pe.st.RetryAt = now, "", 0, time.Time{}
 		return
 	}
-	if errors.Is(err, errBudget) || ctx.Err() != nil {
+	if errors.Is(err, errBudget) || errors.Is(err, errBlocked) || ctx.Err() != nil {
 		return
 	}
 	pe.st.Failures++
@@ -384,9 +392,32 @@ func (p *Puller) pullPeer(ctx context.Context, pe *peer, budget *atomic.Int64) {
 	p.o.Log.Warn("herd pull failed", "peer", pe.url, "err", err, "retry_in", d.Round(time.Second))
 }
 
-var errBudget = errors.New("pull budget used")
+var (
+	errBudget  = errors.New("pull budget used")
+	errBlocked = errors.New("blocked by herd.block")
+)
+
+// blocked reports whether this node blocks pe, by what it knows of pe now.
+func (p *Puller) blocked(pe *peer) bool {
+	if p.o.Blocked == nil {
+		return false
+	}
+	pe.mu.Lock()
+	asn := pe.st.ASN
+	pe.mu.Unlock()
+	if asn == 0 {
+		asn = pe.wantASN
+	}
+	return p.o.Blocked(asn, pe.id, pe.url)
+}
 
 func (p *Puller) pull(ctx context.Context, pe *peer, budget *atomic.Int64) error {
+	// A blocked member is not asked for anything. A static peer's ASN is
+	// known only from its status, so that one request is the most a member
+	// blocked by ASN alone gets.
+	if p.blocked(pe) {
+		return errBlocked
+	}
 	left := p.lim.PeerRequests
 	take := func() error {
 		if left <= 0 {
@@ -413,6 +444,9 @@ func (p *Puller) pull(ctx context.Context, pe *peer, budget *atomic.Int64) error
 	pe.mu.Lock()
 	pe.st.ASN, pe.st.Country, pe.st.Granularity, pe.st.Discovery = st.ASN, st.Vantage, st.Granularity, st.Discovery
 	pe.mu.Unlock()
+	if p.blocked(pe) {
+		return errBlocked
+	}
 	if p.o.Exchange != nil {
 		if err := take(); err != nil {
 			return err
