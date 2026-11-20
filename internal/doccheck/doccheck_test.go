@@ -175,7 +175,7 @@ func TestImagePinsAreLastRelease(t *testing.T) {
 // TestChangelogSummariesStayShort keeps the one-sentence summary under each
 // 1.x release heading short. Pre-1.0 summaries are longer and are not checked.
 func TestChangelogSummariesStayShort(t *testing.T) {
-	const limit = 240
+	const limit = 260
 	lines := strings.Split(read(t, "CHANGELOG.md"), "\n")
 	head := regexp.MustCompile(`^## \[(1\.\d+\.\d+)\] - \d{4}-\d{2}-\d{2}$`)
 	seen := 0

@@ -40,7 +40,7 @@ v1.8 adds an RIS and RouteViews origin signal for RPKI-invalid only paths, six S
 
 ## [1.7.0] - 2026-11-18
 
-v1.7 lab-proves the RouterOS non-BGP steerer, registry hygiene, and the herd hub and dashboard, adds the federation form, and moves the flow discovery row to done (138 done); no new key, default `mode: observe`, inject off.
+v1.7 lab-proves the RouterOS non-BGP steerer, registry hygiene, and the herd hub and dashboard, adds the federation form, points the upgrade test at v1.6.0, and hardens CI flakes; flow discovery row done (138 done), no new key, default `mode: observe`, inject off.
 
 ### Added
 
@@ -60,7 +60,7 @@ v1.7 lab-proves the RouterOS non-BGP steerer, registry hygiene, and the herd hub
 
 ## [1.6.0] - 2026-11-17
 
-v1.6 finishes the shared IX port check (#151) and adds a read-only RouterOS router check, an upgrade test between real releases, a demo report mode, and a doc lint; no new row or key, default `mode: observe`, inject off.
+v1.6 finishes the shared IX port check (#151) and adds a read-only RouterOS router check, an upgrade test between real releases, a demo report mode, and a doc lint; no new row or top-level key, default `mode: observe`, inject off.
 
 ### Added
 
@@ -76,7 +76,7 @@ v1.6 finishes the shared IX port check (#151) and adds a read-only RouterOS rout
 
 ## [1.5.0] - 2026-11-16
 
-v1.5 adds a field-report kit, an opt-in read-only router check, and eBPF span tracking, and lab-proves RPKI-invalid only paths and federation push; new keys off, default `mode: observe`, inject off.
+v1.5 adds a field-report kit, an opt-in read-only router check (`preflight.router_check`), and eBPF span tracking (`ebpf_track`), and lab-proves RPKI-invalid only paths and federation push; both keys off, default `mode: observe`, inject off.
 
 ### Added
 
@@ -102,7 +102,7 @@ v1.4.1 fixes the quickstart and the demo preflight from v1.4.0; no controller co
 
 ## [1.4.0] - 2026-11-14
 
-v1.4 finishes observe setup from the GUI, shows a manager what Packeteer did, and adds a demo lab, a chaos soak, and a path-scoring harness; no new key, default `mode: observe`, inject off.
+v1.4 lets an operator finish observe setup from the GUI, shows a manager what Packeteer did, and adds a one-command demo lab, a chaos soak, and a lab-only path-scoring harness; no new key, default `mode: observe`, inject off.
 
 ### Added
 
@@ -141,7 +141,7 @@ v1.3 makes the v1.2 steering state durable and tightens first-run setup and the 
 
 ## [1.2.0] - 2026-11-11
 
-v1.2 adds steering calls to the REST API and, behind `mcp.write_tools`, to the MCP server; no new key, default `mode: observe`, inject off.
+v1.2 adds steering calls to the REST API and, behind `mcp.write_tools`, to the MCP server, with no new key and no change to an existing config; default `mode: observe`, inject off.
 
 ### Added
 

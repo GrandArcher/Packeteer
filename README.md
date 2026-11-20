@@ -461,7 +461,7 @@ The Settings page can also upgrade in place (#196). It is off by default. It nee
 
 ### From 1.8.0 to 1.9.0
 
-- No existing config key changed. `herd.block` and `herd.down_weight` are new and empty by default. With `herd` and an `outage` source set, `outage.*` events gain `herd_asn`, `herd_reporting`, and `herd_degraded`, and the world view gains `points_at`; they are additions only and no decision reads them. Before a downgrade to 1.8.0 remove the two keys, because 1.8.0 refuses unknown keys.
+- No existing config key changed. `herd.block` and `herd.down_weight` are new and empty by default. With `herd` and an `outage` source set, `outage.as` and `outage.circuit` events gain `herd_asn`, `herd_reporting`, and `herd_degraded`, and the world view gains `points_at`; they are additions only and no decision reads them. Before a downgrade to 1.8.0 remove the two keys, because 1.8.0 refuses unknown keys.
 
 ### From 1.7.0 to 1.8.0
 
