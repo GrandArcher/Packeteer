@@ -4,6 +4,10 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ## [Unreleased]
 
+### Changed
+
+- `upgrade-release` CI job starts from the v1.9.0 image, pinned by digest, instead of v1.8.0; the downgrade step still removes no key (#693).
+
 ## [1.9.0] - 2026-11-20
 
 v1.9 adds Settings forms for the herd Atlas, link-outs, and resource limits, the herd phase 2 local uses (advisory), and a shorter CHANGELOG; no new row (138 done), default `mode: observe`, inject off.
