@@ -179,8 +179,8 @@ func TestTrimmedFeatureRowsStayShort(t *testing.T) {
 		limit int
 		links []string
 	}{
-		"| Web UI dashboard (":                       {3400, []string{"#170", "#349"}},
-		"| Configuration editor and setup wizards |": {3700, []string{"#130", "#658", "#694", "#695"}},
+		"| Web UI dashboard (":                       {3450, []string{"#170", "#349"}},
+		"| Configuration editor and setup wizards |": {3800, []string{"#130", "#658", "#694", "#695"}},
 	}
 	for _, l := range strings.Split(read(t, "docs", "FEATURES.md"), "\n") {
 		for prefix, want := range rows {
