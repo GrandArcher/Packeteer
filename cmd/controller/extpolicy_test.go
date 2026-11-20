@@ -181,7 +181,7 @@ func TestExternalPolicyBesideInject(t *testing.T) {
 		}
 	}
 	// watch reads Changed and Document apart, so a Close between them sends
-	// the expired set twice. The deadline in watch bounds the wait for EOF.
+	// the expired set twice. The context in feedLab.watch bounds the wait.
 	for {
 		doc, err := recv()
 		if errors.Is(err, io.EOF) {
