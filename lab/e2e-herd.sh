@@ -1,7 +1,9 @@
 #!/bin/bash
 # Herd phase 1 (#260) with its hub (#261) and dashboard (#296), proved in
 # the lab (#659), and herd phase 2 (#672): peer exchange, identities checked
-# against an RPKI stand-in, probe hints, and the crowd threshold. Three
+# against an RPKI stand-in, probe hints, and the crowd threshold, and its
+# local uses (#686): a block and a down-weight, the "my upstream or the
+# destination" attribution, and the outage second opinion. Three
 # simulated members, member-a, member-b, and member-c, each a Packeteer
 # instance in observe mode in its own AS (64496, 64497, 64498) behind its own
 # FRR edge. Each edge learns 192.0.2.128/26 (path "64501 64510"),
@@ -29,7 +31,10 @@
 # level with a flow source fed by lab/sendflow toward 192.0.2.230, so
 # 192.0.2.224/28 is a route only user traffic put on its probe list
 # (crowd_k 1). member-b probes 192.0.2.224/28 as a static target; member-a
-# does not, and probes it only through its herd_hints source.
+# does not, and probes it only through its herd_hints source. member-a also
+# runs an outage source, which opens an AS64501 incident once it probes the
+# two dark routes. member-b blocks member-c by endpoint and down-weights
+# member-a by ASN (its own view only).
 # Checked in order:
 #  0. hub-check accepts the four entries and refuses the tampered and the
 #     expired one;
@@ -61,9 +66,17 @@
 #     previews nothing for AS64510;
 #  9. the served-response audit logs the pulls: unfiltered pages on the
 #     listing members a and b, origin_asn queries on the query-only c;
-# 10. isolation: with member-b paused (a peer that never answers), a and c
+# 10. local view on member-b: c is neither pulled nor shown and a is shown
+#     and not counted, while a still shows and counts both; b keeps
+#     probing, stays ready, and announces nothing;
+# 11. attribution: member-a sees AS64511 degraded through AS64501 and the
+#     API and /herd.html say the other members point at provider AS64501;
+#     on member-b, which down-weights a, nothing is clear;
+# 12. outage second opinion: member-a's AS64501 incident carries 1 of 1
+#     verified members seeing AS64501 degraded, and a announces nothing;
+# 13. isolation: with member-b paused (a peer that never answers), a and c
 #     report b as failing, and a keeps probing and stays ready;
-# 11. a member with herd on exits on SIGTERM.
+# 14. a member with herd on exits on SIGTERM.
 # That herd data never reaches Decide, a scorer, or an announcer is the
 # import rule in internal/herd/boundary_test.go and the hint test in
 # internal/herd/hints_test.go; this lab shows the effect.
@@ -132,11 +145,13 @@ render() {
           host: 192.0.2.130
         - prefix: 192.0.2.192/27
           host: 192.0.2.200
-" extra=""
+" extra="" view=""
 	case "$id" in
 	a)
 		extra="  - type: herd_hints
     config: {min_vantages: 1, max_targets: 4}
+  - type: outage
+    config: {min_prefixes: 2, window: 1m, interval: 1s}
 "
 		;;
 	c)
@@ -158,8 +173,13 @@ render() {
 "
 		;;
 	esac
+	if [ "$id" = b ]; then
+		view="  block: {endpoints: [\"https://${ip[c]}:9444\"]}
+  down_weight: {asns: [${asn[a]}]}
+"
+	fi
 	cat >"$lab_dir/$id.yaml" <<YAML
-# Lab only (#260, #659, #672). Observe mode: nothing is announced.
+# Lab only (#260, #659, #672, #686). Observe mode: nothing is announced.
 mode: observe
 asn: ${asn[$id]}
 router_id: ${ip[$id]}
@@ -197,6 +217,7 @@ ${share}  vantage: {country: ${country[$id]}}
   limits: {pull_interval: 30s}
   hub: {url: "https://herd-hub:8443/herd.json"}
   identity: {url: "https://herd-hub:8443/rsc.json"}
+${view}
 YAML
 }
 for id in a b c d e f; do render "$id"; done
@@ -318,12 +339,13 @@ need_log() {
 	fail "$why (no $svc log matching: $pattern)"
 }
 
-# peers_of member: set urls (JSON strings) and asns to the other two members'.
+# peers_of member: set urls (JSON strings) and asns to the other members it
+# pulls. member-b blocks member-c (#686).
 peers_of() {
 	local o
 	urls=() asns=()
 	for o in a b c; do
-		if [ "$o" != "$1" ]; then
+		if [ "$o" != "$1" ] && [ "$1$o" != bc ]; then
 			urls+=("\"https://${ip[$o]}:9444\"")
 			asns+=("${asn[$o]}")
 		fi
@@ -334,7 +356,7 @@ echo "1. every member takes the seed from the hub and finds the others by peer e
 for m in a b c; do
 	need_api "$m" /api/herd '.hub.source == "hub" and .hub.listed == 1 and .hub.rejected == 2 and .hub.peers == 1 and .hub.last_error == null' "member-$m did not load the hub list" 120
 	peers_of "$m"
-	need_api "$m" /api/herd "(.peers | length) == 3 and ([.peers[] | select(.source == \"hub\") | .url] == [\"https://${ip[d]}:9444\"]) and ([.peers[] | select(.source == \"exchange\") | .url] | sort) == [${urls[0]},${urls[1]}]" "member-$m should have the seed as its hub peer and the other two members by peer exchange" 150
+	need_api "$m" /api/herd "(.peers | length) == $((${#urls[@]} + 1)) and ([.peers[] | select(.source == \"hub\") | .url] == [\"https://${ip[d]}:9444\"]) and ([.peers[] | select(.source == \"exchange\") | .url] | sort) == [$(IFS=,; echo "${urls[*]}")]" "member-$m should have the seed as its hub peer and the other members it does not block by peer exchange" 150
 	need_api "$m" /api/herd '[.peers[] | select(.source == "hub")][0] | .relayed == 6 and .relay_refused == 3 and .exchange_error == null' "member-$m should read six relayed entries from the seed and refuse three"
 	need_log herd-hub "GET /herd.json from ${ip[$m]}:" "member-$m did not fetch the list from the local hub"
 	need_log herd-hub "GET /rsc.json from ${ip[$m]}:" "member-$m did not fetch the checklists from the local hub"
@@ -345,10 +367,10 @@ done
 
 echo "2. every member pulls both other members; nobody announces"
 for m in a b c; do
-	need_api "$m" /api/herd '.enabled and (.peers | length) == 3 and all(.peers[]; .failures == 0 and .last_ok != null)' "member-$m does not see its peers" 150
-	need_api "$m" /api/herd '[.peers[] | select(.source == "exchange" and .records_pulled > 0)] | length == 2' "member-$m should pull records from both other members"
 	peers_of "$m"
-	need_api "$m" /api/herd "([.peers[] | select(.source == \"exchange\") | .asn] | sort) == [${asns[0]},${asns[1]}] and ([.peers[] | select(.source == \"hub\") | .asn] == [${asn[d]}])" "member-$m peers must report the ASN of their entries"
+	need_api "$m" /api/herd ".enabled and (.peers | length) == $((${#urls[@]} + 1)) and all(.peers[]; .failures == 0 and .last_ok != null)" "member-$m does not see its peers" 150
+	need_api "$m" /api/herd "[.peers[] | select(.source == \"exchange\" and .records_pulled > 0)] | length == ${#urls[@]}" "member-$m should pull records from the other members it does not block"
+	need_api "$m" /api/herd "([.peers[] | select(.source == \"exchange\") | .asn] | sort) == [$(IFS=,; echo "${asns[*]}")] and ([.peers[] | select(.source == \"hub\") | .asn] == [${asn[d]}])" "member-$m peers must report the ASN of their entries"
 done
 for m in a b c; do
 	got=$("${compose[@]}" exec -T "edge-$m" vtysh -c "show bgp ipv4 unicast neighbors ${ip[$m]} received-routes json" 2>/dev/null | jq -r '(.receivedRoutes // {}) | length' 2>/dev/null || true)
@@ -374,6 +396,9 @@ need_status a '/api/herd/vantages' 400 "a view without origin_asn or prefix is r
 echo "5. the dashboard views on member-a list the same three members"
 need_api a /api/herd/overview '([.members[] | select(.local | not) | .source] | sort) == ["exchange","exchange","hub"] and ([.countries[]] | sort) == ["DE","JP","US"] and ([.members[] | select(.asn == 64499) | .records] == [0])' "member-a overview should list the seed and the two members found by exchange"
 need_api a /api/herd/mesh '([.rows[].asn] | unique) == [64496,64497,64498]' "member-a mesh should list the three members"
+# Attribution (#686): a sees AS64511 lose packets through AS64501, and so does
+# b, the one other member that counts, through the same provider ASN.
+need_api a /api/herd/events '[.events[] | select(.kind == "origin_asn" and .value == "64511") | .here] == [[{"provider_asn":64501,"points_at":"provider","via_reporting":1,"via_degraded":1,"elsewhere_reporting":0,"elsewhere_degraded":0}]]' "member-a world view should say AS64511 points at provider AS64501"
 need_api a /api/herd/map '([.countries[] | select(.members > 0) | .country] | sort) == ["DE","JP","US"]' "member-a map should list the three members' countries"
 need_api a '/api/herd/monitor?origin_asn=64511' '([.series[].asn] | unique) == [64496,64497,64498]' "member-a monitor for AS64511 should list the three members"
 for asn_m in 64496 64497 64498; do
@@ -384,6 +409,7 @@ bash lab/ui-smoke.sh "http://${ip[a]}:8080/herd.html" \
 	'World view' '2 of 2 members see loss (pooled by origin AS)' 'Counts are RPKI-verified members' 'loss, not counted' \
 	'this node (AS64496), US, via AS64501, icmp' ', DE, via AS64501, icmp' ', JP, via AS64501, icmp' \
 	'>AS64497<' '>AS64498<' '>AS64499<' '>hub<' '>exchange<' '>RPKI<' '>unverified<' \
+	'This node through AS64501: points at provider AS64501' \
 	--absent 'No target shows loss' || fail "member-a /herd.html does not show the world view"
 
 echo "6. hints: member-a probes what verified b sees degraded, and steers nothing"
@@ -422,11 +448,43 @@ need_log member-a 'action=herd\.serve target=.*nonce=' "member-a logged no serve
 need_log member-b 'action=herd\.serve target=.*nonce=' "member-b logged no served pull"
 need_log member-c 'action=herd\.serve target=.*origin_asn=64510' "member-c logged no served origin_asn query"
 
-echo "10. a peer that never answers does not stop probing or the other members"
+stamp() { api "$1" /api/probes | jq -r '[.. | .time? // empty] | max // empty' 2>/dev/null || true; }
+# no_steer member: the member's edge received no route and it holds no improvement.
+no_steer() {
+	local got
+	got=$("${compose[@]}" exec -T "edge-$1" vtysh -c "show bgp ipv4 unicast neighbors ${ip[$1]} received-routes json" 2>/dev/null | jq -r '(.receivedRoutes // {}) | length' 2>/dev/null || true)
+	[ "$got" = 0 ] || fail "edge-$1 received routes from member-$1 ($got) $2"
+	api "$1" /api/improvements | jq -e '(.improvements | length) == 0' >/dev/null || fail "member-$1 has an improvement $2"
+}
+
+echo "10. local view: member-b blocks c and down-weights a; a's view is unchanged"
+cid=$(keyid c)
+need_api b /api/herd "([.blocked[] | {url, key_id, records_pulled}] == [{\"url\":\"https://${ip[c]}:9444\",\"key_id\":\"$cid\",\"records_pulled\":0}]) and ([.peers[] | select(.key_id == \"$cid\")] | length == 0) and ([.peers[] | select(.asn == 64496) | .down_weighted] == [true])" "member-b should list c as blocked, never pulled, and a as down-weighted"
+need_api b '/api/herd/vantages?prefix=192.0.2.192/27' '(.vantages | length) == 0' "member-b must show none of the blocked member-c's rows"
+need_api a '/api/herd/vantages?prefix=192.0.2.192/27' '(.vantages | length) == 1 and .vantages[0].asn == 64498' "member-a, which blocks nobody, should still show member-c's route"
+need_api b /api/herd/overview '(any(.members[]; .asn == 64498) | not) and ([.members[] | select(.asn == 64496) | .down_weighted] == [true])' "member-b overview must not list c and must mark a down-weighted"
+need_api b /api/herd/events '[.events[] | select(.kind == "origin_asn" and .value == "64511" and .reporting == 1 and .degraded == 1 and ([.vantages[] | select(.asn == 64496 and .down_weighted and (.counted | not))] | length == 1))] | length == 1' "member-b world view should list a's row for AS64511 and not count it"
+need_api a /api/herd/events '[.events[] | select(.kind == "origin_asn" and .value == "64511" and .reporting == 2 and .degraded == 2)] | length == 1' "member-a world view must still count a and b: b's down-weight is b's view only"
+before=$(stamp b)
+sleep 8
+after=$(stamp b)
+if [ -z "$after" ] || [ "$after" = "$before" ]; then
+	fail "member-b probe results did not advance with a block and a down-weight ($before -> $after)"
+fi
+api b /readyz | jq -e '.ready == true' >/dev/null || fail "member-b is not ready with a block and a down-weight"
+no_steer b "with a block and a down-weight"
+
+echo "11. attribution on member-b: with a down-weighted, no other member counts"
+need_api b /api/herd/events '[.events[] | select(.kind == "origin_asn" and .value == "64511") | .here[] | select(.provider_asn == 64501 and .points_at == "unknown" and .via_reporting == 0)] | length == 1' "member-b attribution must not count the down-weighted member-a"
+
+echo "12. outage second opinion: member-a's AS64501 incident is annotated, nothing steers"
+need_api a '/api/events?limit=1000' '[.events[] | select(.kind == "outage.as" and .fields.asn == "64501" and (.message | startswith("AS 64501 degraded across ")) and .fields.herd_asn == "64501" and .fields.herd_reporting == "1" and .fields.herd_degraded == "1")] | length >= 1' "member-a outage incident for AS64501 should say 1 of 1 verified members sees AS64501 degraded" 150
+no_steer a "after an annotated outage incident"
+
+echo "13. a peer that never answers does not stop probing or the other members"
 "${compose[@]}" pause member-b
 need_api a /api/herd '[.peers[] | select(.failures > 0 and .last_error != "")] | length == 1' "member-a does not report the paused peer as failing" 120
 need_api c /api/herd '[.peers[] | select(.failures > 0)] | length == 1' "member-c does not report the paused peer as failing" 120
-stamp() { api "$1" /api/probes | jq -r '[.. | .time? // empty] | max // empty' 2>/dev/null || true; }
 before=$(stamp a)
 sleep 8
 after=$(stamp a)
@@ -436,7 +494,7 @@ fi
 api a /readyz | jq -e '.ready == true' >/dev/null || fail "member-a is not ready with a paused peer"
 "${compose[@]}" unpause member-b
 
-echo "11. SIGTERM: a member with herd on exits"
+echo "14. SIGTERM: a member with herd on exits"
 "${compose[@]}" kill -s SIGTERM member-a
 for i in $(seq 1 20); do
 	if [ "$("${compose[@]}" ps -q --status running member-a | wc -l)" -eq 0 ]; then

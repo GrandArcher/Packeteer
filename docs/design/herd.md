@@ -4,10 +4,11 @@ Status: phase 1 (local store, serve, pull among static peers) is
 implemented under #260 and the hub under #261. Part of phase 2 is
 implemented under #672: peer exchange from hub peers, identities checked
 against validated RSC checklists read from an https source (one identity
-per ASN), the crowd threshold, and the hint source. See docs/herd.md for
-the shipped behavior and config. Not implemented: seed DNS names, the RSC
-validation itself, local blocklists and weights, the attribution and
-outage annotation uses, and phase 3. Names and numbers below are
+per ASN), the crowd threshold, and the hint source; the local block and
+down-weight, the attribution, and the outage annotation under #686. See
+docs/herd.md for the shipped behavior and config. Not implemented: seed
+DNS names, the RSC validation itself, a public hub repository, the DHT,
+and phase 3. Names and numbers below are
 proposals for review. None of them were measured.
 
 A herd is a set of Packeteer instances run by different operators that

@@ -4,7 +4,7 @@ Herd (#260, [design](design/herd.md)) lets a few operators share what their prob
 
 Peers come from `herd.peers`, a hub list ([herd-hub.md](herd-hub.md)), and peer exchange with the hub peers (#672).
 
-Not built: route-visibility warnings (phase 3), a public hub repository, a DHT, local blocklists and weights, the "my upstream or the destination" attribution and the outage annotation, and the IXP vantage kind (proposals in the [design](design/herd.md), #87).
+Not built: route-visibility warnings (phase 3), seed DNS names, RPKI validation in the node, a public hub repository, a DHT, and the IXP vantage kind (proposals in the [design](design/herd.md), #87).
 
 ## What leaves the box
 
@@ -50,6 +50,21 @@ A target source of type `herd_hints` ([CONFIG.md](CONFIG.md#source-herd_hints)) 
 
 A hint only adds a probe target. Records of a route probed only for a hint are not stored or shared (`herd_hints` is not a `share.sources` type), and any improvement still comes from this node's own measurements passing the normal thresholds, hold time, allowlist, and cap. No herd data enters `Decide`.
 
+## Local view
+
+`herd.block` and `herd.down_weight` ([CONFIG.md](CONFIG.md#herd)) name members by identity (`asns`), node key id (`keys`, `key_id` in `GET /api/herd`), or pull API endpoint (`endpoints`) (#686). They change only this node's view; nothing about them is sent to another member, and other nodes still pull, show, and count the member.
+
+- A blocked member is neither pulled nor shown: no records or peer list are requested from it, its stored rows are left out of every view, and it is not relayed in this node's peer list. A member blocked by ASN alone is asked for its status once per pull interval, because that is how its ASN is learned. `GET /api/herd` lists it under `blocked`, not `peers`. A block does not stop it from pulling what this node shares; remove it from `peers` or the hub for that.
+- A down-weighted member is shown in every row, marked `down_weighted`, and left out of every count: the world view, the hints, the crowd threshold, the attribution, and the outage opinion.
+
+## My upstream or the destination
+
+For each target where this node's own latest row through a provider ASN sees loss (at or above the world view's threshold), the world view (`GET /api/herd/events`, `here`) and the dashboard compare it with the latest rows of the other members that count, once per ASN, on the same target and granularity (#686): `via_*` counts the members through the same provider ASN, `elsewhere_*` those through any other. `points_at` is `this_edge` when no other member sees loss, `provider` when the members that see loss all go through that provider ASN, `destination` when every other member sees loss and some of them through another provider ASN, and `unknown` when no other member measures the target or the rows disagree otherwise. It is display only: nothing reads it to steer.
+
+## Outage second opinion
+
+When an `outage` source opens an AS or a circuit incident, its `outage.as` or `outage.circuit` event carries `herd_asn`, `herd_reporting`, and `herd_degraded` (#686): of the other members that count, once per ASN, how many have a latest row in the last 15 minutes that names that ASN as origin, provider, or on its AS path, and how many of those see loss at or above 5 %. `herd_degraded` of `0` means none does. A circuit incident uses the provider's `asn`; without one the event carries no annotation. The counts come from herd's last refresh (every pull interval, on herd's own goroutine), so the outage source never waits on the herd store, and an event sent before the first refresh carries none. The annotation only adds fields to the event: it never opens, closes, or changes an incident, its targets, or its thresholds.
+
 ## Limits
 
 Every limit is enforced by the node it protects (see `herd.limits` in [CONFIG.md](CONFIG.md#herd)): per-identity, per-address and global request rates (`429` with `Retry-After`; covering and covered queries cost up to 4 exact ones), connection and handshake caps, a request byte cap and strict parser, read, write, idle and handshake timeouts, page and response byte caps; when pulling, concurrent pulls, a per-interval and per-peer request budget, a response size cap enforced while reading, records per response, per pull and per peer, exponential backoff with jitter after a failure or `429`, and a disk budget for local and for pulled records. A full hand-off queue drops the round and counts it; the probe loop never waits. A trimmed disk budget deletes the oldest pulled rows first. The per-address table holds 4096 addresses; when it is full the least recently seen one is dropped, an address with a pinned handshake last, so many source addresses cannot refuse a pinned peer (#506). Each trip is counted by limit and peer in `GET /api/herd` and `packeteer_herd_limit_trips_total`.
@@ -77,4 +92,4 @@ Outside intelligence is a separate panel, opt-in per source under `herd.outside`
 
 ## Lab
 
-`lab/e2e-herd.sh` runs three members (FRR edge plus Packeteer each, one AS each) on documentation prefixes and ASNs with generated keys (#659, #672). A local hub (`lab/herdhub`) lists only a seed node it also runs, plus a tampered and an expired entry every member refuses; the members find each other by peer exchange from the seed's peer list and refuse the tampered, expired, and oversized entries in it. The hub also serves the RPKI stand-in, which verifies two members and leaves the third shown and not counted. The run checks the hints, the crowd threshold, and the world view, mesh, map, monitors, and search on `/herd.html`. It is not a public hub repository, and labs never talk to a real herd. See [lab/README.md](../lab/README.md).
+`lab/e2e-herd.sh` runs three members (FRR edge plus Packeteer each, one AS each) on documentation prefixes and ASNs with generated keys (#659, #672). A local hub (`lab/herdhub`) lists only a seed node it also runs, plus a tampered and an expired entry every member refuses; the members find each other by peer exchange from the seed's peer list and refuse the tampered, expired, and oversized entries in it. The hub also serves the RPKI stand-in, which verifies two members and leaves the third shown and not counted. The run checks the hints, the crowd threshold, and the world view, mesh, map, monitors, and search on `/herd.html`, and (#686) a member that blocks one peer and down-weights another while the third member's view is unchanged, the attribution on the API and the page, and the herd fields on an outage incident, with nothing announced. It is not a public hub repository, and labs never talk to a real herd. See [lab/README.md](../lab/README.md).

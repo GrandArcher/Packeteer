@@ -35,9 +35,10 @@ function herdMemberLabel(v) {
   return "AS" + v.asn + " " + String(v.member).slice(0, 8);
 }
 
-// herdVantageLabel names a vantage: member, country, provider, method.
+// herdVantageLabel names a vantage: member, country, provider, method,
+// and whether this node down-weights the member (herd.down_weight).
 function herdVantageLabel(v) {
-  return herdMemberLabel(v) + ", " + v.country + ", via " + herdAS(v.provider_asn) + ", " + v.method;
+  return herdMemberLabel(v) + ", " + v.country + ", via " + herdAS(v.provider_asn) + ", " + v.method + (v.down_weighted ? ", down-weighted" : "");
 }
 
 function herdCountryName(code) {
@@ -88,13 +89,13 @@ function renderHerdOverview(sharing, members, d) {
   var rows = (d.members || []).map(function (m) {
     var state = m.stale ? "stale" : "fresh";
     return [ixpCell(m.local ? "this node" : m.member.slice(0, 12), "mono"), ixpCell("AS" + m.asn),
-      ixpCell(m.local ? "this node" : herdIdentity(m.identity)), ixpCell(m.verified ? "yes" : "no"), ixpCell(m.source),
+      ixpCell(m.local ? "this node" : herdIdentity(m.identity) + (m.down_weighted ? ", down-weighted" : "")), ixpCell(m.verified ? "yes" : "no"), ixpCell(m.source),
       ixpCell((m.countries || []).join(", ")), ixpCell(m.vantages), ixpCell(m.records),
       ixpCell(herdAge(m.newest_age_seconds)), ixpCell(m.last_ok ? fmtTime(m.last_ok) : (m.local ? "" : "never")),
       ixpCell(m.last_error ? state + ": " + m.last_error : state, m.stale ? "bad" : "")];
   });
   members.appendChild(ixpTable(["Member", "ASN", "Identity", "Verified", "Source", "Countries", "Vantages", "Records (24 h)", "Newest record", "Last pulled", "State"], rows));
-  members.appendChild(el("p", "tag", "Verified means the identity source (herd.identity) binds the member's key to its ASN. With one, unverified members are listed and not counted; without one, nobody is verified and every member counts."));
+  members.appendChild(el("p", "tag", "Verified means the identity source (herd.identity) binds the member's key to its ASN. With one, unverified members are listed and not counted; without one, nobody is verified and every member counts. A down-weighted member (herd.down_weight) is listed and never counted; a blocked one (herd.block) is not listed."));
 }
 
 function herdIdentity(id) {
@@ -102,6 +103,15 @@ function herdIdentity(id) {
 }
 
 // ---- World view ----
+
+// herdHere says what the other members point at for one provider ASN this
+// node sees the target degraded through. It is display only.
+function herdHere(h) {
+  var at = {destination: "points at the destination", provider: "points at provider " + herdAS(h.provider_asn),
+    this_edge: "points at this edge", unknown: "points at nothing clear"}[h.points_at] || h.points_at;
+  return "This node through " + herdAS(h.provider_asn) + ": " + at + " (other members through " + herdAS(h.provider_asn) + ": " +
+    h.via_degraded + " of " + h.via_reporting + " see loss; through other providers: " + h.elsewhere_degraded + " of " + h.elsewhere_reporting + ").";
+}
 
 function renderHerdEvents(root, d) {
   clear(root);
@@ -124,9 +134,10 @@ function renderHerdEvents(root, d) {
     box.appendChild(el("p", "tag", (e.by_provider || []).map(function (p) {
       return "through " + herdAS(p.provider_asn) + ": " + p.degraded + " of " + p.reporting;
     }).join("; ")));
+    (e.here || []).forEach(function (h) { box.appendChild(el("p", "tag", herdHere(h))); });
     box.appendChild(ixpTable(["Vantage", "Loss", "RTT avg", "Age", "State"], (e.vantages || []).map(function (v) {
       return [ixpCell(herdVantageLabel(v)), ixpCell(herdPct(v.loss_pct), v.degraded ? "bad" : ""), ixpCell(herdMs(v.rtt_avg_ms)),
-        ixpCell(herdAge(v.age_seconds)), ixpCell((v.degraded ? "loss" : "ok") + (v.counted === false ? ", not counted" : ""), v.degraded ? "bad" : "")];
+        ixpCell(herdAge(v.age_seconds)), ixpCell((v.degraded ? "loss" : "ok") + (v.down_weighted ? ", down-weighted" : "") + (v.counted === false ? ", not counted" : ""), v.degraded ? "bad" : "")];
     })));
     root.appendChild(box);
   });

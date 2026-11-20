@@ -199,7 +199,7 @@ func (s *outageSnap) get(view learnedView) []outage.Route {
 // RIB, and sends its events to the notifiers. A missing or unready RIB
 // yields no routes, so AS correlation stays quiet. The dispatcher queues
 // events, so a slow notifier cannot hold the probe loop.
-func wireOutage(plugins *pluginhost.Set, engine *probe.Engine, view *rib.View, out emitter) {
+func wireOutage(plugins *pluginhost.Set, engine *probe.Engine, view *rib.View, out emitter, note func(plugin.Event) plugin.Event) {
 	if plugins == nil {
 		return
 	}
@@ -212,6 +212,9 @@ func wireOutage(plugins *pluginhost.Set, engine *probe.Engine, view *rib.View, o
 	}
 	routes := func() []outage.Route { return snap.get(view) }
 	send := func(ev plugin.Event) {
+		if note != nil {
+			ev = note(ev)
+		}
 		if out != nil {
 			out.Emit(ev)
 		}

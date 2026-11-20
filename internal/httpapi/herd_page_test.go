@@ -55,7 +55,8 @@ func (fixtureHerd) Events(context.Context, string) (herd.Events, error) {
 	return herd.Events{Enabled: true, AsOf: pageNow, WindowSeconds: 900, LossPct: 5, Basis: herd.BasisPinned, Targets: 3, Events: []herd.EventRow{
 		{Target: herd.Target{Kind: "origin_asn", Value: "64510"}, Reporting: 4, Degraded: 3,
 			ByProvider: []herd.ProviderCount{{ProviderASN: 64520, Reporting: 3, Degraded: 2}, {ProviderASN: 64521, Reporting: 2, Degraded: 1}},
-			Vantages:   []herd.EventVantage{local, a, b, c}},
+			Vantages:   []herd.EventVantage{local, a, b, c},
+			Here:       []herd.Attribution{{ProviderASN: 64520, PointsAt: herd.PointsUnknown, ViaReporting: 1, ViaDegraded: 1, ElsewhereReporting: 2, ElsewhereDegraded: 1}}},
 		{Target: herd.Target{Kind: "prefix", Value: "198.51.100.0/24"}, Reporting: 2, Degraded: 1, Origins: []uint32{64512},
 			ByProvider: []herd.ProviderCount{{ProviderASN: 64520, Reporting: 1, Degraded: 1}}, Vantages: []herd.EventVantage{route}},
 	}}, nil

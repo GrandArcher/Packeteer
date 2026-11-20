@@ -84,7 +84,9 @@ type Board struct {
 	Peers map[string]uint32
 	// Verified is the members the identity source verified, by key id and
 	// "local" for this node; nil when none is configured.
-	Verified  map[string]bool
+	Verified map[string]bool
+	// Down is the peers herd.down_weight names, by key id (#686).
+	Down      map[string]bool
 	Retention time.Duration
 	Now       time.Time
 }
@@ -153,7 +155,7 @@ func (b Board) load(ctx context.Context, bq boardQuery, span time.Duration) ([]o
 	if truncated {
 		rows = rows[:viewRows]
 	}
-	return decodeRows(rows, b.Self, b.Peers, b.Verified), truncated, nil
+	return decodeRows(rows, b), truncated, nil
 }
 
 func (b Board) age(t time.Time) float64 { return max(b.Now.Sub(t).Seconds(), 0) }
@@ -207,11 +209,14 @@ type MemberRow struct {
 	// Verified is set when the identity source binds the member's key to
 	// its ASN. With an identity source, an unverified member is shown and
 	// not counted.
-	Verified  bool     `json:"verified"`
-	Source    string   `json:"source"`
-	Countries []string `json:"countries"`
-	Vantages  int      `json:"vantages"`
-	Records   int      `json:"records"`
+	Verified bool `json:"verified"`
+	// DownWeighted is set for a member herd.down_weight names: shown, not
+	// counted.
+	DownWeighted bool     `json:"down_weighted"`
+	Source       string   `json:"source"`
+	Countries    []string `json:"countries"`
+	Vantages     int      `json:"vantages"`
+	Records      int      `json:"records"`
 	// NewestAgeSeconds is the age of the member's newest record in the
 	// last 24 hours; absent when there is none.
 	NewestAgeSeconds *float64   `json:"newest_age_seconds,omitempty"`
@@ -269,7 +274,7 @@ func (b Board) Overview(ctx context.Context, st NodeStatus) (Overview, error) {
 		if local {
 			key = "local"
 		}
-		m := MemberRow{Member: member, Local: local, ASN: asn, Identity: identityOf(key, b.Verified), Verified: b.Verified[key], Source: source, Countries: []string{}}
+		m := MemberRow{Member: member, Local: local, ASN: asn, Identity: identityOf(key, b.Verified), Verified: b.Verified[key], DownWeighted: b.Down[key], Source: source, Countries: []string{}}
 		if a := byMember[member]; a != nil {
 			m.Records, m.Vantages = a.records, len(a.vantages)
 			for c := range a.countries {
@@ -360,6 +365,95 @@ type EventRow struct {
 	Origins    []uint32        `json:"origins,omitempty"`
 	ByProvider []ProviderCount `json:"by_provider"`
 	Vantages   []EventVantage  `json:"vantages"`
+	// Here is what the other members point at for each provider ASN this
+	// node sees the target degraded through (#686). Display only.
+	Here []Attribution `json:"here,omitempty"`
+}
+
+// What the other members' rows point at when this node sees a target
+// degraded through one provider ASN.
+const (
+	PointsDestination = "destination"
+	PointsProvider    = "provider"
+	PointsThisEdge    = "this_edge"
+	PointsUnknown     = "unknown"
+)
+
+// Attribution compares this node's degraded vantage through ProviderASN
+// with the other members that count, once per member ASN: those through
+// the same provider ASN (Via) and those through any other (Elsewhere). A
+// member that measures through both is in both.
+type Attribution struct {
+	ProviderASN uint32 `json:"provider_asn"`
+	// PointsAt is this_edge when no other member sees loss; provider when
+	// the members that see loss all go through ProviderASN; destination
+	// when every other member sees loss, through ProviderASN and through
+	// another provider ASN; unknown when no other member measures the
+	// target or the rows disagree otherwise.
+	PointsAt           string `json:"points_at"`
+	ViaReporting       int    `json:"via_reporting"`
+	ViaDegraded        int    `json:"via_degraded"`
+	ElsewhereReporting int    `json:"elsewhere_reporting"`
+	ElsewhereDegraded  int    `json:"elsewhere_degraded"`
+}
+
+// attribute builds the Attribution of every provider ASN this node sees
+// the target degraded through, from the latest rows of one target.
+func attribute(list []obs, loss float64) []Attribution {
+	here := map[uint32]bool{}
+	type pk struct{ provider, asn uint32 }
+	all, bad := map[pk]bool{}, map[pk]bool{}
+	for _, o := range list {
+		d := degraded(o, loss)
+		switch {
+		case o.member == "local":
+			if d {
+				here[o.rec.ProviderASN] = true
+			}
+		case o.counted:
+			all[pk{o.rec.ProviderASN, o.asn}] = true
+			if d {
+				bad[pk{o.rec.ProviderASN, o.asn}] = true
+			}
+		}
+	}
+	var out []Attribution
+	for _, a := range sortedASNs(here) {
+		viaAll, viaBad, elseAll, elseBad := map[uint32]bool{}, map[uint32]bool{}, map[uint32]bool{}, map[uint32]bool{}
+		for k := range all {
+			if k.provider == a {
+				viaAll[k.asn], viaBad[k.asn] = true, bad[k]
+			} else {
+				elseAll[k.asn], elseBad[k.asn] = true, elseBad[k.asn] || bad[k]
+			}
+		}
+		at := Attribution{ProviderASN: a, ViaReporting: len(viaAll), ViaDegraded: count(viaBad), ElsewhereReporting: len(elseAll), ElsewhereDegraded: count(elseBad)}
+		switch {
+		case at.ViaReporting+at.ElsewhereReporting == 0:
+			at.PointsAt = PointsUnknown
+		case at.ViaDegraded+at.ElsewhereDegraded == 0:
+			at.PointsAt = PointsThisEdge
+		case at.ElsewhereDegraded == 0:
+			at.PointsAt = PointsProvider
+		case at.ViaDegraded == at.ViaReporting && at.ElsewhereDegraded == at.ElsewhereReporting:
+			at.PointsAt = PointsDestination
+		default:
+			at.PointsAt = PointsUnknown
+		}
+		out = append(out, at)
+	}
+	return out
+}
+
+// count is the number of true values in m.
+func count(m map[uint32]bool) int {
+	n := 0
+	for _, v := range m {
+		if v {
+			n++
+		}
+	}
+	return n
 }
 
 // Events is the world view: where any member sees degradation now.
@@ -420,6 +514,7 @@ func (b Board) Events(ctx context.Context, raw string) (Events, error) {
 			continue
 		}
 		row.Reporting, row.Degraded, row.Origins = len(seen), len(lossy), sortedASNs(origins)
+		row.Here = attribute(list, bq.loss)
 		counts := map[uint32]*ProviderCount{}
 		for k := range pAll {
 			pc := counts[k.provider]
@@ -453,6 +548,62 @@ func (b Board) Events(ctx context.Context, raw string) (Events, error) {
 		ev.Events, ev.Truncated = ev.Events[:maxEvents], true
 	}
 	return ev, nil
+}
+
+// ---- Outage second opinion ----
+
+// Opinion is how many other members see one ASN degraded now (#686):
+// Reporting counts the members that count (once per ASN) with a latest row
+// in the world view's window that names the ASN as origin, provider, or on
+// its AS path; Degraded those with such a row at or above the world view's
+// loss threshold. It annotates an outage incident and never changes one.
+type Opinion struct {
+	Reporting int `json:"reporting"`
+	Degraded  int `json:"degraded"`
+}
+
+// opinions builds the Opinion of every ASN the other members' latest rows
+// name. This node's own rows are left out: they are what opened the
+// incident.
+func (b Board) opinions(ctx context.Context) (map[uint32]Opinion, error) {
+	bq, err := b.parse("", nil, 15*time.Minute, 15*time.Minute)
+	if err != nil {
+		return nil, err
+	}
+	all, _, err := b.load(ctx, bq, bq.window)
+	if err != nil {
+		return nil, err
+	}
+	reporting, bad := map[uint32]map[uint32]bool{}, map[uint32]map[uint32]bool{}
+	mark := func(m map[uint32]map[uint32]bool, asn, member uint32) {
+		if m[asn] == nil {
+			m[asn] = map[uint32]bool{}
+		}
+		m[asn][member] = true
+	}
+	for _, o := range latestCells(all) {
+		if o.member == "local" || !o.counted {
+			continue
+		}
+		named := map[uint32]bool{o.rec.OriginASN: true, o.rec.ProviderASN: true}
+		for _, p := range pathsOf(o.rec) {
+			for _, a := range p {
+				named[a] = true
+			}
+		}
+		delete(named, 0)
+		for a := range named {
+			mark(reporting, a, o.asn)
+			if degraded(o, bq.loss) {
+				mark(bad, a, o.asn)
+			}
+		}
+	}
+	out := make(map[uint32]Opinion, len(reporting))
+	for a, m := range reporting {
+		out[a] = Opinion{Reporting: len(m), Degraded: len(bad[a])}
+	}
+	return out, nil
 }
 
 // ---- Mesh ----

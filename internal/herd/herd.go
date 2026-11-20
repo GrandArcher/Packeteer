@@ -72,6 +72,9 @@ type Herd struct {
 	exch   *Exchange
 	exKeys *KeySet
 	hints  atomic.Pointer[[]Hint]
+	// opinions are the outage second opinions by ASN (#686).
+	opinions atomic.Pointer[map[uint32]Opinion]
+	view     localView
 
 	crowdMu sync.Mutex
 	crowdAt map[netip.Prefix]crowdEntry
@@ -94,7 +97,7 @@ func New(o Options) (*Herd, error) {
 	if err != nil {
 		return nil, err
 	}
-	h := &Herd{o: o, node: node, trips: &Trips{}, crowdAt: map[netip.Prefix]crowdEntry{}}
+	h := &Herd{o: o, node: node, trips: &Trips{}, crowdAt: map[netip.Prefix]crowdEntry{}, view: newLocalView(o.Cfg)}
 	h.rec = NewRecorder(RecorderOptions{
 		Cfg: o.Cfg, Node: node, Store: o.Store, RIB: o.RIB, Rules: o.Rules, Methods: o.Methods,
 		FirstMethod: o.FirstMethod, SourceTypes: o.SourceTypes, Now: o.Now, Log: o.Log, Event: o.Event,
@@ -142,6 +145,7 @@ func New(o Options) (*Herd, error) {
 		po := PullerOptions{
 			Cfg: o.Cfg, Node: node, Store: o.Store, Origins: h.rec.Origins, Now: o.Now, Log: o.Log,
 			Trips: h.trips, Event: o.Event, Active: o.Active, Exchange: h.exch, Learned: h.applyExchange,
+			Blocked: h.view.block.has,
 		}
 		if h.pull, err = NewPuller(po); err != nil {
 			return nil, err
@@ -198,7 +202,7 @@ func (h *Herd) Start(ctx context.Context) error {
 	}
 	if h.pull != nil {
 		run(h.pull.Run)
-		run(h.runHints)
+		run(h.runRefresh)
 	}
 	if h.hub != nil {
 		run(h.hub.Run)
@@ -241,14 +245,18 @@ func (h *Herd) PreviewStatus() []byte {
 
 // board is the dashboard reader over this node's store.
 func (h *Herd) board() Board {
-	b := Board{Store: h.o.Store, Self: h.o.ASN, Peers: map[string]uint32{}, Retention: time.Duration(h.o.Cfg.RetentionDays) * 24 * time.Hour, Now: h.o.Now()}
+	b := Board{Store: h.o.Store, Self: h.o.ASN, Peers: map[string]uint32{}, Down: map[string]bool{}, Retention: time.Duration(h.o.Cfg.RetentionDays) * 24 * time.Hour, Now: h.o.Now()}
 	if h.ids != nil {
 		b.Verified = map[string]bool{"local": h.ids.Verified(h.o.ASN, h.node.ID())}
 	}
-	for _, p := range h.peers() {
+	shown, _ := h.peers()
+	for _, p := range shown {
 		b.Peers[p.KeyID] = p.ASN
 		if b.Verified != nil && p.Verified {
 			b.Verified[p.KeyID] = true
+		}
+		if p.DownWeighted {
+			b.Down[p.KeyID] = true
 		}
 	}
 	return b
@@ -256,22 +264,27 @@ func (h *Herd) board() Board {
 
 // peers is the puller's peers with Verified read from the identity source
 // now, so a peer whose checklist expired stops counting even while its
-// pulls fail.
-func (h *Herd) peers() []PeerStatus {
+// pulls fail, and DownWeighted from herd.down_weight. The peers herd.block
+// names are returned apart: they are not pulled, shown, or counted.
+func (h *Herd) peers() (shown, blocked []PeerStatus) {
 	if h.pull == nil {
-		return nil
+		return nil, nil
 	}
-	ps := h.pull.Peers()
-	for i := range ps {
-		ps[i].Verified = h.ids.Verified(ps[i].ASN, ps[i].KeyID)
+	for _, p := range h.pull.Peers() {
+		p.Verified = h.ids.Verified(p.ASN, p.KeyID)
+		if h.view.block.has(p.ASN, p.KeyID, p.URL) {
+			blocked = append(blocked, p)
+			continue
+		}
+		p.DownWeighted = h.view.down.has(p.ASN, p.KeyID, p.URL)
+		shown = append(shown, p)
 	}
-	return ps
+	return shown, blocked
 }
 
 // Vantages is the per-vantage view of own and pulled records.
 func (h *Herd) Vantages(ctx context.Context, raw string) (VantageView, error) {
-	b := h.board()
-	return BuildView(ctx, b.Store, raw, b.Self, b.Peers, b.Verified, b.Now)
+	return BuildView(ctx, h.board(), raw)
 }
 
 // Overview is the dashboard's member list and own sharing status.
@@ -324,12 +337,15 @@ type NodeStatus struct {
 	Identity *IdentityStatus `json:"identity,omitempty"`
 	CrowdK   int             `json:"crowd_k"`
 	// Hints are the routes the herd_hints source may probe (#672).
-	Hints  []Hint       `json:"hints"`
-	Peers  []PeerStatus `json:"peers"`
-	Hub    *HubStatus   `json:"hub,omitempty"`
-	Limits []TripCount  `json:"limit_trips"`
-	Queue  QueueStatus  `json:"queue"`
-	Store  StoreStatus  `json:"store"`
+	Hints []Hint       `json:"hints"`
+	Peers []PeerStatus `json:"peers"`
+	// Blocked are the peers herd.block names (#686): known from the hub,
+	// peer exchange, or the config, and neither pulled nor shown.
+	Blocked []PeerStatus `json:"blocked"`
+	Hub     *HubStatus   `json:"hub,omitempty"`
+	Limits  []TripCount  `json:"limit_trips"`
+	Queue   QueueStatus  `json:"queue"`
+	Store   StoreStatus  `json:"store"`
 }
 
 // QueueStatus is the recorder's hand-off queue.
@@ -356,11 +372,13 @@ func (h *Herd) Status(ctx context.Context) NodeStatus {
 		Enabled: true, PreviewOnly: c.PreviewOnly, Serving: c.Serving(), KeyID: h.node.ID(), PublicKey: h.node.PublicKey(),
 		ASN: h.o.ASN, Country: c.Vantage.Country, Granularity: c.Share.Granularity, Classes: c.Share.Classes,
 		Sources: c.Share.Sources, Discovery: c.Share.Discovery, RetentionDays: c.RetentionDays, CrowdK: c.Share.CrowdK,
-		Peers: []PeerStatus{}, Hints: append([]Hint{}, h.Hints()...), Limits: h.trips.Snapshot(),
+		Peers: []PeerStatus{}, Blocked: []PeerStatus{}, Hints: append([]Hint{}, h.Hints()...), Limits: h.trips.Snapshot(),
 		Queue: QueueStatus{Dropped: h.rec.Dropped(), Stored: h.rec.Stored(), Restarts: h.rec.Restarts()},
 	}
 	if h.pull != nil {
-		st.Peers = h.peers()
+		shown, blocked := h.peers()
+		st.Peers = append(st.Peers, shown...)
+		st.Blocked = append(st.Blocked, blocked...)
 		st.Queue.Restarts += h.pull.Restarts()
 	}
 	if h.hub != nil {

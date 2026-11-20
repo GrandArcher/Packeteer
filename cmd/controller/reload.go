@@ -424,6 +424,8 @@ type reloader struct {
 	engine  *probe.Engine
 	// hints reads the herd hints for a herd_hints source a reload adds.
 	hints func() []herdhints.Hint
+	// outageNote annotates the events of an outage source a reload adds.
+	outageNote func(plugin.Event) plugin.Event
 	// perASN is the probe.per_asn_pps set the engine was built with; new
 	// traceroute sources share it.
 	perASN  *probe.ASNLimits
@@ -646,7 +648,7 @@ func (r *reloader) applyOnline(ctx context.Context, next *config.Config, online 
 			wireProbeExclusion(next, r.plugins, r.rib)
 			wirePacketWait(r.plugins, r.perASN)
 			wireLearnedRoutes(r.plugins, r.rib)
-			wireOutage(r.plugins, r.engine, r.rib, r.dispatch)
+			wireOutage(r.plugins, r.engine, r.rib, r.dispatch, r.outageNote)
 			wireHerdHints(r.plugins, r.hints)
 		}
 		if slices.Contains(online, "policies") {

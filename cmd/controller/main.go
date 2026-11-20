@@ -872,7 +872,8 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	wireProbeExclusion(cfg, plugins, view)
 	wirePacketWait(plugins, asnLimiter)
 	wireLearnedRoutes(plugins, view)
-	wireOutage(plugins, engine, view, dispatch)
+	outageNote := herdOutageNote(cfg, herdOpinion(&herdRef))
+	wireOutage(plugins, engine, view, dispatch, outageNote)
 	wireHerdHints(plugins, herdHints(&herdRef))
 	col.SetTelemetry(func() []plugin.Usage { return collectTelemetry(context.Background(), plugins) })
 	col.SetFlowTracked(func() int { return flowTracked(plugins) })
@@ -1170,7 +1171,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 
 	rl := &reloader{
 		path: path, getenv: getenv, httpUser: httpUser, log: log, cur: cfg, ctl: ctl, poke: poke,
-		exp: exp, flowTags: exportFlowTags, feed: policyFeed, hints: herdHints(&herdRef),
+		exp: exp, flowTags: exportFlowTags, feed: policyFeed, hints: herdHints(&herdRef), outageNote: outageNote,
 		geo: geo, plugins: plugins, engine: engine, perASN: asnLimiter, decider: decider, fed: fed, col: col,
 		watch: watch, live: live, preview: preview.PreviewConfig, dispatch: dispatch, hist: rec, inb: inb, mit: mit,
 		flowSpecUp: view != nil && mitigationFlowSpec(cfg, plugins),
