@@ -356,8 +356,8 @@ var blockDefs = []Block{
 	},
 	{
 		ID: "herd", Title: "Herd (shared measurements)", YAML: "herd", Optional: true, path: []string{"herd"},
-		Help:  "Shares probe measurements, never names, host addresses, or usage, with the peers you pin by key. Advisory only: never read by a decision and never announces. Needs sqlite storage and bgp neighbors. Outside sources and resource limits are below; none of it is herd data or reaches a decision. A change needs a restart.",
-		check: checkHerdOutside,
+		Help:  "Shares probe measurements, never names, host addresses, or usage, with the peers you pin by key. Advisory only: never read by a decision and never announces. Needs sqlite storage and bgp neighbors. Block and down-weight below change only this node's view. Outside sources and resource limits are below; none of it is herd data or reaches a decision. A change needs a restart.",
+		check: checkHerd,
 		Fields: slices.Concat([]Field{
 			field("enabled", "Enabled", "Off stores, serves, and pulls nothing.", KindBool).startOn(),
 			field("preview_only", "Preview only", "Stores and previews records but serves and pulls nothing. Needs no listen address or peers.", KindBool),
@@ -386,6 +386,12 @@ var blockDefs = []Block{
 				field("url", "URL", "https address of the checklist document.", KindString).req(),
 				field("refresh", "Refresh", "How often it is fetched, 10m to 24h.", KindDuration).rng(600, day).dflt("1h"),
 			),
+			field("block.asns", "Block: ASNs", "Members verified as these ASNs are neither pulled nor shown here, one per row. Changes only this node's view.", KindInts).rng(1, u32Max).adv(),
+			field("block.keys", "Block: key ids", "Members with these node key ids (key_id in GET /api/herd, 64 lowercase hex digits), one per row.", KindList).check("herdkeyid").adv(),
+			field("block.endpoints", "Block: endpoints", "Members at these pull API addresses, https://host:port, one per row.", KindList).check("herdurl").adv(),
+			field("down_weight.asns", "Down-weight: ASNs", "Members verified as these ASNs are shown in rows and left out of every count, one per row. Not for a member that is also blocked.", KindInts).rng(1, u32Max).adv(),
+			field("down_weight.keys", "Down-weight: key ids", "Members with these node key ids, one per row.", KindList).check("herdkeyid").adv(),
+			field("down_weight.endpoints", "Down-weight: endpoints", "Members at these pull API addresses, one per row.", KindList).check("herdurl").adv(),
 			field("outside.atlas.enabled", "RIPE Atlas", "Shows public RIPE Atlas results and the status of your hosted probes on the herd page, read with no API key. Off until ticked.", KindBool),
 			field("outside.atlas.measurements", "Atlas measurements", "Public measurement ids, one per row, at most 4. Only ping results are shown.", KindInts).rng(1, 2147483647),
 			field("outside.atlas.probes", "Atlas probes", "Your own hosted probe ids, one per row, at most 4.", KindInts).rng(1, 2147483647),
