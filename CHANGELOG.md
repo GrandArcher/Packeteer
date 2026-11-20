@@ -7,10 +7,11 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 ### Added
 
 - Settings forms for the herd `outside` sources (Atlas, RIS, RPKI, link-outs), the herd `limits`, and the `linkouts` block; never mode, allowlist, or announcer (#687).
+- Herd local uses in the lab: `herd.block` and `herd.down_weight` (this node's view only), upstream-or-destination attribution in the world view, herd counts on outage incidents; advisory (#686).
+
 ### Changed
 
 - `upgrade-release` CI job starts from the v1.8.0 image, pinned by digest, instead of v1.7.0; the downgrade step still removes no key (#685).
-- Herd local uses in the lab: `herd.block` and `herd.down_weight` (this node's view only), upstream-or-destination attribution in the world view, herd counts on outage incidents; advisory (#686).
 
 ## [1.8.0] - 2026-11-19
 
