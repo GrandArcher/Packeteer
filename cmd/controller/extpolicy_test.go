@@ -180,8 +180,19 @@ func TestExternalPolicyBesideInject(t *testing.T) {
 			d.fatalf("expired shutdown document still lists routes: %+v", doc)
 		}
 	}
-	if _, err := recv(); !errors.Is(err, io.EOF) {
-		t.Errorf("stream after shutdown: %v", err)
+	// watch reads Changed and Document apart, so a Close between them sends
+	// the expired set twice. The deadline in watch bounds the wait for EOF.
+	for {
+		doc, err := recv()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			d.fatalf("stream after shutdown: %v, want EOF", err)
+		}
+		if len(doc.Routes) != 0 || doc.ExpiresInMS != 0 {
+			d.fatalf("document after the empty expired set: %+v", doc)
+		}
 	}
 }
 
