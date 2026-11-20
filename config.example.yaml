@@ -1037,6 +1037,7 @@ plugin_dir: /etc/packeteer/plugins
 # tools for the same prefix or AS. Display only: Packeteer requests none of
 # them. Defaults: he, he_lg, ripestat, peeringdb, bgptools, cloudflare_radar,
 # irr_explorer. nlnog_ring and qrator_radar are off unless listed.
+# Settings has a form for this block (docs/ui.md).
 # linkouts:
 #   enabled: [he, ripestat, bgptools, nlnog_ring]
 #   hide_internal: true               # no link for RFC 1918/ULA or a private-use AS
@@ -1123,6 +1124,7 @@ plugin_dir: /etc/packeteer/plugins
 #   outside:                           # optional dashboard extras, each off until chosen
 #     atlas: {enabled: true, measurements: [1001], probes: [6001]}
 #     links: true                      # needs no other block; ris needs leak_watch, rpki needs rpki
+#   limits: {rate_global: 600}         # local resource limits; every key and default: docs/CONFIG.md
 
 # Non-BGP mode (#300, docs/nonbgp.md). For a site with two links whose router
 # has no BGP: flow records name the destinations, and in inject mode with

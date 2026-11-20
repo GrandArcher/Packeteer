@@ -1,6 +1,7 @@
 package config
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -297,5 +298,31 @@ func TestHerdOutsideIsCheckedInPreviewOnlyToo(t *testing.T) {
 	y := herdBase + "herd:\n  enabled: true\n  preview_only: true\n  share: {classes: [measurements]}\n  vantage: {country: US}\n  outside: {rpki: true}\n"
 	if _, err := Parse([]byte(y)); err == nil || !strings.Contains(err.Error(), "herd.outside.rpki") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// HerdLimitSpecs is what the settings form shows: every limit-tagged key, in
+// file order, with the loader's default and range.
+func TestHerdLimitSpecs(t *testing.T) {
+	specs := HerdLimitSpecs()
+	rt := reflect.TypeOf(HerdLimits{})
+	if len(specs) != rt.NumField() {
+		t.Fatalf("%d specs for %d limit fields", len(specs), rt.NumField())
+	}
+	byKey := map[string]HerdLimitSpec{}
+	for i, s := range specs {
+		if want := rt.Field(i).Tag.Get("yaml"); s.Key != want {
+			t.Errorf("spec %d is %s, want %s", i, s.Key, want)
+		}
+		if s.Min > s.Default || s.Default > s.Max {
+			t.Errorf("%s: default %d outside %d..%d", s.Key, s.Default, s.Min, s.Max)
+		}
+		byKey[s.Key] = s
+	}
+	if s := byKey["rate_global"]; s.Duration || s.Default != 600 || s.Min != 1 || s.Max != 1000000 {
+		t.Errorf("rate_global = %+v", s)
+	}
+	if s := byKey["pull_interval"]; !s.Duration || s.Default != int64(5*time.Minute) || s.Min != int64(30*time.Second) || s.Max != int64(24*time.Hour) {
+		t.Errorf("pull_interval = %+v", s)
 	}
 }

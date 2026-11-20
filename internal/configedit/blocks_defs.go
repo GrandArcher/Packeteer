@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/GrandArcher/Packeteer/internal/linkout"
 )
 
 // The blocks of the settings page (#330). Defaults named here are the
@@ -64,6 +66,11 @@ func (f Field) only(scorers ...string) Field {
 
 func (f Field) startOn() Field {
 	f.StartOn = true
+	return f
+}
+
+func (f Field) defaultList(items []string) Field {
+	f.DefaultList = items
 	return f
 }
 
@@ -343,8 +350,9 @@ var blockDefs = []Block{
 	},
 	{
 		ID: "herd", Title: "Herd (shared measurements)", YAML: "herd", Optional: true, path: []string{"herd"},
-		Help: "Shares probe measurements, never names, host addresses, or usage, with the peers you pin by key. Advisory only: never read by a decision and never announces. Needs sqlite storage and bgp neighbors. RIPE Atlas, link-out, and resource-limit settings stay in the raw YAML and are kept. A change needs a restart.",
-		Fields: []Field{
+		Help:  "Shares probe measurements, never names, host addresses, or usage, with the peers you pin by key. Advisory only: never read by a decision and never announces. Needs sqlite storage and bgp neighbors. Outside sources and resource limits are below; none of it is herd data or reaches a decision. A change needs a restart.",
+		check: checkHerdOutside,
+		Fields: slices.Concat([]Field{
 			field("enabled", "Enabled", "Off stores, serves, and pulls nothing.", KindBool).startOn(),
 			field("preview_only", "Preview only", "Stores and previews records but serves and pulls nothing. Needs no listen address or peers.", KindBool),
 			field("share.classes", "What is shared", "measurements, or paths to add the AS path. At least one.", KindList).opts("measurements", "paths").req(),
@@ -372,7 +380,14 @@ var blockDefs = []Block{
 				field("url", "URL", "https address of the checklist document.", KindString).req(),
 				field("refresh", "Refresh", "How often it is fetched, 10m to 24h.", KindDuration).rng(600, day).dflt("1h"),
 			),
-		},
+			field("outside.atlas.enabled", "RIPE Atlas", "Shows public RIPE Atlas results and the status of your hosted probes on the herd page, read with no API key. Off until ticked.", KindBool),
+			field("outside.atlas.measurements", "Atlas measurements", "Public measurement ids, one per row, at most 4. Only ping results are shown.", KindInts).rng(1, 2147483647),
+			field("outside.atlas.probes", "Atlas probes", "Your own hosted probe ids, one per row, at most 4.", KindInts).rng(1, 2147483647),
+			field("outside.atlas.refresh", "Atlas refresh", "How often Atlas is read again, 15m to 24h.", KindDuration).rng(900, day).dflt("15m"),
+			field("outside.ris", "RIS Live routes", "Shows routes of your AS that RIPE RIS Live reported outside it. Needs leak_watch with a rislive source.", KindBool),
+			field("outside.rpki", "RPKI validation", "Shows the origin validation of a route from the RPKI block. Needs RPKI on.", KindBool),
+			field("outside.links", "Link-outs", "Shows the Link-outs sites for the chosen prefix or ASN. Makes no request.", KindBool),
+		}, herdLimitFields()),
 	},
 	{
 		ID: "router_check", Title: "Read-only router check", YAML: "preflight.router_check", Optional: true, path: []string{"preflight", "router_check"},
@@ -386,6 +401,19 @@ var blockDefs = []Block{
 			field("config.username_env", "User variable", "routeros only: the environment variable that holds a read-group user, PACKETEER_ROUTER_READ_....", KindString).check("envname"),
 			field("config.password_env", "Password variable", "routeros only: the environment variable that holds its password, PACKETEER_ROUTER_READ_.... Only the name is stored.", KindString).check("envname"),
 			field("config.ca_file", "CA file", "routeros only: absolute path of the PEM certificate that signed the router's certificate.", KindString).check("abspath").adv(),
+		},
+	},
+	{
+		ID: "linkouts", Title: "Link-outs", YAML: "linkouts", path: []string{"linkouts"},
+		Help:  "The Open in links on the prefix, ASN, and exchange-peer pages. Display only: Packeteer requests none of these sites. A change needs a restart.",
+		check: checkLinkouts,
+		Fields: []Field{
+			field("enabled", "Built-in sites", "The sites shown. Not set in the file, the default sites are listed; emptying the list shows no built-in site. nlnog_ring and qrator_radar are off unless listed.", KindList).opts(linkout.SiteIDs()...).defaultList(linkout.DefaultSites()),
+			field("custom", "Custom links", "Your own sites, at most 20. The URL is https with one of {prefix} or {asn}, not in the host, and no login.", KindRows).unique("name").with(
+				field("name", "Name", "1 to 40 printable characters, unique.", KindString).check("linkname").req(),
+				field("url", "URL", "For example https://lg.example.net/route?prefix={prefix}.", KindString).check("linkurl").req(),
+			),
+			field("hide_internal", "Hide internal", "No link for an RFC 1918, ULA, loopback, or link-local prefix or a private-use AS. Documentation ranges are not internal.", KindBool).dtrue(),
 		},
 	},
 	{

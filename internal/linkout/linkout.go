@@ -56,6 +56,9 @@ var builtin = []site{
 // defaults are the sites shown when linkouts.enabled is not set.
 var defaults = []string{"he", "he_lg", "ripestat", "peeringdb", "bgptools", "cloudflare_radar", "irr_explorer"}
 
+// DefaultSites returns the sites shown when linkouts.enabled is not set.
+func DefaultSites() []string { return slices.Clone(defaults) }
+
 // Custom is an operator template, for example an internal looking glass.
 type Custom struct {
 	Name string `yaml:"name"`
@@ -160,13 +163,19 @@ func ValidateTemplate(tmpl string) (Kind, error) {
 	return kind, nil
 }
 
+// ValidName reports whether s is a custom link name: 1 to MaxNameLength
+// printable characters.
+func ValidName(s string) bool {
+	return s != "" && len(s) <= MaxNameLength && !strings.ContainsFunc(s, func(r rune) bool { return r < ' ' || r == 0x7f })
+}
+
 // Validate reports every problem with the block.
 func (c Config) Validate(add func(string, ...any)) {
 	seen := map[string]bool{}
 	for _, id := range c.Enabled {
 		switch {
 		case !slices.ContainsFunc(builtin, func(s site) bool { return s.id == id }):
-			add("linkouts.enabled: %q is not a link-out site (want one of %s)", id, strings.Join(ids(), ", "))
+			add("linkouts.enabled: %q is not a link-out site (want one of %s)", id, strings.Join(SiteIDs(), ", "))
 		case seen[id]:
 			add("linkouts.enabled: %q is listed twice", id)
 		}
@@ -179,7 +188,7 @@ func (c Config) Validate(add func(string, ...any)) {
 	for i, cu := range c.Custom {
 		where := fmt.Sprintf("linkouts.custom[%d]", i)
 		switch {
-		case cu.Name == "" || len(cu.Name) > MaxNameLength || strings.ContainsFunc(cu.Name, func(r rune) bool { return r < ' ' || r == 0x7f }):
+		case !ValidName(cu.Name):
 			add("%s: name must be 1-%d printable characters", where, MaxNameLength)
 		case names[cu.Name]:
 			add("%s: name %q is used twice", where, cu.Name)
@@ -191,7 +200,8 @@ func (c Config) Validate(add func(string, ...any)) {
 	}
 }
 
-func ids() []string {
+// SiteIDs are the built-in site names linkouts.enabled accepts.
+func SiteIDs() []string {
 	out := make([]string, len(builtin))
 	for i, s := range builtin {
 		out[i] = s.id
