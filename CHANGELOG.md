@@ -40,7 +40,7 @@ v1.8 adds an RIS and RouteViews origin signal for RPKI-invalid only paths, six S
 
 ## [1.7.0] - 2026-11-18
 
-v1.7 lab-proves the RouterOS non-BGP steerer, registry hygiene, and the herd hub and dashboard, adds the federation form, points the upgrade test at v1.6.0, and hardens CI flakes; flow discovery row done (138 done), no new key, default `mode: observe`, inject off.
+v1.7 lab-proves the RouterOS non-BGP steerer, registry hygiene, and the herd hub, adds the federation form, moves the upgrade test to v1.6.0, and hardens CI flakes; flow discovery row done (138 done), no new key, default `mode: observe`, inject off.
 
 ### Added
 
