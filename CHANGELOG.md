@@ -1,8 +1,12 @@
 # Changelog
 
-All notable changes to Packeteer are documented here. Versions are Git tags on `main`. The image tags `ghcr.io/grandarcher/packeteer:<version>` (for example `:1.8.0`) and `:latest` are published from each `v<version>` tag. `:edge` tracks `main`.
+All notable changes to Packeteer are documented here. Versions are Git tags on `main`. The image tags `ghcr.io/grandarcher/packeteer:<version>` (for example `:1.9.0`) and `:latest` are published from each `v<version>` tag. `:edge` tracks `main`.
 
 ## [Unreleased]
+
+## [1.9.0] - 2026-11-20
+
+v1.9 adds Settings forms for the herd Atlas, link-outs, and resource limits, the herd phase 2 local uses (advisory), and a shorter CHANGELOG; no new row (138 done), default `mode: observe`, inject off.
 
 ### Added
 
@@ -12,10 +16,11 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 ### Changed
 
 - `upgrade-release` CI job starts from the v1.8.0 image, pinned by digest, instead of v1.7.0; the downgrade step still removes no key (#685).
+- The v1.0 to v1.8 release summaries in this file are one short sentence each, meaning unchanged; the doc check now caps them (#688).
 
 ## [1.8.0] - 2026-11-19
 
-The v1.8 release adds an RIS and RouteViews origin signal for RPKI-invalid only paths, Settings forms for six more blocks, herd phase 2 in the lab, and lab proof of the registry delete push, with no new capability row (138 done); the shipped config stays `mode: observe` and injection stays off by default.
+v1.8 adds an RIS and RouteViews origin signal for RPKI-invalid only paths, six Settings forms, herd phase 2 in the lab, and registry delete-push lab proof; no new row (138 done), default `mode: observe`, inject off.
 
 ### Added
 
@@ -35,7 +40,7 @@ The v1.8 release adds an RIS and RouteViews origin signal for RPKI-invalid only 
 
 ## [1.7.0] - 2026-11-18
 
-The v1.7 release lab-proves the RouterOS non-BGP steerer, registry hygiene, and the herd hub and dashboard, adds the federation settings form, points the upgrade test at v1.6.0, and hardens CI flakes, with no new config key and the flow target discovery row moved to done (138 done); the shipped config stays `mode: observe` and injection stays off by default.
+v1.7 lab-proves the RouterOS non-BGP steerer, registry hygiene, and the herd hub, adds the federation form, moves the upgrade test to v1.6.0, and hardens CI flakes; flow discovery row done (138 done), no new key, default `mode: observe`, inject off.
 
 ### Added
 
@@ -55,7 +60,7 @@ The v1.7 release lab-proves the RouterOS non-BGP steerer, registry hygiene, and 
 
 ## [1.6.0] - 2026-11-17
 
-The v1.6 release finishes the shared IX port check (#151) and adds a read-only RouterOS router check, an upgrade test between real releases, a demo report mode, and a paragraph-length doc lint, with no new capability row or top-level config key; the shipped config stays `mode: observe` and injection stays off by default.
+v1.6 finishes the shared IX port check (#151) and adds a read-only RouterOS router check, an upgrade test between real releases, a demo report mode, and a doc lint; no new row or top-level key, default `mode: observe`, inject off.
 
 ### Added
 
@@ -71,7 +76,7 @@ The v1.6 release finishes the shared IX port check (#151) and adds a read-only R
 
 ## [1.5.0] - 2026-11-16
 
-v1.5 adds a field-report kit, an opt-in read-only router check (`preflight.router_check`), and kernel-side eBPF span tracking (`span` `ebpf_track`), and lab-proves RPKI-invalid only paths and federation push; both new keys are off by default, the shipped config stays `mode: observe`, and injection stays off by default.
+v1.5 adds a field-report kit, an opt-in read-only router check (`preflight.router_check`), and eBPF span tracking (`ebpf_track`), and lab-proves RPKI-invalid only paths and federation push; both keys off, default `mode: observe`, inject off.
 
 ### Added
 
@@ -89,7 +94,7 @@ v1.5 adds a field-report kit, an opt-in read-only router check (`preflight.route
 
 ## [1.4.1] - 2026-11-14
 
-The v1.4.1 patch fixes the quickstart and the demo preflight from v1.4.0, with no controller code or config key changed; the shipped config stays `mode: observe` and injection stays off by default.
+v1.4.1 fixes the quickstart and the demo preflight from v1.4.0; no controller code or config key changed, default `mode: observe`, inject off.
 
 ### Fixed
 
@@ -97,7 +102,7 @@ The v1.4.1 patch fixes the quickstart and the demo preflight from v1.4.0, with n
 
 ## [1.4.0] - 2026-11-14
 
-The v1.4 release lets an operator finish observe setup from the GUI, shows a manager what Packeteer did, and adds a one-command demo lab, a chaos soak, and a lab-only path-scoring harness, with no new config key; the shipped config stays `mode: observe` and injection stays off by default.
+v1.4 lets an operator finish observe setup from the GUI, shows a manager what Packeteer did, and adds a one-command demo lab, a chaos soak, and a lab-only path-scoring harness; no new key, default `mode: observe`, inject off.
 
 ### Added
 
@@ -118,7 +123,7 @@ The v1.4 release lets an operator finish observe setup from the GUI, shows a man
 
 ## [1.3.0] - 2026-11-13
 
-The v1.3 release makes the steering state from v1.2 durable and tightens first-run setup and the Settings and System pages, with no new config key; the shipped config stays `mode: observe` and injection stays off by default.
+v1.3 makes the v1.2 steering state durable and tightens first-run setup and the Settings and System pages; no new key, default `mode: observe`, inject off.
 
 ### Changed
 
@@ -136,7 +141,7 @@ The v1.3 release makes the steering state from v1.2 durable and tightens first-r
 
 ## [1.2.0] - 2026-11-11
 
-The v1.2 release adds steering calls to the REST API and, behind `mcp.write_tools`, to the MCP server, with no new config key and no change to an existing config; the shipped config stays `mode: observe` and injection stays off by default.
+v1.2 adds steering calls to the REST API and, behind `mcp.write_tools`, to the MCP server, with no new key and no change to an existing config; default `mode: observe`, inject off.
 
 ### Added
 
@@ -144,7 +149,7 @@ The v1.2 release adds steering calls to the REST API and, behind `mcp.write_tool
 
 ## [1.1.0] - 2026-11-10
 
-The v1.1 release adds three capability rows, non-BGP mode, the MCP server, and RPKI-invalid only paths, all opt-in and off by default, with no change to an existing config; the shipped config stays `mode: observe` and injection stays off by default.
+v1.1 adds three opt-in rows, non-BGP mode, the MCP server, and RPKI-invalid only paths, with no change to an existing config; default `mode: observe`, inject off.
 
 ### Added
 
@@ -155,7 +160,7 @@ The v1.1 release adds three capability rows, non-BGP mode, the MCP server, and R
 
 ## [1.0.1] - 2026-11-09
 
-The v1.0.1 patch is the post-v1.0 hardening pass (#527-#536), with no new capability rows; the shipped config stays `mode: observe` and injection stays off by default.
+v1.0.1 is the post-v1.0 hardening pass (#527-#536), with no new rows; default `mode: observe`, inject off.
 
 ### Fixed
 
@@ -175,7 +180,7 @@ The v1.0.1 patch is the post-v1.0 hardening pass (#527-#536), with no new capabi
 
 ## [1.0.0] - 2026-11-04
 
-The v1.0 release is the pre-release audit and review pass over v0.9: the fixes from the audit (#486-#494, #501-#510) and the review (#215), with no new capability rows. Nothing is field-proven (#54). The shipped config stays `mode: observe`, sign-in stays on by default, and injection stays off by default. Read the upgrade notes below before moving from 0.9.
+v1.0 is the audit and review pass over v0.9 (#486-#494, #501-#510, #215): no new rows, nothing field-proven (#54), sign-in on, default `mode: observe`, inject off; read the upgrade notes.
 
 ### Changed
 
@@ -614,7 +619,8 @@ First release. An observe-first BGP path performance controller in one container
 - Communities are RFC 1997 (two 16-bit integers). `router_id` is IPv4.
 - RouterOS, Junos, and IOS snippets are documentation. The automated BGP test is the FRR lab.
 
-[Unreleased]: https://github.com/GrandArcher/Packeteer/compare/v1.8.0...HEAD
+[Unreleased]: https://github.com/GrandArcher/Packeteer/compare/v1.9.0...HEAD
+[1.9.0]: https://github.com/GrandArcher/Packeteer/compare/v1.8.0...v1.9.0
 [1.8.0]: https://github.com/GrandArcher/Packeteer/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/GrandArcher/Packeteer/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/GrandArcher/Packeteer/compare/v1.5.0...v1.6.0
