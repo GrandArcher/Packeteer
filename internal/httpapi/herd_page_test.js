@@ -132,16 +132,16 @@ var rpki = box();
 context.renderHerdEvents(rpki, {basis: "rpki", loss_pct: 5, window_seconds: 900, targets: 1, events: [{kind: "origin_asn", value: "64511", reporting: 1, degraded: 1, by_provider: [],
   vantages: [{member: "key-a", asn: 64502, country: "DE", provider_asn: 64520, method: "icmp", loss_pct: 50, age_seconds: 60, degraded: true, counted: true},
     {member: "key-b", asn: 64503, country: "JP", provider_asn: 64520, method: "icmp", loss_pct: 60, age_seconds: 60, degraded: true, counted: false},
-    {member: "key-c", asn: 64504, country: "BR", provider_asn: 64521, method: "icmp", loss_pct: 70, age_seconds: 60, degraded: true, counted: false, down_weighted: true}],
-  here: [{provider_asn: 64520, points_at: "provider", via_reporting: 1, via_degraded: 1, elsewhere_reporting: 0, elsewhere_degraded: 0},
-    {provider_asn: 64521, points_at: "this_edge", via_reporting: 0, via_degraded: 0, elsewhere_reporting: 1, elsewhere_degraded: 0}]}]});
+    {member: "key-c", asn: 64504, country: "BR", provider_asn: 64505, method: "icmp", loss_pct: 70, age_seconds: 60, degraded: true, counted: false, down_weighted: true}],
+  here: [{provider_asn: 64505, points_at: "provider", via_reporting: 1, via_degraded: 1, elsewhere_reporting: 1, elsewhere_degraded: 0},
+    {provider_asn: 64506, points_at: "this_edge", via_reporting: 1, via_degraded: 0, elsewhere_reporting: 1, elsewhere_degraded: 0}]}]});
 assert(rpki.textContent.indexOf("Counts are RPKI-verified members, one per ASN; unverified members are listed and not counted.") >= 0, "rpki basis: " + rpki.textContent);
 assert(rpki.textContent.indexOf("1 of 1 members see loss") >= 0, "rpki count: " + rpki.textContent);
 var rr = rowsOf(rpki);
 assert(rr.length === 3 && rr[0][4] === "loss" && rr[1][4] === "loss, not counted", "an unverified row is listed and marked: " + JSON.stringify(rr));
-assert(rr[2][0] === "AS64504 key-c, BR, via AS64521, icmp, down-weighted" && rr[2][4] === "loss, down-weighted, not counted", "a down-weighted row is listed and marked: " + JSON.stringify(rr[2]));
-assert(rpki.textContent.indexOf("This node through AS64520: points at provider AS64520 (other members through AS64520: 1 of 1 see loss; through other providers: 0 of 0).") >= 0, "provider attribution: " + rpki.textContent);
-assert(rpki.textContent.indexOf("This node through AS64521: points at this edge (") >= 0, "this edge attribution: " + rpki.textContent);
+assert(rr[2][0] === "AS64504 key-c, BR, via AS64505, icmp, down-weighted" && rr[2][4] === "loss, down-weighted, not counted", "a down-weighted row is listed and marked: " + JSON.stringify(rr[2]));
+assert(rpki.textContent.indexOf("This node through AS64505: points at provider AS64505 (other members through AS64505: 1 of 1 see loss; through other providers: 0 of 1).") >= 0, "provider attribution: " + rpki.textContent);
+assert(rpki.textContent.indexOf("This node through AS64506: points at this edge (") >= 0, "this edge attribution: " + rpki.textContent);
 var none = box();
 context.renderHerdEvents(none, {events: [], loss_pct: 5, window_seconds: 900, targets: 3});
 assert(none.textContent === "No target shows loss at or above 5 % from any member in the last 15 min (3 targets measured).", "quiet: " + none.textContent);

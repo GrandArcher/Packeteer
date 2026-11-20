@@ -80,7 +80,12 @@ func TestAttributionPointsAtDestinationProviderOrThisEdge(t *testing.T) {
 		{"down-weighted member", map[string]bool{peerA: true}, func(f *fleet) {
 			f.put(peerA, "DE", 64505, 64508, "", m, 90, 20)
 			f.put(peerB, "JP", 64506, 64508, "", m, 0, 30)
-		}, Attribution{PointsAt: PointsThisEdge, ElsewhereReporting: 1}},
+		}, Attribution{PointsAt: PointsUnknown, ElsewhereReporting: 1}},
+		// Nobody else goes through AS64505 and nobody sees loss: a problem
+		// across that provider looks the same as one at this edge.
+		{"no other member through the provider ASN", nil, func(f *fleet) {
+			f.put(peerB, "JP", 64506, 64508, "", m, 0, 30)
+		}, Attribution{PointsAt: PointsUnknown, ElsewhereReporting: 1}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -209,7 +214,7 @@ func TestOpinionsCountOtherMembersThatNameTheASN(t *testing.T) {
 			t.Errorf("AS%d = %+v, want %+v", asn, ops[asn], w)
 		}
 	}
-	if op, ok := ops[64599]; ok {
+	if op, ok := ops[65551]; ok {
 		t.Errorf("an ASN no row names has an opinion %+v", op)
 	}
 	b.Down = map[string]bool{peerA: true, peerB: true}
@@ -237,8 +242,9 @@ func herdWith(t *testing.T, cfg *config.Herd, node *Node, asn uint32) *Herd {
 
 // A blocked member (#686), named by its ASN, key, or endpoint, is never
 // asked for records and never shown; GET /api/herd lists it under blocked.
-// A member blocked by ASN alone is asked for its status, which is how its
-// ASN is learned. The block is this node's view only: a node without it
+// A static peer blocked by ASN alone is asked for its status, which is how
+// its ASN is learned; an exchange peer's entry names its ASN, so it is
+// blocked from the start. The block is this node's view only: a node without it
 // pulls the same members.
 func TestBlockedMembersAreNeitherPulledNorShown(t *testing.T) {
 	keyFile := filepath.Join(t.TempDir(), "x.key")
@@ -248,7 +254,8 @@ func TestBlockedMembersAreNeitherPulledNorShown(t *testing.T) {
 	}
 	other := newMember(t, 64505, nil)
 	byASN, byKey, byURL, open := newMember(t, 64502, nil), newMember(t, 64503, nil), newMember(t, 64504, nil), newMember(t, 64506, nil)
-	for _, m := range []*member{byASN, byKey, byURL, open} {
+	byEntry := newMember(t, 64507, nil)
+	for _, m := range []*member{byASN, byKey, byURL, open, byEntry} {
 		m.cfg.Share.Discovery = config.HerdListing
 		m.serve(xNode, other.node)
 		m.seedN(3, 64510)
@@ -259,12 +266,14 @@ func TestBlockedMembersAreNeitherPulledNorShown(t *testing.T) {
 		for _, m := range []*member{byASN, byKey, byURL, open} {
 			h.Peers = append(h.Peers, config.HerdPeer{URL: m.url(), Key: m.node.PublicKey()})
 		}
-		h.Block = config.HerdMembers{ASNs: []uint32{64502}, Keys: []string{byKey.node.ID()}, Endpoints: []string{byURL.url()}}
+		h.Block = config.HerdMembers{ASNs: []uint32{64502, 64507}, Keys: []string{byKey.node.ID()}, Endpoints: []string{byURL.url()}}
 	})
 	x := herdWith(t, cfg, xNode, 64501)
+	x.pull.hubDial = nil
+	x.pull.SetExchange([]HubPeer{{URL: byEntry.url(), Key: byEntry.node.pub, ASN: 64507, Source: SourceExchange}})
 	x.pull.Round(context.Background())
 
-	for _, m := range []*member{byASN, byKey, byURL} {
+	for _, m := range []*member{byASN, byKey, byURL, byEntry} {
 		if n := len(pulledRows(t, &member{t: t, store: x.o.Store}, m.node)); n != 0 {
 			t.Errorf("AS%d: %d rows pulled from a blocked member", m.asn, n)
 		}
@@ -283,8 +292,9 @@ func TestBlockedMembersAreNeitherPulledNorShown(t *testing.T) {
 	for _, p := range st.Blocked {
 		blocked[p.KeyID] = p
 	}
-	if len(blocked) != 3 || blocked[byASN.node.ID()].ASN != 64502 || blocked[byKey.node.ID()].ASN != 0 || blocked[byURL.node.ID()].ASN != 0 {
-		t.Errorf("blocked = %+v, want the three, with only the ASN-blocked one's status read", st.Blocked)
+	if len(blocked) != 4 || blocked[byASN.node.ID()].ASN != 64502 || blocked[byKey.node.ID()].ASN != 0 || blocked[byURL.node.ID()].ASN != 0 ||
+		blocked[byEntry.node.ID()].ASN != 64507 || blocked[byEntry.node.ID()].Source != SourceExchange {
+		t.Errorf("blocked = %+v, want the four, with only the static ASN-blocked one's status read and the exchange one's ASN from its entry", st.Blocked)
 	}
 	for _, p := range st.Blocked {
 		if p.Pulled != 0 || p.Failures != 0 || !p.LastOK.IsZero() {

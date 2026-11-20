@@ -385,12 +385,14 @@ const (
 // member that measures through both is in both.
 type Attribution struct {
 	ProviderASN uint32 `json:"provider_asn"`
-	// PointsAt is this_edge when no other member sees loss; provider when
+	// PointsAt is this_edge when no other member sees loss and some go
+	// through ProviderASN; provider when
 	// the members that see loss all go through ProviderASN and some member
 	// through another provider ASN sees none; destination when every other
 	// member sees loss, some of them through another provider ASN; unknown
-	// otherwise, including when every other member goes through
-	// ProviderASN, where the provider and the destination look the same.
+	// otherwise, including when nobody else goes through ProviderASN or
+	// everyone else does, where the provider looks like this edge or the
+	// destination.
 	PointsAt           string `json:"points_at"`
 	ViaReporting       int    `json:"via_reporting"`
 	ViaDegraded        int    `json:"via_degraded"`
@@ -422,19 +424,20 @@ func attribute(list []obs, loss float64) []Attribution {
 	for _, a := range sortedASNs(here) {
 		viaAll, viaBad, elseAll, elseBad := map[uint32]bool{}, map[uint32]bool{}, map[uint32]bool{}, map[uint32]bool{}
 		for k := range all {
+			reporting, degraded := elseAll, elseBad
 			if k.provider == a {
-				viaAll[k.asn], viaBad[k.asn] = true, bad[k]
-			} else {
-				elseAll[k.asn], elseBad[k.asn] = true, elseBad[k.asn] || bad[k]
+				reporting, degraded = viaAll, viaBad
+			}
+			reporting[k.asn] = true
+			if bad[k] {
+				degraded[k.asn] = true
 			}
 		}
-		at := Attribution{ProviderASN: a, ViaReporting: len(viaAll), ViaDegraded: count(viaBad), ElsewhereReporting: len(elseAll), ElsewhereDegraded: count(elseBad)}
+		at := Attribution{ProviderASN: a, ViaReporting: len(viaAll), ViaDegraded: len(viaBad), ElsewhereReporting: len(elseAll), ElsewhereDegraded: len(elseBad)}
 		switch {
-		case at.ViaReporting+at.ElsewhereReporting == 0:
-			at.PointsAt = PointsUnknown
-		case at.ViaDegraded+at.ElsewhereDegraded == 0:
+		case at.ViaDegraded+at.ElsewhereDegraded == 0 && at.ViaReporting > 0:
 			at.PointsAt = PointsThisEdge
-		case at.ElsewhereDegraded == 0 && at.ElsewhereReporting > 0:
+		case at.ViaDegraded > 0 && at.ElsewhereDegraded == 0 && at.ElsewhereReporting > 0:
 			at.PointsAt = PointsProvider
 		case at.ElsewhereDegraded > 0 && at.ViaDegraded == at.ViaReporting && at.ElsewhereDegraded == at.ElsewhereReporting:
 			at.PointsAt = PointsDestination
@@ -444,17 +447,6 @@ func attribute(list []obs, loss float64) []Attribution {
 		out = append(out, at)
 	}
 	return out
-}
-
-// count is the number of true values in m.
-func count(m map[uint32]bool) int {
-	n := 0
-	for _, v := range m {
-		if v {
-			n++
-		}
-	}
-	return n
 }
 
 // Events is the world view: where any member sees degradation now.

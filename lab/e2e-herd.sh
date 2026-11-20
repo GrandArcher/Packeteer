@@ -40,9 +40,10 @@
 #     expired one;
 #  1. every member fetched the list and the checklists from the hub, took
 #     the seed as its one hub peer, refused the two bad hub entries, found
-#     the other two members by peer exchange, and refused the tampered,
-#     expired, and oversized relayed entries;
-#  2. each member pulls both other members (no failures, records pulled),
+#     the other two members by peer exchange (member-b lists c as blocked),
+#     and refused the tampered, expired, and oversized relayed entries;
+#  2. each member pulls the other members it does not block (b pulls only
+#     a; no failures, records pulled),
 #     nothing is announced (no edge receives a route from its member), and
 #     no member has an improvement;
 #  3. identity: a and b are verified, c and the seed are not; the world
@@ -375,7 +376,7 @@ for m in a b c; do
 	need_log "member-$m" 'entry refused.*larger than 16384 bytes' "member-$m did not refuse the oversized relayed entry"
 done
 
-echo "2. every member pulls both other members; nobody announces"
+echo "2. every member pulls the other members it does not block; nobody announces"
 for m in a b c; do
 	peers_of "$m"
 	need_api "$m" /api/herd ".enabled and (.peers | length) == $((${#urls[@]} + 1)) and all(.peers[]; .failures == 0 and .last_ok != null)" "member-$m does not see its peers" 150

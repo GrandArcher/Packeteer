@@ -197,7 +197,9 @@ func (p *Puller) newPeer(url string, pub ed25519.PublicKey, source string, wantA
 			Timeout:       p.lim.PullTimeout,
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		},
-		st: PeerStatus{URL: url, KeyID: id, Source: source},
+		// A hub or exchange entry names the peer's ASN before its status is
+		// read, so a block by ASN applies to it from the start.
+		st: PeerStatus{URL: url, KeyID: id, Source: source, ASN: wantASN},
 	}
 }
 
