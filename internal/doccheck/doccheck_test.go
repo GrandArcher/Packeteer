@@ -172,6 +172,35 @@ func TestImagePinsAreLastRelease(t *testing.T) {
 	}
 }
 
+// TestChangelogSummariesStayShort keeps the one-sentence summary under each
+// 1.x release heading short. Pre-1.0 summaries are longer and are not checked.
+func TestChangelogSummariesStayShort(t *testing.T) {
+	const limit = 220
+	lines := strings.Split(read(t, "CHANGELOG.md"), "\n")
+	head := regexp.MustCompile(`^## \[(1\.\d+\.\d+)\] - \d{4}-\d{2}-\d{2}$`)
+	seen := 0
+	for i, l := range lines {
+		m := head.FindStringSubmatch(l)
+		if m == nil {
+			continue
+		}
+		seen++
+		if i+3 >= len(lines) || lines[i+1] != "" || lines[i+2] == "" || lines[i+3] != "" {
+			t.Errorf("%s: want one summary paragraph of one line after the heading", m[1])
+			continue
+		}
+		if n := len(lines[i+2]); n > limit {
+			t.Errorf("%s: summary is %d characters, limit %d", m[1], n, limit)
+		}
+		if !strings.Contains(lines[i+2], "`mode: observe`") {
+			t.Errorf("%s: summary does not state the default mode: observe", m[1])
+		}
+	}
+	if seen < 10 {
+		t.Fatalf("only %d 1.x releases found in CHANGELOG.md", seen)
+	}
+}
+
 var relLink = regexp.MustCompile(`\]\(([^)\s#:]+)(#[^)\s]*)?\)`)
 
 // TestReadmeLinksExist fails on a README link or screenshot whose file is
