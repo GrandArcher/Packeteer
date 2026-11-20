@@ -31,9 +31,9 @@
 # level with a flow source fed by lab/sendflow toward 192.0.2.230, so
 # 192.0.2.224/28 is a route only user traffic put on its probe list
 # (crowd_k 1). member-b probes 192.0.2.224/28 as a static target; member-a
-# does not, and probes it only through its herd_hints source. member-a also
-# runs an outage source, which opens an AS64501 incident once it probes the
-# two dark routes. member-b blocks member-c by endpoint and down-weights
+# does not, and starts probing it through its herd_hints source. member-a
+# also runs an outage source, which opens an AS64501 incident once it probes
+# the two dark routes, and then lists the /28 too. member-b blocks member-c by endpoint and down-weights
 # member-a by ASN (its own view only).
 # Checked in order:
 #  0. hub-check accepts the four entries and refuses the tampered and the
@@ -69,9 +69,11 @@
 # 10. local view on member-b: c is neither pulled nor shown and a is shown
 #     and not counted, while a still shows and counts both; b keeps
 #     probing, stays ready, and announces nothing;
-# 11. attribution: member-a sees AS64511 degraded through AS64501 and the
-#     API and /herd.html say the other members point at provider AS64501;
-#     on member-b, which down-weights a, nothing is clear;
+# 11. attribution: member-a sees AS64511 degraded through AS64501, and the
+#     API and /herd.html show that the one other member that counts sees it
+#     degraded through the same provider ASN, which cannot tell the provider
+#     from the destination (every member has the one upstream); on member-b,
+#     which down-weights a, no other member counts;
 # 12. outage second opinion: member-a's AS64501 incident carries 1 of 1
 #     verified members seeing AS64501 degraded, and a announces nothing;
 # 13. isolation: with member-b paused (a peer that never answers), a and c
@@ -352,6 +354,14 @@ peers_of() {
 	done
 }
 
+# no_steer member: the member's edge received no route and it holds no improvement.
+no_steer() {
+	local got
+	got=$("${compose[@]}" exec -T "edge-$1" vtysh -c "show bgp ipv4 unicast neighbors ${ip[$1]} received-routes json" 2>/dev/null | jq -r '(.receivedRoutes // {}) | length' 2>/dev/null || true)
+	[ "$got" = 0 ] || fail "edge-$1 received routes from member-$1 ($got) $2"
+	api "$1" /api/improvements | jq -e '(.improvements | length) == 0' >/dev/null || fail "member-$1 has an improvement $2"
+}
+
 echo "1. every member takes the seed from the hub and finds the others by peer exchange"
 for m in a b c; do
 	need_api "$m" /api/herd '.hub.source == "hub" and .hub.listed == 1 and .hub.rejected == 2 and .hub.peers == 1 and .hub.last_error == null' "member-$m did not load the hub list" 120
@@ -373,9 +383,7 @@ for m in a b c; do
 	need_api "$m" /api/herd "([.peers[] | select(.source == \"exchange\") | .asn] | sort) == [$(IFS=,; echo "${asns[*]}")] and ([.peers[] | select(.source == \"hub\") | .asn] == [${asn[d]}])" "member-$m peers must report the ASN of their entries"
 done
 for m in a b c; do
-	got=$("${compose[@]}" exec -T "edge-$m" vtysh -c "show bgp ipv4 unicast neighbors ${ip[$m]} received-routes json" 2>/dev/null | jq -r '(.receivedRoutes // {}) | length' 2>/dev/null || true)
-	[ "$got" = 0 ] || fail "edge-$m received routes from member-$m ($got); herd members announce nothing"
-	api "$m" /api/improvements | jq -e '(.improvements | length) == 0' >/dev/null || fail "member-$m has an improvement"
+	no_steer "$m" "(herd members announce nothing)"
 done
 
 echo "3. identity: a and b are verified, c and the seed are shown and not counted"
@@ -397,8 +405,10 @@ echo "5. the dashboard views on member-a list the same three members"
 need_api a /api/herd/overview '([.members[] | select(.local | not) | .source] | sort) == ["exchange","exchange","hub"] and ([.countries[]] | sort) == ["DE","JP","US"] and ([.members[] | select(.asn == 64499) | .records] == [0])' "member-a overview should list the seed and the two members found by exchange"
 need_api a /api/herd/mesh '([.rows[].asn] | unique) == [64496,64497,64498]' "member-a mesh should list the three members"
 # Attribution (#686): a sees AS64511 lose packets through AS64501, and so does
-# b, the one other member that counts, through the same provider ASN.
-need_api a /api/herd/events '[.events[] | select(.kind == "origin_asn" and .value == "64511") | .here] == [[{"provider_asn":64501,"points_at":"provider","via_reporting":1,"via_degraded":1,"elsewhere_reporting":0,"elsewhere_degraded":0}]]' "member-a world view should say AS64511 points at provider AS64501"
+# b, the one other member that counts, through the same provider ASN. With
+# no member through another provider ASN the provider and the destination
+# look the same, so nothing clear is named.
+need_api a /api/herd/events '[.events[] | select(.kind == "origin_asn" and .value == "64511") | .here] == [[{"provider_asn":64501,"points_at":"unknown","via_reporting":1,"via_degraded":1,"elsewhere_reporting":0,"elsewhere_degraded":0}]]' "member-a world view should compare its AS64511 loss through AS64501 with b's"
 need_api a /api/herd/map '([.countries[] | select(.members > 0) | .country] | sort) == ["DE","JP","US"]' "member-a map should list the three members' countries"
 need_api a '/api/herd/monitor?origin_asn=64511' '([.series[].asn] | unique) == [64496,64497,64498]' "member-a monitor for AS64511 should list the three members"
 for asn_m in 64496 64497 64498; do
@@ -409,15 +419,13 @@ bash lab/ui-smoke.sh "http://${ip[a]}:8080/herd.html" \
 	'World view' '2 of 2 members see loss (pooled by origin AS)' 'Counts are RPKI-verified members' 'loss, not counted' \
 	'this node (AS64496), US, via AS64501, icmp' ', DE, via AS64501, icmp' ', JP, via AS64501, icmp' \
 	'>AS64497<' '>AS64498<' '>AS64499<' '>hub<' '>exchange<' '>RPKI<' '>unverified<' \
-	'This node through AS64501: points at provider AS64501' \
+	'This node through AS64501: points at nothing clear (other members through AS64501: 1 of 1 see loss; through other providers: 0 of 0).' \
 	--absent 'No target shows loss' || fail "member-a /herd.html does not show the world view"
 
 echo "6. hints: member-a probes what verified b sees degraded, and steers nothing"
 need_api a /api/herd '[.hints[] | select(.prefix == "192.0.2.224/28" and .vantages == 1)] | length == 1' "member-a should hold a hint for 192.0.2.224/28 from member-b" 150
 need_api a /api/probes '[.probes[].prefix] | index("192.0.2.224/28") != null' "member-a should probe the hinted route, which no static target lists" 60
-got=$("${compose[@]}" exec -T edge-a vtysh -c "show bgp ipv4 unicast neighbors ${ip[a]} received-routes json" 2>/dev/null | jq -r '(.receivedRoutes // {}) | length' 2>/dev/null || true)
-[ "$got" = 0 ] || fail "edge-a received routes from member-a ($got) after a hint"
-api a /api/improvements | jq -e '(.improvements | length) == 0' >/dev/null || fail "member-a has an improvement after a hint"
+no_steer a "after a hint"
 
 echo "7. crowd threshold: member-c holds back its flow-only route"
 need_api c '/api/herd/vantages?prefix=192.0.2.224/28' '[.vantages[] | select(.local)] | length == 1' "member-c should have measured its flow route" 150
@@ -449,13 +457,6 @@ need_log member-b 'action=herd\.serve target=.*nonce=' "member-b logged no serve
 need_log member-c 'action=herd\.serve target=.*origin_asn=64510' "member-c logged no served origin_asn query"
 
 stamp() { api "$1" /api/probes | jq -r '[.. | .time? // empty] | max // empty' 2>/dev/null || true; }
-# no_steer member: the member's edge received no route and it holds no improvement.
-no_steer() {
-	local got
-	got=$("${compose[@]}" exec -T "edge-$1" vtysh -c "show bgp ipv4 unicast neighbors ${ip[$1]} received-routes json" 2>/dev/null | jq -r '(.receivedRoutes // {}) | length' 2>/dev/null || true)
-	[ "$got" = 0 ] || fail "edge-$1 received routes from member-$1 ($got) $2"
-	api "$1" /api/improvements | jq -e '(.improvements | length) == 0' >/dev/null || fail "member-$1 has an improvement $2"
-}
 
 echo "10. local view: member-b blocks c and down-weights a; a's view is unchanged"
 cid=$(keyid c)

@@ -11,12 +11,12 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/config"
 )
 
-// attributionOf is this node's attribution through AS64520 for AS64513
+// attributionOf is this node's attribution through AS64505 for AS64508
 // once the given peer rows are stored next to this node's degraded one.
 func attributionOf(t *testing.T, down map[string]bool, rows func(f *fleet)) []Attribution {
 	t.Helper()
 	f := newFleet(t)
-	f.put("", "US", 64520, 64513, "", time.Minute, 60, 90)
+	f.put("", "US", 64505, 64508, "", time.Minute, 60, 90)
 	rows(f)
 	b := f.board()
 	b.Down = down
@@ -25,16 +25,16 @@ func attributionOf(t *testing.T, down map[string]bool, rows func(f *fleet)) []At
 		t.Fatal(err)
 	}
 	for _, e := range ev.Events {
-		if e.Kind == kindOrigin && e.Value == "64513" {
+		if e.Kind == kindOrigin && e.Value == "64508" {
 			return e.Here
 		}
 	}
-	t.Fatalf("no event for AS64513: %+v", ev.Events)
+	t.Fatalf("no event for AS64508: %+v", ev.Events)
 	return nil
 }
 
-// "My upstream or the destination" (#686): this node sees AS64513 degraded
-// through AS64520 and the other members' rows point at the destination,
+// "My upstream or the destination" (#686): this node sees AS64508 degraded
+// through AS64505 and the other members' rows point at the destination,
 // the provider, or this edge.
 func TestAttributionPointsAtDestinationProviderOrThisEdge(t *testing.T) {
 	m := time.Minute
@@ -45,41 +45,47 @@ func TestAttributionPointsAtDestinationProviderOrThisEdge(t *testing.T) {
 		want Attribution
 	}{
 		{"bad only here", nil, func(f *fleet) {
-			f.put(peerA, "DE", 64520, 64513, "", m, 0, 20)
-			f.put(peerB, "JP", 64521, 64513, "", m, 0, 30)
+			f.put(peerA, "DE", 64505, 64508, "", m, 0, 20)
+			f.put(peerB, "JP", 64506, 64508, "", m, 0, 30)
 		}, Attribution{PointsAt: PointsThisEdge, ViaReporting: 1, ElsewhereReporting: 1}},
 		{"bad through the same provider ASN only", nil, func(f *fleet) {
-			f.put(peerA, "DE", 64520, 64513, "", m, 40, 20)
-			f.put(peerB, "JP", 64520, 64513, "", m, 30, 30)
-			f.put(peerC, "BR", 64521, 64513, "", m, 0, 30)
+			f.put(peerA, "DE", 64505, 64508, "", m, 40, 20)
+			f.put(peerB, "JP", 64505, 64508, "", m, 30, 30)
+			f.put(peerC, "BR", 64506, 64508, "", m, 0, 30)
 		}, Attribution{PointsAt: PointsProvider, ViaReporting: 2, ViaDegraded: 2, ElsewhereReporting: 1}},
 		{"bad from every vantage and provider", nil, func(f *fleet) {
-			f.put(peerA, "DE", 64520, 64513, "", m, 40, 20)
-			f.put(peerB, "JP", 64521, 64513, "", m, 100, 30)
-			f.put(peerC, "BR", 64522, 64513, "", m, 25, 30)
+			f.put(peerA, "DE", 64505, 64508, "", m, 40, 20)
+			f.put(peerB, "JP", 64506, 64508, "", m, 100, 30)
+			f.put(peerC, "BR", 64507, 64508, "", m, 25, 30)
 		}, Attribution{PointsAt: PointsDestination, ViaReporting: 1, ViaDegraded: 1, ElsewhereReporting: 2, ElsewhereDegraded: 2}},
+		// With nobody through another provider ASN, the provider and the
+		// destination cannot be told apart.
+		{"every other member through the same provider ASN", nil, func(f *fleet) {
+			f.put(peerA, "DE", 64505, 64508, "", m, 40, 20)
+			f.put(peerB, "JP", 64505, 64508, "", m, 30, 30)
+		}, Attribution{PointsAt: PointsUnknown, ViaReporting: 2, ViaDegraded: 2}},
 		{"no other member measures it", nil, func(*fleet) {}, Attribution{PointsAt: PointsUnknown}},
 		{"rows disagree", nil, func(f *fleet) {
-			f.put(peerA, "DE", 64520, 64513, "", m, 0, 20)
-			f.put(peerB, "JP", 64521, 64513, "", m, 50, 30)
+			f.put(peerA, "DE", 64505, 64508, "", m, 0, 20)
+			f.put(peerB, "JP", 64506, 64508, "", m, 50, 30)
 		}, Attribution{PointsAt: PointsUnknown, ViaReporting: 1, ElsewhereReporting: 1, ElsewhereDegraded: 1}},
 		// A member through two other providers that sees loss through one
 		// of them counts once, as degraded.
 		{"one member through two other providers", nil, func(f *fleet) {
-			f.put(peerA, "DE", 64520, 64513, "", m, 40, 20)
-			f.put(peerB, "JP", 64521, 64513, "", m, 0, 30)
-			f.put(peerB, "JP", 64522, 64513, "", m, 30, 30)
+			f.put(peerA, "DE", 64505, 64508, "", m, 40, 20)
+			f.put(peerB, "JP", 64506, 64508, "", m, 0, 30)
+			f.put(peerB, "JP", 64507, 64508, "", m, 30, 30)
 		}, Attribution{PointsAt: PointsDestination, ViaReporting: 1, ViaDegraded: 1, ElsewhereReporting: 1, ElsewhereDegraded: 1}},
 		// A down-weighted member's loss is shown, not counted.
 		{"down-weighted member", map[string]bool{peerA: true}, func(f *fleet) {
-			f.put(peerA, "DE", 64520, 64513, "", m, 90, 20)
-			f.put(peerB, "JP", 64521, 64513, "", m, 0, 30)
+			f.put(peerA, "DE", 64505, 64508, "", m, 90, 20)
+			f.put(peerB, "JP", 64506, 64508, "", m, 0, 30)
 		}, Attribution{PointsAt: PointsThisEdge, ElsewhereReporting: 1}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := attributionOf(t, tt.down, tt.rows)
-			tt.want.ProviderASN = 64520
+			tt.want.ProviderASN = 64505
 			if len(got) != 1 || got[0] != tt.want {
 				t.Errorf("here = %+v, want [%+v]", got, tt.want)
 			}
@@ -113,11 +119,13 @@ func TestAttributionOnlyForThisNodesDegradedProviders(t *testing.T) {
 		}
 	}
 	got := attributionOf(t, nil, func(f *fleet) {
-		f.put("", "US", 64521, 64513, "", time.Minute, 30, 90)
-		f.put(peerA, "DE", 64521, 64513, "", time.Minute, 50, 20)
+		f.put("", "US", 64506, 64508, "", time.Minute, 30, 90)
+		f.put(peerA, "DE", 64506, 64508, "", time.Minute, 50, 20)
 	})
-	if len(got) != 2 || got[0].ProviderASN != 64520 || got[0].PointsAt != PointsDestination || got[1].ProviderASN != 64521 || got[1].PointsAt != PointsProvider {
-		t.Errorf("here = %+v, want AS64520 destination and AS64521 provider", got)
+	// Through AS64506 the one other member goes the same way, so the
+	// provider and the destination look the same.
+	if len(got) != 2 || got[0].ProviderASN != 64505 || got[0].PointsAt != PointsDestination || got[1].ProviderASN != 64506 || got[1].PointsAt != PointsUnknown {
+		t.Errorf("here = %+v, want AS64505 destination and AS64506 unknown", got)
 	}
 }
 

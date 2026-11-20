@@ -348,8 +348,8 @@ type EventVantage struct {
 	RTTAvgMs   *float64 `json:"rtt_avg_ms,omitempty"`
 	AgeSeconds float64  `json:"age_seconds"`
 	Degraded   bool     `json:"degraded"`
-	// Counted is false for an unverified member's row, which is shown and
-	// left out of every count.
+	// Counted is false for an unverified or a down-weighted member's row,
+	// which is shown and left out of every count.
 	Counted bool `json:"counted"`
 }
 
@@ -386,10 +386,11 @@ const (
 type Attribution struct {
 	ProviderASN uint32 `json:"provider_asn"`
 	// PointsAt is this_edge when no other member sees loss; provider when
-	// the members that see loss all go through ProviderASN; destination
-	// when every other member sees loss, through ProviderASN and through
-	// another provider ASN; unknown when no other member measures the
-	// target or the rows disagree otherwise.
+	// the members that see loss all go through ProviderASN and some member
+	// through another provider ASN sees none; destination when every other
+	// member sees loss, some of them through another provider ASN; unknown
+	// otherwise, including when every other member goes through
+	// ProviderASN, where the provider and the destination look the same.
 	PointsAt           string `json:"points_at"`
 	ViaReporting       int    `json:"via_reporting"`
 	ViaDegraded        int    `json:"via_degraded"`
@@ -433,9 +434,9 @@ func attribute(list []obs, loss float64) []Attribution {
 			at.PointsAt = PointsUnknown
 		case at.ViaDegraded+at.ElsewhereDegraded == 0:
 			at.PointsAt = PointsThisEdge
-		case at.ElsewhereDegraded == 0:
+		case at.ElsewhereDegraded == 0 && at.ElsewhereReporting > 0:
 			at.PointsAt = PointsProvider
-		case at.ViaDegraded == at.ViaReporting && at.ElsewhereDegraded == at.ElsewhereReporting:
+		case at.ElsewhereDegraded > 0 && at.ViaDegraded == at.ViaReporting && at.ElsewhereDegraded == at.ElsewhereReporting:
 			at.PointsAt = PointsDestination
 		default:
 			at.PointsAt = PointsUnknown
