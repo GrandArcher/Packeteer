@@ -4,6 +4,10 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ## [Unreleased]
 
+### Added
+
+- Settings form rows for `rpki.only_invalid.origin_collectors` (type `json`, name, URL, rate); never mode, allowlist, or announcer, and no collector is contacted (#695).
+
 ## [1.9.0] - 2026-11-20
 
 v1.9 adds Settings forms for the herd Atlas, link-outs, and resource limits, the herd phase 2 local uses (advisory), and a shorter CHANGELOG; no new row (138 done), default `mode: observe`, inject off.

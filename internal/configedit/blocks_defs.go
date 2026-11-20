@@ -302,6 +302,12 @@ var blockDefs = []Block{
 				field("name", "Name", "Optional label.", KindString).check("name"),
 				field("config.path", "Path", "Absolute path of the incident file mounted in the container.", KindString).check("abspath").req(),
 			),
+			field("origin_collectors", "Origin collectors", "Endpoints you run or trust that list the origin ASes seen for a prefix. Packeteer ships no client for RIPE RIS or RouteViews, and saving never contacts the URL.", KindRows).with(
+				field("type", "Type", "The only collector is json: a GET of the URL with ?prefix=, answered with the prefix and its origins.", KindEnum).opts("json").req(),
+				field("name", "Name", "Optional label.", KindString).check("name"),
+				field("config.url", "URL", "http:// or https:// address of the endpoint, no login or query.", KindString).check("baseurl").req(),
+				field("config.rate_per_minute", "Lookups per minute", "Caps the lookups sent to the endpoint, 1 to 600.", KindInt).rng(1, 600).dflt("60").adv(),
+			),
 		},
 	},
 	{
