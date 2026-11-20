@@ -40,7 +40,7 @@ v1.8 adds an RIS and RouteViews origin signal for RPKI-invalid only paths, six S
 
 ## [1.7.0] - 2026-11-18
 
-v1.7 lab-proves the RouterOS non-BGP steerer, registry hygiene, and the herd hub, adds the federation settings form, and hardens CI flakes; no new config key (138 done), default `mode: observe`, inject off.
+v1.7 lab-proves the RouterOS non-BGP steerer, registry hygiene, and the herd hub and dashboard, adds the federation form, and moves the flow discovery row to done (138 done); no new key, default `mode: observe`, inject off.
 
 ### Added
 
@@ -60,7 +60,7 @@ v1.7 lab-proves the RouterOS non-BGP steerer, registry hygiene, and the herd hub
 
 ## [1.6.0] - 2026-11-17
 
-v1.6 finishes the shared IX port check (#151) and adds a RouterOS router check, an upgrade test between releases, a demo report mode, and a doc lint; no new row or key, default `mode: observe`, inject off.
+v1.6 finishes the shared IX port check (#151) and adds a read-only RouterOS router check, an upgrade test between real releases, a demo report mode, and a doc lint; no new row or key, default `mode: observe`, inject off.
 
 ### Added
 
@@ -76,7 +76,7 @@ v1.6 finishes the shared IX port check (#151) and adds a RouterOS router check, 
 
 ## [1.5.0] - 2026-11-16
 
-v1.5 adds a field-report kit, an opt-in router check, and eBPF span tracking, and lab-proves RPKI-invalid only paths and federation push; new keys off, default `mode: observe`, inject off.
+v1.5 adds a field-report kit, an opt-in read-only router check, and eBPF span tracking, and lab-proves RPKI-invalid only paths and federation push; new keys off, default `mode: observe`, inject off.
 
 ### Added
 
@@ -149,7 +149,7 @@ v1.2 adds steering calls to the REST API and, behind `mcp.write_tools`, to the M
 
 ## [1.1.0] - 2026-11-10
 
-v1.1 adds non-BGP mode, the MCP server, and RPKI-invalid only paths, all opt-in, with no change to an existing config; default `mode: observe`, inject off.
+v1.1 adds three opt-in rows, non-BGP mode, the MCP server, and RPKI-invalid only paths, with no change to an existing config; default `mode: observe`, inject off.
 
 ### Added
 
@@ -180,7 +180,7 @@ v1.0.1 is the post-v1.0 hardening pass (#527-#536), with no new rows; default `m
 
 ## [1.0.0] - 2026-11-04
 
-v1.0 is the audit and review pass over v0.9 (#486-#494, #501-#510, #215), with no new rows and sign-in on by default; default `mode: observe`, inject off. Read the upgrade notes before moving from 0.9.
+v1.0 is the audit and review pass over v0.9 (#486-#494, #501-#510, #215): no new rows, nothing field-proven (#54), sign-in on, default `mode: observe`, inject off; read the upgrade notes.
 
 ### Changed
 
