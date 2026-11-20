@@ -245,6 +245,25 @@ func (l *HerdLimits) limitFields(fn func(name string, v reflect.Value, def, min,
 	}
 }
 
+// HerdLimitSpec is the default and range of one herd.limits key. A duration
+// key carries nanoseconds.
+type HerdLimitSpec struct {
+	Key               string
+	Duration          bool
+	Default, Min, Max int64
+}
+
+// HerdLimitSpecs lists the herd.limits keys in file order, for the settings
+// form, so the form cannot drift from the loader's defaults and ranges.
+func HerdLimitSpecs() []HerdLimitSpec {
+	var out []HerdLimitSpec
+	var l HerdLimits
+	l.limitFields(func(name string, v reflect.Value, def, lo, hi int64) {
+		out = append(out, HerdLimitSpec{Key: name, Duration: v.Type() == reflect.TypeOf(time.Duration(0)), Default: def, Min: lo, Max: hi})
+	})
+	return out
+}
+
 func (l *HerdLimits) applyDefaults() {
 	l.limitFields(func(_ string, v reflect.Value, def, _, _ int64) {
 		if v.Int() == 0 {

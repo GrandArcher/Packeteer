@@ -16,6 +16,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/GrandArcher/Packeteer/internal/config"
+	"github.com/GrandArcher/Packeteer/internal/linkout"
 )
 
 // Blocks (#330) are the sections of the settings form that the older typed
@@ -75,6 +76,10 @@ type Field struct {
 	Check    string   `json:"check,omitempty"`
 	Required bool     `json:"required,omitempty"`
 	Advanced bool     `json:"advanced,omitempty"`
+	// DefaultList is what a list reads as while the key is absent, for a
+	// key whose absence is not the same as an empty list. Emptying the list
+	// then writes an explicit empty one.
+	DefaultList []string `json:"default_list,omitempty"`
 	// DefaultTrue is a bool the loader reads as true when the key is
 	// absent. Writing true then deletes the key.
 	DefaultTrue bool `json:"default_true,omitempty"`
@@ -171,6 +176,16 @@ var checkers = map[string]func(string) error{
 		}
 		return nil
 	},
+	"linkname": func(s string) error {
+		if !linkout.ValidName(s) {
+			return fmt.Errorf("%q must be 1 to %d printable characters", s, linkout.MaxNameLength)
+		}
+		return nil
+	},
+	"linkurl": func(s string) error {
+		_, err := linkout.ValidateTemplate(s)
+		return err
+	},
 	"abspath": func(s string) error {
 		if !strings.HasPrefix(s, "/") || strings.ContainsAny(s, "\r\n") {
 			return fmt.Errorf("%q must be an absolute path", s)
@@ -212,6 +227,9 @@ func readField(m *yaml.Node, f Field) any {
 	case KindList, KindInts, KindCIDRs:
 		if n != nil && n.Kind == yaml.ScalarNode && n.Tag != "!!null" {
 			return []string{n.Value}
+		}
+		if n == nil && f.DefaultList != nil {
+			return slices.Clone(f.DefaultList)
 		}
 		out := []string{}
 		if n != nil && n.Kind == yaml.SequenceNode {
@@ -570,7 +588,11 @@ func writeField(m *yaml.Node, f Field, val any) error {
 			setPath(m, f.Key, "false", "!!bool")
 		}
 	case KindList, KindCIDRs:
-		setPathList(m, f.Key, val.([]string), "!!str")
+		if list := val.([]string); len(list) == 0 && f.DefaultList != nil {
+			setEmptyList(m, f.Key)
+		} else {
+			setPathList(m, f.Key, list, "!!str")
+		}
 	case KindInts:
 		setPathList(m, f.Key, val.([]string), "!!int")
 	case KindRows:
@@ -643,6 +665,22 @@ func setPathList(m *yaml.Node, key string, vals []string, tag string) {
 		m = ensureMapping(m, p)
 	}
 	setStringList(m, parts[len(parts)-1], vals, tag)
+}
+
+// setEmptyList writes key as an explicit empty list.
+func setEmptyList(m *yaml.Node, key string) {
+	parts := strings.Split(key, ".")
+	for _, p := range parts[:len(parts)-1] {
+		m = ensureMapping(m, p)
+	}
+	if seq, ok := sequenceChild(m, parts[len(parts)-1]); ok {
+		seq.Content = nil
+		return
+	}
+	deleteKey(m, parts[len(parts)-1])
+	m.Content = append(m.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: parts[len(parts)-1]},
+		&yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq", Style: yaml.FlowStyle})
 }
 
 func writeRows(m *yaml.Node, f Field, rows []Values) error {

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+
+	"github.com/GrandArcher/Packeteer/internal/linkout"
 )
 
 // pluginKeys are the config keys each plugin type of a settings block reads,
@@ -70,4 +72,11 @@ func rowsCheck(path, place, key string) func(Values) error {
 
 func checkRouterCheck(v Values) error {
 	return checkPluginEntry("preflight.router_check", "preflight.router_check", v)
+}
+
+func checkLinkouts(v Values) error {
+	if rows, _ := v["custom"].([]Values); len(rows) > linkout.MaxCustom {
+		return fieldErr("linkouts.custom", "at most %d entries", linkout.MaxCustom)
+	}
+	return nil
 }

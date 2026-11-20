@@ -147,8 +147,9 @@ func TestObserveBlocksUnchangedFormWritesNothing(t *testing.T) {
 }
 
 // An edit of each block keeps the keys the forms do not show: the SLURM
-// exceptions, push_enabled, the backout list, the herd limits and Atlas, and
-// an rtr source's TLS settings.
+// exceptions, push_enabled, the backout list, and an rtr source's TLS
+// settings. The herd limits and Atlas have fields (#687) and keep their text
+// while they are not edited.
 func TestObserveBlocksKeepTheRestOfTheFile(t *testing.T) {
 	out, cfg := observeEdit(t, observeBlocksYAML, func(f *Form) {
 		f.Blocks["rpki"]["avoid_invalid"] = true
@@ -186,7 +187,7 @@ func TestObserveBlocksNeverTouchSafetyKeys(t *testing.T) {
 		"push_enabled": true, "install_routes": true, "synthesize": true, "slurm": true, "backout": true,
 	}
 	for _, b := range Blocks() {
-		if !isObserveBlock(b.ID) {
+		if !isObserveBlock(b.ID) && b.ID != "linkouts" {
 			continue
 		}
 		var walk func(fields []Field)
@@ -232,12 +233,20 @@ storage:
 		f.Blocks["registry"] = Values{"enabled": true, "asns": []string{"64496"}, "sources": []Values{{"type": "peeringdb"}}}
 		f.Blocks["mcp"] = Values{"enabled": true}
 		f.Blocks["verify"] = Values{"enabled": true}
-		f.Blocks["herd"] = Values{"enabled": true, "preview_only": true, "share.classes": []string{"measurements"}, "vantage.country": "US"}
+		f.Blocks["herd"] = Values{
+			"enabled": true, "preview_only": true, "share.classes": []string{"measurements"}, "vantage.country": "US",
+			"outside.atlas.enabled": true, "outside.atlas.measurements": []string{"1001"}, "outside.rpki": true, "outside.links": true,
+			"limits.rate_global": "900", "limits.local_bytes": "1073741824",
+		}
+		f.Blocks["linkouts"] = Values{"enabled": []string{"he", "nlnog_ring"}, "custom": []Values{{"name": "internal LG", "url": "https://lg.example.net/{asn}"}}, "hide_internal": false}
 		f.Blocks["router_check"] = Values{"type": "frr", "config.socket_env": "PACKETEER_FRR_SOCKET"}
 	})
 	if cfg.Mode != "observe" || cfg.Announcer == nil || cfg.Announcer.Type != "gobgp" || cfg.PacketeerCommunity != "64512:666" || cfg.LocalPref != 200 ||
 		len(cfg.Allowlist.Prefixes) != 1 || cfg.Allowlist.Prefixes[0] != "198.51.100.0/24" {
 		t.Fatalf("safety keys changed: mode %q announcer %+v allowlist %v\n%s", cfg.Mode, cfg.Announcer, cfg.Allowlist.Prefixes, out)
+	}
+	if o := cfg.Herd.Outside; !o.Atlas.Enabled || !o.RPKI || !o.Links || cfg.Herd.Limits.RateGlobal != 900 || len(cfg.Linkouts.Custom) != 1 {
+		t.Fatalf("the herd outside and limits or link-outs were not written: %s", out)
 	}
 	if cfg.Synthesize != nil || cfg.NonBGP != nil || cfg.Registry.PushEnabled || cfg.MCP.WriteTools || cfg.RPKI.AvoidInvalid || cfg.RPKI.OnlyInvalid.SLURM != nil {
 		t.Fatalf("a form switched on something it does not offer: %s", out)

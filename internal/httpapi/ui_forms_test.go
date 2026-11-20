@@ -389,7 +389,7 @@ func TestConfigPreviewAndSchema(t *testing.T) {
 	for _, b := range got["blocks"].([]any) {
 		ids[b.(map[string]any)["id"].(string)] = true
 	}
-	for _, id := range []string{"scorer", "bgp", "bmp", "maintenance", "inbound_announcer", "anomaly", "mitigation", "http", "inject", "federation", "rpki", "rpki_only_invalid", "registry", "mcp", "verify", "herd", "router_check"} {
+	for _, id := range []string{"scorer", "bgp", "bmp", "maintenance", "inbound_announcer", "anomaly", "mitigation", "http", "inject", "federation", "rpki", "rpki_only_invalid", "registry", "mcp", "verify", "herd", "linkouts", "router_check"} {
 		if !ids[id] {
 			t.Fatalf("schema lacks block %s: %s", id, rec.Body)
 		}

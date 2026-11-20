@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// The blocks of the Settings forms of #670 are read once at start, so Preview
+// The blocks of the Settings forms of #670 and #687 (link-outs) are read once at start, so Preview
 // lists each one as a restart key and a reload refuses them (the page shows
 // the list before Save). Herd is covered by TestHerdChangeNeedsRestart.
 func TestSettingsFormBlocksNeedRestart(t *testing.T) {
@@ -20,6 +20,7 @@ providers:
 		{"rpki", "rpki:\n  enabled: true\n  sources:\n    - type: rtr\n      config: {address: \"192.0.2.20:3323\"}\n"},
 		{"registry", "registry:\n  enabled: true\n  asns: [64496]\n  sources:\n    - type: peeringdb\n"},
 		{"mcp", "mcp:\n  enabled: true\n"},
+		{"linkouts", "linkouts:\n  enabled: [he]\n  hide_internal: false\n"},
 		{"verify", "verify:\n  enabled: true\n"},
 		{"preflight", "preflight:\n  router_check:\n    type: frr\n    config: {socket_env: PACKETEER_FRR_SOCKET}\n"},
 	} {
