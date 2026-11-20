@@ -228,7 +228,7 @@ func readField(m *yaml.Node, f Field) any {
 		if n != nil && n.Kind == yaml.ScalarNode && n.Tag != "!!null" {
 			return []string{n.Value}
 		}
-		if n == nil && f.DefaultList != nil {
+		if (n == nil || n.Tag == "!!null") && f.DefaultList != nil {
 			return slices.Clone(f.DefaultList)
 		}
 		out := []string{}

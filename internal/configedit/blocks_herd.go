@@ -84,10 +84,11 @@ func checkHerdOutside(v Values) error {
 	if len(meas)+len(probes) == 0 {
 		return fieldErr("herd.outside.atlas.measurements", "name at least one measurement or probe")
 	}
-	for key, ids := range map[string][]string{"measurements": meas, "probes": probes} {
-		if len(ids) > config.MaxHerdAtlasIDs {
-			return fieldErr("herd.outside.atlas."+key, "at most %d", config.MaxHerdAtlasIDs)
-		}
+	if len(meas) > config.MaxHerdAtlasIDs {
+		return fieldErr("herd.outside.atlas.measurements", "at most %d", config.MaxHerdAtlasIDs)
+	}
+	if len(probes) > config.MaxHerdAtlasIDs {
+		return fieldErr("herd.outside.atlas.probes", "at most %d", config.MaxHerdAtlasIDs)
 	}
 	return nil
 }

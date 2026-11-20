@@ -2,6 +2,7 @@ package configedit
 
 import (
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -54,19 +55,10 @@ func TestHerdLimitFieldsMatchTheLoader(t *testing.T) {
 		}
 	}
 	for key := range herdLimitText {
-		if !slicesHasKey(specs, key) {
+		if !slices.ContainsFunc(specs, func(s config.HerdLimitSpec) bool { return s.Key == key }) {
 			t.Errorf("text for %s, which is not a limit", key)
 		}
 	}
-}
-
-func slicesHasKey(specs []config.HerdLimitSpec, key string) bool {
-	for _, s := range specs {
-		if s.Key == key {
-			return true
-		}
-	}
-	return false
 }
 
 func TestHerdOutsideAndLimitsReadTheFile(t *testing.T) {
@@ -314,5 +306,13 @@ func TestLinkoutsRefusals(t *testing.T) {
 				t.Fatalf("err = %v, want %q", err, c.want)
 			}
 		})
+	}
+}
+
+// A null site list is not set to the loader, so the form shows the defaults.
+func TestLinkoutsNullListReadsAsDefaults(t *testing.T) {
+	got := mustParse(t, linkoutsYAML+"linkouts:\n  enabled:\n").Blocks["linkouts"]["enabled"]
+	if !reflect.DeepEqual(got, linkout.DefaultSites()) {
+		t.Fatalf("enabled = %v", got)
 	}
 }
