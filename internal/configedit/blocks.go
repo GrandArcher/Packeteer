@@ -170,6 +170,12 @@ var checkers = map[string]func(string) error{
 		}
 		return nil
 	},
+	"herdkeyid": func(s string) error {
+		if err := config.CheckHerdKeyID(s); err != nil {
+			return fmt.Errorf("%q %v", s, err)
+		}
+		return nil
+	},
 	"country": func(s string) error {
 		if len(s) != 2 || s[0] < 'A' || s[0] > 'Z' || s[1] < 'A' || s[1] > 'Z' {
 			return fmt.Errorf("%q must be an ISO 3166-1 alpha-2 code in capitals", s)

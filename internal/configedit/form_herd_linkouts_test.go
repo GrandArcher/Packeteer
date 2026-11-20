@@ -1,6 +1,11 @@
 package configedit
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strconv"
@@ -314,5 +319,122 @@ func TestLinkoutsNullListReadsAsDefaults(t *testing.T) {
 	got := mustParse(t, linkoutsYAML+"linkouts:\n  enabled:\n").Blocks["linkouts"]["enabled"]
 	if !reflect.DeepEqual(got, linkout.DefaultSites()) {
 		t.Fatalf("enabled = %v", got)
+	}
+}
+
+// Forms of #694: herd.block and herd.down_weight. They change this node's
+// view only and are never read by Decide.
+
+const herdKeyID = "abababababababababababababababababababababababababababababababab"
+
+func TestHerdViewFieldsReadTheFile(t *testing.T) {
+	h := mustParse(t, observeBlocksYAML).Blocks["herd"]
+	if !reflect.DeepEqual(h["block.asns"], []string{"64502"}) || len(h["block.keys"].([]string)) != 0 || len(h["down_weight.asns"].([]string)) != 0 {
+		t.Fatalf("herd = %+v", h)
+	}
+	b, _ := blockByID("herd")
+	for _, f := range b.Fields {
+		if (strings.HasPrefix(f.Key, "block.") || strings.HasPrefix(f.Key, "down_weight.")) && (f.Required || f.StartOn || f.DefaultTrue || f.Default != "" || !f.Advanced) {
+			t.Errorf("%s must be an optional advanced list that starts empty: %+v", f.Key, f)
+		}
+	}
+}
+
+func TestHerdViewFieldsWrite(t *testing.T) {
+	out, cfg := observeEdit(t, observeBlocksYAML, func(f *Form) {
+		h := f.Blocks["herd"]
+		h["block.asns"] = []string{"64502", "64503"}
+		h["block.keys"] = []string{herdKeyID}
+		h["down_weight.asns"] = []string{"64504"}
+		h["down_weight.endpoints"] = []string{"https://198.51.100.7:9444"}
+	})
+	b, d := cfg.Herd.Block, cfg.Herd.DownWeight
+	if !reflect.DeepEqual(b.ASNs, []uint32{64502, 64503}) || !reflect.DeepEqual(b.Keys, []string{herdKeyID}) || len(b.Endpoints) != 0 ||
+		!reflect.DeepEqual(d.ASNs, []uint32{64504}) || !reflect.DeepEqual(d.Endpoints, []string{"https://198.51.100.7:9444"}) || len(d.Keys) != 0 {
+		t.Fatalf("block = %+v down_weight = %+v\n%s", b, d, out)
+	}
+	if !strings.Contains(out, "# lab edge") || !strings.Contains(out, "limits: {rate_global: 700}") {
+		t.Fatalf("the rest of the file changed:\n%s", out)
+	}
+}
+
+// Emptying the lists removes the keys: nothing is blocked or down-weighted by
+// default.
+func TestHerdViewFieldsEmptyWriteNothing(t *testing.T) {
+	out, cfg := observeEdit(t, observeBlocksYAML, func(f *Form) { f.Blocks["herd"]["block.asns"] = []string{} })
+	if strings.Contains(out, "block") || strings.Contains(out, "down_weight") || len(cfg.Herd.Block.ASNs) != 0 || len(cfg.Herd.DownWeight.ASNs) != 0 {
+		t.Fatalf("an empty view was written:\n%s", out)
+	}
+}
+
+func TestHerdViewFieldsRefusals(t *testing.T) {
+	many := make([]string, 256)
+	for i := range many {
+		many[i] = strconv.Itoa(1 + i)
+	}
+	cases := []struct {
+		name string
+		edit func(v Values)
+		want string
+	}{
+		{"asn zero", func(v Values) { v["block.asns"] = []string{"0"} }, "block.asns[0]"},
+		{"asn text", func(v Values) { v["down_weight.asns"] = []string{"AS64504"} }, "whole number"},
+		{"key id short", func(v Values) { v["block.keys"] = []string{"abc"} }, "herd.block.keys[0]: \"abc\" must be a key id"},
+		{"key id upper case", func(v Values) { v["down_weight.keys"] = []string{strings.ToUpper(herdKeyID)} }, "herd.down_weight.keys[0]"},
+		{"endpoint http", func(v Values) { v["block.endpoints"] = []string{"http://198.51.100.7:9444"} }, "herd.block.endpoints[0]"},
+		{"endpoint without port", func(v Values) { v["down_weight.endpoints"] = []string{"https://198.51.100.7"} }, "needs a port"},
+		{"asn twice", func(v Values) { v["block.asns"] = []string{"64502", "64502"} }, "duplicate value 64502"},
+		{"member in both", func(v Values) { v["down_weight.asns"] = []string{"64502"} }, "herd.down_weight.asns[0]: already listed in herd.block"},
+		{"key in both", func(v Values) {
+			v["block.keys"], v["down_weight.keys"] = []string{herdKeyID}, []string{herdKeyID}
+		}, "herd.down_weight.keys[0]: already listed in herd.block"},
+		{"too many", func(v Values) { v["block.asns"], v["block.keys"] = many, []string{herdKeyID} }, "herd.block.asns: at most 256 entries"},
+		{"preview only", func(v Values) { v["preview_only"] = true }, "herd.block.asns: preview_only serves and pulls nothing"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := mustParse(t, observeBlocksYAML)
+			c.edit(f.Blocks["herd"])
+			_, err := ApplyForm([]byte(observeBlocksYAML), roundTripJSON(t, f))
+			if err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("err = %v, want %q", err, c.want)
+			}
+		})
+	}
+}
+
+// A block or down-weight edit leaves mode, the allowlist, the announcer, and
+// the route community as they were, and nothing in the decision path or the
+// announcers names the herd config.
+func TestHerdViewEditNeverReachesDecideOrTheAnnouncer(t *testing.T) {
+	out, cfg := observeEdit(t, observeBlocksYAML, func(f *Form) {
+		f.Blocks["herd"]["block.keys"] = []string{herdKeyID}
+		f.Blocks["herd"]["down_weight.asns"] = []string{"64504"}
+	})
+	if cfg.Mode != "observe" || cfg.Announcer == nil || cfg.Announcer.Type != "gobgp" || cfg.PacketeerCommunity != "64512:666" ||
+		len(cfg.Allowlist.Prefixes) != 1 || cfg.Allowlist.Prefixes[0] != "198.51.100.0/24" {
+		t.Fatalf("safety keys changed:\n%s", out)
+	}
+	fset := token.NewFileSet()
+	for _, dir := range []string{"../policy", "../plugins/announcer"} {
+		err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+			if err != nil || d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+				return err
+			}
+			f, perr := parser.ParseFile(fset, path, nil, 0)
+			if perr != nil {
+				return perr
+			}
+			ast.Inspect(f, func(n ast.Node) bool {
+				if sel, ok := n.(*ast.SelectorExpr); ok && (sel.Sel.Name == "Herd" || sel.Sel.Name == "DownWeight") {
+					t.Errorf("%s reads %s", fset.Position(sel.Pos()), sel.Sel.Name)
+				}
+				return true
+			})
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 }

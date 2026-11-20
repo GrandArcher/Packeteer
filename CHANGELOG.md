@@ -4,6 +4,9 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ## [Unreleased]
 
+### Added
+
+- Settings form fields for `herd.block` and `herd.down_weight` (ASNs, key ids, endpoints), with Preview and Save; this node's view only, never mode, allowlist, or announcer (#694).
 ### Changed
 
 - `upgrade-release` CI job starts from the v1.9.0 image, pinned by digest, instead of v1.8.0; the downgrade step still removes no key (#693).

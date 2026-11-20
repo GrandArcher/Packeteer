@@ -499,8 +499,8 @@ func (h *Herd) validateView(add func(string, ...any)) {
 			note("asns", i, "asn:"+strconv.FormatUint(uint64(a), 10))
 		}
 		for i, k := range l.m.Keys {
-			if !isHerdKeyID(k) {
-				add("herd.%s.keys[%d]: %q must be a key id, 64 lowercase hex digits (key_id in GET /api/herd)", l.name, i, k)
+			if err := CheckHerdKeyID(k); err != nil {
+				add("herd.%s.keys[%d]: %q %s", l.name, i, k, err)
 				continue
 			}
 			note("keys", i, "key:"+k)
@@ -515,18 +515,19 @@ func (h *Herd) validateView(add func(string, ...any)) {
 	}
 }
 
-// isHerdKeyID reports whether s is a node key id: the lowercase hex
-// SHA-256 of an Ed25519 public key.
-func isHerdKeyID(s string) bool {
-	if len(s) != 64 {
-		return false
-	}
+// CheckHerdKeyID checks a node key id: the lowercase hex SHA-256 of an
+// Ed25519 public key.
+func CheckHerdKeyID(s string) error {
+	ok := len(s) == 64
 	for _, c := range s {
 		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
-			return false
+			ok = false
 		}
 	}
-	return true
+	if !ok {
+		return errors.New("must be a key id, 64 lowercase hex digits (key_id in GET /api/herd)")
+	}
+	return nil
 }
 
 func (b *HerdHub) validate(add func(string, ...any)) {
