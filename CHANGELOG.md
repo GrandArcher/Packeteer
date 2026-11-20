@@ -7,6 +7,9 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 ### Added
 
 - Settings form rows for `rpki.only_invalid.origin_collectors` (type `json`, name, URL, rate); never mode, allowlist, or announcer, and no collector is contacted (#695).
+### Changed
+
+- `upgrade-release` CI job starts from the v1.9.0 image, pinned by digest, instead of v1.8.0; the downgrade step still removes no key (#693).
 
 ## [1.9.0] - 2026-11-20
 
