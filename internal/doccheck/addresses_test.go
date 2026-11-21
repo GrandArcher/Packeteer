@@ -74,7 +74,7 @@ func okAddr(a netip.Addr) bool {
 // ip:8.8.8.8 are read. A netmask is a run of one bits then zero bits
 // (255.255.255.0), never an address, so it is skipped too.
 var (
-	ipv4Re = regexp.MustCompile(`(?:^|[^0-9A-Za-z_.])(\d{1,3}(?:\.\d{1,3}){3})(?:/\d{1,2})?(?:$|[^0-9A-Za-z_.]|\.(?:$|[^0-9]))`)
+	ipv4Re = regexp.MustCompile(`\d{1,3}(?:\.\d{1,3}){3}(?:/\d{1,2})?`)
 	// A section number such as "RFC 4271 section 9.1.2.2" is not an address.
 	sectionRe = regexp.MustCompile(`(?i)(?:section|sec\.?|rfc\s*\d+)\s+$`)
 	// An IPv4-mapped IPv6 literal is reported once, by the IPv6 pass.
@@ -92,19 +92,32 @@ func isNetmask(a netip.Addr) bool {
 	return v|(v-1) == 0xffffffff || v == 0
 }
 
+// glue reports a byte that makes a neighbouring dotted quad part of a
+// longer token (a version string, a name) rather than an address.
+func glue(c byte) bool {
+	return c == '.' || c == '_' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
+}
+
 func wordByte(c byte) bool {
 	return c == '_' || c == '-' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
 }
 
 func ipFindings(line string) []string {
 	var bad []string
-	for _, m := range ipv4Re.FindAllStringSubmatchIndex(line, -1) {
-		text := line[m[2]:m[3]]
-		a, err := netip.ParseAddr(text)
-		if err != nil || isNetmask(a) || sectionRe.MatchString(line[:m[2]]) || mappedRe.MatchString(line[:m[2]]) {
+	for _, m := range ipv4Re.FindAllStringIndex(line, -1) {
+		start, end := m[0], m[1]
+		text, _, _ := strings.Cut(line[start:end], "/")
+		end = start + len(text)
+		// The match consumes nothing the next one needs: the neighbours
+		// are checked here, so "10.0.0.1-8.8.8.8" yields both.
+		if start > 0 && glue(line[start-1]) || end < len(line) && (line[end] != '.' && glue(line[end]) || line[end] == '.' && end+1 < len(line) && line[end+1] >= '0' && line[end+1] <= '9') {
 			continue
 		}
-		if ptrRe.MatchString(line[m[3]:]) {
+		a, err := netip.ParseAddr(text)
+		if err != nil || isNetmask(a) || sectionRe.MatchString(line[:start]) || mappedRe.MatchString(line[:start]) {
+			continue
+		}
+		if ptrRe.MatchString(line[end:]) {
 			// 11.2.0.192.in-addr.arpa names 192.0.2.11.
 			b := a.As4()
 			a = netip.AddrFrom4([4]byte{b[3], b[2], b[1], b[0]})
@@ -291,6 +304,10 @@ func TestAddressScannerRules(t *testing.T) {
 	bad("mask 255.255.255.0 and 255.255.0.0 and 0.0.0.0")
 	bad("version v8.8.8.8 and 8.8.8.8.9 and frr8.8.8.8")
 	bad("image frr:8.8.8.8-x", "address 8.8.8.8")
+	bad("10.0.0.1-8.8.8.8", "address 8.8.8.8")
+	bad("8.8.8.8 9.9.9.9", "address 8.8.8.8", "address 9.9.9.9")
+	bad("[8.8.8.8,9.9.9.9/24]", "address 8.8.8.8", "address 9.9.9.9")
+	bad("ends 8.8.8.8.", "address 8.8.8.8")
 	bad("RFC 4271 section 9.1.2.2 and 1.3.6.1.4.1.8072")
 	bad("PACKETEER-MIB::pktrProviderDown 12:30:45")
 	bad("2.0.192.in-addr.arpa 11.2.0.192.in-addr.arpa")
