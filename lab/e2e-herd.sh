@@ -1,7 +1,8 @@
 #!/bin/bash
 # Herd phase 1 (#260) with its hub (#261) and dashboard (#296), proved in
 # the lab (#659), and herd phase 2 (#672): peer exchange, identities checked
-# against an RPKI stand-in, probe hints, and the crowd threshold, and its
+# against RPKI Signed Checklists that an in-lab rpki-client validated
+# (#708), probe hints, and the crowd threshold, and its
 # local uses (#686): a block and a down-weight, the "my upstream or the
 # destination" attribution, and the outage second opinion. Three
 # simulated members, member-a, member-b, and member-c, each a Packeteer
@@ -22,9 +23,13 @@
 # plus a tampered and an expired entry, so the members find each other only
 # by peer exchange from the seed's peer list, which relays the three member
 # entries and a tampered, an expired, and an oversized one. The hub also
-# serves the RPKI stand-in: validated checklists that bind a's and b's keys
-# to their ASNs and AS64498 to the seed's key, so member-c is unverified
-# (shown, not counted) and so is the seed.
+# serves the checklists rpki-client validated: lab/mkrpki builds a local
+# repository whose trust anchor signs checklists that bind a's and b's keys
+# to their ASNs and AS64498 to the seed's key, plus a tampered and an
+# expired one that bind AS64498 to c's key. rpki-client runs with no
+# network, fetches no trust anchor, and refuses those two, so member-c is
+# unverified (shown, not counted) and so is the seed. Packeteer validates no
+# RPKI object itself.
 #
 # member-a and member-b share at origin-ASN level and list what they share.
 # member-c excludes 192.0.2.128/26, answers queries only, and shares at route
@@ -37,7 +42,9 @@
 # member-a by ASN (its own view only).
 # Checked in order:
 #  0. hub-check accepts the four entries and refuses the tampered and the
-#     expired one;
+#     expired one; rpki-client, with no network, validates the three good
+#     checklists and refuses the tampered and the expired one, and the hub
+#     serves only the three;
 #  1. every member fetched the list and the checklists from the hub, took
 #     the seed as its one hub peer, refused the two bad hub entries, found
 #     the other two members by peer exchange (member-b lists c as blocked),
@@ -46,7 +53,8 @@
 #     a; no failures, records pulled),
 #     nothing is announced (no edge receives a route from its member), and
 #     no member has an improvement;
-#  3. identity: a and b are verified, c and the seed are not; the world
+#  3. identity: a and b are verified, c (named only by the refused
+#     checklists) and the seed are not; the world
 #     view on member-a counts a and b for AS64511 and lists c's row as not
 #     counted;
 #  4. per-vantage view: a sees itself and b for AS64510 (not c, which
@@ -94,10 +102,11 @@ image=packeteer:e2e
 lab_dir=$(mktemp -d)
 keys_bin=$(mktemp)
 certs_bin=$(mktemp)
+rpki_bin=$(mktemp)
 flow_bin=$(mktemp)
 rates=$(mktemp)
 flow_pid=""
-trap 'rc=$?; if [ -n "$flow_pid" ]; then kill "$flow_pid" 2>/dev/null || true; fi; if [ "$rc" -ne 0 ]; then echo "---- lab logs ----"; "${compose[@]}" logs --no-color || true; "${compose[@]}" ps || true; fi; "${compose[@]}" unpause member-b >/dev/null 2>&1 || true; "${compose[@]}" down -v --remove-orphans || true; rm -f "$keys_bin" "$certs_bin" "$flow_bin" "$rates" "$rates.tmp"; rm -rf "$lab_dir"; exit "$rc"' EXIT
+trap 'rc=$?; if [ -n "$flow_pid" ]; then kill "$flow_pid" 2>/dev/null || true; fi; if [ "$rc" -ne 0 ]; then echo "---- lab logs ----"; "${compose[@]}" logs --no-color || true; "${compose[@]}" ps || true; fi; "${compose[@]}" unpause member-b >/dev/null 2>&1 || true; "${compose[@]}" down -v --remove-orphans || true; rm -f "$keys_bin" "$certs_bin" "$rpki_bin" "$flow_bin" "$rates" "$rates.tmp"; rm -rf "$lab_dir"; exit "$rc"' EXIT
 
 api() {
 	"${compose[@]}" exec -T "member-$1" wget -qO- "http://127.0.0.1:8080$2" 2>/dev/null || true
@@ -112,7 +121,8 @@ dump() {
 	for m in a b c; do
 		"${compose[@]}" exec -T "edge-$m" vtysh -c 'show bgp summary' -c 'show bgp ipv4 unicast' >&2 || true
 	done
-	"${compose[@]}" logs --no-color herd-hub member-a member-b member-c >&2 || true
+	cat "$lab_dir/rp/rpki-client.json" >&2 || true
+	"${compose[@]}" logs --no-color rpki-client herd-hub member-a member-b member-c >&2 || true
 }
 
 fail() {
@@ -121,18 +131,24 @@ fail() {
 	exit 1
 }
 
-echo "building herd keys, the hub, flow sender, and the lab certificate"
+echo "building herd keys, the hub, flow sender, the lab certificate, and the lab RPKI repository"
 go build -o "$keys_bin" ./lab/mkherdkeys
 go build -o "$certs_bin" ./lab/mkcerts
+go build -o "$rpki_bin" ./lab/mkrpki
 go build -o "$flow_bin" ./lab/sendflow
-mkdir -p "$lab_dir/keys" "$lab_dir/certs" "$lab_dir/hub" "$lab_dir/repo/entries" "$lab_dir/bad" "$lab_dir/relay"
+mkdir -p "$lab_dir/keys" "$lab_dir/certs" "$lab_dir/hub" "$lab_dir/repo/entries" "$lab_dir/bad" "$lab_dir/relay" "$lab_dir/rp"
 CGO_ENABLED=0 GOOS=linux GOARCH="$(go env GOARCH)" go build -o "$lab_dir/hub/herdhub" ./lab/herdhub
 "$certs_bin" "$lab_dir/certs" herd-hub
 # d is the seed node (run by lab/herdhub); e and f never run: e's key signs
 # the expired entry, f's the oversized one.
 "$keys_bin" "$lab_dir/keys" a b c d e f >/dev/null
+# The lab RPKI repository: a and b are bound to their ASNs; AS64498 is bound
+# to the seed's key, and to c's only by a tampered and an expired checklist.
+"$rpki_bin" "$lab_dir/rpki" "$lab_dir/keys" a:64496:a b:64497:b seed:64498:d tampered:64498:c:tampered expired:64498:c:expired
 # A rootless Docker reads these as another user; the keys protect nothing.
+# rpki-client runs as nobody and writes its output to rp/.
 chmod 755 "$lab_dir" "$lab_dir/keys" "$lab_dir/certs" "$lab_dir/hub" "$lab_dir/hub/herdhub" "$lab_dir/relay"
+chmod 777 "$lab_dir/rp"
 export PACKETEER_LAB_DIR="$lab_dir"
 
 declare -A ip=([a]=192.0.2.10 [b]=192.0.2.11 [c]=192.0.2.12 [d]=192.0.2.20 [e]=192.0.2.13 [f]=192.0.2.14)
@@ -277,27 +293,29 @@ done
 cp "$lab_dir/bad/${asn[b]}.json" "$lab_dir/relay/tampered.json"
 cp "$lab_dir/bad/${asn[e]}.json" "$lab_dir/relay/expired.json"
 pk_herd f entry -url "https://${ip[f]}:9444" | jq --arg pad "$(head -c 20000 /dev/zero | tr '\0' x)" '. + {pad: $pad}' >"$lab_dir/relay/oversized.json"
-# The RPKI stand-in: a and b are bound to their ASNs; AS64498 is bound to
-# the seed's key, not c's, so c (and the seed, which nothing binds) is
-# unverified.
-not_after=$(date -u -d '+1 day' +%Y-%m-%dT%H:%M:%SZ)
-jq -n --arg na "$not_after" --arg a "$(keyid a)" --arg b "$(keyid b)" --arg d "$(keyid d)" \
-	'{schema: "packeteer-herd-rsc/1", generated_at: (now | todate), checklists: [
-		{asns: [64496], digests: [$a], not_after: $na},
-		{asns: [64497], digests: [$b], not_after: $na},
-		{asns: [64498], digests: [$d], not_after: $na}]}' >"$lab_dir/hub/rsc.json"
-chmod 644 "$lab_dir/hub/herd.json" "$lab_dir/hub/rsc.json" "$lab_dir/relay/"*.json
+chmod 644 "$lab_dir/hub/herd.json" "$lab_dir/relay/"*.json
 
-"${compose[@]}" up -d herd-hub
+"${compose[@]}" up -d rpki-client herd-hub
 hub_get() {
 	curl -fsS --cacert "$lab_dir/certs/ca.crt" --resolve herd-hub:8443:192.0.2.20 "https://herd-hub:8443$1" 2>/dev/null || true
 }
 for i in $(seq 1 30); do
 	hub_get /herd.json | jq -e '(.entries | length) == 3' >/dev/null 2>&1 &&
 		hub_get /rsc.json | jq -e '(.checklists | length) == 3' >/dev/null 2>&1 && break
-	[ "$i" -eq 30 ] && fail "the hub does not serve the list and the checklists over https"
+	[ "$i" -eq 30 ] && fail "the hub does not serve the list and the checklists rpki-client validated over https"
 	sleep 1
 done
+echo "0. rpki-client validates the lab checklists with no network; the hub serves only the valid ones"
+[ "$(docker inspect -f '{{.HostConfig.NetworkMode}}' "$("${compose[@]}" ps -q rpki-client)")" = none ] ||
+	fail "rpki-client must run with no network"
+jq -se 'length == 5 and (map({key: .file, value: .validation}) | from_entries |
+	.["/rpki/rsc/a.sig"] == "OK" and .["/rpki/rsc/b.sig"] == "OK" and .["/rpki/rsc/seed.sig"] == "OK" and
+	.["/rpki/rsc/tampered.sig"] != "OK" and .["/rpki/rsc/expired.sig"] != "OK")' "$lab_dir/rp/rpki-client.json" >/dev/null ||
+	fail "rpki-client should validate the a, b, and seed checklists and refuse the tampered and the expired one"
+hub_get /rsc.json | jq -e --arg a "$(keyid a)" --arg b "$(keyid b)" --arg d "$(keyid d)" \
+	'.schema == "packeteer-herd-rsc/1" and ([.checklists[] | {asns, digests}] | sort_by(.asns)) ==
+	[{asns: [64496], digests: [$a]}, {asns: [64497], digests: [$b]}, {asns: [64498], digests: [$d]}]' >/dev/null ||
+	fail "the hub should serve exactly the three checklists rpki-client validated: $(hub_get /rsc.json)"
 "${compose[@]}" up -d
 
 # member-c's flow source sees user traffic toward 192.0.2.230 only.
@@ -388,6 +406,7 @@ for m in a b c; do
 done
 
 echo "3. identity: a and b are verified, c and the seed are shown and not counted"
+# c's key is named only by the tampered and the expired checklist.
 need_api a /api/herd '.verified and .identity.bindings == 3 and .identity.last_error == null and ([.peers[] | select(.verified) | .asn] == [64497])' "member-a should be verified and see only b verified"
 need_api b /api/herd '.verified and ([.peers[] | select(.verified) | .asn] == [64496])' "member-b should be verified and see only a verified"
 need_api c /api/herd '(.verified | not) and ([.peers[] | select(.verified) | .asn] | sort) == [64496,64497]' "member-c is bound to no key of its own and must not be verified"

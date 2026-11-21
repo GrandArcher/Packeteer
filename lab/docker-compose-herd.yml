@@ -6,14 +6,18 @@
 # are answered; dark owns 192.0.2.200 in the second and answers no ping, and
 # nothing owns the third, so every member that probes them sees loss.
 # herd-hub is the local hub (lab/herdhub), not a public repository: it
-# serves the hub list and the RPKI stand-in over https, trusted through the
-# lab CA in SSL_CERT_FILE, and runs the seed node (AS64499) the list names,
-# whose peer list is how members find each other. Documentation addresses
-# (RFC 5737) and documentation ASNs only. Brought up by lab/e2e-herd.sh,
-# which sets PACKETEER_LAB_DIR: keys/ holds the herd keys (from
-# lab/mkherdkeys), a.yaml to d.yaml the rendered configs, certs/ the lab CA
-# and hub certificate (lab/mkcerts), hub/ the hub binary, list, and
-# checklists, and relay/ the entries the seed relays.
+# serves the hub list and the checklists rpki-client validated over https,
+# trusted through the lab CA in SSL_CERT_FILE, and runs the seed node
+# (AS64499) the list names, whose peer list is how members find each other.
+# rpki-client (#708) runs with no network and validates the RPKI Signed
+# Checklists in rpki/ offline against the lab trust anchor every 10s; no
+# trust anchor is fetched and no live repository is reached. Documentation
+# addresses (RFC 5737) and documentation ASNs only. Brought up by
+# lab/e2e-herd.sh, which sets PACKETEER_LAB_DIR: keys/ holds the herd keys
+# (from lab/mkherdkeys), a.yaml to d.yaml the rendered configs, certs/ the
+# lab CA and hub certificate (lab/mkcerts), hub/ the hub binary and list,
+# rpki/ the lab repository (from lab/mkrpki), rp/ rpki-client's output, and
+# relay/ the entries the seed relays.
 name: packeteer-e2e-herd
 x-frr: &frr
   image: quay.io/frrouting/frr:10.2.4
@@ -34,12 +38,33 @@ x-member: &member
     PACKETEER_LOG_LEVEL: debug
     SSL_CERT_FILE: /etc/packeteer/certs/ca.crt
 services:
+  rpki-client:
+    build: ./rpki-client
+    image: packeteer-lab-rpki-client
+    network_mode: none
+    user: "65534:65534"
+    command:
+      - /bin/sh
+      - -c
+      - |
+        rpki-client -V
+        while :; do
+          rpki-client -j -d /rpki/cache -t /rpki/lab.tal -f /rpki/rsc/*.sig >/rp/rpki-client.json.tmp
+          mv /rp/rpki-client.json.tmp /rp/rpki-client.json
+          sleep 10
+        done
+    volumes:
+      - ${PACKETEER_LAB_DIR}/rpki:/rpki:ro
+      - ${PACKETEER_LAB_DIR}/rp:/rp
   herd-hub:
     image: alpine:3.22
+    depends_on:
+      - rpki-client
     command: ["/hub/herdhub", "-cert", "/certs/herd-hub.crt", "-key", "/certs/herd-hub.key", "-list", "/hub/herd.json",
-      "-rsc", "/hub/rsc.json", "-relay-config", "/etc/packeteer/config.yaml", "-relay", "/relay"]
+      "-rpki-client", "/rp/rpki-client.json", "-relay-config", "/etc/packeteer/config.yaml", "-relay", "/relay"]
     volumes:
       - ${PACKETEER_LAB_DIR}/hub:/hub:ro
+      - ${PACKETEER_LAB_DIR}/rp:/rp:ro
       - ${PACKETEER_LAB_DIR}/certs:/certs:ro
       - ${PACKETEER_LAB_DIR}/d.yaml:/etc/packeteer/config.yaml:ro
       - ${PACKETEER_LAB_DIR}/keys:/etc/packeteer/herd:ro

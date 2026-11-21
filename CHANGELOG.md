@@ -10,6 +10,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Added
 
+- The herd lab proves `herd.identity` against checklists an in-lab rpki-client validates offline (no network, no trust anchor fetch), refusing a tampered and an expired one (`lab/mkrpki`, #708).
 - `internal/doccheck` test fails on a public IP or a non-documentation, non-private ASN in lab, examples, config.example.yaml, deploy, docs, scripts and workflows (#704).
 ### Security
 
