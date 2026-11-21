@@ -455,9 +455,11 @@ Nothing is field-proven (#54). The shipped config stays `mode: observe`, and inj
 
 v1.10.0 added no capability row and no config key; the counts stayed at 138 done. It added Settings forms for keys that already existed and moved the upgrade test forward. What an operator looked for:
 
-- The Settings page got form fields for `herd.block` and `herd.down_weight` and for the `rpki.only_invalid.origin_collectors` rows; none edits `mode`, the allowlist, or the announcer ([docs/ui.md](docs/ui.md), #694, #695).
+- The Settings page had form fields for `herd.block` and `herd.down_weight` (ASNs, key ids, endpoints; this node's view only, empty by default) and for the `rpki.only_invalid.origin_collectors` rows (type `json`, name, URL, rate). Each had Preview and Save, needed a restart, and none edited `mode`, the allowlist, or the announcer; no collector was contacted ([docs/ui.md](docs/ui.md), #694, #695).
 - The `upgrade-release` CI job started from the v1.9.0 image, pinned by digest, instead of v1.8.0 (#693).
-- Two long [FEATURES](docs/FEATURES.md) rows were shortened (#696).
+- `TestExternalPolicyBesideInject` reads the watch stream to EOF after the expired shutdown set; a test change only (#700).
+- The two longest [FEATURES](docs/FEATURES.md) table rows (Web UI dashboard, Configuration editor) became shorter; no capability or issue link was dropped (#696).
+- Docker Desktop on macOS and Windows stayed "allowed, not verified": no `scripts/demo.sh --report` result had been recorded ([docs/demo.md](docs/demo.md#platforms)).
 
 Nothing is field-proven (#54). The shipped config stays `mode: observe`, and injection stays off by default ([CHANGELOG](CHANGELOG.md#1100---2026-11-20)).
 
