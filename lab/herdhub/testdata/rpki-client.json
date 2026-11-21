@@ -1,0 +1,89 @@
+{
+	"file": "/rpki/rsc/a.sig",
+	"hash_id": "BaQVFvCE9OYlP/EOn4wTX5OjOYTJ/cRh2LYrU6i2OnI=",
+	"type": "rsc",
+	"ski": "06:EC:43:2B:8F:C3:FD:AE:78:87:72:04:5D:1A:AC:81:D2:3D:55:CE",
+	"cert_issuer": "/CN=packeteer-lab-ta",
+	"cert_serial": "02",
+	"aki": "0D:FF:1D:91:05:5E:75:EF:B4:3C:C2:5E:BE:39:AE:EA:9D:79:76:48",
+	"aia": "rsync://rpki.example.net/ta/ta.cer",
+	"signing_time": 1795227176,
+	"valid_since": 1795227176,
+	"valid_until": 1795835576,
+	"expires": 1795403576,
+	"signed_with_resources": [
+		{ "asid": 64496 }
+	],
+	"filenamesandhashes": [
+		{ "filename": "a.pub", "hash_digest": "ehXFDV9LDI2p3ZyLD/uMrYfmUKszoCDEFIQ3Lv4xhps=" }
+	],
+	"validation": "OK"
+}
+{
+	"file": "/rpki/rsc/b.sig",
+	"hash_id": "FePTofau5uQ3p6SgUve+lZBVDuvjJUf51RTj4p9d7Os=",
+	"type": "rsc",
+	"ski": "9F:F2:BE:0F:E6:04:9D:F4:C9:D2:59:11:7E:87:E7:13:4C:8C:7F:00",
+	"cert_issuer": "/CN=packeteer-lab-ta",
+	"cert_serial": "03",
+	"aki": "0D:FF:1D:91:05:5E:75:EF:B4:3C:C2:5E:BE:39:AE:EA:9D:79:76:48",
+	"aia": "rsync://rpki.example.net/ta/ta.cer",
+	"signing_time": 1795227176,
+	"valid_since": 1795227176,
+	"valid_until": 1795835576,
+	"expires": 1795403576,
+	"signed_with_resources": [
+		{ "asid": 64497 }
+	],
+	"filenamesandhashes": [
+		{ "filename": "b.pub", "hash_digest": "Lnt1p/Fh4e/CjULrjTjGskLGIJeFDIMNUrr5lOkO120=" }
+	],
+	"validation": "OK"
+}
+{
+	"file": "/rpki/rsc/d.sig",
+	"hash_id": "Er0vq3HsZJsfs0UejrnWmMatNNJBgL0QMnKJh1BVhHI=",
+	"type": "rsc",
+	"ski": "57:84:31:89:BF:AB:D2:AC:0F:5D:DB:D5:9A:00:0E:A3:2D:26:17:0B",
+	"cert_issuer": "/CN=packeteer-lab-ta",
+	"cert_serial": "04",
+	"aki": "0D:FF:1D:91:05:5E:75:EF:B4:3C:C2:5E:BE:39:AE:EA:9D:79:76:48",
+	"aia": "rsync://rpki.example.net/ta/ta.cer",
+	"signing_time": 1795227176,
+	"valid_since": 1795227176,
+	"valid_until": 1795835576,
+	"expires": 1795403576,
+	"signed_with_resources": [
+		{ "asid": 64498 }
+	],
+	"filenamesandhashes": [
+		{ "filename": "d.pub", "hash_digest": "7svM+mbEh9jtnbGNF/zg3q+njQskqLx+ZLNiLwgRfuA=" }
+	],
+	"validation": "OK"
+}
+{
+	"file": "/rpki/rsc/expired.sig",
+	"hash_id": "fKQ4j8Gr7ywMwszBcxbxbSGaGkLmSYMEkESfJ4Tqx3M=",
+	"type": "rsc",
+	"ski": "0B:7B:B5:FD:D5:44:8D:4D:94:E9:7F:EA:F2:CD:E3:C2:82:70:77:9E",
+	"cert_issuer": "/CN=packeteer-lab-ta",
+	"cert_serial": "06",
+	"aki": "0D:FF:1D:91:05:5E:75:EF:B4:3C:C2:5E:BE:39:AE:EA:9D:79:76:48",
+	"aia": "rsync://rpki.example.net/ta/ta.cer",
+	"signing_time": 1795057976,
+	"valid_since": 1795057976,
+	"valid_until": 1795227176,
+	"signed_with_resources": [
+		{ "asid": 64498 }
+	],
+	"filenamesandhashes": [
+		{ "filename": "c.pub", "hash_digest": "Rt4Be5nIyD/oTf6td6AGO1W/pdUfQxnJCQZ9e9HE0hg=" }
+	],
+	"validation": "Failed",
+	"error": "certificate has expired"
+}
+{
+	"file": "/rpki/rsc/tampered.sig",
+	"hash_id": "3JOqunc3XNnh381CfxBccd5iv7C1vmMy0Z37bzGn9Ig=",
+	"validation": "N/A"
+}

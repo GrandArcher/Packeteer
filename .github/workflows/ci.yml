@@ -3023,7 +3023,7 @@ jobs:
         run: bash lab/e2e-weights.sh
       - name: FRR multi-POP lab (two federated instances over mTLS, inter-DC RTT, peer loss, global commit, link cut and heal, SIGTERM, SIGKILL, settings push in observe)
         run: bash lab/e2e-multipop.sh
-      - name: FRR herd lab (#260, #659; three members found through a local hub, tampered and expired entries refused, per-vantage view, /herd.html world view, exclude list, signed pulls over pinned mTLS, no prefix in a preview, audit, a paused peer, SIGTERM)
+      - name: FRR herd lab (#260, #659, #708; three members found through a local hub, tampered and expired entries refused, identity from checklists an offline rpki-client validated, per-vantage view, /herd.html world view, exclude list, signed pulls over pinned mTLS, no prefix in a preview, audit, a paused peer, SIGTERM)
         run: bash lab/e2e-herd.sh
       - name: Probe agent lab (#478; controller and two agents at two sites over mutual TLS, probes attributed to the right site, a killed agent's provider fails closed and decisions stop using it, a revoked certificate is refused, nothing announced)
         run: bash lab/e2e-agents.sh
