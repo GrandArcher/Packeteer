@@ -14,8 +14,8 @@ import (
 
 // AGENTS.md says lab fixtures, examples and docs use documentation prefixes
 // and documentation or private ASNs only. This test enforces it for the
-// trees below. Known mismatch, to decide later: the milestone wording asks
-// for documentation ASNs only, while AGENTS.md also allows private ASNs
+// trees below. Known mismatch, to decide later: BOT.md asks for
+// documentation ASNs only, while AGENTS.md also allows private ASNs
 // (64512-65534). Private ASNs are logged here, not failed.
 var scannedRoots = []string{
 	"lab", "examples", "config.example.yaml", "deploy", "docs", "scripts", ".github/workflows",
@@ -68,10 +68,11 @@ func okAddr(a netip.Addr) bool {
 	return false
 }
 
-// A dotted quad is an address only when no word character, dot or dash
-// glues it to a neighbour. That skips version strings such as v1.2.3.4 and
-// image tags, and a fifth dotted group. A netmask is a run of one bits then
-// zero bits (255.255.255.0), never an address, so it is skipped too.
+// A dotted quad is an address only when no letter, digit, underscore or dot
+// glues it to a neighbour. That skips version strings such as v1.2.3.4 and a
+// fifth dotted group. A dash or colon does not glue, so 10.0.0.1-10.0.0.9 and
+// ip:8.8.8.8 are read. A netmask is a run of one bits then zero bits
+// (255.255.255.0), never an address, so it is skipped too.
 var (
 	ipv4Re = regexp.MustCompile(`(?:^|[^0-9A-Za-z_.])(\d{1,3}(?:\.\d{1,3}){3})(?:/\d{1,2})?(?:$|[^0-9A-Za-z_.]|\.(?:$|[^0-9]))`)
 	// A section number such as "RFC 4271 section 9.1.2.2" is not an address.
@@ -288,7 +289,8 @@ func TestAddressScannerRules(t *testing.T) {
 	bad("peer 2606:4700:4700::1111", "address 2606:4700:4700::1111")
 	bad("peer 2001:db8::1 fe80::1 ::1 fd00::5")
 	bad("mask 255.255.255.0 and 255.255.0.0 and 0.0.0.0")
-	bad("version v1.2.3.4 image frr:10.1.2.3-x tag 8.8.8.8.9")
+	bad("version v8.8.8.8 and 8.8.8.8.9 and frr8.8.8.8")
+	bad("image frr:8.8.8.8-x", "address 8.8.8.8")
 	bad("RFC 4271 section 9.1.2.2 and 1.3.6.1.4.1.8072")
 	bad("PACKETEER-MIB::pktrProviderDown 12:30:45")
 	bad("2.0.192.in-addr.arpa 11.2.0.192.in-addr.arpa")
