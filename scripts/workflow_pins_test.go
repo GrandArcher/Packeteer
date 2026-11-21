@@ -10,7 +10,6 @@ import (
 
 // A workflow action ref is a mutable tag unless it is a full commit SHA, and
 // publish.yml runs with the registry login and contents: write on tag pushes.
-
 var (
 	usesLine  = regexp.MustCompile(`(?m)^\s*(?:-\s+)?uses:\s*(\S+)`)
 	pinnedRef = regexp.MustCompile(`^[^@\s]+@[0-9a-f]{40}$`)
@@ -53,9 +52,13 @@ func TestUnpinnedUsesFlagsTagsAndBranchesButNotShasOrLocalActions(t *testing.T) 
 }
 
 func TestWorkflowActionsArePinnedByCommitSHA(t *testing.T) {
-	files, err := filepath.Glob("../.github/workflows/*.yml")
-	if err != nil {
-		t.Fatal(err)
+	var files []string
+	for _, pat := range []string{"*.yml", "*.yaml"} {
+		m, err := filepath.Glob("../.github/workflows/" + pat)
+		if err != nil {
+			t.Fatal(err)
+		}
+		files = append(files, m...)
 	}
 	if len(files) == 0 {
 		t.Fatal("no workflows found under .github/workflows")
