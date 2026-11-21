@@ -76,7 +76,7 @@ var (
 	sha256Algorithm     = pkix.AlgorithmIdentifier{Algorithm: oidSHA256}
 	rsaEncryptionAlgo   = pkix.AlgorithmIdentifier{Algorithm: oidRSAEncryption, Parameters: asn1.NullRawValue}
 	portableFilename    = regexp.MustCompile(`^[A-Za-z0-9_-][A-Za-z0-9._-]*$`)
-	errUsage            = errors.New("usage: mkrpki DIR KEYDIR NAME:ASN:KEY[:tampered|:expired] [SPEC]")
+	errUsage            = errors.New("usage: mkrpki DIR KEYDIR NAME:ASN:KEY[:tampered|:expired] [SPEC...]")
 	certificatePolicies = pkix.Extension{Id: oidCertPolicies, Critical: true, Value: mustMarshal([]policyInformation{{oidRPKIPolicy}})}
 )
 
