@@ -4,6 +4,10 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ## [Unreleased]
 
+### Security
+
+- `publish.yml` actions are pinned by commit SHA like the other workflows, and a test fails on any unpinned `uses:` ref (#703).
+
 ## [1.10.0] - 2026-11-20
 
 v1.10 adds Settings forms for `herd.block`, `herd.down_weight` and `rpki.only_invalid.origin_collectors`, moves the upgrade test to v1.9.0, and shortens two FEATURES rows; no new row (138 done), default `mode: observe`, inject off.
