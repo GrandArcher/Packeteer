@@ -13,7 +13,7 @@ import (
 
 // testdata/rpki-client.json is the output of rpki-client 9.5
 // ("rpki-client -j -f") for a repository built by lab/mkrpki with
-// a:64496:a b:64497:b d:64498:d tampered:64498:c:tampered
+// a:64496:a b:64497:b seed:64498:d tampered:64498:c:tampered
 // expired:64498:c:expired, the checklists of lab/e2e-herd.sh.
 func TestChecklistsListOnlyWhatRPKIClientValidated(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("testdata", "rpki-client.json"))
@@ -27,7 +27,7 @@ func TestChecklistsListOnlyWhatRPKIClientValidated(t *testing.T) {
 	}
 	// Every valid checklist ends at its signature path's expiry, here the
 	// CRL's next update, before its EE certificate's own end.
-	end := time.Unix(1795403576, 0).UTC()
+	end := time.Unix(1795403810, 0).UTC()
 	want := []herd.Checklist{
 		{ASNs: []uint32{64496}, Digests: []string{"7a15c50d5f4b0c8da9dd9c8b0ffb8cad87e650ab33a020c41484372efe31869b"}, NotAfter: end},
 		{ASNs: []uint32{64497}, Digests: []string{"2e7b75a7f161e1efc28d42eb8d38c6b242c62097850c830d52baf994e90ed76d"}, NotAfter: end},

@@ -299,10 +299,10 @@ chmod 644 "$lab_dir/hub/herd.json" "$lab_dir/relay/"*.json
 hub_get() {
 	curl -fsS --cacert "$lab_dir/certs/ca.crt" --resolve herd-hub:8443:192.0.2.20 "https://herd-hub:8443$1" 2>/dev/null || true
 }
-for i in $(seq 1 60); do
+for i in $(seq 1 30); do
 	hub_get /herd.json | jq -e '(.entries | length) == 3' >/dev/null 2>&1 &&
 		hub_get /rsc.json | jq -e '(.checklists | length) == 3' >/dev/null 2>&1 && break
-	[ "$i" -eq 60 ] && fail "the hub does not serve the list and the checklists rpki-client validated over https"
+	[ "$i" -eq 30 ] && fail "the hub does not serve the list and the checklists rpki-client validated over https"
 	sleep 1
 done
 echo "0. rpki-client validates the lab checklists with no network; the hub serves only the valid ones"

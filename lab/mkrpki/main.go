@@ -385,7 +385,7 @@ func build(dir, keyDir string, specs []spec, now time.Time) error {
 	}
 	for name, b := range files {
 		path := filepath.Join(dir, name)
-		// rpki-client drops to its own user, which must read the cache.
+		// rpki-client runs as an unprivileged user, which must read the cache.
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return err
 		}

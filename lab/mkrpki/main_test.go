@@ -166,7 +166,17 @@ func TestParseSpecRefusesWhatTheTrustAnchorCannotSign(t *testing.T) {
 			t.Errorf("parseSpec(%q) did not fail", s)
 		}
 	}
-	if err := run([]string{t.TempDir(), t.TempDir(), "a:64496:missing"}); err == nil {
+	keys := t.TempDir()
+	if _, err := herd.LoadNode(filepath.Join(keys, "a.key")); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{t.TempDir(), keys, "a:64496:missing"}); err == nil {
 		t.Error("a missing node key must fail, not create one")
+	}
+	if err := run([]string{t.TempDir(), keys, "a:64496:a", "a:64497:a"}); err == nil || !strings.Contains(err.Error(), "named twice") {
+		t.Errorf("a checklist named twice: %v", err)
+	}
+	if err := run([]string{t.TempDir(), keys}); err != errUsage {
+		t.Errorf("no SPEC: %v, want the usage", err)
 	}
 }
