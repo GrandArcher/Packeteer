@@ -4,6 +4,10 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ## [Unreleased]
 
+### Changed
+
+- `upgrade-release` CI job starts from the v1.10.0 image, pinned by digest, instead of v1.9.0; the downgrade step still removes no key (#707).
+
 ### Added
 
 - The herd lab proves `herd.identity` against checklists an in-lab rpki-client validates offline (no network, no trust anchor fetch), refusing a tampered and an expired one (`lab/mkrpki`, #708).
