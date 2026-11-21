@@ -1,16 +1,26 @@
 # Changelog
 
-All notable changes to Packeteer are documented here. Versions are Git tags on `main`. The image tags `ghcr.io/grandarcher/packeteer:<version>` (for example `:1.9.0`) and `:latest` are published from each `v<version>` tag. `:edge` tracks `main`.
+All notable changes to Packeteer are documented here. Versions are Git tags on `main`. The image tags `ghcr.io/grandarcher/packeteer:<version>` (for example `:1.10.0`) and `:latest` are published from each `v<version>` tag. `:edge` tracks `main`.
 
 ## [Unreleased]
+
+## [1.10.0] - 2026-11-20
+
+v1.10 adds Settings forms for `herd.block`, `herd.down_weight` and `rpki.only_invalid.origin_collectors`, moves the upgrade test to v1.9.0, and shortens two FEATURES rows; no new row (138 done), default `mode: observe`, inject off.
 
 ### Added
 
 - Settings form rows for `rpki.only_invalid.origin_collectors` (type `json`, name, URL, rate); never mode, allowlist, or announcer, and no collector is contacted (#695).
 - Settings form fields for `herd.block` and `herd.down_weight` (ASNs, key ids, endpoints), with Preview and Save; this node's view only, never mode, allowlist, or announcer (#694).
+
 ### Changed
 
 - `upgrade-release` CI job starts from the v1.9.0 image, pinned by digest, instead of v1.8.0; the downgrade step still removes no key (#693).
+- The FEATURES.md rows for the Web UI dashboard and the Configuration editor are shorter; no capability or issue link dropped (#696).
+
+### Fixed
+
+- `TestExternalPolicyBesideInject` reads the watch stream to EOF after the expired shutdown set and fails on routes or time left, so it no longer flakes under `-race` (#700).
 
 ## [1.9.0] - 2026-11-20
 
@@ -627,7 +637,8 @@ First release. An observe-first BGP path performance controller in one container
 - Communities are RFC 1997 (two 16-bit integers). `router_id` is IPv4.
 - RouterOS, Junos, and IOS snippets are documentation. The automated BGP test is the FRR lab.
 
-[Unreleased]: https://github.com/GrandArcher/Packeteer/compare/v1.9.0...HEAD
+[Unreleased]: https://github.com/GrandArcher/Packeteer/compare/v1.10.0...HEAD
+[1.10.0]: https://github.com/GrandArcher/Packeteer/compare/v1.9.0...v1.10.0
 [1.9.0]: https://github.com/GrandArcher/Packeteer/compare/v1.8.0...v1.9.0
 [1.8.0]: https://github.com/GrandArcher/Packeteer/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/GrandArcher/Packeteer/compare/v1.6.0...v1.7.0

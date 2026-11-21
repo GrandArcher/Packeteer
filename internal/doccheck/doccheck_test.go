@@ -172,6 +172,37 @@ func TestImagePinsAreLastRelease(t *testing.T) {
 	}
 }
 
+// TestTrimmedFeatureRowsStayShort keeps the two rows trimmed in #696 from
+// growing back, and keeps the issue links that the trim must not drop.
+func TestTrimmedFeatureRowsStayShort(t *testing.T) {
+	rows := map[string]struct {
+		limit int
+		links []string
+	}{
+		"| Web UI dashboard (":                       {3450, []string{"#170", "#349"}},
+		"| Configuration editor and setup wizards |": {3800, []string{"#130", "#658", "#694", "#695"}},
+	}
+	for _, l := range strings.Split(read(t, "docs", "FEATURES.md"), "\n") {
+		for prefix, want := range rows {
+			if !strings.HasPrefix(l, prefix) {
+				continue
+			}
+			delete(rows, prefix)
+			if len(l) > want.limit {
+				t.Errorf("%s row is %d characters, limit %d", prefix, len(l), want.limit)
+			}
+			for _, link := range want.links {
+				if !strings.Contains(l, link) {
+					t.Errorf("%s row lost %s", prefix, link)
+				}
+			}
+		}
+	}
+	for prefix := range rows {
+		t.Errorf("no FEATURES.md row starts with %q", prefix)
+	}
+}
+
 // TestChangelogSummariesStayShort keeps the one-sentence summary under each
 // 1.x release heading short. Pre-1.0 summaries are longer and are not checked.
 func TestChangelogSummariesStayShort(t *testing.T) {
