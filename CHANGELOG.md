@@ -4,6 +4,9 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ## [Unreleased]
 
+### Added
+
+- `internal/doccheck` test fails on a public IP or a non-documentation, non-private ASN in lab, examples, config.example.yaml, deploy, docs, scripts and workflows (#704).
 ### Security
 
 - `publish.yml` actions are pinned by commit SHA like the other workflows, and a test fails on any unpinned `uses:` ref (#703).
