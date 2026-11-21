@@ -8,6 +8,9 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 - `upgrade-release` CI job starts from the v1.10.0 image, pinned by digest, instead of v1.9.0; the downgrade step still removes no key (#707).
 
+### Added
+
+- `internal/doccheck` test fails on a public IP or a non-documentation, non-private ASN in lab, examples, config.example.yaml, deploy, docs, scripts and workflows (#704).
 ### Security
 
 - `publish.yml` actions are pinned by commit SHA like the other workflows, and a test fails on any unpinned `uses:` ref (#703).

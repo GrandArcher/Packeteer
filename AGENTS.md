@@ -49,6 +49,7 @@ An `ixp:` block is an Internet exchange operator observing the fabric, route ser
 - All BGP tests use simulated routers (in-process GoBGP, or FRR/GoBGP containers in CI). Never real networks.
 - No graceful-restart: Packeteer routes must disappear when Packeteer does.
 - Use documentation prefixes (192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24, 2001:db8::/32) and documentation/private ASNs (64496-64511, 65536-65551, or 64512-65534) only.
+- CI enforces this for `lab/`, `examples/`, `config.example.yaml`, `deploy/`, `docs/`, `scripts/` and `.github/workflows/` (`internal/doccheck/addresses_test.go`): a public IP or a non-documentation, non-private ASN fails the test. Exceptions go in its allowlist with a reason.
 
 ## PR requirements
 
