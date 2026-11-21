@@ -78,17 +78,17 @@ The image is `ghcr.io/grandarcher/packeteer`, linux/amd64 and linux/arm64. It ru
 
 | Tag | What it is |
 |---|---|
-| `1.10.0` | The last release. Pin this one. |
+| `1.11.0` | The last release. Pin this one. |
 | `latest` | The same release, updated when a release tag is published. |
 | `edge` | The build from `main`. |
 
 **Step by step: [docs/quickstart.md](docs/quickstart.md).** It goes from an empty directory to a running instance in observe, with a first run on loopback, `docker run` and Compose, and the stop. CI runs every command on that page against the image built from the same commit.
 
-The short version, pinned to 1.10.0, the last release. Take the example config from the same tag as the image: the file on `main` can carry keys a release does not know yet, and unknown keys refuse startup. For `:edge`, use `main` in both places.
+The short version, pinned to 1.11.0, the last release. Take the example config from the same tag as the image: the file on `main` can carry keys a release does not know yet, and unknown keys refuse startup. For `:edge`, use `main` in both places.
 
 ```sh
-IMAGE=ghcr.io/grandarcher/packeteer:1.10.0
-curl -fsSLo config.yaml https://raw.githubusercontent.com/GrandArcher/Packeteer/v1.10.0/config.example.yaml
+IMAGE=ghcr.io/grandarcher/packeteer:1.11.0
+curl -fsSLo config.yaml https://raw.githubusercontent.com/GrandArcher/Packeteer/v1.11.0/config.example.yaml
 # Edit providers and source IPs. Leave mode: observe.
 mkdir -p plugins
 
@@ -109,7 +109,7 @@ docker run -d --name packeteer --network host \
 
 ```sh
 docker run --rm -e PACKETEER_CONFIG=/etc/packeteer/config.example.yaml \
-  ghcr.io/grandarcher/packeteer:1.10.0 -check
+  ghcr.io/grandarcher/packeteer:1.11.0 -check
 ```
 
 The default config path inside the container is `/etc/packeteer/config.yaml` (`PACKETEER_CONFIG`, or `-config`).
@@ -120,7 +120,7 @@ Without `NET_RAW`, or where ICMP is filtered, the probe falls back to TCP port 4
 
 The `packeteer-data` volume keeps report history (`storage: {type: sqlite}`, file `/var/lib/packeteer/packeteer.db`) across container restarts and upgrades, and the open billing period of SNMP 95th-percentile samples when telemetry is configured. Without the volume, reports and that window start empty after the container is recreated. Leave out `storage` to turn history off; the probe and decision loop does not depend on it, and the 95th window then lives in memory only. Sign-in on by default (no `auth.enabled`, no `PACKETEER_HTTP_USER`) adds `sqlite` when `storage` is left out.
 
-[docker-compose.yml](docker-compose.yml) runs the same container with Compose: host networking, the two capabilities, the mounts, and `restart: unless-stopped` ([quickstart, step 5](docs/quickstart.md#5-or-run-it-with-compose)). Its `image` line pins `ghcr.io/grandarcher/packeteer:1.10.0`; use `:edge` for the build from `main`. There is no `ports:` map: with host networking, `http.listen` is already an address on the host. Stop with `docker compose stop -t 30` (see [Rollback](#rollback)).
+[docker-compose.yml](docker-compose.yml) runs the same container with Compose: host networking, the two capabilities, the mounts, and `restart: unless-stopped` ([quickstart, step 5](docs/quickstart.md#5-or-run-it-with-compose)). Its `image` line pins `ghcr.io/grandarcher/packeteer:1.11.0`; use `:edge` for the build from `main`. There is no `ports:` map: with host networking, `http.listen` is already an address on the host. Stop with `docker compose stop -t 30` (see [Rollback](#rollback)).
 
 ## Minimum config
 
@@ -352,7 +352,7 @@ Symptoms, log lines, and fixes: [docs/troubleshooting.md](docs/troubleshooting.m
 
 ## Features
 
-Status on main after the 1.10.0 release, capability rows per milestone and how many are done, from the summary in [docs/FEATURES.md](docs/FEATURES.md#summary):
+Status on main after the 1.11.0 release, capability rows per milestone and how many are done, from the summary in [docs/FEATURES.md](docs/FEATURES.md#summary):
 
 | Milestone | Rows | Done |
 |---|---|---|
@@ -453,21 +453,32 @@ v1.9.0 added no capability row; the counts stayed at 138 done. It added two opt-
 
 Nothing is field-proven (#54). The shipped config stays `mode: observe`, and injection stays off by default ([CHANGELOG](CHANGELOG.md#190---2026-11-20)).
 
-v1.10.0 (this release) adds no capability row and no config key; the counts stay at 138 done. It adds Settings forms for keys that already existed and moves the upgrade test forward. What an operator will look for:
+v1.10.0 added no capability row and no config key; the counts stayed at 138 done. It added Settings forms for keys that already existed and moved the upgrade test forward. What an operator looked for:
 
-- The Settings page has form fields for `herd.block` and `herd.down_weight` (ASNs, key ids, endpoints; this node's view only, empty by default) and for the `rpki.only_invalid.origin_collectors` rows (type `json`, name, URL, rate). Each has Preview and Save, needs a restart, and none edits `mode`, the allowlist, or the announcer; no collector is contacted ([docs/ui.md](docs/ui.md), #694, #695).
-- The `upgrade-release` CI job now starts from the v1.9.0 image, pinned by digest, instead of v1.8.0 (#693).
-- `TestExternalPolicyBesideInject` reads the watch stream to EOF after the expired shutdown set; a test change only (#700).
-- The two longest [FEATURES](docs/FEATURES.md) table rows (Web UI dashboard, Configuration editor) are shorter; no capability or issue link was dropped (#696).
-- Docker Desktop on macOS and Windows stays "allowed, not verified": no `scripts/demo.sh --report` result has been recorded ([docs/demo.md](docs/demo.md#platforms)).
+- The Settings page got form fields for `herd.block` and `herd.down_weight` and for the `rpki.only_invalid.origin_collectors` rows; none edits `mode`, the allowlist, or the announcer ([docs/ui.md](docs/ui.md), #694, #695).
+- The `upgrade-release` CI job started from the v1.9.0 image, pinned by digest, instead of v1.8.0 (#693).
+- Two long [FEATURES](docs/FEATURES.md) rows were shortened (#696).
 
 Nothing is field-proven (#54). The shipped config stays `mode: observe`, and injection stays off by default ([CHANGELOG](CHANGELOG.md#1100---2026-11-20)).
+
+v1.11.0 (this release) adds no capability row and no config key; the counts stay at 138 done. It adds lab proof for an existing herd key and a CI check on documentation addresses. What an operator will look for:
+
+- `herd.identity` is lab-proven against checklists that an in-lab rpki-client validates offline, with a tampered and an expired one refused (`lab/mkrpki`, #708). The node still does not validate RPKI objects itself, and no public relying party publishes the checklist schema ([docs/herd.md](docs/herd.md)).
+- The `upgrade-release` CI job now starts from the v1.10.0 image, pinned by digest, instead of v1.9.0 (#707).
+- `internal/doccheck` fails on a public IP or a non-documentation, non-private ASN in the lab, examples, docs, scripts, and workflow files (#704), and `publish.yml` actions are pinned by commit SHA (#703).
+- Docker Desktop on macOS and Windows stays "allowed, not verified": no `scripts/demo.sh --report` result has been recorded ([docs/demo.md](docs/demo.md#platforms)).
+
+Nothing is field-proven (#54). The shipped config stays `mode: observe`, and injection stays off by default ([CHANGELOG](CHANGELOG.md#1110---2026-11-21)).
 
 ## Upgrades
 
 Pulling a newer image and recreating the container is the plain upgrade. Your config and the `packeteer-data` volume carry over.
 
 The Settings page can also upgrade in place (#196). It is off by default. It needs `upgrade.enabled: true`, the release public key in `upgrade.public_key` ([CONFIG.md](docs/CONFIG.md#upgrade)), an admin login (auth or basic auth), and the `packeteer-data` volume to keep the new version across restarts. The public key is printed in the [v0.6.0 release notes](https://github.com/GrandArcher/Packeteer/releases/tag/v0.6.0). Every route is withdrawn before the switch, and a release whose signature or checksum does not match is refused. Details: [docs/ui.md](docs/ui.md#upgrade-from-the-ui).
+
+### From 1.10.0 to 1.11.0
+
+- No config key and no behavior changed. Nothing to remove before a downgrade.
 
 ### From 1.9.0 to 1.10.0
 

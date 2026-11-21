@@ -30,6 +30,7 @@ A red job is a finding until its log shows one of these. Rerun with `gh run reru
 ## Pull requests
 
 - One issue per PR, from a branch off `main`. Never push to `main`.
+- A PR merges when these CI checks pass: `test`, `docker`, `e2e`, `lint`, `race`, `govulncheck`, and `gitleaks`.
 - Title: `#N outcome`. Body: `Closes #N`, summary, how tested, and rollback for any announce-path change.
 - Add tests for the behavior you change. BGP tests use simulated routers and documentation prefixes and ASNs only.
 - Keep `config.example.yaml` in `mode: observe`. Do not commit secrets, real prefixes, or live RIBs.
