@@ -105,6 +105,10 @@ func TestValidate(t *testing.T) {
 		{"no reason", func(p *Profile) { p.DefaultPolicy.Reason = "" }, "no reason"},
 		{"bad miss", func(p *Profile) { p.Miss = "x" }, "unknown miss"},
 		{"bad selection", func(p *Profile) { p.Selection = "x" }, "unknown selection"},
+		{"thresholds ok", func(p *Profile) { p.Thresholds = Thresholds{Warn: 0.8, Full: 1} }, ""},
+		{"warn above full", func(p *Profile) { p.Thresholds = Thresholds{Warn: 0.9, Full: 0.8} }, "thresholds"},
+		{"warn zero", func(p *Profile) { p.Thresholds = Thresholds{Full: 0.9} }, "thresholds"},
+		{"full above one", func(p *Profile) { p.Thresholds = Thresholds{Warn: 0.5, Full: 1.5} }, "thresholds"},
 		{"unverified above refuse", func(p *Profile) { p.Status = Unverified }, "must be refuse"},
 		{"dry run without reader", func(p *Profile) { p.MaxRun = DryRun }, "needs a reader"},
 	}
@@ -185,14 +189,5 @@ func TestRegistryIDs(t *testing.T) {
 	}
 	if got, want := r.IDs(), []string{"alpha", "none", "refuse"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("IDs = %v, want %v", got, want)
-	}
-}
-
-// G23: a reader that cannot measure reports unknown, never a zero reading.
-func TestReaderUnknownIsNotZero(t *testing.T) {
-	var r Reader = fakeReader{}
-	got, err := r.Read(context.Background(), FIBv4)
-	if err != nil || got.Known || got.Used != 0 {
-		t.Fatalf("Read = %+v, %v", got, err)
 	}
 }

@@ -15,7 +15,8 @@ const (
 	RefuseID = "refuse"
 )
 
-// NoneProfile is for platforms with no hardware forwarding table to offload to:
+// NoneProfile is for platforms with no hardware forwarding table to offload to
+// (verified trivially: there is nothing to measure):
 // software routers, CPU-only MikroTik, and CHR.
 func NoneProfile() Profile {
 	return Profile{

@@ -137,8 +137,9 @@ func (s Selection) valid() bool {
 	return s == CommunitySnippet || s == WithholdOnly || s == ObserveFlags
 }
 
-// Thresholds are fractions of a dimension's total, in (0, 1], at which a
-// platform is reported as filling up and as full.
+// Thresholds are fractions of a dimension's total at which a platform is
+// reported as filling up and as full. Both zero means none are set; otherwise
+// 0 < Warn <= Full <= 1.
 type Thresholds struct {
 	Warn float64
 	Full float64
@@ -156,8 +157,7 @@ type Timing struct {
 	AgeOutSeconds  int
 }
 
-// KnownBad is a platform software version with a documented defect that
-// makes the profile unsafe to run at or above Report.
+// KnownBad is a platform software version with a documented defect.
 type KnownBad struct {
 	Version string
 	Reason  string
@@ -219,6 +219,9 @@ func (p Profile) Validate() error {
 		return fmt.Errorf("offload: profile %q: unknown selection %q", p.ID, p.Selection)
 	case p.Status == Unverified && p.MaxRun != Refuse:
 		return fmt.Errorf("offload: profile %q: an unverified platform must be refuse, not %s", p.ID, p.MaxRun)
+	case p.Thresholds != (Thresholds{}) &&
+		!(p.Thresholds.Warn > 0 && p.Thresholds.Warn <= p.Thresholds.Full && p.Thresholds.Full <= 1):
+		return fmt.Errorf("offload: profile %q: thresholds must satisfy 0 < warn <= full <= 1", p.ID)
 	case p.MaxRun > Report && p.Reader == nil:
 		return fmt.Errorf("offload: profile %q: %s needs a reader", p.ID, p.MaxRun)
 	}
