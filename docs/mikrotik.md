@@ -105,13 +105,13 @@ How to read it:
 - An offload is partial when `ipv4-shortest-hw-prefix` is above 0 or any route is on the CPU. `nexthop-usage` equal to `nexthop-cap` (8192 of 8192 in a public report) collapsed offload there.
 - The basic monitor of some versions (7.17.2) has no LPM fields; only the advanced monitor has `lpm-cap`. When the account may not read the advanced monitor, the advanced settings, or the switch ports, the reading says so in `unread` and carries on.
 - A router with no switch chip (the CHR) answers 400 or 404 on the L3HW menus or has no switch: the reading is `applicable: false` and nothing more is read.
-- A refused login or a missing `rest-api` or `read` policy is `ErrAuth`; the error holds the path and the HTTP status, never the login.
+- A refused login or a missing `rest-api` or `read` policy is `ErrAuth`; the error holds the path and the HTTP status, never the login. Without `api` RouterOS answers 500 "not allowed (9)", which is an error, not `ErrAuth`.
 
 The login comes from the same environment variables as the router check. RouterOS's default `read` group includes the `sensitive` policy, which can expose secrets stored on the router; the reader reads no secret field, but give it a group without `sensitive`:
 
 ```
 # Run on the router. Lab addresses and names only.
-/user group add name=pk-l3hw-read policy=read,rest-api,!sensitive,!write,!policy
+/user group add name=pk-l3hw-read policy=read,api,rest-api,!sensitive,!write,!policy
 /user add name=pk-reader group=pk-l3hw-read password="<set on the router, never in git>"
 ```
 

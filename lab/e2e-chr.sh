@@ -20,7 +20,7 @@
 # API answer or log line.
 #
 # Then the read-only L3HW reader (#736) against the same CHR as a user of
-# a read,rest-api,!sensitive,!write,!policy group: the CHR has no switch
+# a read,api,rest-api,!sensitive,!write,!policy group: the CHR has no switch
 # chip, so the reader says "not applicable", and /export is unchanged.
 #
 # Then non-BGP mode (#300, #655) with the mikrotik steerer, the lab
@@ -509,7 +509,7 @@ log "router check: pass with evidence, fail with the fix, router config unchange
 # ---- read-only L3HW reader (#736) ----
 log "L3HW reader: a CHR has no switch chip, read as a user of the documented group"
 l3hw_pw=$(openssl rand -hex 16)
-chr_script '/user group add name=pk-l3hw-read policy=read,rest-api,!sensitive,!write,!policy'
+chr_script '/user group add name=pk-l3hw-read policy=read,api,rest-api,!sensitive,!write,!policy'
 chr_script "/user add name=pk-l3hw group=pk-l3hw-read password=\"${l3hw_pw}\""
 rest '/user' | jq -e 'any(.[]; .name == "pk-l3hw" and .group == "pk-l3hw-read")' >/dev/null || fail "L3HW read user not created"
 router_export >"$work/export-l3hw-before.txt"
