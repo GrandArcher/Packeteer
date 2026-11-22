@@ -6,6 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ### Changed
 
+- `scripts/check-paragraphs.sh` also scans `lab/*.md` (still warning-level); the `lab/e2e-registry.sh` paragraph in `lab/README.md` is split, text unchanged (#715).
 - `upgrade-release` CI job starts from the v1.11.0 image, pinned by digest, instead of v1.10.0; the same assertions run and the downgrade step still removes no key (#714).
 
 ## [1.11.0] - 2026-11-21

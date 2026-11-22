@@ -29,7 +29,11 @@ func TestCheckParagraphsWarnsOnLongLinesAndAllowsFeatureRows(t *testing.T) {
 		{"long FEATURES table row", "docs/FEATURES.md", "| " + long + " |\n", false},
 		{"long FEATURES paragraph", "docs/FEATURES.md", long + "\n", true},
 		{"long CHANGELOG summary", "CHANGELOG.md", long + "\n", false},
-		{"long line outside docs", "lab/README.md", long + "\n", false},
+		{"long lab README line", "lab/README.md", long + "\n", true},
+		{"long nested lab README line", "lab/chaos/README.md", long + "\n", true},
+		{"lab line at the limit", "lab/README.md", atLimit + "\n", false},
+		{"long line in a lab script", "lab/e2e.sh", long + "\n", false},
+		{"long line outside docs and lab", "internal/x.md", long + "\n", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
