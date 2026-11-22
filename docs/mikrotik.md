@@ -107,7 +107,7 @@ How to read it:
 - A router with no switch chip (the CHR) answers 400 or 404 on the L3HW menus or has no switch: the reading is `applicable: false` and nothing more is read.
 - A refused login or a missing `rest-api` or `read` policy is `ErrAuth`; the error holds the path and the HTTP status, never the login.
 
-The login comes from the same environment variables as the router check. RouterOS's default `read` group includes the `sensitive` policy, which can expose secrets stored on the router; the reader keeps only names and counts, but give it a group without `sensitive`:
+The login comes from the same environment variables as the router check. RouterOS's default `read` group includes the `sensitive` policy, which can expose secrets stored on the router; the reader reads no secret field, but give it a group without `sensitive`:
 
 ```
 # Run on the router. Lab addresses and names only.

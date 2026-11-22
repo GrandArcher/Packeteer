@@ -19,9 +19,9 @@
 # /export is the same before and after each read, and the login is in no
 # API answer or log line.
 #
-# Then the read-only L3HW reader (#736) against the same CHR as the
-# user of a read,rest-api,!sensitive,!write,!policy group: it has no switch chip, so the reader says "not
-# applicable", and /export is unchanged.
+# Then the read-only L3HW reader (#736) against the same CHR as a user of
+# a read,rest-api,!sensitive,!write,!policy group: the CHR has no switch
+# chip, so the reader says "not applicable", and /export is unchanged.
 #
 # Then non-BGP mode (#300, #655) with the mikrotik steerer, the lab
 # speakers stopped: lab/sendflow feeds Packeteer's flow source, and RouterOS
