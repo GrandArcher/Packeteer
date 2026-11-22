@@ -483,7 +483,8 @@ Nothing is field-proven (#54). The shipped config stays `mode: observe`, and inj
 
 v1.13.0 (this release) adds no capability row and no config key; the counts stay at 138 done. What an operator will look for:
 
-- The `upgrade-release` CI job now starts from the v1.12.0 image, pinned by digest, instead of v1.11.0 (#729). It is the only change since 1.12.0; no behavior changed.
+- The `upgrade-release` CI job now starts from the v1.12.0 image, pinned by digest, instead of v1.11.0 (#729).
+- Dependencies were updated: nats.go 1.56.0, golang.org/x/net 0.63.0, golang.org/x/crypto 0.59.0, modernc.org/sqlite 1.62.0, maxminddb-golang 2.9.1, and the setup-go action 7.1.0 (#722-#727).
 - Docker Desktop on macOS and Windows stays "allowed, not verified": no `scripts/demo.sh --report` result has been recorded ([docs/demo.md](docs/demo.md#platforms)).
 
 Nothing is field-proven (#54). The shipped config stays `mode: observe`, and injection stays off by default ([CHANGELOG](CHANGELOG.md#1130---2026-11-22)).
@@ -496,7 +497,7 @@ The Settings page can also upgrade in place (#196). It is off by default. It nee
 
 ### From 1.12.0 to 1.13.0
 
-- No config key and no behavior changed. Nothing to remove before a downgrade.
+- No config key changed. Dependencies were updated (see the CHANGELOG). Nothing to remove before a downgrade.
 
 ### From 1.11.0 to 1.12.0
 
