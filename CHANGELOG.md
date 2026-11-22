@@ -4,6 +4,10 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ## [Unreleased]
 
+### Changed
+
+- `upgrade-release` CI job starts from the v1.11.0 image, pinned by digest, instead of v1.10.0; the same assertions run and the downgrade step still removes no key (#714).
+
 ## [1.11.0] - 2026-11-21
 
 v1.11 lab-proves herd identity against an in-lab rpki-client, moves the upgrade test to v1.10.0, and adds a documentation address check and pinned publish actions; no new row (138 done), default `mode: observe`, inject off.
