@@ -16,15 +16,15 @@ Addresses on this page are documentation ranges (RFC 5737) and loopback. The ASN
 
 ```sh
 mkdir -p packeteer && cd packeteer
-curl -fsSLo config.yaml https://raw.githubusercontent.com/GrandArcher/Packeteer/v1.12.0/config.example.yaml
-IMAGE=ghcr.io/grandarcher/packeteer:1.12.0
+curl -fsSLo config.yaml https://raw.githubusercontent.com/GrandArcher/Packeteer/v1.13.0/config.example.yaml
+IMAGE=ghcr.io/grandarcher/packeteer:1.13.0
 docker run --rm -v "$PWD/config.yaml:/etc/packeteer/config.yaml:ro" "$IMAGE" -check
 ```
 <!-- ci-expect: mode: observe -->
 <!-- ci-expect: announce: disabled -->
 <!-- ci-expect: check: ok -->
 
-`-check` loads the file, validates every plugin block, prints a summary, and exits. It ends with `check: ok (no probes sent, no BGP sessions opened)`. The image and the example config come from the same tag, 1.12.0, the last release: the file on `main` can carry keys a release does not know yet. `:edge` is the build from `main` (see the tags in the [README](../README.md#install)).
+`-check` loads the file, validates every plugin block, prints a summary, and exits. It ends with `check: ok (no probes sent, no BGP sessions opened)`. The image and the example config come from the same tag, 1.13.0, the last release: the file on `main` can carry keys a release does not know yet. `:edge` is the build from `main` (see the tags in the [README](../README.md#install)).
 
 ## 2. A first run on loopback
 
@@ -164,7 +164,7 @@ The same container as a Compose service. Use one or the other, not both: they sh
 
 ```sh
 docker stop -t 30 packeteer && docker rm packeteer
-curl -fsSLo docker-compose.yml https://raw.githubusercontent.com/GrandArcher/Packeteer/v1.12.0/docker-compose.yml
+curl -fsSLo docker-compose.yml https://raw.githubusercontent.com/GrandArcher/Packeteer/v1.13.0/docker-compose.yml
 docker compose up -d
 docker compose ps
 ```
@@ -178,7 +178,7 @@ docker compose logs packeteer
 <!-- ci-expect: "mode":"observe" -->
 <!-- ci-expect: packeteer running -->
 
-The Compose file pins the same flags: host networking, the two capabilities, the config and plugin mounts, a data volume, and `restart: unless-stopped`. It passes `PACKETEER_ADMIN_PASSWORD` from your shell to the container. Compose starts with a new data volume of its own, so the admin is created again from that password. Export it first (as in Step 4) if this is a new shell, or the `curl` above is refused. Leave it unset to get a generated password, which is in `/var/lib/packeteer/first-run-admin-password` (read it with `docker compose exec packeteer cat /var/lib/packeteer/first-run-admin-password`); the log names that file but never shows the password. Its `image` line pins the release, 1.12.0, like step 1.
+The Compose file pins the same flags: host networking, the two capabilities, the config and plugin mounts, a data volume, and `restart: unless-stopped`. It passes `PACKETEER_ADMIN_PASSWORD` from your shell to the container. Compose starts with a new data volume of its own, so the admin is created again from that password. Export it first (as in Step 4) if this is a new shell, or the `curl` above is refused. Leave it unset to get a generated password, which is in `/var/lib/packeteer/first-run-admin-password` (read it with `docker compose exec packeteer cat /var/lib/packeteer/first-run-admin-password`); the log names that file but never shows the password. Its `image` line pins the release, 1.13.0, like step 1.
 
 ## 6. Stop
 
