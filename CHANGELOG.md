@@ -4,13 +4,13 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ## [Unreleased]
 
-### Fixed
-
-- Outbound announcer deletes its routes by path, not UUID: GoBGP scans the whole table per UUID delete, so at 1,000,000 learned prefixes the SIGTERM withdraw missed the stop grace (#719).
-
 ### Changed
 
 - `upgrade-release` CI job starts from the v1.11.0 image, pinned by digest, instead of v1.10.0; the same assertions run and the downgrade step still removes no key (#714).
+
+### Fixed
+
+- Outbound announcer deletes its routes by path, not UUID: GoBGP scans the whole table per UUID delete, so at 1,000,000 learned prefixes the SIGTERM withdraw missed the stop grace (#719).
 
 ## [1.11.0] - 2026-11-21
 

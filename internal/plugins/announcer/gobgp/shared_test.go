@@ -124,9 +124,10 @@ func TestSharedPrefixImplicitReplaceAndDeleteByPath(t *testing.T) {
 }
 
 // TestOutboundWithdrawAllKeepsInboundAndMitigation is SAFE-06 of #486:
-// the outbound WithdrawAll removes only the routes it published, so a failed partial reload after it does not leave inbound and
-// mitigation counting routes the speaker dropped. Each controller's own
-// WithdrawAll then clears the rest.
+// the outbound WithdrawAll removes only the routes it published, so a
+// failed partial reload after it does not leave inbound and mitigation
+// counting routes the speaker dropped. Each controller's own WithdrawAll
+// then clears the rest.
 func TestOutboundWithdrawAllKeepsInboundAndMitigation(t *testing.T) {
 	ctx := context.Background()
 	r, _, out, in, m := sharedSpeaker(t)
@@ -187,8 +188,9 @@ func TestOutboundWithdrawAllKeepsInboundAndMitigation(t *testing.T) {
 }
 
 // TestOutboundWithdrawAllKeepsFailedDeletes: a path the speaker refuses
-// to delete (here one with no NLRI) stays tracked and WithdrawAll reports it, so a caller never
-// believes a route is gone that it could not withdraw.
+// to delete (here one with no NLRI) stays tracked and WithdrawAll reports
+// it, so a caller never believes a route is gone that it could not
+// withdraw.
 func TestOutboundWithdrawAllKeepsFailedDeletes(t *testing.T) {
 	ctx := context.Background()
 	_, _, out, _, _ := sharedSpeaker(t)

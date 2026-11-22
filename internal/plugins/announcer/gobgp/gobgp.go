@@ -267,9 +267,9 @@ func (a *Announcer) SetRouters(ctx context.Context, routers []plugin.RouterExpor
 //
 // A replace is make-before-break (#386): the old path is not deleted
 // first. GoBGP takes a local path with the same prefix and path identifier
-// as an implicit withdraw of the one before it, so
-// the edge gets one UPDATE with the new next hop and never a gap. When
-// AddPath fails the old route stays on the wire and in paths. The one
+// as an implicit withdraw of the one before it, so the edge gets one
+// UPDATE with the new next hop and never a gap. When AddPath fails the old
+// route stays on the wire and in paths. The one
 // exception is a move onto a next hop that a router blocks while it took
 // the old one (blocksMove): that move withdraws first, so the router
 // loses the route instead of keeping the old one.
@@ -322,12 +322,12 @@ func (a *Announcer) Withdraw(ctx context.Context, p netip.Prefix) error {
 	return nil
 }
 
-// WithdrawAll removes every route this announcer published, one delete
-// by path each (deletePath).
-// Inbound steer and mitigation routes share the speaker and are left to
-// their own controllers (#486): a family-wide delete would remove them
-// while those controllers still count them as on the wire. A failed
-// delete keeps its prefix, so the next call tries it again.
+// WithdrawAll removes every route this announcer published, one delete by
+// path each (deletePath). Inbound steer and mitigation routes share the
+// speaker and are left to their own controllers (#486): a family-wide
+// delete would remove them while those controllers still count them as on
+// the wire. A failed delete keeps its prefix, so the next call tries it
+// again.
 func (a *Announcer) WithdrawAll(ctx context.Context) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
