@@ -9,6 +9,10 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 - `scripts/check-paragraphs.sh` also scans `lab/*.md` (still warning-level); the `lab/e2e-registry.sh` paragraph in `lab/README.md` is split, text unchanged (#715).
 - `upgrade-release` CI job starts from the v1.11.0 image, pinned by digest, instead of v1.10.0; the same assertions run and the downgrade step still removes no key (#714).
 
+### Fixed
+
+- Outbound announcer deletes its routes by path, not UUID: GoBGP scans the whole table per UUID delete, so at 1,000,000 learned prefixes the SIGTERM withdraw missed the stop grace (#719).
+
 ## [1.11.0] - 2026-11-21
 
 v1.11 lab-proves herd identity against an in-lab rpki-client, moves the upgrade test to v1.10.0, and adds a documentation address check and pinned publish actions; no new row (138 done), default `mode: observe`, inject off.

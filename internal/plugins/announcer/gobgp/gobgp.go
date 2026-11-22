@@ -71,10 +71,23 @@ type Announcer struct {
 	routers routerPolicy
 }
 
-// announced is one route on the speaker: its AddPath UUID and next hop.
+// announced is one route on the speaker: the path it was added with and
+// its next hop.
 type announced struct {
-	uuid    []byte
+	path    *api.Path
 	nextHop netip.Addr
+}
+
+// deletePath withdraws p by path, not by UUID: GoBGP v3.37 finds a UUID
+// by scanning the whole global table, so each delete costs the size of
+// the learned RIB, and at 1,000,000 prefixes a shutdown WithdrawAll of
+// 1,000 routes outlasted the container stop grace (#719). A delete by
+// path is a keyed lookup. It removes whatever local path-ID 0 path the
+// speaker holds for p, which is this announcer's: outbound skips the
+// prefixes inbound reserves and mitigation holds, and mitigation waits
+// until outbound releases one (#486).
+func (a *Announcer) deletePath(ctx context.Context, p netip.Prefix, on announced) error {
+	return a.srv.DeletePath(ctx, &api.DeletePathRequest{Family: familyOf(p), Path: on.path})
 }
 
 // routerPolicy is one installed per-router export policy.
@@ -206,7 +219,7 @@ func (a *Announcer) SetRouters(ctx context.Context, routers []plugin.RouterExpor
 	// Only this announcer's paths: the inbound announcer's steer routes
 	// share the speaker and are not affected by the table.
 	for p, on := range a.paths {
-		if err := a.srv.DeletePath(ctx, &api.DeletePathRequest{Uuid: on.uuid, Family: familyOf(p)}); err != nil {
+		if err := a.deletePath(ctx, p, on); err != nil {
 			return fmt.Errorf("gobgp announcer: withdraw %s before the table swap: %w", p, err)
 		}
 		delete(a.paths, p)
@@ -254,9 +267,9 @@ func (a *Announcer) SetRouters(ctx context.Context, routers []plugin.RouterExpor
 //
 // A replace is make-before-break (#386): the old path is not deleted
 // first. GoBGP takes a local path with the same prefix and path identifier
-// as an implicit withdraw of the one before it and re-keys the UUID, so
-// the edge gets one UPDATE with the new next hop and never a gap. When
-// AddPath fails the old route stays on the wire and in paths. The one
+// as an implicit withdraw of the one before it, so the edge gets one
+// UPDATE with the new next hop and never a gap. When AddPath fails the old
+// route stays on the wire and in paths. The one
 // exception is a move onto a next hop that a router blocks while it took
 // the old one (blocksMove): that move withdraws first, so the router
 // loses the route instead of keeping the old one.
@@ -275,16 +288,15 @@ func (a *Announcer) Announce(ctx context.Context, r plugin.Route) error {
 	}
 	nh := r.NextHop.Unmap()
 	if old, ok := a.paths[r.Prefix]; ok && a.routers.blocksMove(old.nextHop, nh) {
-		if err := a.srv.DeletePath(ctx, &api.DeletePathRequest{Uuid: old.uuid, Family: familyOf(r.Prefix)}); err != nil {
+		if err := a.deletePath(ctx, r.Prefix, old); err != nil {
 			return fmt.Errorf("gobgp announcer: replace %s: %w", r.Prefix, err)
 		}
 		delete(a.paths, r.Prefix)
 	}
-	resp, err := a.srv.AddPath(ctx, &api.AddPathRequest{Path: path})
-	if err != nil {
+	if _, err := a.srv.AddPath(ctx, &api.AddPathRequest{Path: path}); err != nil {
 		return fmt.Errorf("gobgp announcer: announce %s: %w", r.Prefix, err)
 	}
-	a.paths[r.Prefix] = announced{uuid: resp.GetUuid(), nextHop: nh}
+	a.paths[r.Prefix] = announced{path: path, nextHop: nh}
 	a.log.Info("announced", "prefix", r.Prefix, "next_hop", r.NextHop, "local_pref", r.LocalPref, "provider", r.Provider, "as_path", asPathString(r.ASPath))
 	return nil
 }
@@ -302,7 +314,7 @@ func (a *Announcer) Withdraw(ctx context.Context, p netip.Prefix) error {
 	if !ok {
 		return nil
 	}
-	if err := a.srv.DeletePath(ctx, &api.DeletePathRequest{Uuid: on.uuid, Family: familyOf(p)}); err != nil {
+	if err := a.deletePath(ctx, p, on); err != nil {
 		return fmt.Errorf("gobgp announcer: withdraw %s: %w", p, err)
 	}
 	delete(a.paths, p)
@@ -310,11 +322,12 @@ func (a *Announcer) Withdraw(ctx context.Context, p netip.Prefix) error {
 	return nil
 }
 
-// WithdrawAll removes every route this announcer published, by UUID.
-// Inbound steer and mitigation routes share the speaker and are left to
-// their own controllers (#486): a family-wide delete would remove them
-// while those controllers still count them as on the wire. A failed
-// delete keeps its prefix, so the next call tries it again.
+// WithdrawAll removes every route this announcer published, one delete by
+// path each (deletePath). Inbound steer and mitigation routes share the
+// speaker and are left to their own controllers (#486): a family-wide
+// delete would remove them while those controllers still count them as on
+// the wire. A failed delete keeps its prefix, so the next call tries it
+// again.
 func (a *Announcer) WithdrawAll(ctx context.Context) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -324,7 +337,7 @@ func (a *Announcer) WithdrawAll(ctx context.Context) error {
 	var errs []error
 	n := 0
 	for p, on := range a.paths {
-		if err := a.srv.DeletePath(ctx, &api.DeletePathRequest{Uuid: on.uuid, Family: familyOf(p)}); err != nil {
+		if err := a.deletePath(ctx, p, on); err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", p, err))
 			continue
 		}
