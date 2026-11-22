@@ -7,6 +7,9 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 ### Added
 
 - Read-only RouterOS L3HW reader (monitor, settings, ports, policy routing, default routes; GET and monitor `once` only), checked on the CHR as not applicable (#736).
+- `internal/offload`: platform profile type, registry, and the `none` and `refuse` profiles with a pure run-level check; nothing calls it yet, so no behavior changes (#732).
+- `internal/offload`: pure multi-dimension install budget (free = cap - used - reserve) that freezes on a missing, stale or insane reading; nothing calls it yet (#733).
+- `internal/offload`: pure shed and swap planner (rank key, displace margin, hold time, swap and shed caps, freeze and settling); nothing calls it yet (#734).
 
 ## [1.13.0] - 2026-11-22
 
