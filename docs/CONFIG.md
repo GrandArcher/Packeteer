@@ -953,13 +953,19 @@ Opt-in hardware-offload-aware mode (#735). Config parsing and `-check` validatio
 | `enabled` | `false` | `true` turns the mode on. Needs at least one router. |
 | `run` | `dry_run` | `dry_run` or `enforce`. |
 | `recheck` | `5m` | How often a router's offload state is read again. 10s to 1h. |
-| `routers[].neighbor` | none | A `bgp.neighbors` address. Listed once. |
-| `routers[].profile` | `generic` | `generic` (highest run level `dry_run`) or `mikrotik` (`enforce`). |
-| `routers[].reader` | `static` | `static`, `routeros`, or `snmp`. |
-| `routers[].capacity` | none | The router's hardware route capacity, 1 to 100000000. Required. |
-| `routers[].reserve_pct` | `10` | Share of `capacity` kept free. 1 to 50; 0 is the default. |
-| `routers[].offload_community` | none | Optional standard or large community that marks a route for offload. |
-| `routers[].ipv6_offload` | `false` | The router offloads IPv6 routes. MikroTik's `ipv6-hw` is off by default. |
+| `routers` | none | The watched routers; each row has the keys below. |
+
+Keys of a `routers` row:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `neighbor` | none | A `bgp.neighbors` address. Listed once. |
+| `profile` | `generic` | `generic` (highest run level `dry_run`) or `mikrotik` (`enforce`). |
+| `reader` | `static` | `static`, `routeros`, or `snmp`. |
+| `capacity` | none | The router's hardware route capacity, 1 to 100000000. Required. |
+| `reserve_pct` | `10` | Share of `capacity` kept free. 1 to 50; 0 is the default. |
+| `offload_community` | none | Optional standard or large community that marks a route for offload. |
+| `ipv6_offload` | `false` | The router offloads IPv6 routes. MikroTik's `ipv6-hw` is off by default. |
 
 `-check` and the loader refuse: a `run` above a router's profile level, `run: enforce` without `mode: inject`, any `offload_aware` block together with `ixp:`, a bad `reserve_pct` or `recheck`, and a neighbor that is not in `bgp.neighbors`. The settings editor and a federation push refuse to turn `run: enforce` on ([design/federation-push.md](design/federation-push.md)); set it in the mounted file. The block is restart-only. Rollback: remove the block.
 
