@@ -78,17 +78,17 @@ The image is `ghcr.io/grandarcher/packeteer`, linux/amd64 and linux/arm64. It ru
 
 | Tag | What it is |
 |---|---|
-| `1.12.0` | The last release. Pin this one. |
+| `1.13.0` | The last release. Pin this one. |
 | `latest` | The same release, updated when a release tag is published. |
 | `edge` | The build from `main`. |
 
 **Step by step: [docs/quickstart.md](docs/quickstart.md).** It goes from an empty directory to a running instance in observe, with a first run on loopback, `docker run` and Compose, and the stop. CI runs every command on that page against the image built from the same commit.
 
-The short version, pinned to 1.12.0, the last release. Take the example config from the same tag as the image: the file on `main` can carry keys a release does not know yet, and unknown keys refuse startup. For `:edge`, use `main` in both places.
+The short version, pinned to 1.13.0, the last release. Take the example config from the same tag as the image: the file on `main` can carry keys a release does not know yet, and unknown keys refuse startup. For `:edge`, use `main` in both places.
 
 ```sh
-IMAGE=ghcr.io/grandarcher/packeteer:1.12.0
-curl -fsSLo config.yaml https://raw.githubusercontent.com/GrandArcher/Packeteer/v1.12.0/config.example.yaml
+IMAGE=ghcr.io/grandarcher/packeteer:1.13.0
+curl -fsSLo config.yaml https://raw.githubusercontent.com/GrandArcher/Packeteer/v1.13.0/config.example.yaml
 # Edit providers and source IPs. Leave mode: observe.
 mkdir -p plugins
 
@@ -109,7 +109,7 @@ docker run -d --name packeteer --network host \
 
 ```sh
 docker run --rm -e PACKETEER_CONFIG=/etc/packeteer/config.example.yaml \
-  ghcr.io/grandarcher/packeteer:1.12.0 -check
+  ghcr.io/grandarcher/packeteer:1.13.0 -check
 ```
 
 The default config path inside the container is `/etc/packeteer/config.yaml` (`PACKETEER_CONFIG`, or `-config`).
@@ -120,7 +120,7 @@ Without `NET_RAW`, or where ICMP is filtered, the probe falls back to TCP port 4
 
 The `packeteer-data` volume keeps report history (`storage: {type: sqlite}`, file `/var/lib/packeteer/packeteer.db`) across container restarts and upgrades, and the open billing period of SNMP 95th-percentile samples when telemetry is configured. Without the volume, reports and that window start empty after the container is recreated. Leave out `storage` to turn history off; the probe and decision loop does not depend on it, and the 95th window then lives in memory only. Sign-in on by default (no `auth.enabled`, no `PACKETEER_HTTP_USER`) adds `sqlite` when `storage` is left out.
 
-[docker-compose.yml](docker-compose.yml) runs the same container with Compose: host networking, the two capabilities, the mounts, and `restart: unless-stopped` ([quickstart, step 5](docs/quickstart.md#5-or-run-it-with-compose)). Its `image` line pins `ghcr.io/grandarcher/packeteer:1.12.0`; use `:edge` for the build from `main`. There is no `ports:` map: with host networking, `http.listen` is already an address on the host. Stop with `docker compose stop -t 30` (see [Rollback](#rollback)).
+[docker-compose.yml](docker-compose.yml) runs the same container with Compose: host networking, the two capabilities, the mounts, and `restart: unless-stopped` ([quickstart, step 5](docs/quickstart.md#5-or-run-it-with-compose)). Its `image` line pins `ghcr.io/grandarcher/packeteer:1.13.0`; use `:edge` for the build from `main`. There is no `ports:` map: with host networking, `http.listen` is already an address on the host. Stop with `docker compose stop -t 30` (see [Rollback](#rollback)).
 
 ## Minimum config
 
@@ -352,7 +352,7 @@ Symptoms, log lines, and fixes: [docs/troubleshooting.md](docs/troubleshooting.m
 
 ## Features
 
-Status on main after the 1.12.0 release, capability rows per milestone and how many are done, from the summary in [docs/FEATURES.md](docs/FEATURES.md#summary):
+Status on main after the 1.13.0 release, capability rows per milestone and how many are done, from the summary in [docs/FEATURES.md](docs/FEATURES.md#summary):
 
 | Milestone | Rows | Done |
 |---|---|---|
@@ -472,20 +472,31 @@ v1.11.0 added no capability row and no config key; the counts stayed at 138 done
 
 Nothing is field-proven (#54). The shipped config stays `mode: observe`, and injection stays off by default ([CHANGELOG](CHANGELOG.md#1110---2026-11-21)).
 
-v1.12.0 (this release) adds no capability row and no config key; the counts stay at 138 done. What an operator will look for:
+v1.12.0 added no capability row and no config key; the counts stayed at 138 done. What an operator looked for:
 
-- The outbound announcer deletes its routes by path, not by UUID. GoBGP scans the whole table for a UUID delete, so with 1,000,000 learned prefixes the SIGTERM withdraw of 1,000 inject routes outlasted the 30 s stop grace; the by-path delete is a keyed lookup (#719). Nothing is announced differently.
-- The `upgrade-release` CI job now starts from the v1.11.0 image, pinned by digest, instead of v1.10.0 (#714).
-- `scripts/check-paragraphs.sh` also scans `lab/*.md`, still warning-level; one `lab/README.md` paragraph was split with its text unchanged (#715).
-- Docker Desktop on macOS and Windows stays "allowed, not verified": no `scripts/demo.sh --report` result has been recorded ([docs/demo.md](docs/demo.md#platforms)).
+- The outbound announcer deleted its routes by path, not by UUID. GoBGP scans the whole table for a UUID delete, so with 1,000,000 learned prefixes the SIGTERM withdraw of 1,000 inject routes outlasted the 30 s stop grace; the by-path delete is a keyed lookup (#719). Nothing was announced differently.
+- The `upgrade-release` CI job started from the v1.11.0 image, pinned by digest, instead of v1.10.0 (#714).
+- `scripts/check-paragraphs.sh` also scanned `lab/*.md`, still warning-level; one `lab/README.md` paragraph was split with its text unchanged (#715).
+- Docker Desktop on macOS and Windows stayed "allowed, not verified": no `scripts/demo.sh --report` result had been recorded ([docs/demo.md](docs/demo.md#platforms)).
 
 Nothing is field-proven (#54). The shipped config stays `mode: observe`, and injection stays off by default ([CHANGELOG](CHANGELOG.md#1120---2026-11-22)).
+
+v1.13.0 (this release) adds no capability row and no config key; the counts stay at 138 done. What an operator will look for:
+
+- The `upgrade-release` CI job now starts from the v1.12.0 image, pinned by digest, instead of v1.11.0 (#729). It is the only change since 1.12.0; no behavior changed.
+- Docker Desktop on macOS and Windows stays "allowed, not verified": no `scripts/demo.sh --report` result has been recorded ([docs/demo.md](docs/demo.md#platforms)).
+
+Nothing is field-proven (#54). The shipped config stays `mode: observe`, and injection stays off by default ([CHANGELOG](CHANGELOG.md#1130---2026-11-22)).
 
 ## Upgrades
 
 Pulling a newer image and recreating the container is the plain upgrade. Your config and the `packeteer-data` volume carry over.
 
 The Settings page can also upgrade in place (#196). It is off by default. It needs `upgrade.enabled: true`, the release public key in `upgrade.public_key` ([CONFIG.md](docs/CONFIG.md#upgrade)), an admin login (auth or basic auth), and the `packeteer-data` volume to keep the new version across restarts. The public key is printed in the [v0.6.0 release notes](https://github.com/GrandArcher/Packeteer/releases/tag/v0.6.0). Every route is withdrawn before the switch, and a release whose signature or checksum does not match is refused. Details: [docs/ui.md](docs/ui.md#upgrade-from-the-ui).
+
+### From 1.12.0 to 1.13.0
+
+- No config key and no behavior changed. Nothing to remove before a downgrade.
 
 ### From 1.11.0 to 1.12.0
 
