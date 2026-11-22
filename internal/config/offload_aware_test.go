@@ -122,7 +122,6 @@ func TestOffloadAwareEnforceNeedsInjectAndProfile(t *testing.T) {
 	if _, err := Parse([]byte(observe)); err == nil || !strings.Contains(err.Error(), "enforce requires mode: inject") {
 		t.Fatalf("enforce in observe: %v", err)
 	}
-	// run above the profile's MaxRun.
 	_, err = Parse([]byte(offloadYAML("  enabled: true\n  run: enforce\n")))
 	if err == nil || !strings.Contains(err.Error(), `offload_aware.routers[0]: offload: run level refused: profile "lab-dry" allows at most dry_run, requested enforce`) {
 		t.Fatalf("enforce on a dry_run profile: %v", err)
