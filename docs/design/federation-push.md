@@ -15,7 +15,7 @@ Two sections only, listed in `federation.PushableSections`:
 
 A peer given an empty section resets that key to its default, so the sender refuses to push a section its own file does not have. The sender reads the sections from its own saved config file, so what is pushed is what that instance runs after its last save. Edit and save locally first, then push.
 
-Never pushed, and refused by name on the receiver: `mode`, `allowlist`, `announcer`, `bgp`, `inbound`, `mitigation`, `max_improvements`, `hold_time`, providers, `federation`, `auth`, `http`, and everything else. A peer never accepts inject or allowlist changes from another instance.
+Never pushed, and refused by name on the receiver: `mode`, `allowlist`, `announcer`, `bgp`, `inbound`, `mitigation`, `max_improvements`, `hold_time`, providers, `federation`, `auth`, `http`, and everything else. A peer never accepts inject or allowlist changes from another instance. That includes `offload_aware`: the settings editor and the receiver refuse a candidate that turns `offload_aware.run: enforce` on, so it is set in the mounted file only (#735).
 
 ## Flow
 

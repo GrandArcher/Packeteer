@@ -8,6 +8,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 - `internal/offload`: platform profile type, registry, and the `none` and `refuse` profiles with a pure run-level check; nothing calls it yet, so no behavior changes (#732).
 - `internal/offload`: pure multi-dimension install budget (free = cap - used - reserve) that freezes on a missing, stale or insane reading; nothing calls it yet (#733).
+- Opt-in `offload_aware` config block (run `dry_run` by default, per-router profile): parsed and checked only, nothing reads it yet; the editor and federation push refuse `enforce` (#735).
 
 ## [1.13.0] - 2026-11-22
 

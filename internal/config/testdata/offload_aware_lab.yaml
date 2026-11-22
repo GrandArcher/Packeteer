@@ -1,0 +1,40 @@
+# Lab router for offload_aware (#735). Documentation addresses and ASNs only.
+mode: inject
+asn: 64512
+router_id: 192.0.2.10
+packeteer_community: "64512:666"
+local_pref: 200
+hold_time: 15m
+thresholds:
+  min_loss_delta_pct: 1.0
+  min_rtt_delta_ms: 15
+bgp:
+  neighbors:
+    - address: 192.0.2.1
+      description: lab-edge-1
+    - address: 192.0.2.2
+      description: lab-edge-2
+providers:
+  - name: transit-a
+    source_ip: 192.0.2.11
+    next_hop: 192.0.2.1
+allowlist:
+  prefixes:
+    - 198.51.100.0/24
+    - 2001:db8:100::/48
+announcer:
+  type: gobgp
+offload_aware:
+  enabled: true
+  run: dry_run
+  recheck: 2m
+  routers:
+    - neighbor: 192.0.2.1
+      profile: mikrotik
+      reader: routeros
+      capacity: 100000
+      reserve_pct: 15
+      offload_community: "64512:777"
+      ipv6_offload: true
+    - neighbor: 192.0.2.2
+      capacity: 20000

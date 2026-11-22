@@ -402,6 +402,7 @@ func TestFederationSettingsPush(t *testing.T) {
 		{"allowlist", map[string]string{"allowlist": "prefixes: [203.0.113.0/24]\n"}, `section "allowlist" cannot be pushed`},
 		{"announcer", map[string]string{"announcer": "type: gobgp\n"}, `section "announcer" cannot be pushed`},
 		{"bgp", map[string]string{"bgp": "neighbors: []\n"}, `section "bgp" cannot be pushed`},
+		{"offload_aware enforce", map[string]string{"offload_aware": "enabled: true\nrun: enforce\n"}, `section "offload_aware" cannot be pushed`},
 		{"invalid threshold", map[string]string{"thresholds": "min_loss_delta_pct: -4\n"}, "min_loss_delta_pct"},
 		{"unknown threshold key", map[string]string{"thresholds": "min_loss_delta_pct: 3\nbogus: 1\n"}, "bogus"},
 		{"mixed with a bad section", map[string]string{"thresholds": "min_loss_delta_pct: 9\n", "mode": "inject\n"}, `section "mode" cannot be pushed`},
