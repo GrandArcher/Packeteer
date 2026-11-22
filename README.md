@@ -479,7 +479,7 @@ v1.12.0 (this release) adds no capability row and no config key; the counts stay
 - `scripts/check-paragraphs.sh` also scans `lab/*.md`, still warning-level; one `lab/README.md` paragraph was split with its text unchanged (#715).
 - Docker Desktop on macOS and Windows stays "allowed, not verified": no `scripts/demo.sh --report` result has been recorded ([docs/demo.md](docs/demo.md#platforms)).
 
-Nothing is field-proven (#54). The shipped config stays `mode: observe`, and injection stays off by default ([CHANGELOG](CHANGELOG.md#1120---2026-11-21)).
+Nothing is field-proven (#54). The shipped config stays `mode: observe`, and injection stays off by default ([CHANGELOG](CHANGELOG.md#1120---2026-11-22)).
 
 ## Upgrades
 

@@ -4,7 +4,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ## [Unreleased]
 
-## [1.12.0] - 2026-11-21
+## [1.12.0] - 2026-11-22
 
 v1.12 moves the upgrade test to v1.11.0, extends the paragraph lint to `lab/`, and fixes the SIGTERM withdraw under a 1,000,000-prefix RIB; no new row (138 done), default `mode: observe`, inject off.
 
