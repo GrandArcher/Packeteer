@@ -59,7 +59,7 @@ type PlannerConfig struct {
 	Weigher plugin.ImprovementWeigher
 	// DisplaceMargin: a challenger displaces an installed fix only when its
 	// lead metric (the weight, or the volume under VolumeEmphasis) is at least
-	// the fix's x (1 + DisplaceMargin). Nil means DefaultDisplaceMargin.
+	// the fix's x (1 + DisplaceMargin) and strictly larger. Nil means DefaultDisplaceMargin.
 	DisplaceMargin *float64
 	// HoldTime is how long an installed fix stays before it may be displaced.
 	HoldTime time.Duration
@@ -201,10 +201,7 @@ func (p *Planner) weight(c Candidate) float64 {
 			})
 		}
 	}
-	if math.IsNaN(w) || w < 0 {
-		return 0
-	}
-	return w
+	return clean(w)
 }
 
 func clean(v float64) float64 {
