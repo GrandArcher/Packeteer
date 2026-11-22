@@ -58,8 +58,9 @@ type PlannerConfig struct {
 	// off, ranks by Gain alone.
 	Weigher plugin.ImprovementWeigher
 	// DisplaceMargin: a challenger displaces an installed fix only when its
-	// weight is at least the fix's x (1 + DisplaceMargin).
-	DisplaceMargin float64
+	// lead metric (the weight, or the volume under VolumeEmphasis) is at least
+	// the fix's x (1 + DisplaceMargin). Nil means DefaultDisplaceMargin.
+	DisplaceMargin *float64
 	// HoldTime is how long an installed fix stays before it may be displaced.
 	HoldTime time.Duration
 	// MaxSwapsPerRound caps swaps in one round.
@@ -68,15 +69,27 @@ type PlannerConfig struct {
 	// reports in Input.SwapsLastMinute. 0 means no cap. A profile whose
 	// platform re-indexes or flushes a cache on every table change sets it.
 	MaxSwapsPerMinute int
-	// MaxShedPerRound caps sheds in one round.
+	// MaxShedPerRound caps sheds in one round. 0 means DefaultMaxShedPerRound.
 	MaxShedPerRound int
 	// IPv6 is how the budget pools IPv6 routes; it must match the Budget.
 	IPv6 IPv6Pool
 }
 
+// withDefaults fills the knobs the issue gives a default.
+func (c PlannerConfig) withDefaults() PlannerConfig {
+	if c.DisplaceMargin == nil {
+		m := DefaultDisplaceMargin
+		c.DisplaceMargin = &m
+	}
+	if c.MaxShedPerRound == 0 {
+		c.MaxShedPerRound = DefaultMaxShedPerRound
+	}
+	return c
+}
+
 func (c PlannerConfig) validate() error {
 	switch {
-	case math.IsNaN(c.DisplaceMargin) || math.IsInf(c.DisplaceMargin, 0) || c.DisplaceMargin < 0:
+	case math.IsNaN(*c.DisplaceMargin) || math.IsInf(*c.DisplaceMargin, 0) || *c.DisplaceMargin < 0:
 		return errors.New("offload: displace margin must be a finite number, 0 or more")
 	case c.HoldTime < 0:
 		return errors.New("offload: hold time must not be negative")
@@ -84,8 +97,8 @@ func (c PlannerConfig) validate() error {
 		return errors.New("offload: max swaps per round must be at least 1")
 	case c.MaxSwapsPerMinute < 0:
 		return errors.New("offload: max swaps per minute must not be negative")
-	case c.MaxShedPerRound < 1:
-		return errors.New("offload: max shed per round must be at least 1")
+	case c.MaxShedPerRound < 0:
+		return errors.New("offload: max shed per round must not be negative")
 	case c.IPv6.Shared && c.IPv6.Weight < 1:
 		return errors.New("offload: shared IPv6 weight must be at least 1")
 	}
@@ -147,6 +160,7 @@ type Planner struct {
 
 // NewPlanner returns a Planner for profile p, or the first defect in cfg.
 func NewPlanner(p Profile, cfg PlannerConfig) (*Planner, error) {
+	cfg = cfg.withDefaults()
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
@@ -282,10 +296,16 @@ func (p *Planner) Plan(in Input) (Plan, error) {
 		seen[c.Prefix] = true
 		r := ranked{Candidate: c, weight: p.weight(c), v6: c.Prefix.Addr().Is6()}
 		switch {
+		case !c.Prefix.IsValid() || c.Prefix.Bits() == 0:
+			// Never shed, swapped out or installed: a default route is not
+			// Packeteer's to edit.
+			a := Withhold
+			if c.Installed {
+				a = Keep
+			}
+			out.Decisions = append(out.Decisions, Decision{c.Prefix, a, netip.Prefix{}, "invalid or default route is never planned"})
 		case c.Installed:
 			installed = append(installed, r)
-		case !c.Prefix.IsValid() || c.Prefix.Bits() == 0:
-			out.Decisions = append(out.Decisions, Decision{c.Prefix, Withhold, netip.Prefix{}, "invalid or default route is never planned"})
 		default:
 			wanted = append(wanted, r)
 		}
@@ -311,6 +331,10 @@ func (p *Planner) Plan(in Input) (Plan, error) {
 	shed := map[netip.Prefix]bool{}
 	if in.Budget.ShedOK {
 		for _, r := range installed {
+			// A family with room left is not the one under pressure.
+			if (r.v6 && in.Budget.HeadroomV6 > 0) || (!r.v6 && in.Budget.HeadroomV4 > 0) {
+				continue
+			}
 			if len(shed) == p.cfg.MaxShedPerRound {
 				break
 			}
@@ -353,9 +377,17 @@ func (p *Planner) Plan(in Input) (Plan, error) {
 	return out, nil
 }
 
+// lead is the metric the rank key leads with, so the margin and the rank agree.
+func (p *Planner) lead(r ranked) float64 {
+	if p.emphasis == VolumeEmphasis {
+		return clean(r.VolumeMbps)
+	}
+	return r.weight
+}
+
 // victim is the lowest-ranked installed fix of the challenger's family that
-// the challenger may displace. The lowest candidate is the one whose weight
-// the margin is tested against: any higher-ranked one needs more.
+// is past hold time. The margin is tested against it alone: any higher-ranked
+// fix has at least as large a lead metric, so needs more.
 func (p *Planner) victim(now time.Time, c ranked, installed []ranked, shed, taken map[netip.Prefix]bool) (ranked, string, bool) {
 	why := "no installed fix of this family to displace"
 	for _, v := range installed {
@@ -366,7 +398,7 @@ func (p *Planner) victim(now time.Time, c ranked, installed []ranked, shed, take
 			why = "lowest installed fix is inside hold time"
 			continue
 		}
-		if c.weight > v.weight && c.weight >= v.weight*(1+p.cfg.DisplaceMargin) {
+		if cl, vl := p.lead(c), p.lead(v); cl > vl && cl >= vl*(1+*p.cfg.DisplaceMargin) {
 			return v, "outweighs " + v.Prefix.String() + " by the displace margin", true
 		}
 		return ranked{}, "weight is inside the displace margin of the lowest installed fix", false

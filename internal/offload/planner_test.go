@@ -2,6 +2,7 @@ package offload
 
 import (
 	"fmt"
+	"math"
 	"math/rand"
 	"net/netip"
 	"reflect"
@@ -17,7 +18,7 @@ func pfx(s string) netip.Prefix { return netip.MustParsePrefix(s) }
 
 func testCfg() PlannerConfig {
 	return PlannerConfig{
-		DisplaceMargin:   DefaultDisplaceMargin,
+		DisplaceMargin:   ptr(DefaultDisplaceMargin),
 		HoldTime:         10 * time.Minute,
 		MaxSwapsPerRound: 2,
 		MaxShedPerRound:  DefaultMaxShedPerRound,
@@ -464,7 +465,7 @@ func TestPlanIsDeterministic(t *testing.T) {
 				t.Fatalf("round %d: order of input changed the plan\n%+v\n%+v", round, want.Decisions, got.Decisions)
 			}
 		}
-		if n := count(want, Swap); n > 2 {
+		if n := count(want, Swap); n > testCfg().MaxSwapsPerRound {
 			t.Fatalf("%d swaps over the cap", n)
 		}
 		if n := count(want, Shed); n > DefaultMaxShedPerRound {
@@ -475,12 +476,12 @@ func TestPlanIsDeterministic(t *testing.T) {
 
 func TestPlannerConfigValidation(t *testing.T) {
 	bad := map[string]func(*PlannerConfig){
-		"negative margin":   func(c *PlannerConfig) { c.DisplaceMargin = -0.1 },
-		"NaN margin":        func(c *PlannerConfig) { c.DisplaceMargin = nan() },
+		"negative margin":   func(c *PlannerConfig) { c.DisplaceMargin = ptr(-0.1) },
+		"NaN margin":        func(c *PlannerConfig) { c.DisplaceMargin = ptr(math.NaN()) },
 		"negative hold":     func(c *PlannerConfig) { c.HoldTime = -1 },
 		"no swaps":          func(c *PlannerConfig) { c.MaxSwapsPerRound = 0 },
 		"negative rate cap": func(c *PlannerConfig) { c.MaxSwapsPerMinute = -1 },
-		"no sheds":          func(c *PlannerConfig) { c.MaxShedPerRound = 0 },
+		"negative sheds":    func(c *PlannerConfig) { c.MaxShedPerRound = -1 },
 		"shared no weight":  func(c *PlannerConfig) { c.IPv6 = IPv6Pool{Shared: true} },
 	}
 	for name, f := range bad {
@@ -497,4 +498,87 @@ func TestPlannerConfigValidation(t *testing.T) {
 	}
 }
 
-func nan() float64 { var z float64; return z / z }
+func ptr(v float64) *float64 { return &v }
+
+func TestDefaultsApply(t *testing.T) {
+	cfg := testCfg()
+	cfg.DisplaceMargin, cfg.MaxShedPerRound = nil, 0
+	pl := newPlanner(t, NoneProfile(), cfg)
+	if *pl.cfg.DisplaceMargin != 0.25 || pl.cfg.MaxShedPerRound != 5 {
+		t.Fatalf("margin %v, max shed %d", *pl.cfg.DisplaceMargin, pl.cfg.MaxShedPerRound)
+	}
+	// A zero margin given on purpose is kept: any strictly larger weight swaps.
+	cfg.DisplaceMargin = ptr(0)
+	got := plan(t, newPlanner(t, NoneProfile(), cfg), Input{
+		Now:        t0,
+		Candidates: []Candidate{installedFix("192.0.2.0/24", 100, t0.Add(-time.Hour)), wantFix("198.51.100.0/24", 101)},
+		Budget:     full,
+	})
+	if count(got, Swap) != 1 {
+		t.Fatalf("%+v", got.Decisions)
+	}
+}
+
+func TestInstalledDefaultRouteIsNeverShedOrSwapped(t *testing.T) {
+	pl := newPlanner(t, NoneProfile(), testCfg())
+	got := plan(t, pl, Input{
+		Now: t0,
+		Candidates: []Candidate{
+			installedFix("0.0.0.0/0", 0, t0.Add(-time.Hour)),
+			installedFix("::/0", 0, t0.Add(-time.Hour)),
+			wantFix("198.51.100.0/24", 1000), wantFix("2001:db8::/32", 1000),
+		},
+		Budget: Result{ShedOK: true},
+	})
+	a := actions(got)
+	if a["0.0.0.0/0"] != "keep" || a["::/0"] != "keep" || count(got, Shed) != 0 || count(got, Swap) != 0 {
+		t.Fatalf("%+v", got.Decisions)
+	}
+}
+
+func TestShedOnlyTheFamilyUnderPressure(t *testing.T) {
+	pl := newPlanner(t, NoneProfile(), testCfg())
+	got := plan(t, pl, Input{
+		Now: t0,
+		Candidates: []Candidate{
+			installedFix("192.0.2.0/24", 1, t0.Add(-time.Hour)),
+			installedFix("2001:db8::/32", 1, t0.Add(-time.Hour)),
+		},
+		Budget: Result{HeadroomV4: 50, HeadroomV6: 0, ShedOK: true},
+	})
+	if a := actions(got); a["2001:db8::/32"] != "shed" || a["192.0.2.0/24"] != "keep" {
+		t.Fatalf("%v", a)
+	}
+}
+
+func TestVolumeEmphasisMarginUsesVolume(t *testing.T) {
+	prof := NoneProfile()
+	prof.Miss = CPUPunt
+	old := t0.Add(-time.Hour)
+	mk := func(p string, gain, vol float64, installed bool) Candidate {
+		return Candidate{Prefix: pfx(p), Cause: plugin.CausePerformance, Gain: gain, VolumeMbps: vol, Since: old, Installed: installed}
+	}
+	cases := []struct {
+		name string
+		want string
+		cand Candidate
+	}{
+		// Lowest installed fix is 100 Mbps with a huge gain. A challenger with
+		// more gain but less volume must not displace it; more volume must.
+		{"more gain, less volume", "withhold", mk("198.51.100.0/24", 9999, 50, false)},
+		{"inside volume margin", "withhold", mk("198.51.100.0/24", 1, 124, false)},
+		{"volume past margin", "swap", mk("198.51.100.0/24", 1, 130, false)},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := plan(t, newPlanner(t, prof, testCfg()), Input{
+				Now:        t0,
+				Candidates: []Candidate{mk("192.0.2.0/24", 500, 100, true), mk("192.0.2.128/25", 1, 400, true), c.cand},
+				Budget:     full,
+			})
+			if a := actions(got); a["198.51.100.0/24"] != c.want {
+				t.Fatalf("%v", a)
+			}
+		})
+	}
+}
