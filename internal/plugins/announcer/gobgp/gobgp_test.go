@@ -486,7 +486,7 @@ func TestMoveBetweenProvidersIsMakeBeforeBreak(t *testing.T) {
 			}
 		}
 
-		// The new UUID is the one kept: a withdraw must remove the moved
+		// The new path is the one tracked: a withdraw must remove the moved
 		// route, and the watch must see it, so the check above can fail.
 		if err := a.Withdraw(ctx, netip.MustParsePrefix(tc.prefix)); err != nil {
 			t.Fatal(err)
