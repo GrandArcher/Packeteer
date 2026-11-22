@@ -193,7 +193,6 @@ func (r *Reader) ReadL3HW(ctx context.Context) (L3HW, error) {
 		}
 		return out, authErr(err)
 	}
-	out.Settings = Settings{IPv6HW: yes(set["ipv6-hw"]), FasttrackHW: yes(set["fasttrack-hw"]), Autorestart: yes(set["autorestart"])}
 
 	mon, err := r.monitor(ctx, "/interface/ethernet/switch/l3hw-settings/monitor")
 	if err != nil {
@@ -206,6 +205,7 @@ func (r *Reader) ReadL3HW(ctx context.Context) (L3HW, error) {
 		return out, err
 	}
 	out.Applicable = true
+	out.Settings = Settings{IPv6HW: yes(set["ipv6-hw"]), FasttrackHW: yes(set["fasttrack-hw"]), Autorestart: yes(set["autorestart"])}
 
 	if adv, err := r.monitor(ctx, "/interface/ethernet/switch/l3hw-settings/advanced/monitor"); err != nil {
 		if !optional(err) {

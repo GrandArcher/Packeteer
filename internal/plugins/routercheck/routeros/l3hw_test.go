@@ -221,12 +221,15 @@ func TestIPv6HWOffHasNoIPv6HardwareCounts(t *testing.T) {
 	}
 }
 
-// An operator field report (CCR2216, RouterOS 7.24.2): the default route
-// carries the H flag while most of the table is in the CPU. The H flag must
-// not be read as proof of hardware.
-func TestHFlagWithMostRoutesOnTheCPU(t *testing.T) {
-	f := chip("7.24.2", shwp30, advLPM)
-	got, err := f.reader(t).ReadL3HW(context.Background())
+// The shape of an operator field report (CCR2216, RouterOS 7.24.2): the
+// active default route carries the H flag while the monitor says no route is
+// in hardware. The numbers are illustrative documentation values; only the
+// shape is from the report. The H flag must not be read as proof of
+// hardware.
+const hFlagNoHW = `[{"state":"ok","ipv4-routes-total":"600000","ipv4-routes-hw":"0","ipv4-routes-cpu":"600000","ipv4-shortest-hw-prefix":"32","ipv6-routes-total":"20","ipv6-routes-hw":"0","ipv6-routes-cpu":"20","nexthop-cap":"8192","nexthop-usage":"120"}]`
+
+func TestHFlagWithNothingInHardware(t *testing.T) {
+	got, err := chip("7.24.2", hFlagNoHW, advLPM).reader(t).ReadL3HW(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -239,8 +242,9 @@ func TestHFlagWithMostRoutesOnTheCPU(t *testing.T) {
 	if !def.HFlag || def.Gateway != "192.0.2.1" {
 		t.Fatalf("default = %+v", def)
 	}
-	if got.Monitor.IPv4RoutesHW*10 >= got.Monitor.IPv4RoutesTotal || !got.Monitor.Partial() {
-		t.Errorf("monitor = %+v: the counts, not the H flag, say what is in hardware", got.Monitor)
+	m := got.Monitor
+	if m.IPv4RoutesHW != 0 || m.IPv4ShortestHWPrefix != 32 || !m.Partial() || m.NexthopExhausted() {
+		t.Errorf("monitor = %+v: the counts, not the H flag, say what is in hardware", m)
 	}
 }
 
@@ -284,7 +288,7 @@ func TestChrWithNoSwitchChipIsNotApplicable(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got.Applicable || got.Version != "7.23.7" || got.Monitor != (Monitor{}) || got.DefaultRoutes != nil {
+			if got.Applicable || got.Version != "7.23.7" || got.Monitor != (Monitor{}) || got.Settings != (Settings{}) || got.DefaultRoutes != nil {
 				t.Errorf("got %+v, want not applicable with only the version", got)
 			}
 			for _, r := range f.requests() {
