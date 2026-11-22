@@ -1,10 +1,12 @@
 // Package routeros is the RouterOS 7 backend of the read-only router check
 // (#637). It reads the BGP connections and routing filter rules over the
 // REST API with GET requests to a fixed list of paths; it never sends
-// POST, PUT, PATCH, or DELETE, and never follows a redirect.
+// PUT, PATCH, or DELETE, and never follows a redirect. The only POSTs are
+// the L3HW monitor reads with "once" (#736, l3hw.go).
 package routeros
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -55,6 +57,11 @@ func New(c plugin.Config, env plugin.Env) (plugin.RouterCheck, error) {
 	if err := c.Decode(&cfg); err != nil {
 		return nil, err
 	}
+	return Open(cfg, env)
+}
+
+// Open validates the config and returns a reader. It does not connect.
+func Open(cfg Config, env plugin.Env) (*Reader, error) {
 	login, err := cfg.Login(env)
 	if err != nil {
 		return nil, err
@@ -68,17 +75,37 @@ func New(c plugin.Config, env plugin.Env) (plugin.RouterCheck, error) {
 	}, nil
 }
 
+// StatusError is a reply other than 200 OK. It carries no credentials.
+type StatusError struct {
+	Path   string
+	Code   int
+	Status string
+}
+
+func (e *StatusError) Error() string {
+	return fmt.Sprintf("read %s: RouterOS answered %s", e.Path, e.Status)
+}
+
 // get reads one allowlisted path. The method is always GET.
 func (r *Reader) get(ctx context.Context, path string, out any) error {
-	if err := allow.Check(path); err != nil {
+	return r.do(ctx, http.MethodGet, path, nil, allow, out)
+}
+
+// do sends one request whose method and path pass list and decodes the
+// JSON reply into out.
+func (r *Reader) do(ctx context.Context, method, path string, body []byte, list readonly.Allowlist, out any) error {
+	if err := list.Check(path); err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.base+path, nil)
+	req, err := http.NewRequestWithContext(ctx, method, r.base+path, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
 	req.SetBasicAuth(r.user, r.pass)
 	req.Header.Set("Accept", "application/json")
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 	resp, err := r.http.Do(req)
 	if err != nil {
 		var ue *url.Error
@@ -96,7 +123,7 @@ func (r *Reader) get(ctx context.Context, path string, out any) error {
 		return fmt.Errorf("read %s: reply too long", path)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("read %s: RouterOS answered %s", path, resp.Status)
+		return &StatusError{Path: path, Code: resp.StatusCode, Status: resp.Status}
 	}
 	if err := json.Unmarshal(data, out); err != nil {
 		return fmt.Errorf("read %s: %w", path, err)
