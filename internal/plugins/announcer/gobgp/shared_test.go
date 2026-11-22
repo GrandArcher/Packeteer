@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	api "github.com/osrg/gobgp/v3/api"
 	"github.com/osrg/gobgp/v3/pkg/server"
 
 	"github.com/GrandArcher/Packeteer/internal/config"
@@ -123,8 +124,7 @@ func TestSharedPrefixImplicitReplaceAndDeleteByPath(t *testing.T) {
 }
 
 // TestOutboundWithdrawAllKeepsInboundAndMitigation is SAFE-06 of #486:
-// the outbound WithdrawAll removes only the routes it published, by UUID,
-// so a failed partial reload after it does not leave inbound and
+// the outbound WithdrawAll removes only the routes it published, so a failed partial reload after it does not leave inbound and
 // mitigation counting routes the speaker dropped. Each controller's own
 // WithdrawAll then clears the rest.
 func TestOutboundWithdrawAllKeepsInboundAndMitigation(t *testing.T) {
@@ -135,7 +135,7 @@ func TestOutboundWithdrawAllKeepsInboundAndMitigation(t *testing.T) {
 	bh := netip.MustParsePrefix("192.0.2.0/24")
 
 	for _, nh := range []string{"192.0.2.2", "192.0.2.3"} {
-		// The second announce is a replace: GoBGP re-keys the UUID.
+		// The second announce is an implicit replace on the speaker.
 		if err := out.Announce(ctx, plugin.Route{Prefix: imp, NextHop: netip.MustParseAddr(nh), LocalPref: 250, Communities: []string{"64512:666"}}); err != nil {
 			t.Fatal(err)
 		}
@@ -186,8 +186,8 @@ func TestOutboundWithdrawAllKeepsInboundAndMitigation(t *testing.T) {
 	eventually(t, "every route withdrawn", wire())
 }
 
-// TestOutboundWithdrawAllKeepsFailedDeletes: a path the speaker cannot
-// find by UUID stays tracked and WithdrawAll reports it, so a caller never
+// TestOutboundWithdrawAllKeepsFailedDeletes: a path the speaker refuses
+// to delete (here one with no NLRI) stays tracked and WithdrawAll reports it, so a caller never
 // believes a route is gone that it could not withdraw.
 func TestOutboundWithdrawAllKeepsFailedDeletes(t *testing.T) {
 	ctx := context.Background()
@@ -197,10 +197,10 @@ func TestOutboundWithdrawAllKeepsFailedDeletes(t *testing.T) {
 		t.Fatal(err)
 	}
 	out.mu.Lock()
-	out.paths[imp] = announced{uuid: make([]byte, 16), nextHop: netip.MustParseAddr("192.0.2.2")}
+	out.paths[imp] = announced{path: &api.Path{Family: v4Family}, nextHop: netip.MustParseAddr("192.0.2.2")}
 	out.mu.Unlock()
 	if err := out.WithdrawAll(ctx); err == nil {
-		t.Fatal("withdraw all with an unknown UUID reported success")
+		t.Fatal("withdraw all with a path the speaker refuses reported success")
 	}
 	out.mu.Lock()
 	_, kept := out.paths[imp]
