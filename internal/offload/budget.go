@@ -278,7 +278,7 @@ func (b *Budget) headroom(free map[Dimension]uint64, v6 bool) uint64 {
 	if _, ok := free[fib]; !ok {
 		return 0
 	}
-	min := uint64(math.MaxUint64)
+	lowest := uint64(math.MaxUint64)
 	for _, d := range b.cfg.Dimensions {
 		f := free[d]
 		switch {
@@ -292,9 +292,9 @@ func (b *Budget) headroom(free map[Dimension]uint64, v6 bool) uint64 {
 		case d == FIBv4 && v6:
 			f /= b.cfg.IPv6.Weight
 		}
-		if f < min {
-			min = f
+		if f < lowest {
+			lowest = f
 		}
 	}
-	return min
+	return lowest
 }
