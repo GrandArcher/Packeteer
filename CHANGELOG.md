@@ -4,6 +4,10 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ## [Unreleased]
 
+### Added
+
+- `internal/offload`: platform profile type, registry, and the `none` and `refuse` profiles with a pure run-level check; nothing calls it yet, so no behavior changes (#732).
+
 ## [1.13.0] - 2026-11-22
 
 v1.13 moves the upgrade test to v1.12.0 and updates dependencies; no new row (138 done), default `mode: observe`, inject off.
