@@ -80,11 +80,44 @@ RouterOS offers the graceful-restart capability (`gr` under `local.capabilities`
 
 The same job runs the read-only router check (`preflight.router_check` type `routeros`, GET requests only) as a `read`-group user: see [onboarding.md](onboarding.md#read-only-router-check).
 
+The job then reads the CHR with the L3HW reader below (`lab/checkl3hw`): a CHR has no switch chip, so the reader reports `applicable: false`, and `/export` is the same before and after.
+
 It then runs non-BGP mode ([nonbgp.md](nonbgp.md), #300) with the `mikrotik` steerer, the BGP speakers stopped, logged in as a user of a `read,write,api,rest-api` group made for the run ([lab/chr/packeteer-nonbgp.yaml](../lab/chr/packeteer-nonbgp.yaml), inject with `nonbgp.install_routes: true`, lab only). RouterOS gets exactly one static route, `203.0.113.0/24` via 192.0.2.2 with the comment `packeteer-steer`, active; SIGTERM removes it; after SIGKILL it stays, and the next start, with no flow, sweeps it.
 
 Once Packeteer's route is best, the router stops advertising the prefix to Packeteer (best path only), as described above; the improvement stays.
 
 FRR, Junos, and IOS equivalents: [frr.md](frr.md), [junos.md](junos.md), [cisco.md](cisco.md). The whole observe -> suggest -> inject sequence, with the checks at each step: [walkthrough.md](walkthrough.md).
+
+## Hardware routing (L3HW) reader
+
+The `routeros` router check's login also feeds a read-only reader of RouterOS hardware routing state (#736, `Reader.ReadL3HW` in `internal/plugins/routercheck/routeros`). It reads and decides nothing yet: it returns typed readings for the planned `offload_aware` mode, which is off by default and not built. Point it only at a lab router or a router you chose; it writes nothing.
+
+It sends GET requests, and `POST` only to `l3hw-settings/monitor` and `l3hw-settings/advanced/monitor` with the body `{"once":""}`. Every path is on a fixed list and anything else is refused in code. It reads:
+
+- `/system/resource` (version), `/interface/ethernet/switch` and `.../port` (`l3-hw-offloading`), `l3hw-settings` (`ipv6-hw`, `fasttrack-hw`, `autorestart`) and `l3hw-settings/advanced` (`shwp-reset-counter`, `route-index-delay-min` and `-max`, `route-queue-limit-high` and `-low`)
+- the monitor counts: `ipv4-routes-total`, `-hw` and `-cpu`, `ipv4-shortest-hw-prefix`, the IPv6 counts, `nexthop-cap` and `nexthop-usage`; the advanced monitor adds `error-code` and `lpm-cap` and `lpm-usage`
+- bridges, VLAN interfaces, bonds, VRRP interfaces, routing rules, VRFs, enabled `mark-routing` mangle rules, and enabled `forward` filter rules (counted, not copied)
+- every `0.0.0.0/0` and `::/0` route, active or not: gateway, distance, protocol (`belongs-to`), `bgp-local-pref`, `suppress-hw-offload`, and the `H` flag
+
+How to read it:
+
+- The `H` flag only means a route is eligible for hardware. The monitor counts say what is in hardware.
+- An offload is partial when `ipv4-shortest-hw-prefix` is above 0 or any route is on the CPU. `nexthop-usage` equal to `nexthop-cap` (8192 of 8192 in a public report) collapsed offload there.
+- The basic monitor of some versions (7.17.2) has no LPM fields; only the advanced monitor has `lpm-cap`. When the account may not read the advanced monitor, the advanced settings, or the switch ports, the reading says so in `unread` and carries on.
+- A router with no switch chip (the CHR) answers 400 or 404 on the L3HW menus or has no switch: the reading is `applicable: false` and nothing more is read.
+- A refused login or a missing `rest-api` or `read` policy is `ErrAuth`; the error holds the path and the HTTP status, never the login.
+
+The login comes from the same environment variables as the router check. RouterOS's default `read` group includes the `sensitive` policy, which can expose secrets stored on the router; the reader keeps only names and counts, but give it a group without `sensitive`:
+
+```
+# Run on the router. Lab addresses and names only.
+/user group add name=pk-l3hw-read policy=read,rest-api,!sensitive,!write,!policy
+/user add name=pk-reader group=pk-l3hw-read password="<set on the router, never in git>"
+```
+
+`go run ./lab/checkl3hw -url https://192.0.2.254` prints the reading as JSON (login from `PACKETEER_ROUTER_READ_USER` and `PACKETEER_ROUTER_READ_PASSWORD`). Tests use a fake REST server with documented outputs: a CCR2216 with 942,338 routes and 942,326 in hardware, one with 37,729 in hardware at shortest prefix 30 and `lpm-cap` 27200, and a table of 174,000 routes with none in hardware at prefix 24 and next hops 8192 of 8192.
+
+Rollback: nothing is configured by the reader. Remove the user and group above if you made them; revert #736 to drop the code.
 
 ## Exchange peers
 

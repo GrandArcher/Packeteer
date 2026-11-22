@@ -19,6 +19,10 @@
 # /export is the same before and after each read, and the login is in no
 # API answer or log line.
 #
+# Then the read-only L3HW reader (#736) against the same CHR as the
+# read-group user: it has no switch chip, so the reader says "not
+# applicable", and /export is unchanged.
+#
 # Then non-BGP mode (#300, #655) with the mikrotik steerer, the lab
 # speakers stopped: lab/sendflow feeds Packeteer's flow source, and RouterOS
 # gets one static route, 203.0.113.0/24 via 192.0.2.2 with the comment
@@ -501,6 +505,19 @@ if grep -lF -e "$reader_pw" -e pk-reader "$work"/report-*.json "$work"/latest-*.
 	fail "the router login is in the output above"
 fi
 log "router check: pass with evidence, fail with the fix, router config unchanged"
+
+# ---- read-only L3HW reader (#736) ----
+log "L3HW reader: a CHR has no switch chip"
+router_export >"$work/export-l3hw-before.txt"
+go build -o "$work/checkl3hw" ./lab/checkl3hw
+"$work/checkl3hw" -url "http://127.0.0.1:${rest_port}" >"$work/l3hw.json" || fail "the L3HW reader failed on the CHR"
+router_export >"$work/export-l3hw-after.txt"
+jq -e '.applicable == false and (.version | length > 0)' "$work/l3hw.json" >/dev/null || fail "the L3HW reader did not report not applicable on the CHR"
+diff "$work/export-l3hw-before.txt" "$work/export-l3hw-after.txt" || fail "the router config changed during the L3HW read"
+if grep -lF -e "$reader_pw" "$work/l3hw.json"; then
+	fail "the router login is in the L3HW output"
+fi
+log "L3HW reader: not applicable, router config unchanged"
 
 # ---- non-BGP mode with the mikrotik steerer (#300, #655) ----
 # The speakers go first, so the CHR has no BGP route for the lab prefixes:

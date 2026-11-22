@@ -4,6 +4,10 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 
 ## [Unreleased]
 
+### Added
+
+- Read-only RouterOS L3HW reader (monitor, settings, ports, policy routing, default routes; GET and monitor `once` only), checked on the CHR as not applicable (#736).
+
 ## [1.13.0] - 2026-11-22
 
 v1.13 moves the upgrade test to v1.12.0 and updates dependencies; no new row (138 done), default `mode: observe`, inject off.
