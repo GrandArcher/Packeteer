@@ -32,6 +32,7 @@ func TestCheckRun(t *testing.T) {
 		{"enforce profile dry run", Profile{ID: "x", MaxRun: Enforce}, DryRun, DryRun, ""},
 		{"enforce profile enforce", Profile{ID: "x", MaxRun: Enforce}, Enforce, Enforce, ""},
 		{"dry run profile enforce", Profile{ID: "x", MaxRun: DryRun}, Enforce, Refuse, "allows at most dry_run"},
+		{"profile with bad max", Profile{ID: "x", MaxRun: RunLevel(9)}, Enforce, Refuse, "unknown max level"},
 		{"negative level", NoneProfile(), RunLevel(-1), Refuse, "unknown level"},
 		{"level above enforce", Profile{ID: "x", MaxRun: Enforce}, RunLevel(9), Refuse, "unknown level"},
 	}

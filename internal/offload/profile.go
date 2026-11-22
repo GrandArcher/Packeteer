@@ -192,6 +192,9 @@ func CheckRun(p Profile, requested RunLevel) (RunLevel, error) {
 	if !requested.valid() {
 		return Refuse, fmt.Errorf("%w: profile %q: unknown level %s", ErrRefused, p.ID, requested)
 	}
+	if !p.MaxRun.valid() {
+		return Refuse, fmt.Errorf("%w: profile %q has unknown max level %d", ErrRefused, p.ID, int(p.MaxRun))
+	}
 	if requested > p.MaxRun {
 		return Refuse, fmt.Errorf("%w: profile %q allows at most %s, requested %s: %s",
 			ErrRefused, p.ID, p.MaxRun, requested, p.DefaultPolicy.Reason)
