@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"flag"
 	"os"
 	"strings"
@@ -8,14 +9,40 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/GrandArcher/Packeteer/internal/offload"
 )
 
 var updateGolden = flag.Bool("update", false, "rewrite the golden files")
 
 const offloadRouter = `
     - neighbor: 192.0.2.1
+      profile: lab-dry
       capacity: 1000
 `
+
+type fakeReader struct{}
+
+func (fakeReader) Read(context.Context, offload.Dimension) (offload.Reading, error) {
+	return offload.Reading{}, nil
+}
+
+// labProfiles registers, for one test, a profile that stops at dry_run and
+// one that reaches enforce: the shipped registry has neither.
+func labProfiles(t *testing.T) {
+	t.Helper()
+	reg := offload.NewRegistry()
+	for id, top := range map[string]offload.RunLevel{"lab-dry": offload.DryRun, "lab-enforce": offload.Enforce} {
+		p := offload.NoneProfile()
+		p.ID, p.MaxRun, p.Reader = id, top, fakeReader{}
+		if err := reg.Register(p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old := offloadProfiles
+	offloadProfiles = reg
+	t.Cleanup(func() { offloadProfiles = old })
+}
 
 // offloadYAML is injectYAML (neighbor 192.0.2.1) with an offload_aware block.
 func offloadYAML(head string) string {
@@ -61,6 +88,7 @@ func TestOffloadAwareAbsentLeavesOutputUnchanged(t *testing.T) {
 }
 
 func TestOffloadAwareDefaults(t *testing.T) {
+	labProfiles(t)
 	cfg, err := Parse([]byte(offloadYAML("  enabled: true\n")))
 	if err != nil {
 		t.Fatal(err)
@@ -70,7 +98,7 @@ func TestOffloadAwareDefaults(t *testing.T) {
 		t.Fatalf("block defaults = %+v", o)
 	}
 	r := o.Routers[0]
-	if r.Profile != "generic" || r.Reader != "static" || r.ReservePct != 10 || r.IPv6Offload || r.OffloadCommunity != "" || r.Capacity != 1000 {
+	if r.Profile != "lab-dry" || r.Reader != "static" || r.ReservePct != 10 || r.IPv6Offload || r.OffloadCommunity != "" || r.Capacity != 1000 {
 		t.Fatalf("router defaults = %+v", r)
 	}
 	if cfg.Mode != ModeInject {
@@ -79,29 +107,46 @@ func TestOffloadAwareDefaults(t *testing.T) {
 }
 
 func TestOffloadAwareEnforceNeedsInjectAndProfile(t *testing.T) {
-	mikrotik := strings.Replace(offloadYAML("  enabled: true\n  run: enforce\n"), "capacity: 1000", "capacity: 1000\n      profile: mikrotik", 1)
-	cfg, err := Parse([]byte(mikrotik))
+	labProfiles(t)
+	enforce := strings.Replace(offloadYAML("  enabled: true\n  run: enforce\n"), "lab-dry", "lab-enforce", 1)
+	cfg, err := Parse([]byte(enforce))
 	if err != nil {
-		t.Fatalf("enforce on a mikrotik profile with mode inject: %v", err)
+		t.Fatalf("enforce on a profile that allows it with mode inject: %v", err)
 	}
 	if !cfg.OffloadEnforcing() || cfg.Mode != ModeInject {
 		t.Fatalf("enforcing = %v mode = %s", cfg.OffloadEnforcing(), cfg.Mode)
 	}
 	// A profile never changes mode: the same file in observe is refused.
-	observe := strings.Replace(mikrotik, "mode: inject", "mode: observe", 1)
+	observe := strings.Replace(enforce, "mode: inject", "mode: observe", 1)
 	observe = strings.Replace(observe, "announcer:\n  type: gobgp\n", "", 1)
 	if _, err := Parse([]byte(observe)); err == nil || !strings.Contains(err.Error(), "enforce requires mode: inject") {
 		t.Fatalf("enforce in observe: %v", err)
 	}
-	// run above the profile's highest level.
-	if _, err := Parse([]byte(offloadYAML("  enabled: true\n  run: enforce\n"))); err == nil ||
-		!strings.Contains(err.Error(), `offload_aware.routers[0]: run enforce is above the highest run level (dry_run) of profile "generic"`) {
-		t.Fatalf("enforce on generic: %v", err)
+	// run above the profile's MaxRun.
+	_, err = Parse([]byte(offloadYAML("  enabled: true\n  run: enforce\n")))
+	if err == nil || !strings.Contains(err.Error(), `offload_aware.routers[0]: offload: run level refused: profile "lab-dry" allows at most dry_run, requested enforce`) {
+		t.Fatalf("enforce on a dry_run profile: %v", err)
+	}
+}
+
+// The shipped profiles stop at report and refuse, so an enabled block that
+// names one is refused at dry_run too, with the profile's reason.
+func TestOffloadAwareShippedProfilesRefuse(t *testing.T) {
+	for _, id := range []string{offload.NoneID, offload.RefuseID} {
+		text := strings.Replace(offloadYAML("  enabled: true\n"), "lab-dry", id, 1)
+		if _, err := Parse([]byte(text)); err == nil || !strings.Contains(err.Error(), `profile "`+id+`" allows at most`) {
+			t.Errorf("%s at dry_run: %v", id, err)
+		}
+		// A block that is not enabled runs nothing, so nothing is refused.
+		off := strings.Replace(text, "enabled: true", "enabled: false", 1)
+		if _, err := Parse([]byte(off)); err != nil {
+			t.Errorf("%s disabled: %v", id, err)
+		}
 	}
 }
 
 func TestOffloadAwareRefusesIXP(t *testing.T) {
-	for _, extra := range []string{"offload_aware: {enabled: true, routers: [{neighbor: 192.0.2.1, capacity: 1000}]}\n", "offload_aware: {enabled: false}\n"} {
+	for _, extra := range []string{"offload_aware: {enabled: true, routers: [{neighbor: 192.0.2.1, profile: none, capacity: 1000}]}\n", "offload_aware: {enabled: false}\n"} {
 		_, err := Parse([]byte(minimalYAML + "ixp: {}\nbgp:\n  neighbors:\n    - address: 192.0.2.1\n" + extra))
 		if err == nil || !strings.Contains(err.Error(), "offload_aware cannot be combined with ixp") {
 			t.Fatalf("%q with ixp: %v", extra, err)
@@ -110,6 +155,7 @@ func TestOffloadAwareRefusesIXP(t *testing.T) {
 }
 
 func TestOffloadAwareValidation(t *testing.T) {
+	labProfiles(t)
 	cases := []struct {
 		name, yaml, want string
 	}{
@@ -121,7 +167,8 @@ func TestOffloadAwareValidation(t *testing.T) {
 		{"bad neighbor", strings.Replace(offloadYAML("  enabled: true\n"), "neighbor: 192.0.2.1", "neighbor: edge1", 1), `"edge1" is not an IP address`},
 		{"unknown neighbor", strings.Replace(offloadYAML("  enabled: true\n"), "neighbor: 192.0.2.1", "neighbor: 192.0.2.9", 1), "192.0.2.9 is not a bgp.neighbors address"},
 		{"duplicate neighbor", offloadYAML("  enabled: true\n") + offloadRouter, "192.0.2.1 is listed twice"},
-		{"unknown profile", offloadYAML("  enabled: true\n") + "      profile: nope\n", `unknown profile "nope"`},
+		{"unknown profile", strings.Replace(offloadYAML("  enabled: true\n"), "lab-dry", "nope", 1), `unknown profile: "nope"`},
+		{"no profile", strings.Replace(offloadYAML("  enabled: true\n"), "      profile: lab-dry\n", "", 1), "profile is required"},
 		{"unknown reader", offloadYAML("  enabled: true\n") + "      reader: ssh\n", `unknown reader "ssh"`},
 		{"zero capacity", strings.Replace(offloadYAML("  enabled: true\n"), "capacity: 1000", "capacity: 0", 1), "capacity 0 must be between"},
 		{"huge capacity", strings.Replace(offloadYAML("  enabled: true\n"), "capacity: 1000", "capacity: 1000000000", 1), "capacity 1000000000 must be between"},
@@ -142,6 +189,7 @@ func TestOffloadAwareValidation(t *testing.T) {
 // The lab router file parses and its offload_aware block, with defaults
 // applied, serializes to the golden text.
 func TestOffloadAwareGolden(t *testing.T) {
+	labProfiles(t)
 	cfg, err := Load("testdata/offload_aware_lab.yaml")
 	if err != nil {
 		t.Fatal(err)

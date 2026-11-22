@@ -4,14 +4,14 @@ offload_aware:
     recheck: 2m0s
     routers:
         - neighbor: 192.0.2.1
-          profile: mikrotik
+          profile: lab-enforce
           reader: routeros
           capacity: 100000
           reserve_pct: 15
           offload_community: 64512:777
           ipv6_offload: true
         - neighbor: 192.0.2.2
-          profile: generic
+          profile: lab-dry
           reader: static
           capacity: 20000
           reserve_pct: 10

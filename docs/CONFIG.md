@@ -960,14 +960,14 @@ Keys of a `routers` row:
 | Key | Default | Meaning |
 |---|---|---|
 | `neighbor` | none | A `bgp.neighbors` address. Listed once. |
-| `profile` | `generic` | `generic` (highest run level `dry_run`) or `mikrotik` (`enforce`). |
-| `reader` | `static` | `static`, `routeros`, or `snmp`. |
+| `profile` | none | Required. The ID of an [`internal/offload`](../internal/offload) profile; its `MaxRun` is the highest run level the router may reach. Only `none` (software forwarding, stops at `report`) and `refuse` (unverified platform) ship, so an enabled block is refused until a verified profile lands. |
+| `reader` | `static` | `static`, `routeros`, or `snmp` (names only; no reader reads them yet). |
 | `capacity` | none | The router's hardware route capacity, 1 to 100000000. Required. |
 | `reserve_pct` | `10` | Share of `capacity` kept free. 1 to 50; 0 is the default. |
 | `offload_community` | none | Optional standard or large community that marks a route for offload. |
 | `ipv6_offload` | `false` | The router offloads IPv6 routes. MikroTik's `ipv6-hw` is off by default. |
 
-`-check` and the loader refuse: a `run` above a router's profile level, `run: enforce` without `mode: inject`, any `offload_aware` block together with `ixp:`, a bad `reserve_pct` or `recheck`, and a neighbor that is not in `bgp.neighbors`. The settings editor and a federation push refuse to turn `run: enforce` on ([design/federation-push.md](design/federation-push.md)); set it in the mounted file. The block is restart-only. Rollback: remove the block.
+`-check` and the loader refuse: a `run` above a router's profile `MaxRun` (checked while `enabled`), an unknown or missing `profile`, `run: enforce` without `mode: inject`, any `offload_aware` block together with `ixp:`, a bad `reserve_pct` or `recheck`, and a neighbor that is not in `bgp.neighbors`. The settings editor and a federation push refuse to turn `run: enforce` on ([design/federation-push.md](design/federation-push.md)); set it in the mounted file. The block is restart-only. Rollback: remove the block.
 
 ### `external_policy`
 

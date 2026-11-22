@@ -1,4 +1,5 @@
 # Lab router for offload_aware (#735). Documentation addresses and ASNs only.
+# lab-enforce and lab-dry are profiles the golden test registers.
 mode: inject
 asn: 64512
 router_id: 192.0.2.10
@@ -30,11 +31,12 @@ offload_aware:
   recheck: 2m
   routers:
     - neighbor: 192.0.2.1
-      profile: mikrotik
+      profile: lab-enforce
       reader: routeros
       capacity: 100000
       reserve_pct: 15
       offload_community: "64512:777"
       ipv6_offload: true
     - neighbor: 192.0.2.2
+      profile: lab-dry
       capacity: 20000

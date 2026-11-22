@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"net/netip"
 	"time"
+
+	"github.com/GrandArcher/Packeteer/internal/offload"
 )
 
 // offload_aware run levels (#735).
@@ -12,7 +14,7 @@ const (
 	OffloadRunEnforce = "enforce"
 )
 
-// Offload_aware defaults and bounds (#735).
+// offload_aware defaults and bounds (#735).
 const (
 	DefaultOffloadRecheck    = 5 * time.Minute
 	MinOffloadRecheck        = 10 * time.Second
@@ -21,15 +23,12 @@ const (
 	MaxOffloadReservePct     = 50
 	MaxOffloadCapacity       = 100_000_000
 	OffloadReaderStatic      = "static"
-	DefaultOffloadProfile    = "generic"
 )
 
-// offloadMaxRun is the highest run level each router profile may reach. A
-// profile without a hardware-offload reader stays at dry_run.
-var offloadMaxRun = map[string]string{
-	"generic":  OffloadRunDryRun,
-	"mikrotik": OffloadRunEnforce,
-}
+// offloadProfiles resolves router profiles. Tests replace it to register a
+// profile that allows dry_run or enforce; the shipped registry has only
+// platforms that stop at report or refuse.
+var offloadProfiles = offload.NewRegistry()
 
 var offloadReaders = map[string]bool{OffloadReaderStatic: true, "routeros": true, "snmp": true}
 
@@ -51,8 +50,8 @@ type OffloadAware struct {
 // OffloadRouter is one watched router.
 type OffloadRouter struct {
 	Neighbor string `yaml:"neighbor"`
-	// Profile names the router family. It sets the highest run level the
-	// router may reach. Empty is generic.
+	// Profile is the ID of a registered internal/offload profile. Its MaxRun
+	// is the highest run level the router may reach. Required.
 	Profile string `yaml:"profile"`
 	// Reader is how the offloaded-route count is read: static, routeros, or
 	// snmp. Empty is static.
@@ -83,9 +82,6 @@ func (o *OffloadAware) applyDefaults() {
 	}
 	for i := range o.Routers {
 		r := &o.Routers[i]
-		if r.Profile == "" {
-			r.Profile = DefaultOffloadProfile
-		}
 		if r.Reader == "" {
 			r.Reader = OffloadReaderStatic
 		}
@@ -138,11 +134,20 @@ func (c *Config) validateOffloadAware(add func(string, ...any)) {
 		default:
 			seen[a] = true
 		}
-		top, ok := offloadMaxRun[r.Profile]
-		if !ok {
-			add("%s.profile: unknown profile %q", p, r.Profile)
-		} else if run == OffloadRunEnforce && top == OffloadRunDryRun {
-			add("%s: run enforce is above the highest run level (%s) of profile %q", p, top, r.Profile)
+		prof, err := offloadProfiles.Get(r.Profile)
+		switch {
+		case r.Profile == "":
+			add("%s.profile is required (one of %v)", p, offloadProfiles.IDs())
+		case err != nil:
+			add("%s.profile: %v (one of %v)", p, err, offloadProfiles.IDs())
+		case o.Enabled:
+			level := offload.DryRun
+			if run == OffloadRunEnforce {
+				level = offload.Enforce
+			}
+			if _, err := offload.CheckRun(prof, level); err != nil {
+				add("%s: %v", p, err)
+			}
 		}
 		if !offloadReaders[r.Reader] {
 			add("%s.reader: unknown reader %q", p, r.Reader)
