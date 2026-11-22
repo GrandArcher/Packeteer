@@ -23,8 +23,8 @@ set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"
 
-prev_version=1.11.0
-prev_image="${PREV_IMAGE:-ghcr.io/grandarcher/packeteer@sha256:ad63e4a034790a45c25c338590bdb6984b59306ed229358c54bb715568260a9f}"
+prev_version=1.12.0
+prev_image="${PREV_IMAGE:-ghcr.io/grandarcher/packeteer@sha256:05dec2ada12bab67796654764db67418cf26b483ee965f57a16b4bfb7fcc34ee}"
 case "$prev_image" in
 *@sha256:????????????????????????????????????????????????????????????????) ;;
 *)
@@ -210,7 +210,7 @@ n=$(api 'events?limit=1000' | jq '[.events[] | select(.kind == "controller.start
 echo "e2e-upgrade-release: upgrade kept pin, pause, ack, users, history; mode observe; nothing announced"
 
 echo "== downgrade: start the release image on the same volume"
-# No config key is newer than the release (v1.11.0 accepts everything the build
+# No config key is newer than the release (v1.12.0 accepts everything the build
 # does), so the downgrade removes nothing. When the build adds a key, write it
 # into a copy of the config here, check that the release refuses it, and start
 # the release with the original config, as the README upgrade notes say.
