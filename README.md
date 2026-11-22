@@ -465,7 +465,7 @@ Nothing is field-proven (#54). The shipped config stays `mode: observe`, and inj
 
 v1.11.0 added no capability row and no config key; the counts stayed at 138 done. It added lab proof for an existing herd key and a CI check on documentation addresses. What an operator looked for:
 
-- `herd.identity` was lab-proven against checklists that an in-lab rpki-client validates offline, with a tampered and an expired one refused (`lab/mkrpki`, #708). The node still did not validate RPKI objects itself, and no public relying party published the checklist schema ([docs/herd.md](docs/herd.md)).
+- `herd.identity` was lab-proven against checklists that an in-lab rpki-client validates offline, with a tampered and an expired one refused (`lab/mkrpki`, #708). The node does not validate RPKI objects itself, and no public relying party publishes the checklist schema ([docs/herd.md](docs/herd.md)).
 - The `upgrade-release` CI job started from the v1.10.0 image, pinned by digest, instead of v1.9.0 (#707).
 - `internal/doccheck` failed on a public IP or a non-documentation, non-private ASN in the lab, examples, docs, scripts, and workflow files (#704), and `publish.yml` actions were pinned by commit SHA (#703).
 - Docker Desktop on macOS and Windows stayed "allowed, not verified": no `scripts/demo.sh --report` result had been recorded ([docs/demo.md](docs/demo.md#platforms)).
