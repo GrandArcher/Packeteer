@@ -440,6 +440,23 @@ scorer:
 #   marker_community: "64512:667"
 #   no_advertise: false
 #
+# Hardware-offload-aware mode (#735, docs/CONFIG.md#offload_aware). Off by
+# default and parsed only: nothing reads it yet. An enabled block needs a
+# profile that allows the run level (none and refuse do not), and run: enforce
+# needs mode: inject; the settings editor refuses to set enforce.
+# offload_aware:
+#   enabled: false
+#   run: dry_run                        # dry_run | enforce
+#   recheck: 5m
+#   routers:
+#     - neighbor: 192.0.2.1             # a bgp.neighbors address
+#       profile: none                   # an internal/offload profile ID (none | refuse ship)
+#       reader: static                  # static | routeros | snmp
+#       capacity: 100000                # hardware route capacity
+#       reserve_pct: 10
+#       offload_community: "64512:777"
+#       ipv6_offload: false
+#
 # RPKI origin validation (off by default; docs/CONFIG.md#rpki). Read-only
 # sources (rtr: RFC 8210 over TCP, tls, or ssh; json: Routinator /json or
 # rpki-client -j) label each learned path's origin valid, invalid, not found,

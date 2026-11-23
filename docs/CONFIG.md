@@ -944,6 +944,31 @@ Synthesized routes count toward `more_specific.max_routes` (100 when the `more_s
 
 A synthesized route is withdrawn with its decision (flip-back, TTL), the round C is missing from the learned RIB (no 5s confirm window: S never hides C from the router), when S stops being measured or a rail above fails, when the RIB is not ready (session loss), on SIGTERM, on an HA standby, and when the leak watch sees it outside the AS. A SIGKILL or crash drops the session and the router removes it; graceful restart stays off. While Packeteer steers C itself, the router stops sending C to Packeteer, so C missing is not read as a leave; S then goes with C's own decision (retire, TTL, or the same leave rule). The block is restart-only. Rollback: `synthesize.enabled: false` and restart.
 
+### `offload_aware`
+
+Opt-in hardware-offload-aware mode (#735). Config parsing and `-check` validation only: nothing reads the block at runtime yet, so it changes no decision and announces nothing. Absent or `enabled: false` is off, and a config without the block loads and marshals as before. A profile never changes `mode`: `run: enforce` still needs `mode: inject`.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `enabled` | `false` | `true` turns the mode on. Needs at least one router. |
+| `run` | `dry_run` | `dry_run` or `enforce`. |
+| `recheck` | `5m` | How often a router's offload state is read again. 10s to 1h. |
+| `routers` | none | The watched routers; each row has the keys below. |
+
+Keys of a `routers` row:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `neighbor` | none | A `bgp.neighbors` address. Listed once. |
+| `profile` | none | Required. The ID of an [`internal/offload`](../internal/offload) profile; its `MaxRun` is the highest run level the router may reach. Only `none` (software forwarding, stops at `report`) and `refuse` (unverified platform) ship, so an enabled block is refused until a verified profile lands. |
+| `reader` | `static` | `static`, `routeros`, or `snmp` (names only; no reader reads them yet). |
+| `capacity` | none | The router's hardware route capacity, 1 to 100000000. Required. |
+| `reserve_pct` | `10` | Share of `capacity` kept free. 1 to 50; 0 is the default. |
+| `offload_community` | none | Optional standard or large community that marks a route for offload. |
+| `ipv6_offload` | `false` | The router offloads IPv6 routes. MikroTik's `ipv6-hw` is off by default. |
+
+`-check` and the loader refuse: a `run` above a router's profile `MaxRun` (checked while `enabled`), an unknown or missing `profile`, `run: enforce` without `mode: inject`, any `offload_aware` block together with `ixp:`, a bad `reserve_pct` or `recheck`, and a neighbor that is not in `bgp.neighbors`. The settings editor and a federation push refuse to turn `run: enforce` on ([design/federation-push.md](design/federation-push.md)); set it in the mounted file. The block is restart-only. Rollback: remove the block.
+
 ### `external_policy`
 
 External policy feed (#232, lab-proven only, not on a public edge). Contract: [external-policy.md](external-policy.md). Publishes the outbound routes the announce controller puts on the wire, read-only over TLS, for your own BGP daemon to apply. It carries routes only in `mode: inject`. With it enabled, `mode: inject` runs without `announcer` and the session only learns. Refused with `ixp`.

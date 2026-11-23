@@ -9,6 +9,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 - Read-only RouterOS L3HW reader (monitor, settings, ports, policy routing, default routes; GET and monitor `once` only), checked on the CHR as not applicable (#736).
 - `internal/offload`: platform profile type, registry, and the `none` and `refuse` profiles with a pure run-level check; nothing calls it yet, so no behavior changes (#732).
 - `internal/offload`: pure multi-dimension install budget (free = cap - used - reserve) that freezes on a missing, stale or insane reading; nothing calls it yet (#733).
+- Opt-in `offload_aware` config block (run `dry_run` by default, per-router profile): parsed and checked only, nothing reads it yet; the editor and federation push refuse `enforce` (#735).
 - `internal/offload`: pure shed and swap planner (rank key, displace margin, hold time, swap and shed caps, freeze and settling); nothing calls it yet (#734).
 - `internal/offload/mikrotik`: the `mikrotik-l3hw-lpm` profile (CCR2216/CCR2116): pre-checks, default-out-of-hardware freeze, version rules, budget config; dry_run at most; no caller yet (#737).
 
