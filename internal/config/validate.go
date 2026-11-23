@@ -43,6 +43,7 @@ func (c *Config) Validate() error {
 	c.validateLogHTTP(add)
 	c.validateMoreSpecific(add)
 	c.validateSynthesize(add)
+	c.validateOffloadAware(add)
 	c.validateRPKI(add)
 	c.validateIRR(add)
 	c.validateRegistry(add)

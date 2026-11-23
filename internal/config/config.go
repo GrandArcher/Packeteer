@@ -190,6 +190,10 @@ type Config struct {
 	// RIB (#122). Opt-in, inject only, under the rails in
 	// docs/design/more-specific.md. Nil or disabled is off.
 	Synthesize *Synthesize `yaml:"synthesize"`
+	// OffloadAware is the opt-in hardware-offload-aware mode (#735). Only
+	// parsed and validated so far. Nil or disabled is off; omitted from a
+	// marshaled config while nil.
+	OffloadAware *OffloadAware `yaml:"offload_aware,omitempty"`
 	// RPKI is the shared RPKI origin-validation source (#158). Nil or
 	// disabled is off.
 	RPKI *RPKI `yaml:"rpki"`

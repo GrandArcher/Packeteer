@@ -115,12 +115,26 @@ func candidateChecker(getenv func(string) string, httpUser string) func(running 
 		if err := checkEnvNames(running, next); err != nil {
 			return nil, err
 		}
+		if err := checkOffloadEnforceUnchanged(running, next); err != nil {
+			return nil, err
+		}
 		quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
 		if _, err := preflight(next, quiet, getenv, httpUser, true); err != nil {
 			return nil, err
 		}
 		return next, nil
 	}
+}
+
+// checkOffloadEnforceUnchanged refuses a candidate that turns
+// offload_aware.run: enforce on. Like the programs above, that level is set
+// in the mounted file only, so the settings editor and a federation push
+// never reach it (#735). A running config already at enforce keeps it.
+func checkOffloadEnforceUnchanged(running, next *config.Config) error {
+	if next.OffloadEnforcing() && !running.OffloadEnforcing() {
+		return errors.New("offload_aware.run: enforce cannot be set through the config editor; edit the mounted file")
+	}
+	return nil
 }
 
 // checkProgramsUnchanged refuses a candidate whose exec or grpc plugins,

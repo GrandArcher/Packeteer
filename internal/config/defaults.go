@@ -23,6 +23,9 @@ func (c *Config) applyDefaults() {
 	if c.Synthesize != nil {
 		c.Synthesize.applyDefaults()
 	}
+	if c.OffloadAware != nil {
+		c.OffloadAware.applyDefaults()
+	}
 	if c.Probe.Interval == 0 {
 		c.Probe.Interval = DefaultProbeInterval
 	}
