@@ -1,0 +1,1926 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index ab31f546..ff665527 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -3086,6 +3086,21 @@ jobs:
+       - name: registry hygiene lab (#657; missing and stale route object, ROA gap, PeeringDB max-prefix and port-speed drift against stand-ins on an internal network, wrong digest refused, confirmed pushes reach the stand-in only and are audit-logged, nothing announced, SIGTERM)
+         run: bash lab/e2e-registry.sh
+ 
++  origin-agreement:
++    # RIS and RouteViews origin agreement for RPKI-invalid only paths (#401)
++    # against in-lab stand-ins only (#671). The lab network is internal: no
++    # live collector is reachable. Observe mode. One scan runs a minute after
++    # start and the next five minutes later.
++    runs-on: ubuntu-latest
++    timeout-minutes: 25
++    steps:
++      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
++      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
++        with:
++          go-version-file: go.mod
++      - name: origin agreement lab (#671; agreement, disagreement, and empty answers from RIS and RouteViews stand-ins on an internal network, down collectors add no agreement, nothing announced, SIGTERM)
++        run: bash lab/e2e-origin-agreement.sh
++
+   chaos:
+     # Chaos soak (#585), short profile: one pass of a session flap, a
+     # transit-b probe-source failure, SIGTERM, and SIGKILL on the HA lab,
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 533f652c..c9f63c35 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -6,6 +6,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
+ 
+ ### Added
+ 
++- `rpki.only_invalid.origin_collectors` (`origin_collector` plugin `json`) adds an `origin_agreement` signal; the `origin-agreement` CI job proves it on RIS and RouteViews stand-ins (#671).
+ - Settings forms for `rpki` (with `only_invalid`), `registry`, `mcp`, `verify`, `herd` and `preflight.router_check`; never mode, allowlist, announcer, SLURM, `push_enabled` or backout (#670).
+ - Herd phase 2 in the lab: peer exchange from hub peers, `herd.identity` RPKI checklist stand-in, `herd_hints` source, crowd threshold for route-level flow and span routes; still advisory (#672).
+ 
+diff --git a/cmd/controller/configdoc_test.go b/cmd/controller/configdoc_test.go
+index 6d6c1aad..a74d8ff6 100644
+--- a/cmd/controller/configdoc_test.go
++++ b/cmd/controller/configdoc_test.go
+@@ -11,6 +11,7 @@ import (
+ 	"github.com/GrandArcher/Packeteer/internal/config"
+ 	"github.com/GrandArcher/Packeteer/internal/geoip"
+ 	"github.com/GrandArcher/Packeteer/internal/plugins/announcer/gobgp"
++	collectorjson "github.com/GrandArcher/Packeteer/internal/plugins/collector/httpjson"
+ 	"github.com/GrandArcher/Packeteer/internal/plugins/detector/baseline"
+ 	"github.com/GrandArcher/Packeteer/internal/plugins/elector/lease"
+ 	"github.com/GrandArcher/Packeteer/internal/plugins/exec"
+@@ -134,6 +135,7 @@ func TestConfigDocCoversStructs(t *testing.T) {
+ 		irrwhois.Config{},
+ 		irrfile.Config{},
+ 		hijackfile.Config{},
++		collectorjson.Config{},
+ 		fabricicmp.Config{},
+ 		birdseye.Config{},
+ 		birdseye.ServerConfig{},
+diff --git a/cmd/controller/main.go b/cmd/controller/main.go
+index f14683f1..5f414584 100644
+--- a/cmd/controller/main.go
++++ b/cmd/controller/main.go
+@@ -279,7 +279,7 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
+ 		if s := cfg.RPKI.OnlyInvalid.SLURM; s != nil {
+ 			slurm = s.Path + " (each exception needs an admin to approve it)"
+ 		}
+-		fmt.Fprintf(stdout, "rpki only_invalid: report RPKI-invalid only paths, hijack_feeds=%d, slurm exceptions %s (never announces)\n", len(cfg.RPKI.OnlyInvalid.HijackFeeds), slurm)
++		fmt.Fprintf(stdout, "rpki only_invalid: report RPKI-invalid only paths, hijack_feeds=%d, origin_collectors=%d, slurm exceptions %s (never announces)\n", len(cfg.RPKI.OnlyInvalid.HijackFeeds), len(cfg.RPKI.OnlyInvalid.OriginCollectors), slurm)
+ 	}
+ 	if cfg.Lookup != nil {
+ 		fmt.Fprintf(stdout, "lookup: %s (read-only, never announces)\n", cfg.Lookup.Type)
+diff --git a/cmd/controller/onlyinvalid.go b/cmd/controller/onlyinvalid.go
+index ac521c01..16662db3 100644
+--- a/cmd/controller/onlyinvalid.go
++++ b/cmd/controller/onlyinvalid.go
+@@ -31,6 +31,9 @@ func newOnlyInvalid(cfg *config.Config, plugins *pluginhost.Set, view *rib.View,
+ 	for _, f := range plugins.HijackFeeds {
+ 		deps.Feeds = append(deps.Feeds, onlyinvalid.Feed{Name: f.Name, Plugin: f.Plugin})
+ 	}
++	for _, c := range plugins.OriginCollectors {
++		deps.Collectors = append(deps.Collectors, onlyinvalid.Collector{Name: c.Name, Plugin: c.Plugin})
++	}
+ 	o := cfg.RPKI.OnlyInvalid
+ 	svc := &onlyinvalid.Service{Detector: onlyinvalid.NewDetector(deps, o.StableAfter)}
+ 	if s := o.SLURM; s != nil {
+diff --git a/cmd/controller/onlyinvalid_test.go b/cmd/controller/onlyinvalid_test.go
+index 96cdf3c5..920b85af 100644
+--- a/cmd/controller/onlyinvalid_test.go
++++ b/cmd/controller/onlyinvalid_test.go
+@@ -3,6 +3,8 @@ package main
+ import (
+ 	"errors"
+ 	"log/slog"
++	"net/http"
++	"net/http/httptest"
+ 	"net/netip"
+ 	"path/filepath"
+ 	"strings"
+@@ -45,6 +47,11 @@ func TestNewOnlyInvalid(t *testing.T) {
+ 		t.Fatal("built without rpki.only_invalid")
+ 	}
+ 
++	// The collector stand-in sees the local origin for the prefix.
++	collector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		_, _ = w.Write([]byte(`{"prefix":"` + r.URL.Query().Get("prefix") + `","origins":[64500]}`))
++	}))
++	defer collector.Close()
+ 	slurm := filepath.Join(t.TempDir(), "slurm.json")
+ 	// BMP alone (#237): the view is ready while a BMP peer is up.
+ 	bmpAlone := strings.Replace(bmpConfig, "bgp:\n  neighbors:\n    - address: 192.0.2.254\n", "", 1)
+@@ -55,6 +62,7 @@ func TestNewOnlyInvalid(t *testing.T) {
+   only_invalid:
+     enabled: true
+     hijack_feeds: [{type: file, name: radar-export, config: {path: ../../internal/plugins/hijackfeed/file/testdata/incidents.json}}]
++    origin_collectors: [{type: json, name: ris, config: {url: "` + collector.URL + `/ris"}}]
+     slurm:
+       path: ` + slurm + `
+       prefixes: [198.51.100.0/24]
+@@ -85,6 +93,9 @@ func TestNewOnlyInvalid(t *testing.T) {
+ 	var mu sync.Mutex
+ 	var events []plugin.Event
+ 	emit := func(e plugin.Event) { mu.Lock(); events = append(events, e); mu.Unlock() }
++	if len(plugins.OriginCollectors) != 1 || plugins.OriginCollectors[0].Name != "ris" {
++		t.Fatalf("origin collectors = %+v", plugins.OriginCollectors)
++	}
+ 	svc := newOnlyInvalid(cfg, plugins, view, rpki.NewSet([]plugin.RPKI{freshVRPs{vrps: vrps}}), irr.NewChecker(nil, irr.Options{}), emit, auth.NewAuditor(nil, nil, nil), slog.New(slog.DiscardHandler))
+ 	if svc == nil || svc.Exceptions == nil || svc.Exceptions.Path() != slurm {
+ 		t.Fatalf("service = %+v", svc)
+@@ -94,13 +105,14 @@ func TestNewOnlyInvalid(t *testing.T) {
+ 	}
+ 	svc.Scan(t.Context())
+ 	c, ok := svc.Case(netip.MustParsePrefix("198.51.100.0/24"))
+-	// The same-origin ROA, two providers, and a quiet feed score 3, but
+-	// without IRR or route age that also fits a forged-origin hijack.
+-	if !ok || c.Origin != 64500 || len(c.Paths) != 2 || c.Score != 3 || c.Class != onlyinvalid.ClassUnclear {
++	// The same-origin ROA, two providers, a quiet feed, and one collector
++	// that sees the origin score 4, but without IRR or route age that also
++	// fits a forged-origin hijack.
++	if !ok || c.Origin != 64500 || len(c.Paths) != 2 || c.Score != 4 || c.Class != onlyinvalid.ClassUnclear {
+ 		t.Fatalf("case = %+v, status %+v", c, svc.Status())
+ 	}
+ 	evidence := c.Evidence()
+-	for _, want := range []string{"irr_route +0: irr is off", "roa_same_origin +1", "providers +1: 2 providers agree on AS64500 (transit-a, transit-b)", "hijack_feeds +1: 1 of 1 feeds report no incident for AS64500"} {
++	for _, want := range []string{"irr_route +0: irr is off", "roa_same_origin +1", "providers +1: 2 providers agree on AS64500 (transit-a, transit-b)", "hijack_feeds +1: 1 of 1 feeds report no incident for AS64500", "origin_agreement +1: ris sees AS64500 as an origin"} {
+ 		if !strings.Contains(evidence, want) {
+ 			t.Errorf("evidence lacks %q: %s", want, evidence)
+ 		}
+diff --git a/config.example.yaml b/config.example.yaml
+index d1fddac7..b2c75dd8 100644
+--- a/config.example.yaml
++++ b/config.example.yaml
+@@ -478,6 +478,13 @@ scorer:
+ #       - type: file
+ #         config:
+ #           path: /etc/packeteer/hijacks.json
++#     # Origins a public collector set (RIS, RouteViews) sees for each case,
++#     # from an endpoint you run or trust (docs/CONFIG.md#origin-collector-json).
++#     origin_collectors:
++#       - type: json
++#         name: ris
++#         config:
++#           url: http://192.0.2.50:8080/ris
+ #     slurm:
+ #       path: /var/lib/packeteer/slurm/slurm.json
+ #       prefixes: [198.51.100.0/24]
+diff --git a/docs/CONFIG.md b/docs/CONFIG.md
+index 4119c1b1..676667af 100644
+--- a/docs/CONFIG.md
++++ b/docs/CONFIG.md
+@@ -971,9 +971,10 @@ RPKI-invalid only paths (#401, not on a public edge). Off by default; needs `rpk
+ 
+ | Key | Default | Meaning |
+ |---|---|---|
+-| `enabled` | `false` | `true` turns the report on. A block that is not enabled must not set `hijack_feeds` or `slurm`. |
++| `enabled` | `false` | `true` turns the report on. A block that is not enabled must not set `hijack_feeds`, `origin_collectors`, or `slurm`. |
+ | `stable_after` | `720h` | How long the oldest learned path with the origin must be in the RIB to count as a stable origin (+2). 1h-8760h. |
+ | `hijack_feeds` | none | `hijack_feed` plugin entries asked for incidents for each case: `file` ([hijack feed `file`](#hijack-feed-file)). Instance names must differ. Evidence only. |
++| `origin_collectors` | none | `origin_collector` plugin entries asked which origins a public collector set (RIPE RIS, RouteViews) sees for each case: `json` ([origin collector `json`](#origin-collector-json)). Instance names must differ. Evidence only: agreement, disagreement, and no answer are the `origin_agreement` signal. |
+ | `slurm` | none | Allows proposing SLURM exceptions, with the keys below. Without it no exception can be proposed. |
+ 
+ `slurm` keys:
+@@ -992,6 +993,15 @@ Reads a mounted JSON file `{"incidents": [{"prefix": "...", "origin": 64511, "de
+ |---|---|---|
+ | `path` | none | Required. The file inside the container, for example `/etc/packeteer/hijacks.json`. |
+ 
++### Origin collector `json`
++
++One HTTP GET per lookup: `<url>?prefix=198.51.100.0/24`, answered with `{"prefix": "198.51.100.0/24", "origins": [64500]}`. Packeteer ships no client for a public service: `url` is an endpoint the operator runs or trusts that serves the origins RIS or RouteViews data shows (the lab uses stand-ins, [only-invalid.md](only-invalid.md#origin-agreement)). `prefix` in the answer must be the one asked, so the answer for a covering or more specific prefix is an error. `origins` empty means the collector saw no announcement of exactly that prefix. A failed request, a non-200 answer, or a bad body is an error. At most 1,000 origins; redirects stay on the same host.
++
++| Key | Default | Meaning |
++|---|---|---|
++| `url` | none | Required. `http` or `https`, no credentials, query, or fragment. |
++| `rate_per_minute` | `60` | Lookups sent per minute. 1-600. Each open case is looked up once per scan, one at a time, so a few hundred cases against a public service can take longer than the 5-minute scan interval; the lookups wait, and a lookup that waits past 10 seconds is no answer. |
++
+ ### `irr`
+ 
+ IRR origin check per provider path (#214, not on a public edge). Off by default. Each learned path of a probed prefix is labelled `registered` (a route or route6 object for exactly the prefix names the path's origin AS), `not_registered` (every source answered and none does), or `unknown` (no source answered, or the answer is older than `staleness`). It is shown beside RPKI on the prefix card and `/api/prefixes` (with the source, the IRR database of the matching object, the data time, every origin registered for the prefix, the provider's as-set membership, and the origin's aut-num `as-name`), and on `/api/decisions` candidates. The System page has one row per source. Lookups answer from a cache and never wait on the network: a miss is `unknown` until a background lookup asks every source in order, one lookup at a time. A source that fails keeps its last answers until `staleness` and is asked again after a minute. Each cache holds at most 100,000 keys. Objects of IRRd's `RPKI` pseudo-source (built from ROAs) are not counted. Nothing is announced and the learned RIB is unchanged; with `prefer_registered` off it changes no decision. The learned-RIB rule, allowlist, cap, community + NO_EXPORT, hold time, and withdraw rules are unchanged. A change needs a restart.
+diff --git a/docs/FEATURES.md b/docs/FEATURES.md
+index 71a8c7dd..fb507943 100644
+--- a/docs/FEATURES.md
++++ b/docs/FEATURES.md
+@@ -20,7 +20,7 @@ Milestones:
+ - **v0.9**: evidence and explanations (decision checks, probe confidence, steer verification, reordering, the `https` prober, probe agents, `probe.exclude`), registries (RPKI and IRR per provider path, registry hygiene, NetBox and Peering Manager), outputs (exporters, an SNMP agent, syslog, an external policy feed, BMP alone), plugin work (gRPC plugins, the author guide), opt-in outside sources (herd page, Atlas, NLNOG RING, threat feeds, GeoIP), MED and overload protection, `synthesize`, and the UI refresh. Lab only; partial rows say what is missing.
+ - **v1.0**: no new rows. The pre-release audit and review pass over v0.9 (#486-#494, #501-#510, review #215): fixes to the allowlist and announce path, the BMP, flow, and policy-feed inputs, sign-in, probe agents, HA, and the signed upgrade, and probe and RIB cost at 100k targets. The counts below are unchanged. Lab only; nothing is field-proven (#54).
+ - **v1.0.1**: no new rows. A patch with the post-v1.0 hardening fixes (#527-#536). The counts below are unchanged. Lab only; nothing is field-proven (#54).
+-- **v1.1**: assistant access, RPKI-invalid only paths, and non-BGP mode. An MCP server over the REST API for AI assistants (#302), RPKI-invalid only paths (#401), partial: public collector agreement is not a signal yet; report only, detection and an approved SLURM exception lab-proven against Routinator (#627). Non-BGP mode (#300), partial: opt-in static routes from flow data for a router with no BGP, an owner-approved exception to the learned-RIB rule; lab-proven with the `linux` steerer and, on a RouterOS CHR, the `mikrotik` steerer (#655). The counts below include all three rows.
++- **v1.1**: assistant access, RPKI-invalid only paths, and non-BGP mode. An MCP server over the REST API for AI assistants (#302), RPKI-invalid only paths (#401), partial: report only, public collector agreement is a score signal (#671), detection and an approved SLURM exception lab-proven against Routinator (#627). Non-BGP mode (#300), partial: opt-in static routes from flow data for a router with no BGP, an owner-approved exception to the learned-RIB rule; lab-proven with the `linux` steerer and, on a RouterOS CHR, the `mikrotik` steerer (#655). The counts below include all three rows.
+ - **v1.2**: no new rows. Steering over the REST API and as MCP write tools (#558): pin a prefix, pause and resume optimization, acknowledge an alert; it completes the MCP row above, so the counts below move from 130 to 131 done (v1.1: 1 of 3). Lab only; nothing is field-proven (#54).
+ - **v1.3**: no new rows. Pins, the pause, and alert acknowledgements survive a restart and HA takeover with `ha` or sqlite storage (#565) with a lost-state warning (#566), plus first-run setup, router config snippets, the guided inject step, the hold-time review dialog, and the System page probe-source check (#568, #569, #575, #576, #581). The counts below are unchanged. Lab only; nothing is field-proven (#54).
+ - **v1.4**: one new row, an experimental, lab-only path-scoring harness (#584) that scores config variants against recorded history and never changes a default. Also finishing observe setup from the GUI (host policy routing panel, "Setup complete, still observe", #582; the `firstrun-gui` CI job, #587), the `value` report and the `/value.html` page for a manager (#583, #588), a one-command observe-only demo lab (`scripts/demo.sh`, #586) with a five-minute script (`docs/demo.md`, #590), and a chaos soak on the HA lab that checks the safety invariants on the router through a session flap, a probe-source failure, SIGTERM, and SIGKILL (`lab/e2e-chaos.sh`, #585; CI runs the short profile; the weekly 5h run is `.github/workflows/chaos.yml` and the multi-day run is documented in `lab/chaos/README.md`, #589). The counts below include the harness row (131 to 132 done). Lab only; nothing is field-proven (#54).
+@@ -219,7 +219,7 @@ The `maintenance` policy excludes providers during cron-scheduled, one-off, or o
+ | RPKI validity of IX paths: each learned path's origin labeled valid/invalid/notfound/unknown from an opt-in `rpki` block (RTR, RFC 8210), with an optional `avoid_invalid` no-steer policy | done (#158: an ordered `rpki.sources` list of `rtr` plugins labels `/api/decisions` candidates, the prefix card's learned paths, `/api/exchanges` peers, and the System page, and a source is skipped when stale or empty; `avoid_invalid` refuses a new improvement onto an invalid path and retires an active one through the normal path; nothing is announced and the learned RIB is unchanged; shares the source with #200) | v0.8 | rpki (`rtr`) + core (`internal/rpki`, `internal/policy`) | #158 | no |
+ | RPKI validity per provider path from the operator's cache: valid/invalid/notfound/unknown with the answering source and data age, ordered fallback sources, a display-only RIPEstat last resort, per-path history, events, and metrics | done (#200: `rpki.sources` of `rtr` (TCP, TLS, or SSH) and `json` (Routinator `/json`, rpki-client `-j`) answer in order; `/api/decisions` candidates and the prefix card carry `rpki_source` and `rpki_updated`, and leak watch entries carry `rpki_source`; every learned path of a probed prefix is stored per provider and origin AS and shown on the prefix timeline; `rpki.display_fallback: {type: ripestat}` labels only the prefix card, rate-limited, never a decision; `rpki.stale`/`rpki.fresh` events and `packeteer_rpki_*` metrics; a stale or unreachable cache is `unknown` and fails open; tested on RTR answers recorded from Routinator, StayRTR, and FORT and JSON from Routinator and rpki-client, and on a simulated GoBGP edge with a stub RTR server. With `synthesize` on, a sub-range that would be invalid for the origin it is announced with is not announced (#122)) | v0.9 | rpki (`rtr`, `json`, `ripestat`) + core (`internal/rpki`, `internal/history`) + storage (`sqlite`) | #200 | no |
+ | IRR origin check per provider path beside RPKI: registered/not registered/unknown from IRR servers or a local file, ordered sources, cached with a staleness limit, as-set and aut-num lookups, an opt-in prefer-registered rule | done (#214: `irr.sources` of `whois` (IRRd `!s`/`!r`/`!i`/`!m` for IRRd v4 servers and mirrors serving RADB, RIPE, ARIN, APNIC, AFRINIC, LACNIC, NTTCOM, ALTDB, LEVEL3; RIPE-style flags for RIPE, APNIC, AFRINIC servers) and `file` (RPSL dump, bgpq4 JSON); `/api/prefixes` paths and the prefix card show state, source, database, age, registered origins, `irr.as_sets` membership, and as-name; `/api/decisions` candidates carry the state; System rows per source; `irr.prefer_registered` only refuses a new improvement onto a not registered path, `unknown` fails open; tested on fixtures shaped from rr.ntt.net and RIPE database answers, no live IRR in tests; not lab-proven) | v0.9 | irr (`whois`, `file`) + core (`internal/irr`, `internal/policy`) + API + UI | #214 | no |
+-| RPKI-invalid only paths: spot invalid routes that are the only path to a destination, classed likely stale ROA or likely hijack with evidence, and opt-in SLURM (RFC 8416) exceptions an admin approves | partial (#401: `rpki.only_invalid`, off by default; a prefix whose every learned path is invalid and that no valid or not-found learned route covers raises `rpki.only_invalid` with a score from IRR route object and as-set, route age, a same-origin ROA with a short maxLength, provider agreement or a conflicting origin, and `hijack_feed` plugins (`file`); `GET /api/rpki/only-invalid`, a prefix page panel, and a Registry page section; with `slurm`, an operator proposes a `prefixAssertion` (or a `prefixFilter` for AS0 ROAs) inside `slurm.prefixes` for a likely stale ROA, an admin approves the exact entry by digest, and Packeteer writes the file the RTR cache reads; proposal, approval, write, and removal are audit-logged with the evidence; `review_after` reminder (default 720h, `0s` off); never announces; an approved exception changes the validation data the RTR cache serves, not the learned RIB; recorded fixtures and a stub RTR cache, no live lookups in tests; lab-proven against Routinator fed only local SLURM data: detection, no case for an invalid route a valid route covers, and an approved exception that Routinator serves and that clears the case, #627). Missing: RIS and RouteViews origin agreement as a signal | v1.1 | hijack_feed (`file`) + core (`internal/onlyinvalid`) + API + UI ([only-invalid.md](only-invalid.md)) | #401, #627 | no (lab-proven) |
++| RPKI-invalid only paths: spot invalid routes that are the only path to a destination, classed likely stale ROA or likely hijack with evidence, and opt-in SLURM (RFC 8416) exceptions an admin approves | partial (#401: `rpki.only_invalid`, off by default; a prefix whose every learned path is invalid and that no valid or not-found learned route covers raises `rpki.only_invalid` with a score from IRR route object and as-set, route age, a same-origin ROA with a short maxLength, provider agreement or a conflicting origin, `hijack_feed` plugins (`file`), and `origin_collector` plugins (`json`, an `origin_agreement` signal: collectors that list the origin agree, one that lists other origins disagrees, one that is down or saw nothing is no agreement); `GET /api/rpki/only-invalid`, a prefix page panel, and a Registry page section; with `slurm`, an operator proposes a `prefixAssertion` (or a `prefixFilter` for AS0 ROAs) inside `slurm.prefixes` for a likely stale ROA, an admin approves the exact entry by digest, and Packeteer writes the file the RTR cache reads; proposal, approval, write, and removal are audit-logged with the evidence; `review_after` reminder (default 720h, `0s` off); never announces; an approved exception changes the validation data the RTR cache serves, not the learned RIB; recorded fixtures and a stub RTR cache, no live lookups in tests; lab-proven against Routinator fed only local SLURM data: detection, no case for an invalid route a valid route covers, and an approved exception that Routinator serves and that clears the case, #627; origin agreement lab-proven against in-lab RIS and RouteViews stand-ins on an internal network with no route to a live collector: agreement, disagreement, and a down or empty collector that adds nothing, #671). A live RIS or RouteViews client is not provided: the `json` collector reads an endpoint the operator runs or trusts | v1.1 | hijack_feed (`file`) + origin_collector (`json`) + core (`internal/onlyinvalid`) + API + UI ([only-invalid.md](only-invalid.md)) | #401, #627, #671 | no (lab-proven) |
+ | Registry hygiene: scheduled read-only scan for stale or missing IRR route objects, RPKI ROA gaps, as-set drift, and PeeringDB drift, with the exact fix and an admin-confirmed push | partial (#289: `registry` block, off by default; findings for announced prefixes with no route object, route objects for prefixes no longer announced, conflicting or duplicate objects across every `irr.sources` database, ROAs missing or with a short maxLength or wrong origin, customer ASNs seen as transit but missing from the as-set, PeeringDB max-prefix below real counts plus headroom, exchange connections and port speeds that differ from `exchanges[].local_lan_addrs` and `port.capacity_mbps`, missing facilities, and missing or old contacts; the Registry page and `GET /api/registry` show severity and the RPSL or field diff, a delete diff being the object the IRR source stores; a push is `POST /api/registry/push`, off by default (`registry.push_enabled`), admin only, needs the digest of the diff shown, is audit-logged, and works for RIPE route objects (`ripe` source) and PeeringDB `info_prefixes4`/`info_prefixes6`/port speed (`peeringdb` source); credentials only from the environment; ROAs are suggest-only; tested on fixtures and in-process servers with documentation prefixes, no live registry in tests; lab-proven against in-lab stand-ins only: a whois IRR, a VRP JSON document, PeeringDB, and the RIPE REST API on an internal network with no route to a live registry, where the scan reports a missing route object, a stale route object, a ROA maxLength gap, and PeeringDB max-prefix and port-speed drift, a wrong digest is refused, and confirmed pushes change the stand-in only and are audit-logged, #657; the delete push is lab-proven too: the lab scans every 3m (allowed with `irr.source: TEST` only), the stale object's delete is offered after the second scan, a wrong digest is refused and the object stays, the shown digest deletes it on the stand-in only, and it is audit-logged, #673). Missing: a one-click push to RADB or ARIN, whose findings carry the RPSL to submit by hand | v0.9 | registry (`peeringdb`, `ripe`) + core (`internal/registry`) + API + UI ([registry.md](registry.md)) | #289, #657, #673 | no (lab-proven) |
+ | Fabric probes from IX vantages: loss, RTT, and jitter for each member LAN address, honoring Can Ping and the busy-host tolerance | done (#162: `ixp.vantages` and `ixp.fabric` type `icmp`, `GET /api/ixp/probes`, aggregate metrics; observe-only, not an input to Decide, nothing announced) | v0.8 | `ixp_fabric` (`icmp`) | #162 | no |
+ | Route-server observability via Birdseye: per member session state, received, accepted, and filtered counts, filtered-by-reason counts (`rs-asn:1101:x`), and accepted against `max_prefix`, kept as history, with alerts on changes | done (#164: `ixp.routeservers` type `birdseye`, `GET /api/ixp/routeservers` and `/history`, `ixp.rs_*` events, aggregate metrics; GET only, history is in memory, not the RIB, not an input to Decide, nothing announced) | v0.8 | `ixp_routeserver` (`birdseye`) + notifier events | #164 | no |
+diff --git a/docs/PLUGINS.md b/docs/PLUGINS.md
+index 0ce3b039..76f73740 100644
+--- a/docs/PLUGINS.md
++++ b/docs/PLUGINS.md
+@@ -79,6 +79,7 @@ Each entry has `type` (required), an optional `name` (defaults to the type and m
+ | `rpki` | `Validate(netip.Prefix, uint32) RPKIValidity`, `Status() RPKIStatus`. Origin validation for learned paths (#158); list under `rpki.sources:`, tried in order. Read-only: it never announces and never changes the learned RIB | `rtr` (RFC 8210 RPKI-to-Router client, TCP, TLS, or SSH), `json` (VRP JSON over HTTP, #200), `ripestat` (display only, `rpki.display_fallback`, #200) | **never** |
+ | `irr` | `Routes(ctx, netip.Prefix) ([]IRRRoute, time.Time, error)`, `ASSetMembers(ctx, string)`, `ASName(ctx, uint32)`, `OriginPrefixes(ctx, uint32)` and `RouteObjects(ctx, netip.Prefix)` (registry hygiene, #289: the stored RPSL text of each object; `file` does not serve it), each with its data time; `ErrIRRUnsupported` for a lookup the data cannot answer. IRR origin check for learned paths (#214); list under `irr.sources:`, asked in order through a cache. Read-only: it never announces and never changes the learned RIB | `whois` (IRRd or RIPE-style whois on TCP 43), `file` (RPSL dump or bgpq4 JSON) | **never** |
+ | `hijack_feed` | `Incidents(ctx, netip.Prefix) ([]HijackIncident, error)`: the incidents whose prefix overlaps the one asked; an error is no evidence. Evidence for RPKI-invalid only paths (#401); list under `rpki.only_invalid.hijack_feeds:`. Read-only: it never announces and never changes a decision | `file` (a mounted JSON file of incidents) | **never** |
++| `origin_collector` | `Origins(ctx, netip.Prefix) ([]uint32, error)`: the origin ASes a public collector set (RIS, RouteViews) sees for exactly the prefix; empty is "saw nothing", an error is "could not answer", and neither counts as agreement. Evidence for RPKI-invalid only paths (#671); list under `rpki.only_invalid.origin_collectors:`. Read-only: it never announces and never changes a decision | `json` (an HTTP JSON endpoint) | **never** |
+ | `registry` | `Check(ctx, RegistryFacts) ([]RegistryFinding, error)`, `Push(ctx, RegistryChange) error`. Registry hygiene (#289); list under `registry.sources:`. `Check` only reads; `Push` runs only after an admin confirmed the diff and `registry.push_enabled` is on, and returns `ErrRegistryNoPush` for a change it does not apply. Credentials come from the environment. Never announces and never changes the learned RIB | `peeringdb` (reads, PUT of max-prefix and port speed), `ripe` (RIPE database route and route6 objects) | **never** |
+ 
+ An elector never announces and never picks routes. It only answers whether this instance may announce now. `Active` must turn false before any other instance can turn true, even when the plugin's own goroutine is stuck, because the outbound, inbound, and mitigation controllers check it under their locks before every sync. The core reports candidacy on each renewal (`Eligible`: the RIB view is ready; `RouteHold`: the longest negotiated BGP hold time, so a standby can wait until a crashed instance's routes are gone) and calls `Resign` only after it withdrew. It is in-process only. Built-in `lease`: see [CONFIG.md](CONFIG.md#elector-lease) and [ha.md](ha.md).
+@@ -166,6 +167,7 @@ Embed `plugin.Base` for no-op `Start`/`Stop`.
+ - `whois` (irr, #214): one whois connection per lookup, `dialect` `irrd` (`!s`, `!r`, `!i`, `!m`) or `ripe` (`-s -x -T`), `address` (required), `databases` (ordered), `timeout` (default `10s`), `rate_per_minute` (default `60`). See [CONFIG.md](CONFIG.md#irr-source-whois).
+ - `file` (irr, #214): a mounted RPSL dump or bgpq4 JSON (`path`, `format`), read again when it changes. See [CONFIG.md](CONFIG.md#irr-source-file).
+ - `file` (hijack_feed, #401): a mounted JSON file of incidents (`path`), read again when it changes. See [CONFIG.md](CONFIG.md#hijack-feed-file).
++- `json` (origin_collector, #671): one HTTP GET per lookup of the origins a collector set sees for a prefix. See [CONFIG.md](CONFIG.md#origin-collector-json).
+ - `peeringdb` (registry, #289): `base_url`, `timeout`. See [CONFIG.md](CONFIG.md#registry-source-peeringdb).
+ - `ripe` (registry, #289): `base_url`, `source` (`RIPE` or `TEST`), `timeout`. See [CONFIG.md](CONFIG.md#registry-source-ripe).
+ - `ripestat` (rpki, #200): display-only RIPEstat lookup, rate-limited and cached; only as `rpki.display_fallback`. `rate_per_minute` (default `10`), `ttl` (default `1h`). See [CONFIG.md](CONFIG.md#rpki-display-fallback-ripestat).
+diff --git a/docs/only-invalid.md b/docs/only-invalid.md
+index 66e5739c..5ae33ce5 100644
+--- a/docs/only-invalid.md
++++ b/docs/only-invalid.md
+@@ -25,10 +25,15 @@ Each case lists its paths (provider, AS path, learn time), the ROAs covering it,
+ | `roa_same_origin` | +1 / 0 | A ROA authorizes the same origin for a covering prefix with a maxLength shorter than the route, so the covering prefix is valid for that origin / no ROA names the origin. Weak alone: a forged-origin sub-prefix hijack (RFC 9319) looks the same. |
+ | `providers` | +1 / -2 / 0 | Two or more providers carry the same origin / another learned path ends in a different origin (conflicting origin) / one provider. |
+ | `hijack_feeds` | -4 / +1 / 0 | A feed reports an incident for the prefix with this origin or no origin / every feed that answered reports none / no feed configured or none answered. |
++| `origin_agreement` | +1 / +2 / -2 / 0 | One collector / two or more collectors list the origin / a collector lists origins that do not include it / no collector configured, none saw the prefix, or none answered. |
+ 
+ A score of 3 or more is `stale_roa` when `irr_route` or `origin_stable` is positive, and `unclear` without that support. -2 or less is `hijack`; anything between is `unclear`. Each case has a suggested action: contact the prefix holder, or keep dropping and report it.
+ 
+-Public collector agreement (RIS, RouteViews) is not a signal yet.
++Agreement raises the score but never makes a stale ROA alone, and silence is never agreement: a collector that is down, or sees nothing, scores 0, the same as no collector.
++
++## Origin agreement
++
++`origin_collectors` are `origin_collector` plugins ([PLUGINS.md](PLUGINS.md)) asked, for each case, which origins a public collector set sees for exactly that prefix. The case lists the answer in the `origin_agreement` signal: which collectors see the local origin, or, when one lists other origins, those that disagree, and which saw nothing or did not answer. The built-in `json` type reads an HTTP JSON endpoint ([CONFIG.md](CONFIG.md#origin-collector-json)). Packeteer has no client for RIS or RouteViews: the endpoint is one the operator runs or trusts, and no request goes to a public collector unless the operator points `url` at one. The signal only reports. It does not change the learned RIB, announce, or propose an exception.
+ 
+ ## Hijack feeds
+ 
+@@ -83,6 +88,10 @@ rpki:
+       - type: file
+         name: radar-export
+         config: {path: /etc/packeteer/hijacks.json}
++    origin_collectors:
++      - type: json
++        name: ris
++        config: {url: "http://192.0.2.50:8080/ris"}
+     slurm:
+       path: /var/lib/packeteer/slurm/slurm.json
+       prefixes: [198.51.100.0/24]
+@@ -100,3 +109,5 @@ Remove `rpki.only_invalid` and restart. The exceptions stay in the SLURM file, a
+ Unit tests use recorded fixtures with documentation prefixes and ASNs, never live IRR, RPKI, or feed lookups: a stale ROA with IRR and history in agreement, the same prefix from a conflicting origin with a hijack feed hit, a valid alternative path, a valid covering route, the SLURM rules, propose and approve with the audit records, the AS0 filter, the reminder, and a stub RTR cache that serves its ROAs with the approved file applied to the `rtr` plugin, which turns the fixture route from invalid to valid.
+ 
+ The `only-invalid` CI job (`lab/e2e-only-invalid.sh`, #627) runs it against Routinator 0.16.1 with no trust anchor and no repository fetch: Routinator's only data are the lab ROAs as SLURM assertions (`lab/only-invalid/roas.json`) and the file Packeteer writes. An FRR transit sends the edge 198.51.100.0/25 from AS64500 (longer than the ROA's maxLength 24) and an invalid 203.0.113.128/25 under a valid 203.0.113.0/24; the `irr` `file` source has a route object for 198.51.100.0/25. With Packeteer in observe, the job checks that 198.51.100.0/25 raises `rpki.only_invalid` classed `stale_roa` with the evidence and 203.0.113.128/25 raises nothing, that a proposal writes nothing, that after approval the file holds the entry, Routinator serves the route as valid, and the case clears with `rpki.only_invalid_cleared`, that the audit log has the proposal, approval, and write, and that the edge receives no route from Packeteer. Hijack feeds, the AS0 filter, removal, and the review reminder are not in the lab.
++
++The `origin-agreement` CI job (`lab/e2e-origin-agreement.sh`, #671) runs the signal against `lab/collectorstub`, which stands in for RIS and RouteViews as two endpoints (and serves the lab ROAs) on a Docker network marked `internal`, so no live collector is reachable (the script checks that). The edge (`lab/frr-oi-edge`) is the same as in the registry lab and Packeteer runs in observe with only `rpki` and `rpki.only_invalid` (`lab/packeteer-origin-agreement.yaml`); transit-a (`lab/frr-oc-transit-a`) sends three /25s that are longer than the lab ROAs' maxLength, so each is invalid with nothing covering it. With both collectors up: 198.51.100.0/25 (both list AS64500: agreement, +2), 203.0.113.0/25 (RIS lists AS64501, RouteViews lists only AS64511: disagreement, -2), and 203.0.113.128/25 (neither has it: 0). With both stopped, every case is at 0 ("no answer from ris, routeviews") and has the score of a case with no collector. The job also checks that no case is classed `stale_roa` on agreement alone, that the stand-ins got only GET lookups for those three prefixes, that the edge receives no route from Packeteer, and that SIGTERM stops it cleanly.
+diff --git a/internal/config/irr.go b/internal/config/irr.go
+index 6c12a0f1..2d0fee47 100644
+--- a/internal/config/irr.go
++++ b/internal/config/irr.go
+@@ -68,18 +68,7 @@ func (c *Config) validateIRR(add func(string, ...any)) {
+ 	if len(r.Sources) == 0 {
+ 		add("irr.sources: at least one source is required when irr.enabled")
+ 	}
+-	names := map[string]bool{}
+-	for i, s := range r.Sources {
+-		if s.Type == "" {
+-			add("irr.sources[%d]: type is required", i)
+-			continue
+-		}
+-		if n := s.InstanceName(); names[n] {
+-			add("irr.sources[%d]: name %q is used twice; set name", i, n)
+-		} else {
+-			names[n] = true
+-		}
+-	}
++	validateSpecList(add, "irr.sources", r.Sources)
+ 	if r.Refresh < irr.MinRefresh || r.Refresh > irr.MaxStaleness {
+ 		add("irr.refresh %s must be between %s and %s", r.Refresh, irr.MinRefresh, irr.MaxStaleness)
+ 	}
+diff --git a/internal/config/registry.go b/internal/config/registry.go
+index 77281cc5..582fbcae 100644
+--- a/internal/config/registry.go
++++ b/internal/config/registry.go
+@@ -115,24 +115,15 @@ func (c *Config) validateRegistry(add func(string, ...any)) {
+ 	if r.IRR.MntBy != "" && !rpslMntner.MatchString(r.IRR.MntBy) {
+ 		add("registry.irr.mnt_by %q is not a maintainer name", r.IRR.MntBy)
+ 	}
+-	names := map[string]bool{}
++	validateSpecList(add, "registry.sources", r.Sources)
+ 	hasRIPE := false
+ 	for i, s := range r.Sources {
+-		if s.Type == "" {
+-			add("registry.sources[%d]: type is required", i)
+-			continue
+-		}
+ 		if s.Type == "ripe" {
+ 			hasRIPE = true
+ 			if got := ripeDatabase(s); got != "" && r.PushEnabled && (r.IRR.Source == "RIPE" || r.IRR.Source == "TEST") && got != r.IRR.Source {
+ 				add("registry.sources[%d]: the ripe source writes to %s and registry.irr.source is %s; set both to the same database", i, got, r.IRR.Source)
+ 			}
+ 		}
+-		if n := s.InstanceName(); names[n] {
+-			add("registry.sources[%d]: name %q is used twice; set name", i, n)
+-		} else {
+-			names[n] = true
+-		}
+ 	}
+ 	if r.PushEnabled && len(r.Sources) == 0 {
+ 		add("registry.push_enabled needs at least one registry.sources entry to push to")
+diff --git a/internal/config/rpki.go b/internal/config/rpki.go
+index 7ee2733e..bfbf394c 100644
+--- a/internal/config/rpki.go
++++ b/internal/config/rpki.go
+@@ -43,6 +43,9 @@ type OnlyInvalid struct {
+ 	StableAfter time.Duration `yaml:"stable_after"`
+ 	// HijackFeeds are hijack_feed plugins asked for incidents.
+ 	HijackFeeds []PluginSpec `yaml:"hijack_feeds"`
++	// OriginCollectors are origin_collector plugins that report which
++	// origins a public collector set sees for the prefix (#671).
++	OriginCollectors []PluginSpec `yaml:"origin_collectors"`
+ 	// SLURM allows proposing accept-invalid exceptions. Nil proposes
+ 	// none.
+ 	SLURM *OnlyInvalidSLURM `yaml:"slurm"`
+@@ -104,6 +107,9 @@ func (c *Config) normalizeRPKI() {
+ 		for i := range o.HijackFeeds {
+ 			o.HijackFeeds[i].Type = strings.TrimSpace(o.HijackFeeds[i].Type)
+ 		}
++		for i := range o.OriginCollectors {
++			o.OriginCollectors[i].Type = strings.TrimSpace(o.OriginCollectors[i].Type)
++		}
+ 	}
+ }
+ 
+@@ -141,26 +147,16 @@ func (c *Config) validateOnlyInvalid(add func(string, ...any)) {
+ 		return
+ 	}
+ 	if !o.Enabled {
+-		if len(o.HijackFeeds) > 0 || o.SLURM != nil {
+-			add("rpki.only_invalid.enabled is false but hijack_feeds or slurm is set")
++		if len(o.HijackFeeds) > 0 || len(o.OriginCollectors) > 0 || o.SLURM != nil {
++			add("rpki.only_invalid.enabled is false but hijack_feeds, origin_collectors, or slurm is set")
+ 		}
+ 		return
+ 	}
+ 	if o.StableAfter < onlyinvalid.MinStableAfter || o.StableAfter > onlyinvalid.MaxStableAfter {
+ 		add("rpki.only_invalid.stable_after %s must be between %s and %s", o.StableAfter, onlyinvalid.MinStableAfter, onlyinvalid.MaxStableAfter)
+ 	}
+-	names := map[string]bool{}
+-	for i, f := range o.HijackFeeds {
+-		if f.Type == "" {
+-			add("rpki.only_invalid.hijack_feeds[%d]: type is required", i)
+-			continue
+-		}
+-		if n := f.InstanceName(); names[n] {
+-			add("rpki.only_invalid.hijack_feeds[%d]: name %q is used twice; set name", i, n)
+-		} else {
+-			names[n] = true
+-		}
+-	}
++	validateSpecList(add, "rpki.only_invalid.hijack_feeds", o.HijackFeeds)
++	validateSpecList(add, "rpki.only_invalid.origin_collectors", o.OriginCollectors)
+ 	s := o.SLURM
+ 	if s == nil {
+ 		return
+@@ -189,3 +185,20 @@ func (c *Config) validateOnlyInvalid(add func(string, ...any)) {
+ 		add("rpki.only_invalid.slurm.review_after %s must be 0s (no reminder) or between %s and %s", *r, onlyinvalid.MinReviewAfter, onlyinvalid.MaxReviewAfter)
+ 	}
+ }
++
++// validateSpecList checks a list of plugin entries: each has a type and the
++// instance names differ.
++func validateSpecList(add func(string, ...any), key string, specs []PluginSpec) {
++	names := map[string]bool{}
++	for i, f := range specs {
++		if f.Type == "" {
++			add("%s[%d]: type is required", key, i)
++			continue
++		}
++		if n := f.InstanceName(); names[n] {
++			add("%s[%d]: name %q is used twice; set name", key, i, n)
++		} else {
++			names[n] = true
++		}
++	}
++}
+diff --git a/internal/config/rpki_test.go b/internal/config/rpki_test.go
+index 11d4c65b..d7e51ed5 100644
+--- a/internal/config/rpki_test.go
++++ b/internal/config/rpki_test.go
+@@ -84,13 +84,14 @@ func TestOnlyInvalidParses(t *testing.T) {
+ 		t.Fatal("only_invalid on without the block")
+ 	}
+ 	y := minimalYAML + rpkiOn + "  only_invalid:\n    enabled: true\n    hijack_feeds: [{type: \" file \", config: {path: /etc/packeteer/hijacks.json}}]\n" +
++		"    origin_collectors: [{type: \" json \", name: ris, config: {url: \"http://192.0.2.50:8080/ris\"}}]\n" +
+ 		"    slurm:\n      path: /var/lib/packeteer/slurm.json\n      prefixes: [198.51.100.0/24, \"2001:db8::/32\"]\n      review_after: 720h\n"
+ 	cfg, err = Parse([]byte(y))
+ 	if err != nil {
+ 		t.Fatal(err)
+ 	}
+ 	o := cfg.RPKI.OnlyInvalid
+-	if !cfg.OnlyInvalidOn() || o.StableAfter != 720*time.Hour || o.HijackFeeds[0].Type != "file" || *o.SLURM.ReviewAfter != 720*time.Hour {
++	if !cfg.OnlyInvalidOn() || o.StableAfter != 720*time.Hour || o.HijackFeeds[0].Type != "file" || o.OriginCollectors[0].Type != "json" || *o.SLURM.ReviewAfter != 720*time.Hour {
+ 		t.Fatalf("only_invalid = %+v", o)
+ 	}
+ 	if got := o.SLURM.SLURMPrefixes(); len(got) != 2 || got[0] != netip.MustParsePrefix("198.51.100.0/24") || got[1] != netip.MustParsePrefix("2001:db8::/32") {
+@@ -117,10 +118,12 @@ func TestOnlyInvalidValidation(t *testing.T) {
+ 	slurm := on + "    slurm:\n      path: /var/lib/packeteer/slurm.json\n"
+ 	tests := []struct{ name, yaml, want string }{
+ 		{"without rpki", minimalYAML + "rpki:\n  only_invalid: {enabled: true}\n", "rpki.enabled is false but"},
+-		{"disabled with slurm", minimalYAML + rpkiOn + "  only_invalid:\n    slurm: {path: /x}\n", "rpki.only_invalid.enabled is false but hijack_feeds or slurm is set"},
++		{"disabled with slurm", minimalYAML + rpkiOn + "  only_invalid:\n    slurm: {path: /x}\n", "rpki.only_invalid.enabled is false but hijack_feeds, origin_collectors, or slurm is set"},
+ 		{"short stable_after", on + "    stable_after: 1m\n", "rpki.only_invalid.stable_after 1m0s must be between 1h0m0s and 8760h0m0s"},
+ 		{"feed without type", on + "    hijack_feeds: [{}]\n", "rpki.only_invalid.hijack_feeds[0]: type is required"},
+ 		{"feed name twice", on + "    hijack_feeds: [{type: file}, {type: file}]\n", "rpki.only_invalid.hijack_feeds[1]: name \"file\" is used twice"},
++		{"collector without type", on + "    origin_collectors: [{}]\n", "rpki.only_invalid.origin_collectors[0]: type is required"},
++		{"collector name twice", on + "    origin_collectors: [{type: json}, {type: json}]\n", "rpki.only_invalid.origin_collectors[1]: name \"json\" is used twice"},
+ 		{"with ixp", slurm + "      prefixes: [198.51.100.0/24]\nixp: {}\n", "rpki.only_invalid.slurm cannot be combined with ixp"},
+ 		{"relative path", on + "    slurm: {path: slurm.json, prefixes: [198.51.100.0/24]}\n", "rpki.only_invalid.slurm.path \"slurm.json\" must be an absolute path"},
+ 		{"no prefixes", slurm, "rpki.only_invalid.slurm.prefixes: at least one prefix is required"},
+diff --git a/internal/onlyinvalid/detect.go b/internal/onlyinvalid/detect.go
+index 93520301..7b3ae8c8 100644
+--- a/internal/onlyinvalid/detect.go
++++ b/internal/onlyinvalid/detect.go
+@@ -34,7 +34,7 @@ const (
+ 	firstScanDelay = time.Minute
+ 	// maxCases bounds the invalid selected routes one scan inspects.
+ 	maxCases = 1000
+-	// feedTimeout bounds one hijack feed lookup.
++	// feedTimeout bounds one hijack feed or origin collector lookup.
+ 	feedTimeout = 10 * time.Second
+ )
+ 
+@@ -128,6 +128,12 @@ type Feed struct {
+ 	Plugin plugin.HijackFeed
+ }
+ 
++// Collector is one origin_collectors entry.
++type Collector struct {
++	Name   string
++	Plugin plugin.OriginCollector
++}
++
+ // Deps are what the detector reads.
+ type Deps struct {
+ 	RIB  RIB
+@@ -135,9 +141,12 @@ type Deps struct {
+ 	// IRR is irr.Checker.Lookup, nil when irr is off.
+ 	IRR   func(prefix netip.Prefix, origin uint32, provider string) plugin.IRRAnswer
+ 	Feeds []Feed
+-	Emit  func(plugin.Event)
+-	Log   *slog.Logger
+-	Now   func() time.Time
++	// Collectors are the public collector stand-ins or endpoints asked for
++	// the origins they see.
++	Collectors []Collector
++	Emit       func(plugin.Event)
++	Log        *slog.Logger
++	Now        func() time.Time
+ }
+ 
+ // Status is the last scan.
+@@ -309,7 +318,7 @@ func (d *Detector) inspect(ctx context.Context, sel rib.Route, now time.Time) (C
+ 	}
+ 	c.Signals = append(c.Signals, d.irrSignals(prefix, origin, sel.Provider)...)
+ 	c.Signals = append(c.Signals, d.ageSignal(c, now), roaSignal(c), providerSignal(c))
+-	c.Signals = append(c.Signals, d.feedSignal(ctx, prefix, origin))
++	c.Signals = append(c.Signals, d.feedSignal(ctx, prefix, origin), d.collectorSignal(ctx, prefix, origin))
+ 	corroborated := false
+ 	for _, s := range c.Signals {
+ 		c.Score += s.Points
+@@ -502,6 +511,56 @@ func (d *Detector) feedSignal(ctx context.Context, prefix netip.Prefix, origin u
+ 	return Signal{Name: "hijack_feeds", Points: 1, Detail: fmt.Sprintf("%d of %d feeds report no incident for AS%d", answered, len(d.deps.Feeds), origin)}
+ }
+ 
++// collectorSignal: the origins public collectors see for exactly the
++// prefix. A collector that lists the local origin agrees (one is +1, two
++// or more +2); one that lists origins but not the local one disagrees
++// (-2, whatever the others say). A collector that saw nothing or could not
++// answer is no evidence: silence is never agreement.
++func (d *Detector) collectorSignal(ctx context.Context, prefix netip.Prefix, origin uint32) Signal {
++	if len(d.deps.Collectors) == 0 {
++		return Signal{Name: "origin_agreement", Detail: "no origin_collectors configured"}
++	}
++	var agree, silent, failed, disagree []string
++	for _, c := range d.deps.Collectors {
++		cctx, cancel := context.WithTimeout(ctx, feedTimeout)
++		origins, err := c.Plugin.Origins(cctx, prefix)
++		cancel()
++		switch {
++		case err != nil:
++			d.deps.Log.Warn("origin collector lookup failed", "collector", c.Name, "prefix", prefix, "err", err)
++			failed = append(failed, c.Name)
++		case len(origins) == 0:
++			silent = append(silent, c.Name)
++		case slices.Contains(origins, origin):
++			agree = append(agree, c.Name)
++		default:
++			seen := slices.Clone(origins)
++			slices.Sort(seen)
++			disagree = append(disagree, fmt.Sprintf("%s sees %s", c.Name, asList(slices.Compact(seen))))
++		}
++	}
++	var rest []string
++	if len(silent) > 0 {
++		rest = append(rest, "no origin seen by "+strings.Join(silent, ", "))
++	}
++	if len(failed) > 0 {
++		rest = append(rest, "no answer from "+strings.Join(failed, ", "))
++	}
++	tail := ""
++	if len(rest) > 0 {
++		tail = "; " + strings.Join(rest, "; ")
++	}
++	switch {
++	case len(disagree) > 0:
++		return Signal{Name: "origin_agreement", Points: -2, Detail: fmt.Sprintf("not AS%d: %s%s", origin, strings.Join(disagree, ", "), tail)}
++	case len(agree) >= 2:
++		return Signal{Name: "origin_agreement", Points: 2, Detail: fmt.Sprintf("%s see AS%d as an origin%s", strings.Join(agree, ", "), origin, tail)}
++	case len(agree) == 1:
++		return Signal{Name: "origin_agreement", Points: 1, Detail: fmt.Sprintf("%s sees AS%d as an origin%s", agree[0], origin, tail)}
++	}
++	return Signal{Name: "origin_agreement", Detail: "no collector reports an origin" + tail}
++}
++
+ func asList(asns []uint32) string {
+ 	if len(asns) == 0 {
+ 		return "none"
+diff --git a/internal/onlyinvalid/detect_test.go b/internal/onlyinvalid/detect_test.go
+index 0c9921ba..c7887662 100644
+--- a/internal/onlyinvalid/detect_test.go
++++ b/internal/onlyinvalid/detect_test.go
+@@ -385,3 +385,124 @@ func TestStaleNeedsIRROrHistory(t *testing.T) {
+ 		t.Fatalf("with history: %+v", c)
+ 	}
+ }
++
++type fakeCollector struct {
++	plugin.Base
++	origins map[netip.Prefix][]uint32
++	err     error
++	asked   []netip.Prefix
++}
++
++func (f *fakeCollector) Origins(_ context.Context, p netip.Prefix) ([]uint32, error) {
++	f.asked = append(f.asked, p)
++	return f.origins[p], f.err
++}
++
++// weakFixture has only the weak signals (same-origin ROA, two providers),
++// a score of 2 that is never a stale ROA without the IRR or the route age.
++func weakFixture() (*fakeRIB, *fakeRPKI) {
++	r, v, _ := staleFixture()
++	for i := range r.paths[fixture] {
++		r.paths[fixture][i].Age = t0.Add(-time.Hour)
++	}
++	return r, v
++}
++
++// scanWith scans once with the collectors set.
++func scanWith(r RIB, v RPKI, irr func(netip.Prefix, uint32, string) plugin.IRRAnswer, cs ...Collector) *Detector {
++	d := newDetector(r, v, irr, &events{})
++	d.deps.Collectors = cs
++	d.Scan(context.Background())
++	return d
++}
++
++// #671: collectors that list the local origin agree, and the signal says
++// which. Agreement raises the score but never makes a stale ROA alone.
++func TestCollectorAgreement(t *testing.T) {
++	r, v := weakFixture()
++	ris := &fakeCollector{origins: map[netip.Prefix][]uint32{fixture: {64500}}}
++	rv := &fakeCollector{origins: map[netip.Prefix][]uint32{fixture: {64500, 64510}}}
++	d := scanWith(r, v, nil, Collector{"ris", ris}, Collector{"routeviews", rv})
++	c, _ := d.Case(fixture)
++	s := signal(c, "origin_agreement")
++	if s.Points != 2 || s.Detail != "ris, routeviews see AS64500 as an origin" {
++		t.Fatalf("signal = %+v", s)
++	}
++	if c.Score != 4 || c.Class != ClassUnclear {
++		t.Fatalf("agreement alone must not class stale_roa: score %d class %s", c.Score, c.Class)
++	}
++	if len(ris.asked) != 1 || ris.asked[0] != fixture {
++		t.Fatalf("ris asked %v", ris.asked)
++	}
++
++	d = scanWith(r, v, nil, Collector{"ris", ris}, Collector{"routeviews", &fakeCollector{}})
++	c, _ = d.Case(fixture)
++	if s = signal(c, "origin_agreement"); s.Points != 1 || s.Detail != "ris sees AS64500 as an origin; no origin seen by routeviews" {
++		t.Fatalf("one of two: %+v", s)
++	}
++
++	// With the IRR route object the agreement reaches the class.
++	r, v, irr := staleFixture()
++	d = scanWith(r, v, irr, Collector{"ris", ris})
++	if c, _ = d.Case(fixture); c.Class != ClassStaleROA || c.Score != 8 {
++		t.Fatalf("with IRR: %+v", c)
++	}
++}
++
++// #671: a collector that lists other origins disagrees, whatever the
++// other collector says, and the score drops.
++func TestCollectorDisagreement(t *testing.T) {
++	r, v := weakFixture()
++	ris := &fakeCollector{origins: map[netip.Prefix][]uint32{fixture: {64500}}}
++	rv := &fakeCollector{origins: map[netip.Prefix][]uint32{fixture: {64511, 64511, 64510}}}
++	d := scanWith(r, v, nil, Collector{"ris", ris}, Collector{"routeviews", rv})
++	c, _ := d.Case(fixture)
++	s := signal(c, "origin_agreement")
++	if s.Points != -2 || s.Detail != "not AS64500: routeviews sees AS64510, AS64511" {
++		t.Fatalf("signal = %+v", s)
++	}
++	if c.Score != 0 || c.Class != ClassUnclear {
++		t.Fatalf("score %d class %s", c.Score, c.Class)
++	}
++	// With a conflicting origin on the learned paths too, it is a hijack.
++	r, v, irr := staleFixture()
++	r.paths[fixture] = nil
++	r.add("198.51.100.0/24", "transit-a", t0.Add(-2*time.Hour), 64496, 64511)
++	r.add("198.51.100.0/24", "transit-b", t0.Add(-90*24*time.Hour), 64497, 64500)
++	ris = &fakeCollector{origins: map[netip.Prefix][]uint32{fixture: {64500}}}
++	d = scanWith(r, v, irr, Collector{"ris", ris})
++	if c, _ = d.Case(fixture); c.Origin != 64511 || c.Class != ClassHijack || signal(c, "origin_agreement").Points != -2 {
++		t.Fatalf("case = %+v", c)
++	}
++}
++
++// #671: a collector that is down, or sees nothing, never invents
++// agreement: the signal is neutral and the score and class are what they
++// are with no collector configured.
++func TestCollectorDownOrEmptyIsNotAgreement(t *testing.T) {
++	r, v := weakFixture()
++	base, _ := scanWith(r, v, nil).Case(fixture)
++	if s := signal(base, "origin_agreement"); s.Points != 0 || s.Detail != "no origin_collectors configured" {
++		t.Fatalf("none configured: %+v", s)
++	}
++	down := &fakeCollector{err: errors.New("connection refused")}
++	empty := &fakeCollector{}
++	for name, cs := range map[string][]Collector{
++		"down":  {{"ris", down}, {"routeviews", down}},
++		"empty": {{"ris", empty}, {"routeviews", empty}},
++		"mixed": {{"ris", down}, {"routeviews", empty}},
++	} {
++		c, _ := scanWith(r, v, nil, cs...).Case(fixture)
++		s := signal(c, "origin_agreement")
++		if s.Points != 0 || !strings.HasPrefix(s.Detail, "no collector reports an origin") {
++			t.Errorf("%s: signal = %+v", name, s)
++		}
++		if c.Score != base.Score || c.Class != base.Class {
++			t.Errorf("%s: score %d class %s, want %d %s", name, c.Score, c.Class, base.Score, base.Class)
++		}
++	}
++	c, _ := scanWith(r, v, nil, Collector{"ris", down}, Collector{"routeviews", empty}).Case(fixture)
++	if d := signal(c, "origin_agreement").Detail; d != "no collector reports an origin; no origin seen by routeviews; no answer from ris" {
++		t.Fatalf("detail = %q", d)
++	}
++}
+diff --git a/internal/pluginhost/host.go b/internal/pluginhost/host.go
+index 19d1e0bd..9b4b34fd 100644
+--- a/internal/pluginhost/host.go
++++ b/internal/pluginhost/host.go
+@@ -102,6 +102,9 @@ type Set struct {
+ 	// HijackFeeds report hijack incidents (rpki.only_invalid.hijack_feeds,
+ 	// #401). Evidence only: they never announce or change a decision.
+ 	HijackFeeds []Instance[plugin.HijackFeed]
++	// OriginCollectors report the origins a public collector set sees
++	// (rpki.only_invalid.origin_collectors, #671). Evidence only.
++	OriginCollectors []Instance[plugin.OriginCollector]
+ 	// RegistryCheckers are the registry.sources (#289): they read PeeringDB
+ 	// and apply a change a person confirmed. None announces.
+ 	RegistryCheckers []Instance[plugin.RegistryChecker]
+@@ -244,6 +247,7 @@ func Build(cfg *config.Config, opts Options) (*Set, error) {
+ 	}
+ 	if cfg.OnlyInvalidOn() {
+ 		s.HijackFeeds = build(plugin.HijackFeeds, "rpki.only_invalid.hijack_feeds", cfg.RPKI.OnlyInvalid.HijackFeeds, base, &errs)
++		s.OriginCollectors = build(plugin.OriginCollectors, "rpki.only_invalid.origin_collectors", cfg.RPKI.OnlyInvalid.OriginCollectors, base, &errs)
+ 	}
+ 	if cfg.RegistryOn() {
+ 		s.RegistryCheckers = build(plugin.RegistryCheckers, "registry.sources", cfg.Registry.Sources, base, &errs)
+@@ -357,6 +361,9 @@ func (s *Set) all() []namedLifecycle {
+ 	for _, p := range s.HijackFeeds {
+ 		add(plugin.KindHijackFeed, p.Name, p.Plugin)
+ 	}
++	for _, p := range s.OriginCollectors {
++		add(plugin.KindOriginCollector, p.Name, p.Plugin)
++	}
+ 	for _, p := range s.IRRSources {
+ 		add(plugin.KindIRR, p.Name, p.Plugin)
+ 	}
+diff --git a/internal/plugins/all/all.go b/internal/plugins/all/all.go
+index 160b76ef..c94bc1a9 100644
+--- a/internal/plugins/all/all.go
++++ b/internal/plugins/all/all.go
+@@ -4,6 +4,7 @@ package all
+ 
+ import (
+ 	_ "github.com/GrandArcher/Packeteer/internal/plugins/announcer/gobgp"          // gobgp announcer
++	_ "github.com/GrandArcher/Packeteer/internal/plugins/collector/httpjson"       // public collector origin lookup over HTTP JSON (evidence only)
+ 	_ "github.com/GrandArcher/Packeteer/internal/plugins/covering/ripestat"        // RIPEstat announced-prefix lookup (non-BGP mode)
+ 	_ "github.com/GrandArcher/Packeteer/internal/plugins/detector/baseline"        // baseline anomaly detector
+ 	_ "github.com/GrandArcher/Packeteer/internal/plugins/elector/lease"            // lease-file HA elector
+diff --git a/internal/plugins/collector/httpjson/httpjson.go b/internal/plugins/collector/httpjson/httpjson.go
+new file mode 100644
+index 00000000..b3bf2f28
+--- /dev/null
++++ b/internal/plugins/collector/httpjson/httpjson.go
+@@ -0,0 +1,129 @@
++// Package httpjson is the origin collector that reads one HTTP JSON endpoint
++// (#671): the origin ASes a public collector set, such as RIPE RIS or
++// RouteViews, sees for a prefix. Packeteer ships no client for a public
++// service; the URL is an endpoint the operator runs or trusts, and the lab
++// points it at stand-ins on an internal network. It only reads and is
++// evidence only: it never announces and never changes a decision.
++package httpjson
++
++import (
++	"context"
++	"encoding/json"
++	"errors"
++	"fmt"
++	"io"
++	"net/http"
++	"net/netip"
++	"net/url"
++	"strings"
++	"time"
++
++	"golang.org/x/time/rate"
++
++	"github.com/GrandArcher/Packeteer/internal/outbound"
++	"github.com/GrandArcher/Packeteer/pkg/plugin"
++)
++
++// TypeName is the config type.
++const TypeName = "json"
++
++// Defaults and bounds.
++const (
++	DefaultRatePerMinute = 60
++	MaxRatePerMinute     = 600
++	fetchTimeout         = 10 * time.Second
++	maxBody              = 1 << 20
++	maxOrigins           = 1000
++)
++
++func init() { plugin.OriginCollectors.Register(TypeName, New) }
++
++// Config is the plugin's config block.
++type Config struct {
++	// URL is the endpoint, http or https. A lookup is a GET of URL with
++	// the query parameter prefix=<prefix>.
++	URL string `yaml:"url"`
++	// RatePerMinute caps the lookups sent (default 60, at most 600).
++	RatePerMinute int `yaml:"rate_per_minute"`
++}
++
++// Client is the collector plugin.
++type Client struct {
++	plugin.Base
++	url   *url.URL
++	http  *http.Client
++	limit *rate.Limiter
++}
++
++// New is the plugin factory. It validates the config and sends nothing.
++func New(c plugin.Config, _ plugin.Env) (plugin.OriginCollector, error) {
++	var cfg Config
++	if err := c.Decode(&cfg); err != nil {
++		return nil, err
++	}
++	u, err := url.Parse(strings.TrimSpace(cfg.URL))
++	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
++		return nil, fmt.Errorf("url %q must be an http or https URL", cfg.URL)
++	}
++	if u.User != nil {
++		return nil, errors.New("url must not carry credentials")
++	}
++	if u.RawQuery != "" || u.Fragment != "" {
++		return nil, errors.New("url must not carry a query or fragment")
++	}
++	if cfg.RatePerMinute == 0 {
++		cfg.RatePerMinute = DefaultRatePerMinute
++	}
++	if cfg.RatePerMinute < 1 || cfg.RatePerMinute > MaxRatePerMinute {
++		return nil, fmt.Errorf("rate_per_minute %d must be between 1 and %d", cfg.RatePerMinute, MaxRatePerMinute)
++	}
++	return &Client{
++		url:   u,
++		http:  &http.Client{Timeout: fetchTimeout, CheckRedirect: outbound.SameHost},
++		limit: rate.NewLimiter(rate.Limit(float64(cfg.RatePerMinute)/60), 1),
++	}, nil
++}
++
++// response is the endpoint's answer. Prefix must be the one asked, so an
++// answer for a covering or more specific prefix is never read as an answer
++// for this one.
++type response struct {
++	Prefix  string   `json:"prefix"`
++	Origins []uint32 `json:"origins"`
++}
++
++// Origins waits for the rate limit, then asks the endpoint.
++func (c *Client) Origins(ctx context.Context, prefix netip.Prefix) ([]uint32, error) {
++	prefix = prefix.Masked()
++	if err := c.limit.Wait(ctx); err != nil {
++		return nil, err
++	}
++	u := *c.url
++	q := url.Values{}
++	q.Set("prefix", prefix.String())
++	u.RawQuery = q.Encode()
++	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
++	if err != nil {
++		return nil, err
++	}
++	resp, err := c.http.Do(req)
++	if err != nil {
++		return nil, err
++	}
++	defer resp.Body.Close()
++	if resp.StatusCode != http.StatusOK {
++		return nil, fmt.Errorf("collector: %s", resp.Status)
++	}
++	var r response
++	if err := json.NewDecoder(io.LimitReader(resp.Body, maxBody)).Decode(&r); err != nil {
++		return nil, fmt.Errorf("collector: %w", err)
++	}
++	got, err := netip.ParsePrefix(r.Prefix)
++	if err != nil || got.Masked() != prefix {
++		return nil, fmt.Errorf("collector: answer is for %q, not %s", r.Prefix, prefix)
++	}
++	if len(r.Origins) > maxOrigins {
++		return nil, fmt.Errorf("collector: more than %d origins", maxOrigins)
++	}
++	return r.Origins, nil
++}
+diff --git a/internal/plugins/collector/httpjson/httpjson_test.go b/internal/plugins/collector/httpjson/httpjson_test.go
+new file mode 100644
+index 00000000..079e45ee
+--- /dev/null
++++ b/internal/plugins/collector/httpjson/httpjson_test.go
+@@ -0,0 +1,158 @@
++package httpjson
++
++import (
++	"context"
++	"net/http"
++	"net/http/httptest"
++	"net/netip"
++	"slices"
++	"strings"
++	"testing"
++	"time"
++
++	"golang.org/x/time/rate"
++	"gopkg.in/yaml.v3"
++
++	"github.com/GrandArcher/Packeteer/pkg/plugin"
++)
++
++func cfgOf(t *testing.T, y string) plugin.Config {
++	t.Helper()
++	var n yaml.Node
++	if err := yaml.Unmarshal([]byte(y), &n); err != nil {
++		t.Fatal(err)
++	}
++	return plugin.NewConfig(n.Content[0])
++}
++
++func newClient(t *testing.T, url string) *Client {
++	t.Helper()
++	p, err := New(cfgOf(t, "url: "+url+"\n"), plugin.Env{})
++	if err != nil {
++		t.Fatal(err)
++	}
++	c := p.(*Client)
++	c.limit = rate.NewLimiter(rate.Inf, 1)
++	return c
++}
++
++var pfx = netip.MustParsePrefix("198.51.100.0/24")
++
++// #671: a lookup is one GET with the prefix as a query parameter, and the
++// origins in the answer come back as they are.
++func TestOriginsAsksForTheExactPrefix(t *testing.T) {
++	var gotPath, gotPrefix, gotMethod string
++	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		gotMethod, gotPath, gotPrefix = r.Method, r.URL.Path, r.URL.Query().Get("prefix")
++		_, _ = w.Write([]byte(`{"prefix":"198.51.100.0/24","origins":[64500,64510]}`))
++	}))
++	defer srv.Close()
++	got, err := newClient(t, srv.URL+"/ris").Origins(context.Background(), pfx)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if !slices.Equal(got, []uint32{64500, 64510}) {
++		t.Fatalf("origins = %v", got)
++	}
++	if gotMethod != http.MethodGet || gotPath != "/ris" || gotPrefix != "198.51.100.0/24" {
++		t.Fatalf("asked %s %s prefix=%q", gotMethod, gotPath, gotPrefix)
++	}
++}
++
++// #671: a collector that saw nothing is an empty answer, not an error.
++func TestEmptyAnswer(t *testing.T) {
++	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
++		_, _ = w.Write([]byte(`{"prefix":"198.51.100.0/24","origins":[]}`))
++	}))
++	defer srv.Close()
++	got, err := newClient(t, srv.URL).Origins(context.Background(), pfx)
++	if err != nil || len(got) != 0 {
++		t.Fatalf("origins = %v, %v", got, err)
++	}
++}
++
++// Anything that is not a clean answer for exactly the prefix asked is an
++// error, so it is never read as agreement or as "seen nothing".
++func TestBadAnswersAreErrors(t *testing.T) {
++	for name, tc := range map[string]struct {
++		status int
++		body   string
++		want   string
++	}{
++		"server error":          {http.StatusInternalServerError, ``, "500"},
++		"not json":              {http.StatusOK, `<html>`, "collector:"},
++		"covering prefix":       {http.StatusOK, `{"prefix":"198.51.100.0/22","origins":[64500]}`, "not 198.51.100.0/24"},
++		"missing prefix":        {http.StatusOK, `{"origins":[64500]}`, "not 198.51.100.0/24"},
++		"asn out of range":      {http.StatusOK, `{"prefix":"198.51.100.0/24","origins":[99999999999]}`, "collector:"},
++		"more than the maximum": {http.StatusOK, `{"prefix":"198.51.100.0/24","origins":[` + strings.Repeat("64500,", maxOrigins) + `64500]}`, "more than"},
++	} {
++		t.Run(name, func(t *testing.T) {
++			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
++				w.WriteHeader(tc.status)
++				_, _ = w.Write([]byte(tc.body))
++			}))
++			defer srv.Close()
++			got, err := newClient(t, srv.URL).Origins(context.Background(), pfx)
++			if err == nil || !strings.Contains(err.Error(), tc.want) || got != nil {
++				t.Fatalf("origins = %v, err = %v, want an error containing %q", got, err, tc.want)
++			}
++		})
++	}
++}
++
++// A collector that is down is an error.
++func TestDownIsAnError(t *testing.T) {
++	srv := httptest.NewServer(http.NotFoundHandler())
++	url := srv.URL
++	srv.Close()
++	if got, err := newClient(t, url).Origins(context.Background(), pfx); err == nil || got != nil {
++		t.Fatalf("origins = %v, err = %v", got, err)
++	}
++}
++
++func TestConfigValidation(t *testing.T) {
++	for y, want := range map[string]string{
++		"{}":                                `url "" must be an http or https URL`,
++		"url: ftp://192.0.2.50/x":           "must be an http or https URL",
++		"url: http://user:pw@192.0.2.50/x":  "must not carry credentials",
++		"url: http://192.0.2.50/x?prefix=1": "must not carry a query",
++		"{url: \"http://192.0.2.50/x\", rate_per_minute: 601}": "rate_per_minute 601 must be between 1 and 600",
++		"{url: \"http://192.0.2.50/x\", rate_per_minute: -1}":  "rate_per_minute -1 must be between 1 and 600",
++		"{url: \"http://192.0.2.50/x\", bogus: 1}":             "bogus",
++	} {
++		if _, err := New(cfgOf(t, y), plugin.Env{}); err == nil || !strings.Contains(err.Error(), want) {
++			t.Errorf("%s: err = %v, want %q", y, err, want)
++		}
++	}
++	p, err := New(cfgOf(t, "url: http://192.0.2.50/x\n"), plugin.Env{})
++	if err != nil {
++		t.Fatal(err)
++	}
++	if got := p.(*Client).limit.Limit(); got != rate.Limit(float64(DefaultRatePerMinute)/60) {
++		t.Fatalf("default rate = %v", got)
++	}
++}
++
++// The rate limit holds lookups back and a cancelled wait is an error.
++func TestRateLimit(t *testing.T) {
++	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
++		_, _ = w.Write([]byte(`{"prefix":"198.51.100.0/24","origins":[64500]}`))
++	}))
++	defer srv.Close()
++	c := newClient(t, srv.URL)
++	c.limit = rate.NewLimiter(rate.Every(time.Hour), 1)
++	if _, err := c.Origins(context.Background(), pfx); err != nil {
++		t.Fatal(err)
++	}
++	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
++	defer cancel()
++	if got, err := c.Origins(ctx, pfx); err == nil || got != nil {
++		t.Fatalf("second lookup inside the limit: %v, %v", got, err)
++	}
++}
++
++func TestRegistered(t *testing.T) {
++	if !slices.Contains(plugin.OriginCollectors.Types(), TypeName) {
++		t.Fatalf("types = %v", plugin.OriginCollectors.Types())
++	}
++}
+diff --git a/lab/README.md b/lab/README.md
+index e77a04da..d343d5d6 100644
+--- a/lab/README.md
++++ b/lab/README.md
+@@ -128,7 +128,9 @@ The `e2e` job runs [docs/walkthrough.md](../docs/walkthrough.md) on its own topo
+ 
+ `lab/e2e-registry.sh` is registry hygiene (#289) against in-lab registries only (#657) on its own topology (`lab/docker-compose-registry.yml`): the RPKI-invalid lab's edge and transit-a (transit-a sends `203.0.113.0/24` and `203.0.113.128/25` from AS64501), Packeteer in observe (`lab/packeteer-registry.yaml`), and `registry-stub` (`lab/registrystub`, 192.0.2.40), a stand-in for a whois IRR, a VRP JSON document, PeeringDB, and the RIPE REST API. The lab network is `internal`, so no live RADB, ARIN, RIPE, PeeringDB, or other registry is reachable; the script checks that. It checks: (1) the first scan reports exactly a missing route object, a stale route object, a ROA gap (maxLength), a PeeringDB max-prefix drift, and a port-speed drift, with their diffs. (2) The scan only reads the stand-in. (3) A wrong digest, a ROA finding, and the stale delete (offered only after a second scan) change nothing. (3a, #673) The lab config scans every 3m, so the second scan runs: the delete is then offered, a wrong digest is refused and the object stays, the shown digest deletes it on the stand-in only, and the delete and the refusal are in the audit log without a credential. (4) Confirmed pushes with the shown digest change the route object and the two PeeringDB fields on the stand-in, with the lab credentials from the environment, and are in the audit log without a credential. (5) The edge receives no route from Packeteer, and SIGTERM stops it cleanly. It runs as the `registry` CI job. `go test ./lab/registrystub` runs the same scan and pushes in process with the real plugins.
+ 
+-GitHub Actions runs the scripts above (except the Routinator lab, which is the `only-invalid` job, the registry lab, which is the `registry` job, and the release upgrade lab, which is the `upgrade-release` job), the walkthrough, and the demo as the `e2e` job. Docker and Go are required (the scripts build `lab/checkroute`, `lab/checkpath`, `lab/checkms`, `lab/checkpop`, `lab/checklease`, `lab/mkcerts`, `lab/mkherdkeys`, `lab/herdhub`, and `lab/sendflow`); they do not run in the unit-test job. `go test ./lab/checkroute ./lab/checkpath ./lab/checkms ./lab/checkpop ./lab/checklease ./lab/doccmds ./lab/registrystub ./lab/herdhub` covers the checks themselves.
++`lab/e2e-origin-agreement.sh` is RIS and RouteViews origin agreement for RPKI-invalid only paths (#401) against in-lab stand-ins only (#671) on its own topology (`lab/docker-compose-origin-agreement.yml`): the RPKI-invalid lab's edge, a transit-a that sends three invalid /25s (`lab/frr-oc-transit-a`), Packeteer in observe (`lab/packeteer-origin-agreement.yaml`), and three `lab/collectorstub` processes (192.0.2.50 RIS, 192.0.2.51 RouteViews, 192.0.2.52 the lab ROAs as JSON). The lab network is `internal`, so no live collector is reachable; the script checks that. It checks: (1) with both collectors up, `198.51.100.0/25` has the `origin_agreement` signal at +2 (both list AS64500), `203.0.113.0/25` at -2 (RouteViews lists only AS64511), and `203.0.113.128/25` at 0 (neither has it), and no case is classed `stale_roa` on that alone. (2) The stand-ins got only GET lookups for those three prefixes. (3) With both collectors stopped, every case is at 0 with "no answer from ris, routeviews" and keeps the score a case with no collector has. (4) The edge receives no route from Packeteer, the mode stays observe, and SIGTERM stops it cleanly. It runs as the `origin-agreement` CI job. `go test ./lab/collectorstub` runs the stand-ins and the real `json` collector plugin in process.
++
++GitHub Actions runs the scripts above (except the Routinator lab, which is the `only-invalid` job, the registry lab, which is the `registry` job, the origin agreement lab, which is the `origin-agreement` job, and the release upgrade lab, which is the `upgrade-release` job), the walkthrough, and the demo as the `e2e` job. Docker and Go are required (the scripts build `lab/checkroute`, `lab/checkpath`, `lab/checkms`, `lab/checkpop`, `lab/checklease`, `lab/mkcerts`, `lab/mkherdkeys`, `lab/herdhub`, and `lab/sendflow`); they do not run in the unit-test job. `go test ./lab/checkroute ./lab/checkpath ./lab/checkms ./lab/checkpop ./lab/checklease ./lab/doccmds ./lab/registrystub ./lab/herdhub ./lab/collectorstub` covers the checks themselves.
+ 
+ ```sh
+ bash lab/e2e.sh
+diff --git a/lab/collectorstub/main.go b/lab/collectorstub/main.go
+new file mode 100644
+index 00000000..f4b8aa70
+--- /dev/null
++++ b/lab/collectorstub/main.go
+@@ -0,0 +1,147 @@
++// Command collectorstub is the in-lab stand-in for the public route
++// collectors of lab/e2e-origin-agreement.sh (#671), and for the VRP document
++// Packeteer validates against. One role per process:
++//
++//	ris        GET /ris?prefix=P       the origins "RIS" sees for exactly P
++//	routeviews GET /routeviews?prefix=P  the same for "RouteViews"
++//	vrp        GET /json                the lab ROAs in Routinator's JSON form
++//
++// Every answer is fixed data about documentation prefixes and documentation
++// ASNs. It dials nothing. Every request is recorded at /_lab/state so the
++// script can check what reached it. It listens on :8080.
++//
++// Usage: collectorstub -role ris|routeviews|vrp
++package main
++
++import (
++	"encoding/json"
++	"flag"
++	"log"
++	"net/http"
++	"net/netip"
++	"slices"
++	"sync"
++	"time"
++)
++
++// origins is what each collector sees, by the exact prefix. A prefix that is
++// not listed is not announced as far as that collector can tell.
++//
++//   - 198.51.100.0/25: both see AS64500, the origin transit-a announces
++//     (agreement).
++//   - 203.0.113.0/25: transit-a announces AS64501, RIS agrees, RouteViews
++//     lists AS64511 only (disagreement).
++//   - 203.0.113.128/25: neither sees it (empty).
++var origins = map[string]map[netip.Prefix][]uint32{
++	"ris": {
++		netip.MustParsePrefix("198.51.100.0/25"): {64500},
++		netip.MustParsePrefix("203.0.113.0/25"):  {64501},
++	},
++	"routeviews": {
++		netip.MustParsePrefix("198.51.100.0/25"): {64500, 64510},
++		netip.MustParsePrefix("203.0.113.0/25"):  {64511},
++	},
++}
++
++// Request is one recorded request.
++type Request struct {
++	Method string `json:"method"`
++	Path   string `json:"path"`
++	Prefix string `json:"prefix,omitempty"`
++	Status int    `json:"status"`
++}
++
++// State is what /_lab/state returns.
++type State struct {
++	Role     string    `json:"role"`
++	Requests []Request `json:"requests"`
++}
++
++type stub struct {
++	role string
++	now  func() time.Time
++
++	mu   sync.Mutex
++	reqs []Request
++}
++
++type statusWriter struct {
++	http.ResponseWriter
++	status int
++}
++
++func (w *statusWriter) WriteHeader(code int) {
++	w.status = code
++	w.ResponseWriter.WriteHeader(code)
++}
++
++func writeJSON(w http.ResponseWriter, code int, v any) {
++	w.Header().Set("Content-Type", "application/json")
++	w.WriteHeader(code)
++	_ = json.NewEncoder(w).Encode(v)
++}
++
++func (s *stub) record(r *http.Request, status int) {
++	s.mu.Lock()
++	defer s.mu.Unlock()
++	s.reqs = append(s.reqs, Request{Method: r.Method, Path: r.URL.Path, Prefix: r.URL.Query().Get("prefix"), Status: status})
++}
++
++// handler serves the role's endpoint and the lab state.
++func (s *stub) handler() http.Handler {
++	mux := http.NewServeMux()
++	serve := func(h http.HandlerFunc) http.HandlerFunc {
++		return func(w http.ResponseWriter, r *http.Request) {
++			sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
++			if r.Method != http.MethodGet {
++				http.Error(sw, "GET only", http.StatusMethodNotAllowed)
++			} else {
++				h(sw, r)
++			}
++			s.record(r, sw.status)
++		}
++	}
++	if s.role == "vrp" {
++		// 198.51.100.0/24 and 203.0.113.0/24 allow up to /24, so the /25s
++		// transit-a announces are invalid, and nothing covers them.
++		mux.HandleFunc("/json", serve(func(w http.ResponseWriter, _ *http.Request) {
++			writeJSON(w, http.StatusOK, map[string]any{
++				"metadata": map[string]any{"generated": s.now().Unix()},
++				"roas": []map[string]any{
++					{"asn": "AS64500", "prefix": "198.51.100.0/24", "maxLength": 24, "ta": "lab"},
++					{"asn": "AS64501", "prefix": "203.0.113.0/24", "maxLength": 24, "ta": "lab"},
++				},
++			})
++		}))
++	} else {
++		mux.HandleFunc("/"+s.role, serve(func(w http.ResponseWriter, r *http.Request) {
++			p, err := netip.ParsePrefix(r.URL.Query().Get("prefix"))
++			if err != nil {
++				http.Error(w, "bad prefix", http.StatusBadRequest)
++				return
++			}
++			got := origins[s.role][p.Masked()]
++			if got == nil {
++				got = []uint32{}
++			}
++			writeJSON(w, http.StatusOK, map[string]any{"prefix": p.Masked().String(), "origins": got})
++		}))
++	}
++	mux.HandleFunc("/_lab/state", func(w http.ResponseWriter, _ *http.Request) {
++		s.mu.Lock()
++		defer s.mu.Unlock()
++		writeJSON(w, http.StatusOK, State{Role: s.role, Requests: slices.Clone(s.reqs)})
++	})
++	return mux
++}
++
++func main() {
++	role := flag.String("role", "", "ris, routeviews, or vrp")
++	flag.Parse()
++	if *role != "ris" && *role != "routeviews" && *role != "vrp" {
++		log.Fatal("collectorstub: -role must be ris, routeviews, or vrp")
++	}
++	s := &stub{role: *role, now: time.Now}
++	srv := &http.Server{Addr: ":8080", Handler: s.handler(), ReadHeaderTimeout: 10 * time.Second}
++	log.Fatal(srv.ListenAndServe())
++}
+diff --git a/lab/collectorstub/main_test.go b/lab/collectorstub/main_test.go
+new file mode 100644
+index 00000000..e3349cdb
+--- /dev/null
++++ b/lab/collectorstub/main_test.go
+@@ -0,0 +1,219 @@
++package main
++
++import (
++	"context"
++	"encoding/json"
++	"fmt"
++	"io"
++	"net/http"
++	"net/http/httptest"
++	"net/netip"
++	"os"
++	"path/filepath"
++	"slices"
++	"strings"
++	"testing"
++	"time"
++
++	"gopkg.in/yaml.v3"
++
++	"github.com/GrandArcher/Packeteer/internal/config"
++	"github.com/GrandArcher/Packeteer/internal/pluginhost"
++	_ "github.com/GrandArcher/Packeteer/internal/plugins/all"
++	"github.com/GrandArcher/Packeteer/pkg/plugin"
++)
++
++var t0 = time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
++
++func serve(t *testing.T, role string) *httptest.Server {
++	t.Helper()
++	s := &stub{role: role, now: func() time.Time { return t0 }}
++	srv := httptest.NewServer(s.handler())
++	t.Cleanup(srv.Close)
++	return srv
++}
++
++func get(t *testing.T, url string) (int, string) {
++	t.Helper()
++	resp, err := http.Get(url)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer resp.Body.Close()
++	b, err := io.ReadAll(resp.Body)
++	if err != nil {
++		t.Fatal(err)
++	}
++	return resp.StatusCode, string(b)
++}
++
++// #671: the fixed data gives the agreement, disagreement, and empty cases
++// the lab script checks, and every request is recorded.
++func TestCollectorsAnswerTheLabCases(t *testing.T) {
++	ris, rv := serve(t, "ris"), serve(t, "routeviews")
++	want := map[string]map[string]string{
++		"198.51.100.0/25":  {"ris": `{"origins":[64500],"prefix":"198.51.100.0/25"}`, "routeviews": `{"origins":[64500,64510],"prefix":"198.51.100.0/25"}`},
++		"203.0.113.0/25":   {"ris": `{"origins":[64501],"prefix":"203.0.113.0/25"}`, "routeviews": `{"origins":[64511],"prefix":"203.0.113.0/25"}`},
++		"203.0.113.128/25": {"ris": `{"origins":[],"prefix":"203.0.113.128/25"}`, "routeviews": `{"origins":[],"prefix":"203.0.113.128/25"}`},
++	}
++	for prefix, byRole := range want {
++		for role, srv := range map[string]*httptest.Server{"ris": ris, "routeviews": rv} {
++			code, body := get(t, srv.URL+"/"+role+"?prefix="+prefix)
++			if code != http.StatusOK || strings.TrimSpace(body) != byRole[role] {
++				t.Errorf("%s %s: %d %s", role, prefix, code, body)
++			}
++		}
++	}
++	code, _ := get(t, ris.URL+"/ris?prefix=nonsense")
++	if code != http.StatusBadRequest {
++		t.Errorf("bad prefix: %d", code)
++	}
++	resp, err := http.Post(ris.URL+"/ris?prefix=198.51.100.0/25", "text/plain", strings.NewReader("x"))
++	if err != nil {
++		t.Fatal(err)
++	}
++	resp.Body.Close()
++	if resp.StatusCode != http.StatusMethodNotAllowed {
++		t.Errorf("POST: %d", resp.StatusCode)
++	}
++	_, body := get(t, ris.URL+"/_lab/state")
++	var st State
++	if err := json.Unmarshal([]byte(body), &st); err != nil {
++		t.Fatal(err)
++	}
++	if st.Role != "ris" || len(st.Requests) != 5 || st.Requests[3].Status != http.StatusBadRequest || st.Requests[4].Method != http.MethodPost || st.Requests[4].Status != http.StatusMethodNotAllowed {
++		t.Fatalf("state = %+v", st)
++	}
++	// The other role's endpoint does not exist here.
++	if code, _ := get(t, ris.URL+"/routeviews?prefix=198.51.100.0/25"); code != http.StatusNotFound {
++		t.Errorf("routeviews path on ris: %d", code)
++	}
++}
++
++// The VRP document makes each /25 invalid: the ROAs allow up to /24.
++func TestVRPDocument(t *testing.T) {
++	_, body := get(t, serve(t, "vrp").URL+"/json")
++	var doc struct {
++		Metadata struct{ Generated int64 }
++		ROAs     []struct {
++			ASN       string
++			Prefix    string
++			MaxLength int
++		} `json:"roas"`
++	}
++	if err := json.Unmarshal([]byte(body), &doc); err != nil {
++		t.Fatal(err)
++	}
++	if doc.Metadata.Generated != t0.Unix() || len(doc.ROAs) != 2 || doc.ROAs[0].ASN != "AS64500" || doc.ROAs[0].Prefix != "198.51.100.0/24" ||
++		doc.ROAs[1].ASN != "AS64501" || doc.ROAs[1].Prefix != "203.0.113.0/24" || doc.ROAs[0].MaxLength != 24 || doc.ROAs[1].MaxLength != 24 {
++		t.Fatalf("document = %s", body)
++	}
++}
++
++// #671: the lab config builds with the real plugins, stays in observe, and
++// every collector and RPKI address it names is a stand-in. Pointed at
++// in-process stand-ins, the real json plugin returns the data the script
++// expects, and a stopped stand-in is an error, not an empty answer.
++func TestLabConfigAgainstStandIns(t *testing.T) {
++	raw, err := os.ReadFile(filepath.Join("..", "packeteer-origin-agreement.yaml"))
++	if err != nil {
++		t.Fatal(err)
++	}
++	var doc map[string]any
++	if err := yaml.Unmarshal(raw, &doc); err != nil {
++		t.Fatal(err)
++	}
++	var urls []string
++	var walk func(v any)
++	walk = func(v any) {
++		switch v := v.(type) {
++		case map[string]any:
++			for k, x := range v {
++				if s, ok := x.(string); ok && k == "url" {
++					urls = append(urls, s)
++				}
++				walk(x)
++			}
++		case []any:
++			for _, x := range v {
++				walk(x)
++			}
++		}
++	}
++	walk(doc)
++	slices.Sort(urls)
++	wantURLs := []string{"http://ris-stub:8080/ris", "http://routeviews-stub:8080/routeviews", "http://vrp-stub:8080/json"}
++	if !slices.Equal(urls, wantURLs) {
++		t.Fatalf("urls in the lab config: %v, want %v", urls, wantURLs)
++	}
++
++	ris, rv := serve(t, "ris"), serve(t, "routeviews")
++	y := strings.NewReplacer("http://ris-stub:8080", ris.URL, "http://routeviews-stub:8080", rv.URL).Replace(string(raw))
++	cfg, err := config.Parse([]byte(y))
++	if err != nil {
++		t.Fatal(err)
++	}
++	if cfg.Mode != "observe" || !cfg.OnlyInvalidOn() {
++		t.Fatalf("mode %q only_invalid %v", cfg.Mode, cfg.OnlyInvalidOn())
++	}
++	set, err := pluginhost.Build(cfg, pluginhost.Options{CheckOnly: true})
++	if err != nil {
++		t.Fatal(err)
++	}
++	if len(set.OriginCollectors) != 2 || set.OriginCollectors[0].Name != "ris" || set.OriginCollectors[1].Name != "routeviews" {
++		t.Fatalf("collectors = %+v", set.OriginCollectors)
++	}
++	ask := func(c plugin.OriginCollector, prefix string) ([]uint32, error) {
++		return c.Origins(context.Background(), netip.MustParsePrefix(prefix))
++	}
++	for _, tc := range []struct {
++		prefix, ris, routeviews string
++	}{
++		{"198.51.100.0/25", "[64500]", "[64500 64510]"},
++		{"203.0.113.0/25", "[64501]", "[64511]"},
++		{"203.0.113.128/25", "[]", "[]"},
++	} {
++		for i, want := range []string{tc.ris, tc.routeviews} {
++			got, err := ask(set.OriginCollectors[i].Plugin, tc.prefix)
++			if err != nil || fmt.Sprint(got) != want {
++				t.Errorf("%s %s: %v, %v, want %s", set.OriginCollectors[i].Name, tc.prefix, got, err, want)
++			}
++		}
++	}
++	ris.Close()
++	if got, err := ask(set.OriginCollectors[0].Plugin, "198.51.100.0/25"); err == nil || got != nil {
++		t.Fatalf("a stopped stand-in answered: %v, %v", got, err)
++	}
++}
++
++// The lab network has no route out, no service publishes a port, and every
++// service is on that one network.
++func TestLabComposeIsInternal(t *testing.T) {
++	raw, err := os.ReadFile(filepath.Join("..", "docker-compose-origin-agreement.yml"))
++	if err != nil {
++		t.Fatal(err)
++	}
++	var doc struct {
++		Services map[string]struct {
++			Ports    []any `yaml:"ports"`
++			Networks map[string]any
++		} `yaml:"services"`
++		Networks map[string]struct {
++			Internal bool `yaml:"internal"`
++		} `yaml:"networks"`
++	}
++	if err := yaml.Unmarshal(raw, &doc); err != nil {
++		t.Fatal(err)
++	}
++	if len(doc.Networks) != 1 || !doc.Networks["lab"].Internal {
++		t.Fatalf("networks %+v", doc.Networks)
++	}
++	if len(doc.Services) != 6 {
++		t.Fatalf("services %d", len(doc.Services))
++	}
++	for name, s := range doc.Services {
++		if len(s.Ports) != 0 || len(s.Networks) != 1 {
++			t.Errorf("%s: ports %v networks %v", name, s.Ports, s.Networks)
++		}
++	}
++}
+diff --git a/lab/docker-compose-origin-agreement.yml b/lab/docker-compose-origin-agreement.yml
+new file mode 100644
+index 00000000..c0d3c2d6
+--- /dev/null
++++ b/lab/docker-compose-origin-agreement.yml
+@@ -0,0 +1,99 @@
++# Origin agreement lab (#671, for #401): a simulated edge and eBGP transit,
++# Packeteer in observe mode, and three small stand-ins (lab/collectorstub):
++# ris-stub and routeviews-stub, which answer the origins a public collector
++# set would see for a prefix, and vrp-stub, the lab ROAs as a Routinator-style
++# JSON document. Documentation addresses (RFC 5737) and documentation/private
++# ASNs only.
++#
++# The lab network is internal: it has no route out, so nothing here can
++# reach RIPE RIS, RouteViews, or any other live collector, and
++# lab/e2e-origin-agreement.sh checks that. The stand-in is a static Go binary
++# the script builds and runs in a stock alpine container. The script reads
++# the ops API at 192.0.2.10:8080 (lab-only basic auth below) and each
++# stand-in's state at /_lab/state.
++name: packeteer-e2e-origin-agreement
++x-frr: &frr
++  image: quay.io/frrouting/frr:10.2.4
++  privileged: true
++  entrypoint: ["/bin/sh", "/lab/frr-start.sh"]
++x-stub: &stub
++  image: alpine:3.22
++  volumes:
++    - ${LAB_DIR:?LAB_DIR is set by lab/e2e-origin-agreement.sh}/stub:/stub:ro
++services:
++  ris-stub:
++    <<: *stub
++    command: ["/stub/collectorstub", "-role", "ris"]
++    networks:
++      lab:
++        ipv4_address: 192.0.2.50
++  routeviews-stub:
++    <<: *stub
++    command: ["/stub/collectorstub", "-role", "routeviews"]
++    networks:
++      lab:
++        ipv4_address: 192.0.2.51
++  vrp-stub:
++    <<: *stub
++    command: ["/stub/collectorstub", "-role", "vrp"]
++    networks:
++      lab:
++        ipv4_address: 192.0.2.52
++  edge:
++    <<: *frr
++    hostname: edge
++    environment:
++      FRR_EXPECT: "router bgp 64512;neighbor 192.0.2.10 soft-reconfiguration inbound"
++    volumes:
++      - ./frr-oi-edge:/etc/frr
++      - ./frr-start.sh:/lab/frr-start.sh:ro
++    networks:
++      lab:
++        ipv4_address: 192.0.2.254
++  transit-a:
++    <<: *frr
++    hostname: transit-a
++    environment:
++      FRR_EXPECT: "router bgp 64496;network 203.0.113.128/25;set as-path prepend 64500"
++    volumes:
++      - ./frr-oc-transit-a:/etc/frr
++      - ./frr-start.sh:/lab/frr-start.sh:ro
++    networks:
++      lab:
++        ipv4_address: 192.0.2.21
++  packeteer:
++    build:
++      context: ..
++      dockerfile: Dockerfile
++      args:
++        VERSION: e2e
++    image: packeteer:e2e
++    depends_on:
++      - edge
++      - ris-stub
++      - routeviews-stub
++      - vrp-stub
++    cap_add:
++      - NET_RAW
++      - NET_ADMIN
++      - NET_BIND_SERVICE
++    environment:
++      PACKETEER_CONFIG: /etc/packeteer/config.yaml
++      PACKETEER_LOG_LEVEL: debug
++      # Lab-only credentials.
++      PACKETEER_HTTP_USER: lab
++      PACKETEER_HTTP_PASSWORD: lab-only
++    volumes:
++      - ./packeteer-origin-agreement.yaml:/etc/packeteer/config.yaml:ro
++    networks:
++      lab:
++        ipv4_address: 192.0.2.10
++networks:
++  lab:
++    driver: bridge
++    # No route out of the lab: no live collector can be reached.
++    internal: true
++    ipam:
++      config:
++        - subnet: 192.0.2.0/24
++          gateway: 192.0.2.3
+diff --git a/lab/e2e-origin-agreement.sh b/lab/e2e-origin-agreement.sh
+new file mode 100755
+index 00000000..64dab76e
+--- /dev/null
++++ b/lab/e2e-origin-agreement.sh
+@@ -0,0 +1,216 @@
++#!/bin/bash
++# RIS and RouteViews origin agreement for RPKI-invalid only paths (#401),
++# lab-proven (#671) against in-lab stand-ins only. Documentation prefixes
++# and documentation/private ASNs only. lab/collectorstub is the RIS and
++# RouteViews stand-in and the VRP document; the lab network is internal, so
++# nothing can reach RIPE RIS, RouteViews, or any other live collector.
++# Packeteer runs in observe mode.
++#
++# transit-a sends the edge three /25s that are longer than the lab ROAs'
++# maxLength, so each is RPKI-invalid with nothing covering it:
++#   198.51.100.0/25 from AS64500: both stand-ins list AS64500 (agreement);
++#   203.0.113.0/25 from AS64501: RIS lists AS64501, RouteViews lists only
++#     AS64511 (disagreement);
++#   203.0.113.128/25 from AS64501: neither stand-in has it (empty answer).
++# Checked:
++#  - the network is internal, and every request the stand-ins got is a GET
++#    for one of the three prefixes;
++#  - each case carries the origin_agreement signal with the right points and
++#    detail, and agreement alone does not class a case stale_roa;
++#  - with both collectors stopped (down), every case has no agreement
++#    (0 points) and the score of a case with no collector, and stays open;
++#  - the edge receives no route from Packeteer at any sample, the mode stays
++#    observe, and SIGTERM stops it cleanly.
++set -euo pipefail
++
++root=$(cd "$(dirname "$0")/.." && pwd)
++cd "$root"
++compose=(docker compose -f lab/docker-compose-origin-agreement.yml)
++
++check_bin=$(mktemp)
++LAB_DIR=$(mktemp -d)
++export LAB_DIR
++trap 'rc=$?; if [ "$rc" -ne 0 ]; then echo "---- lab logs ----"; "${compose[@]}" logs --no-color || true; "${compose[@]}" ps || true; fi; "${compose[@]}" down -v --remove-orphans || true; rm -rf "$check_bin" "$LAB_DIR"; exit "$rc"' EXIT
++
++echo "building the path check and the collector stand-in"
++go build -o "$check_bin" ./lab/checkpath
++mkdir -p "$LAB_DIR/stub"
++CGO_ENABLED=0 GOOS=linux GOARCH="$(go env GOARCH)" go build -o "$LAB_DIR/stub/collectorstub" ./lab/collectorstub
++# The containers read these as other users.
++chmod 755 "$LAB_DIR" "$LAB_DIR/stub" "$LAB_DIR/stub/collectorstub"
++
++echo "building lab"
++"${compose[@]}" build
++"${compose[@]}" up -d
++
++agree=198.51.100.0/25
++disagree=203.0.113.0/25
++empty=203.0.113.128/25
++base=http://192.0.2.10:8080/api
++
++# Lab-only basic auth (docker-compose-origin-agreement.yml).
++auth=(-u lab:lab-only)
++api() { curl -sS "${auth[@]}" "$base/$1" 2>/dev/null || true; }
++api_up() { curl -sf -o /dev/null "${auth[@]}" "$base/rpki/only-invalid"; }
++# state STUB: what the stand-in recorded. The script runs on the host, which
++# cannot resolve compose service names, so it reads the stand-in's address.
++state() {
++	local ip
++	case $1 in
++	ris-stub) ip=192.0.2.50 ;;
++	routeviews-stub) ip=192.0.2.51 ;;
++	*) ip=$1 ;;
++	esac
++	curl -sS "http://$ip:8080/_lab/state" 2>/dev/null || true
++}
++
++vty() { "${compose[@]}" exec -T edge vtysh -c "$1" 2>/dev/null || true; }
++edge_path() {
++	vty "show bgp ipv4 unicast $1 json" | "$check_bin" -aspath "$2" -nexthop 192.0.2.21 -lacks 64512:
++}
++session_up() { [[ "$(vty 'show bgp neighbors 192.0.2.10')" == *"BGP state = Established"* ]]; }
++
++received() {
++	local s r
++	s=$(vty 'show bgp ipv4 unicast summary json' | jq -r '(.ipv4Unicast.peers // .peers)["192.0.2.10"].pfxRcd // empty' 2>/dev/null || true)
++	r=$(vty 'show bgp ipv4 unicast neighbors 192.0.2.10 received-routes json' | jq -r '(.receivedRoutes // {}) | length' 2>/dev/null || true)
++	echo "${s:-?}/${r:-?}"
++}
++only_transit() {
++	vty 'show bgp ipv4 unicast json' | jq -e '[.routes[][] | .peerId] | length > 0 and all(. == "192.0.2.21")' >/dev/null 2>&1
++}
++
++dump() {
++	for r in edge transit-a; do
++		echo "---- $r ----" >&2
++		"${compose[@]}" exec -T "$r" vtysh -c 'show bgp summary' -c 'show bgp ipv4 unicast' >&2 || true
++	done
++	echo "---- only-invalid ----" >&2
++	api rpki/only-invalid >&2
++	for s in ris-stub routeviews-stub; do
++		echo "---- $s state ----" >&2
++		state "$s" >&2
++	done
++	"${compose[@]}" logs --no-color packeteer >&2 || true
++}
++
++# quiet: observe sends the edge nothing. Checked on every sample once the
++# session is up.
++quiet() {
++	local n
++	n=$(received)
++	if [ "$n" != "0/0" ] || ! only_transit; then
++		echo "the edge received routes from Packeteer (pfxRcd/received-routes $n)" >&2
++		vty 'show bgp ipv4 unicast neighbors 192.0.2.10 received-routes' >&2
++		dump
++		exit 1
++	fi
++}
++
++checked=0
++wait_for() {
++	local secs=$1 what=$2
++	shift 2
++	local end=$((SECONDS + secs))
++	while [ "$SECONDS" -lt "$end" ]; do
++		if [ "$checked" = 1 ]; then quiet; fi
++		if "$@" 2>/dev/null; then
++			return 0
++		fi
++		sleep 2
++	done
++	echo "timed out after ${secs}s waiting for: $what" >&2
++	"$@" || true
++	dump
++	return 1
++}
++
++fail() {
++	echo "$1" >&2
++	dump
++	exit 1
++}
++
++echo "the lab network has no route out"
++net=$("${compose[@]}" ps -q packeteer | xargs docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}')
++[ "$(wc -w <<<"$net")" = 1 ] || fail "packeteer is on more than one network: $net"
++[ "$(docker network inspect -f '{{.Internal}}' "${net// /}")" = true ] || fail "network $net is not internal"
++for svc in packeteer ris-stub routeviews-stub vrp-stub edge transit-a; do
++	[ "$("${compose[@]}" ps -q "$svc" | xargs docker inspect -f '{{len .NetworkSettings.Networks}}')" = 1 ] || fail "$svc is on more than one network"
++done
++
++echo "waiting for the edge paths, the Packeteer session, and the API"
++wait_for 120 "edge path for $agree" edge_path "$agree" "64496 64500"
++wait_for 60 "edge path for $disagree" edge_path "$disagree" "64496 64501"
++wait_for 60 "edge path for $empty" edge_path "$empty" "64496 64501"
++wait_for 120 "packeteer session" session_up
++wait_for 60 "ops API" api_up
++checked=1
++quiet
++
++learned() {
++	api "troubleshoot/lookingglass?prefix=$1" | jq -e --arg p "$1" --argjson o "$2" \
++		'.exact.prefix == $p and .exact.as_path[-1] == $o and .exact.provider == "transit-a"' >/dev/null
++}
++wait_for 60 "packeteer learned $agree" learned "$agree" 64500
++wait_for 60 "packeteer learned $disagree" learned "$disagree" 64501
++wait_for 60 "packeteer learned $empty" learned "$empty" 64501
++
++# agreement PREFIX SCORE POINTS DETAIL: the open case for PREFIX has that
++# score and an origin_agreement signal with exactly those points and detail.
++agreement() {
++	api rpki/only-invalid | jq -e --arg p "$1" --argjson score "$2" --argjson pts "$3" --arg d "$4" \
++		'.cases | any(.prefix == $p and .score == $score and .class == "unclear" and
++			(.signals | any(.name == "origin_agreement" and .points == $pts and .detail == $d)))' >/dev/null
++}
++
++# The first scan runs a minute after start and the next five minutes later;
++# a scan that finds the RIB not ready yet skips.
++echo "collectors up: agreement, disagreement, and an empty answer (up to three scans)"
++agree_ok() { agreement "$agree" 3 2 "ris, routeviews see AS64500 as an origin"; }
++disagree_ok() { agreement "$disagree" -1 -2 "not AS64501: routeviews sees AS64511"; }
++empty_ok() { agreement "$empty" 1 0 "no collector reports an origin; no origin seen by ris, routeviews"; }
++wait_for 700 "$agree agreed by both collectors" agree_ok
++wait_for 60 "$disagree disagreed by routeviews" disagree_ok
++wait_for 60 "$empty seen by neither collector" empty_ok
++
++cases=$(api rpki/only-invalid | jq -c '[.cases[].prefix] | sort')
++[ "$cases" = "[\"$agree\",\"$disagree\",\"$empty\"]" ] || fail "open cases are $cases, want the three /25s"
++# ROA, route age, and provider signals stay as they were: agreement is
++# added evidence, and it did not make a stale ROA of a case with no IRR or
++# route age behind it.
++api rpki/only-invalid | jq -e '.cases | all(.class != "stale_roa")' >/dev/null || fail "a case was classed stale_roa on collector agreement alone"
++raised=$(api "events?limit=1000" | jq -c '[.events[] | select(.kind == "rpki.only_invalid")]')
++jq -e --arg p "$agree" 'any(.fields.prefix == $p and (.fields.evidence | contains("origin_agreement +2: ris, routeviews see AS64500 as an origin")))' <<<"$raised" >/dev/null ||
++	fail "no rpki.only_invalid event for $agree with the origin_agreement evidence: $raised"
++
++echo "the stand-ins got only GET lookups for the three prefixes"
++for s in ris-stub:ris routeviews-stub:routeviews; do
++	host=${s%%:*} role=${s##*:}
++	state "$host" | jq -e --arg role "$role" --arg a "$agree" --arg b "$disagree" --arg c "$empty" \
++		'.role == $role and (.requests | length > 0) and
++		(.requests | all(.method == "GET" and .path == ("/" + $role) and .status == 200 and (.prefix | IN($a, $b, $c)))) and
++		([.requests[].prefix] | unique | length == 3)' >/dev/null || fail "unexpected requests at $host: $(state "$host")"
++done
++
++echo "collectors down: no agreement is invented"
++"${compose[@]}" stop -t 5 ris-stub routeviews-stub
++down_ok() {
++	local d="no collector reports an origin; no answer from ris, routeviews"
++	agreement "$agree" 1 0 "$d" && agreement "$disagree" 1 0 "$d" && agreement "$empty" 1 0 "$d"
++}
++wait_for 420 "every case without agreement while both collectors are down" down_ok
++cases=$(api rpki/only-invalid | jq -c '[.cases[].prefix] | sort')
++[ "$cases" = "[\"$agree\",\"$disagree\",\"$empty\"]" ] || fail "a down collector changed the open cases: $cases"
++api rpki/only-invalid | jq -e '.cases | all(.class != "stale_roa")' >/dev/null || fail "a down collector produced a stale_roa case"
++
++quiet
++api overview | jq -e '.mode == "observe"' >/dev/null || fail "packeteer is not in observe mode"
++
++echo "SIGTERM: packeteer stops cleanly"
++"${compose[@]}" stop -t 20 packeteer
++code=$(docker inspect -f '{{.State.ExitCode}}' "$("${compose[@]}" ps -aq packeteer)")
++[ "$code" = 0 ] || fail "packeteer exited $code on SIGTERM"
++only_transit || fail "the edge holds a route that did not come from transit-a"
++
++echo "origin agreement lab passed"
+diff --git a/lab/frr-oc-transit-a/daemons b/lab/frr-oc-transit-a/daemons
+new file mode 100644
+index 00000000..0a735f69
+--- /dev/null
++++ b/lab/frr-oc-transit-a/daemons
+@@ -0,0 +1,9 @@
++# Lab only. zebra and staticd are required so the blackhole routes exist.
++# bgpd is the simulated router.
++zebra=yes
++bgpd=yes
++staticd=yes
++vtysh_enable=yes
++zebra_options="  -A 127.0.0.1 -s 90000000"
++bgpd_options="   -A 127.0.0.1"
++staticd_options="  -A 127.0.0.1"
+diff --git a/lab/frr-oc-transit-a/frr.conf b/lab/frr-oc-transit-a/frr.conf
+new file mode 100644
+index 00000000..8a88071d
+--- /dev/null
++++ b/lab/frr-oc-transit-a/frr.conf
+@@ -0,0 +1,44 @@
++! Simulated transit-a for the origin agreement lab (#671). Documentation
++! ASNs and prefixes only. It sends the edge three /25s, each longer than the
++! lab ROA's maxLength, so each is RPKI-invalid and nothing covers it:
++! 198.51.100.0/25 from AS64500, and 203.0.113.0/25 and 203.0.113.128/25
++! from AS64501. It receives nothing.
++frr version 10.2
++frr defaults traditional
++hostname transit-a
++log stdout informational
++!
++ip route 198.51.100.0/25 blackhole
++ip route 203.0.113.0/25 blackhole
++ip route 203.0.113.128/25 blackhole
++!
++ip prefix-list origin-64500 seq 10 permit 198.51.100.0/25
++ip prefix-list origin-64501 seq 10 permit 203.0.113.0/25
++ip prefix-list origin-64501 seq 20 permit 203.0.113.128/25
++!
++route-map to-edge permit 10
++ match ip address prefix-list origin-64500
++ set as-path prepend 64500
++route-map to-edge permit 20
++ match ip address prefix-list origin-64501
++ set as-path prepend 64501
++route-map to-edge deny 100
++!
++route-map deny-all deny 10
++!
++router bgp 64496
++ bgp router-id 192.0.2.21
++ no bgp ebgp-requires-policy
++ neighbor 192.0.2.254 remote-as 64512
++ neighbor 192.0.2.254 description edge
++ neighbor 192.0.2.254 advertisement-interval 0
++ !
++ address-family ipv4 unicast
++  network 198.51.100.0/25
++  network 203.0.113.0/25
++  network 203.0.113.128/25
++  neighbor 192.0.2.254 activate
++  neighbor 192.0.2.254 route-map deny-all in
++  neighbor 192.0.2.254 route-map to-edge out
++ exit-address-family
++!
+diff --git a/lab/frr-oc-transit-a/vtysh.conf b/lab/frr-oc-transit-a/vtysh.conf
+new file mode 100644
+index 00000000..06ed5aa3
+--- /dev/null
++++ b/lab/frr-oc-transit-a/vtysh.conf
+@@ -0,0 +1,2 @@
++service integrated-vtysh-config
++hostname transit-a
+diff --git a/lab/packeteer-origin-agreement.yaml b/lab/packeteer-origin-agreement.yaml
+new file mode 100644
+index 00000000..08ad1fdc
+--- /dev/null
++++ b/lab/packeteer-origin-agreement.yaml
+@@ -0,0 +1,42 @@
++# Lab only (#671). Documentation prefixes, private and documentation ASNs.
++# Observe: nothing is announced. rpki.only_invalid reads the learned RIB
++# from the edge, validates it against the lab ROAs served by vrp-stub, and
++# asks the RIS and RouteViews stand-ins (lab/collectorstub) which origins
++# they see. Every address below is a stand-in; the lab network has no route
++# out, so no live collector or RPKI cache can be reached.
++mode: observe
++asn: 64512
++router_id: 192.0.2.10
++providers:
++  - name: transit-a
++    source_ip: 192.0.2.11
++    next_hop: 192.0.2.21
++bgp:
++  neighbors:
++    - address: 192.0.2.254
++      description: edge
++http:
++  listen: 0.0.0.0:8080
++storage:
++  type: sqlite
++  config:
++    path: /var/lib/packeteer/data/packeteer.db
++rpki:
++  enabled: true
++  sources:
++    - type: json
++      name: lab-vrp
++      config:
++        url: "http://vrp-stub:8080/json"
++  only_invalid:
++    enabled: true
++    origin_collectors:
++      - type: json
++        name: ris
++        config: {url: "http://ris-stub:8080/ris"}
++      - type: json
++        name: routeviews
++        config: {url: "http://routeviews-stub:8080/routeviews"}
++# Lab only: no sign-in; the e2e script uses the basic-auth account.
++auth:
++  enabled: false
+diff --git a/lab/ui-fixtures/only-invalid/only-invalid.json b/lab/ui-fixtures/only-invalid/only-invalid.json
+index 8e15a31c..a3a13dd9 100644
+--- a/lab/ui-fixtures/only-invalid/only-invalid.json
++++ b/lab/ui-fixtures/only-invalid/only-invalid.json
+@@ -36,6 +36,11 @@
+           "name": "hijack_feeds",
+           "points": 0,
+           "detail": "no hijack_feeds configured"
++        },
++        {
++          "name": "origin_agreement",
++          "points": 0,
++          "detail": "no origin_collectors configured"
+         }
+       ],
+       "paths": [
+diff --git a/lab/ui-fixtures/only-invalid/propose.json b/lab/ui-fixtures/only-invalid/propose.json
+index ac9dd7e9..858b57a4 100644
+--- a/lab/ui-fixtures/only-invalid/propose.json
++++ b/lab/ui-fixtures/only-invalid/propose.json
+@@ -56,6 +56,11 @@
+         "name": "hijack_feeds",
+         "points": 0,
+         "detail": "no hijack_feeds configured"
++      },
++      {
++        "name": "origin_agreement",
++        "points": 0,
++        "detail": "no origin_collectors configured"
+       }
+     ],
+     "paths": [
+diff --git a/pkg/plugin/collector.go b/pkg/plugin/collector.go
+new file mode 100644
+index 00000000..d27a0f5a
+--- /dev/null
++++ b/pkg/plugin/collector.go
+@@ -0,0 +1,26 @@
++package plugin
++
++import (
++	"context"
++	"net/netip"
++)
++
++// KindOriginCollector is the public route collector extension point
++// (#671). A collector says which origin ASes a public vantage set, such as
++// RIPE RIS or RouteViews, sees announcing a prefix. It is evidence only:
++// the core compares the answer with the local origin to class an
++// RPKI-invalid only path, and nothing it reports announces, withdraws, or
++// changes a decision.
++const KindOriginCollector Kind = "origin_collector"
++
++// OriginCollectors holds the origin collector plugin types.
++var OriginCollectors = NewRegistry[OriginCollector](KindOriginCollector)
++
++// OriginCollector reports the origin ASes seen for exactly prefix. An empty
++// answer with no error means the collector saw no announcement of the
++// prefix. An error means it could not answer; the core treats that, like
++// an empty answer, as no agreement.
++type OriginCollector interface {
++	Lifecycle
++	Origins(ctx context.Context, prefix netip.Prefix) ([]uint32, error)
++}
