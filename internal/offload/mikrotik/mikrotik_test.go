@@ -251,6 +251,53 @@ func TestNotApplicableIsRefused(t *testing.T) {
 	}
 }
 
+func TestOldRouterOSWithoutMonitorReportsOnly(t *testing.T) {
+	cases := []struct {
+		version string
+		maxRun  offload.RunLevel
+		code    string
+	}{
+		{"7.9.2", offload.Report, CodeVersionReportOnly},
+		{"7.3", offload.Report, CodeVersionReportOnly},
+		{"7.2", offload.Refuse, CodeVersionRefused},
+		{"7.17", offload.Refuse, CodeVersionWarn},
+		{"7.10", offload.Refuse, ""},
+		{"", offload.Refuse, ""},
+	}
+	for _, c := range cases {
+		a := Assess(routeros.L3HW{Version: c.version}, labOpts)
+		want := []string{CodeNotApplicable}
+		if c.code != "" {
+			want = append(want, c.code)
+		}
+		slices.Sort(want)
+		if a.MaxRun != c.maxRun || !slices.Equal(codes(a), want) {
+			t.Errorf("version %q: maxRun %s findings %v, want %s %v", c.version, a.MaxRun, codes(a), c.maxRun, want)
+		}
+	}
+}
+
+func TestRouteIndexDelayAboveTheSettleTimingFreezes(t *testing.T) {
+	cases := []struct {
+		max    string
+		freeze bool
+	}{
+		{"", false}, {"50ms", false}, {"1s", false}, {"10s", false},
+		{"10s1ms", true}, {"1m", true}, {"soon", true},
+	}
+	for _, c := range cases {
+		l := healthy()
+		l.Tuning = &routeros.Tuning{RouteIndexDelayMax: c.max}
+		a := Assess(l, labOpts)
+		if got := hasFreeze(a, offload.FreezePreCheck); got != c.freeze {
+			t.Errorf("route-index-delay-max %q: freeze = %v, want %v (%v)", c.max, got, c.freeze, codes(a))
+		}
+		if c.freeze && !slices.Equal(codes(a), []string{CodeRouteIndexDelay}) {
+			t.Errorf("route-index-delay-max %q: findings = %v", c.max, codes(a))
+		}
+	}
+}
+
 func TestSHWPAndNexthopThresholds(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -318,7 +365,7 @@ func TestProfile(t *testing.T) {
 	if p.Thresholds != (offload.Thresholds{Warn: 0.9, Full: 1}) {
 		t.Errorf("thresholds = %+v", p.Thresholds)
 	}
-	if !slices.Equal(p.PreChecks, preChecks) {
+	if !slices.Equal(p.PreChecks, preChecks) || &p.PreChecks[0] == &preChecks[0] {
 		t.Errorf("pre-checks = %v", p.PreChecks)
 	}
 	if want := []string{"<= 7.2", "< 7.10", "7.16 - 7.18"}; len(p.KnownBad) != 3 || p.KnownBad[0].Version != want[0] || p.KnownBad[1].Version != want[1] || p.KnownBad[2].Version != want[2] {
@@ -625,6 +672,18 @@ func TestDefaultsChanged(t *testing.T) {
 	reordered.DefaultRoutes[0], reordered.DefaultRoutes[1] = reordered.DefaultRoutes[1], reordered.DefaultRoutes[0]
 	if DefaultsChanged(base, reordered) {
 		t.Error("a reordered list reported as changed")
+	}
+	twin := func(distance int64) routeros.L3HW {
+		l := healthy()
+		d := l.DefaultRoutes[0]
+		d.Distance = distance
+		l.DefaultRoutes = []routeros.DefaultRoute{d, l.DefaultRoutes[0], l.DefaultRoutes[1]}
+		return l
+	}
+	a, b := twin(30), twin(30)
+	b.DefaultRoutes[0], b.DefaultRoutes[1] = b.DefaultRoutes[1], b.DefaultRoutes[0]
+	if DefaultsChanged(a, b) {
+		t.Error("routes that differ only in distance reported as changed after a reorder")
 	}
 	cases := map[string]func(*routeros.L3HW){
 		"gateway":     func(l *routeros.L3HW) { l.DefaultRoutes[0].Gateway = "192.0.2.2" },

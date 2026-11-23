@@ -8,6 +8,7 @@ package mikrotik
 
 import (
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/offload"
@@ -105,7 +106,7 @@ func Profile(opts Options, src func() (Snapshot, bool)) (offload.Profile, error)
 		Reader:     newReader(opts, src),
 		Selection:  offload.CommunitySnippet,
 		Thresholds: offload.Thresholds{Warn: nexthopWarn, Full: nexthopFull},
-		PreChecks:  preChecks,
+		PreChecks:  slices.Clone(preChecks),
 		Flow:       offload.Flow{NeedsFlow: true},
 		Timing:     offload.Timing{InstallSeconds: routeIndexSec + queueDrainSec, AgeOutSeconds: routeIndexSec + queueDrainSec},
 		KnownBad:   knownBad(),

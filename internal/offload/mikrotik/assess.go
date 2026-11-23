@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/offload"
 	"github.com/GrandArcher/Packeteer/internal/plugins/routercheck/routeros"
@@ -54,6 +55,7 @@ const (
 	CodeNexthopWarn       = "nexthop_warn"
 	CodeNexthopFull       = "nexthop_exhausted"
 	CodeNoVolumeSource    = "no_volume_source"
+	CodeRouteIndexDelay   = "route_index_delay"
 )
 
 // Finding is one thing Assess found.
@@ -94,8 +96,15 @@ func (a *Assessment) add(code string, sev Severity, reason offload.FreezeReason,
 func Assess(l routeros.L3HW, opts Options) Assessment {
 	a := Assessment{MaxRun: offload.DryRun, IPv4Hosts: l.Monitor.IPv4Hosts}
 	if !l.Applicable {
-		a.MaxRun = offload.Refuse
-		a.add(CodeNotApplicable, Warn, "", "", "the router exposes no L3HW monitor (no switch chip, or a CHR)")
+		a.add(CodeNotApplicable, Warn, "", "", "the router exposes no L3HW monitor (no switch chip, a CHR, or RouterOS older than 7.10)")
+		// RouterOS before 7.10 has no monitor, so the version rules must run
+		// here: they are the only place a 7.3 to 7.9 router is told apart.
+		if _, ok := parseVersion(l.Version); ok {
+			a.version(l.Version)
+		}
+		if a.MaxRun == offload.DryRun {
+			a.MaxRun = offload.Refuse
+		}
 		return a
 	}
 	a.version(l.Version)
@@ -232,11 +241,29 @@ func (a *Assessment) thresholds(l routeros.L3HW) {
 	if m.IPv4ShortestHWPrefix > 0 {
 		a.add(CodeSHWP, Freeze, offload.FreezePreCheck, "", "shortest hardware prefix is /%d: the table is partly on the CPU", m.IPv4ShortestHWPrefix)
 	}
+	a.routeIndexDelay(l.Tuning)
 	switch {
 	case m.NexthopExhausted():
 		a.add(CodeNexthopFull, Freeze, offload.FreezePreCheck, offload.NextHops, "next hops %d of %d", m.NexthopUsage, m.NexthopCap)
 	case m.NexthopCap > 0 && float64(m.NexthopUsage) >= nexthopWarn*float64(m.NexthopCap):
 		a.add(CodeNexthopWarn, Warn, "", "", "next hops %d of %d", m.NexthopUsage, m.NexthopCap)
+	}
+}
+
+// routeIndexDelay freezes when the router re-indexes slower than the
+// profile's settle timing assumes, or when the setting cannot be read: a
+// reading would be trusted before RouterOS finished. Advanced settings that
+// were not read (nil or empty) are reported by the reader, not here.
+func (a *Assessment) routeIndexDelay(t *routeros.Tuning) {
+	if t == nil || t.RouteIndexDelayMax == "" {
+		return
+	}
+	d, err := time.ParseDuration(t.RouteIndexDelayMax)
+	switch {
+	case err != nil || d < 0:
+		a.add(CodeRouteIndexDelay, Freeze, offload.FreezePreCheck, "", "route-index-delay-max %q cannot be read", t.RouteIndexDelayMax)
+	case d > routeIndexSec*time.Second:
+		a.add(CodeRouteIndexDelay, Freeze, offload.FreezePreCheck, "", "route-index-delay-max is %s: the profile settles for %d s", t.RouteIndexDelayMax, routeIndexSec)
 	}
 }
 
@@ -255,8 +282,9 @@ func Gate(res offload.Result, a Assessment) offload.Result {
 // LastInstall and a LastShed in the planner input, so the planner settles for
 // the profile's timing before it trusts a reading.
 func DefaultsChanged(prev, cur routeros.L3HW) bool {
+	// The key holds every compared field so equal sets sort the same way.
 	order := func(a, b routeros.DefaultRoute) int {
-		return strings.Compare(a.Family+"|"+a.Gateway+"|"+a.Protocol, b.Family+"|"+b.Gateway+"|"+b.Protocol)
+		return strings.Compare(fmt.Sprintf("%+v", a), fmt.Sprintf("%+v", b))
 	}
 	p := slices.SortedFunc(slices.Values(prev.DefaultRoutes), order)
 	c := slices.SortedFunc(slices.Values(cur.DefaultRoutes), order)
