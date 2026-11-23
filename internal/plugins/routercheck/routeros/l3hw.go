@@ -90,6 +90,7 @@ type Monitor struct {
 	IPv4RoutesHW         int64  `json:"ipv4_routes_hw"`
 	IPv4RoutesCPU        int64  `json:"ipv4_routes_cpu"`
 	IPv4ShortestHWPrefix int64  `json:"ipv4_shortest_hw_prefix"`
+	IPv4Hosts            int64  `json:"ipv4_hosts"`
 	IPv6RoutesTotal      int64  `json:"ipv6_routes_total"`
 	IPv6RoutesHW         int64  `json:"ipv6_routes_hw"`
 	IPv6RoutesCPU        int64  `json:"ipv6_routes_cpu"`
@@ -432,8 +433,8 @@ func nums(x row, keys []string, dst []*int64) error {
 func parseMonitor(x row) (Monitor, error) {
 	m := Monitor{State: x["state"]}
 	err := nums(x,
-		[]string{"ipv4-routes-total", "ipv4-routes-hw", "ipv4-routes-cpu", "ipv4-shortest-hw-prefix", "ipv6-routes-total", "ipv6-routes-hw", "ipv6-routes-cpu", "nexthop-cap", "nexthop-usage"},
-		[]*int64{&m.IPv4RoutesTotal, &m.IPv4RoutesHW, &m.IPv4RoutesCPU, &m.IPv4ShortestHWPrefix, &m.IPv6RoutesTotal, &m.IPv6RoutesHW, &m.IPv6RoutesCPU, &m.NexthopCap, &m.NexthopUsage})
+		[]string{"ipv4-routes-total", "ipv4-routes-hw", "ipv4-routes-cpu", "ipv4-shortest-hw-prefix", "ipv4-hosts", "ipv6-routes-total", "ipv6-routes-hw", "ipv6-routes-cpu", "nexthop-cap", "nexthop-usage"},
+		[]*int64{&m.IPv4RoutesTotal, &m.IPv4RoutesHW, &m.IPv4RoutesCPU, &m.IPv4ShortestHWPrefix, &m.IPv4Hosts, &m.IPv6RoutesTotal, &m.IPv6RoutesHW, &m.IPv6RoutesCPU, &m.NexthopCap, &m.NexthopUsage})
 	if err != nil {
 		return Monitor{}, fmt.Errorf("l3hw monitor: %w", err)
 	}

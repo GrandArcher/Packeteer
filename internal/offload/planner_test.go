@@ -603,3 +603,25 @@ func TestGainOnlyOverridesVolumeEmphasis(t *testing.T) {
 		t.Fatalf("%v", a)
 	}
 }
+
+func TestInstallsAreCappedPerRound(t *testing.T) {
+	cfg := testCfg()
+	cfg.MaxInstallsPerRound = 3
+	var cands []Candidate
+	for i := range 10 {
+		p := netip.PrefixFrom(netip.AddrFrom4([4]byte{198, 51, 100, byte(i)}), 32)
+		cands = append(cands, Candidate{Prefix: p, Cause: plugin.CausePerformance, Gain: float64(10 - i), Since: t0})
+	}
+	got := plan(t, newPlanner(t, NoneProfile(), cfg), Input{Now: t0, Candidates: cands, Budget: Result{HeadroomV4: 100}})
+	if n := count(got, Install); n != 3 {
+		t.Fatalf("%d installs, want the cap 3", n)
+	}
+	a := actions(got)
+	if a["198.51.100.0/32"] != "install" || a["198.51.100.2/32"] != "install" || a["198.51.100.3/32"] != "withhold" {
+		t.Errorf("the best three must install: %v", a)
+	}
+	cfg.MaxInstallsPerRound = -1
+	if _, err := NewPlanner(NoneProfile(), cfg); err == nil {
+		t.Error("a negative install cap was accepted")
+	}
+}

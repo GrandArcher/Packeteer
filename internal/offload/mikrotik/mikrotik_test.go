@@ -427,7 +427,7 @@ func budget(t *testing.T, l routeros.L3HW, bps uint64, ipv6 bool, now time.Time)
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := offload.NewBudget(BudgetConfig(time.Minute, ipv6))
+	b, err := offload.NewBudget(BudgetConfig(labOpts, time.Minute, ipv6))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -472,14 +472,58 @@ func TestBudgetFromTheProfile(t *testing.T) {
 	if res := budget(t, healthy(), 0, true, now); res.Frozen() {
 		t.Fatalf("cpu path zero must be a reading, not a freeze: %+v", res.Freezes)
 	}
-	noCPU, err := Profile(Options{Model: CCR2216}, func() (Snapshot, bool) { return Snapshot{L3HW: healthy()}, true })
+	// A named source that has produced no CPU-path rate: the budget fails closed.
+	noCPU, err := Profile(labOpts, func() (Snapshot, bool) { return Snapshot{L3HW: healthy()}, true })
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, _ := offload.NewBudget(BudgetConfig(time.Minute, true))
+	b, _ := offload.NewBudget(BudgetConfig(labOpts, time.Minute, true))
 	res = b.Evaluate(now, offload.Identity{Profile: ID}, offload.Collect(context.Background(), noCPU.Reader, noCPU.Dimensions, now))
 	if len(res.Freezes) != 1 || res.Freezes[0] != (offload.Freeze{Reason: offload.FreezeMissing, Dimension: offload.CPU}) {
-		t.Errorf("no cpu-path source: freezes = %+v", res.Freezes)
+		t.Errorf("no cpu-path rate: freezes = %+v", res.Freezes)
+	}
+}
+
+func TestNoVolumeSourceBudgetsWithoutTheCPUPathAndPlansByGain(t *testing.T) {
+	noSrc := Options{Model: CCR2216}
+	p, err := Profile(noSrc, func() (Snapshot, bool) { return Snapshot{L3HW: healthy()}, true })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slices.Contains(p.Dimensions, offload.CPU) {
+		t.Fatalf("dimensions = %v", p.Dimensions)
+	}
+	cfg := BudgetConfig(noSrc, time.Minute, false)
+	if slices.Contains(cfg.Dimensions, offload.CPU) || len(cfg.Reserve) != 2 {
+		t.Fatalf("budget config = %+v", cfg)
+	}
+	b, err := offload.NewBudget(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
+	res := b.Evaluate(now, offload.Identity{Profile: ID}, offload.Collect(context.Background(), p.Reader, p.Dimensions, now))
+	if res.Frozen() || res.HeadroomV4 == 0 {
+		t.Fatalf("budget = %+v", res)
+	}
+	pl, err := offload.NewPlanner(p, PlannerConfig(noSrc, false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// By volume the first fix (1 Mbps) would not displace the installed one
+	// (100 Mbps); by gain it leads by far more than the margin.
+	old := now.Add(-time.Hour)
+	res.HeadroomV4 = 0
+	got, err := pl.Plan(offload.Input{Now: now, Budget: res, Candidates: []offload.Candidate{
+		{Prefix: netip.MustParsePrefix("192.0.2.0/24"), Cause: plugin.CausePerformance, Gain: 1, VolumeMbps: 100, Since: old, Installed: true},
+		{Prefix: netip.MustParsePrefix("198.51.100.0/24"), Cause: plugin.CausePerformance, Gain: 50, VolumeMbps: 1, Since: old},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := offload.Decision{Prefix: netip.MustParsePrefix("198.51.100.0/24"), Action: offload.Swap, Out: netip.MustParsePrefix("192.0.2.0/24")}
+	if len(got.Decisions) != 1 || got.Decisions[0].Prefix != want.Prefix || got.Decisions[0].Action != want.Action || got.Decisions[0].Out != want.Out {
+		t.Fatalf("decisions = %+v", got.Decisions)
 	}
 }
 
@@ -489,7 +533,7 @@ func TestBudgetConfigMatchesProfileDimensions(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, v6 := range []bool{false, true} {
-		cfg := BudgetConfig(time.Minute, v6)
+		cfg := BudgetConfig(labOpts, time.Minute, v6)
 		if !slices.Equal(cfg.Dimensions, p.Dimensions) {
 			t.Errorf("budget dimensions %v differ from the profile's %v", cfg.Dimensions, p.Dimensions)
 		}
@@ -512,7 +556,7 @@ func TestPlannerStaysUnderTheReindexLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := PlannerConfig(labOpts, true)
-	if changes := 2*cfg.MaxSwapsPerRound + cfg.MaxShedPerRound; changes >= 128 {
+	if changes := cfg.MaxInstallsPerRound + 2*cfg.MaxSwapsPerRound + cfg.MaxShedPerRound; changes >= 128 {
 		t.Errorf("a full round is %d changes, not under 128", changes)
 	}
 
@@ -539,6 +583,74 @@ func TestPlannerStaysUnderTheReindexLimit(t *testing.T) {
 	}
 	if swaps != cfg.MaxSwapsPerRound {
 		t.Errorf("%d swaps, want the cap %d", swaps, cfg.MaxSwapsPerRound)
+	}
+}
+
+func TestInstallsStopAtTheCap(t *testing.T) {
+	p, err := Profile(labOpts, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pl, err := offload.NewPlanner(p, PlannerConfig(labOpts, false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
+	var cands []offload.Candidate
+	for i := range 100 {
+		pre := netip.PrefixFrom(netip.AddrFrom4([4]byte{198, 51, 100, byte(i)}), 32)
+		cands = append(cands, offload.Candidate{Prefix: pre, Cause: plugin.CausePerformance, Gain: 1, Since: now})
+	}
+	got, err := pl.Plan(offload.Input{Now: now, Candidates: cands, Budget: offload.Result{HeadroomV4: 2000}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	installs := 0
+	for _, d := range got.Decisions {
+		if d.Action == offload.Install {
+			installs++
+		}
+	}
+	if installs != 64 || installs >= 128 {
+		t.Errorf("%d installs with 2000 free entries, want the cap 64", installs)
+	}
+}
+
+func TestDefaultsChanged(t *testing.T) {
+	base := healthy()
+	if DefaultsChanged(base, base) {
+		t.Error("identical readings reported as changed")
+	}
+	reordered := healthy()
+	reordered.DefaultRoutes[0], reordered.DefaultRoutes[1] = reordered.DefaultRoutes[1], reordered.DefaultRoutes[0]
+	if DefaultsChanged(base, reordered) {
+		t.Error("a reordered list reported as changed")
+	}
+	cases := map[string]func(*routeros.L3HW){
+		"gateway":     func(l *routeros.L3HW) { l.DefaultRoutes[0].Gateway = "192.0.2.2" },
+		"distance":    func(l *routeros.L3HW) { l.DefaultRoutes[0].Distance = 30 },
+		"local pref":  func(l *routeros.L3HW) { l.DefaultRoutes[0].LocalPref = 300 },
+		"active":      func(l *routeros.L3HW) { l.DefaultRoutes[0].Active = false },
+		"suppression": func(l *routeros.L3HW) { l.DefaultRoutes[1].SuppressHWOffload = false },
+		"removed":     func(l *routeros.L3HW) { l.DefaultRoutes = l.DefaultRoutes[:1] },
+		"added": func(l *routeros.L3HW) {
+			l.DefaultRoutes = append(l.DefaultRoutes, routeros.DefaultRoute{Family: "ipv4", Gateway: "192.0.2.9", Protocol: "Static route", SuppressHWOffload: true})
+		},
+	}
+	for name, mutate := range cases {
+		cur := healthy()
+		mutate(&cur)
+		if !DefaultsChanged(base, cur) {
+			t.Errorf("%s change not detected", name)
+		}
+	}
+}
+
+func TestHostsAreReportedNotBudgeted(t *testing.T) {
+	l := healthy()
+	l.Monitor.IPv4Hosts = 87
+	if a := Assess(l, labOpts); a.IPv4Hosts != 87 || len(a.Findings) != 0 {
+		t.Errorf("assessment = %+v", a)
 	}
 }
 

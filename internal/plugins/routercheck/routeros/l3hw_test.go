@@ -128,7 +128,7 @@ func TestFullHardwareTable(t *testing.T) {
 		t.Fatalf("applicable/version = %v %q", got.Applicable, got.Version)
 	}
 	m := got.Monitor
-	if m.IPv4RoutesTotal != 942338 || m.IPv4RoutesHW != 942326 || m.IPv4RoutesCPU != 12 || m.IPv4ShortestHWPrefix != 0 || m.State != "ok" {
+	if m.IPv4RoutesTotal != 942338 || m.IPv4RoutesHW != 942326 || m.IPv4RoutesCPU != 12 || m.IPv4ShortestHWPrefix != 0 || m.IPv4Hosts != 87 || m.State != "ok" {
 		t.Errorf("monitor = %+v", m)
 	}
 	if !m.Partial() {

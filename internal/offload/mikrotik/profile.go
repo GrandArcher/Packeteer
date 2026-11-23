@@ -51,13 +51,14 @@ const (
 	// maxChangesPerBatch is where RouterOS re-indexes the whole table: a
 	// round stays under it, counting a swap as two changes.
 	maxChangesPerBatch = 128
-	swapsPerRound      = 32
-	shedsPerRound      = 32
+	swapsPerRound      = 16
+	shedsPerRound      = 16
+	installsPerRound   = 64
 )
 
-// A full round of swaps (two changes each) and sheds must stay under the
-// re-index limit; this fails to compile otherwise.
-const _ = uint(maxChangesPerBatch - 1 - (2*swapsPerRound + shedsPerRound))
+// A full round of installs, swaps (two changes each) and sheds must stay
+// under the re-index limit; this fails to compile otherwise.
+const _ = uint(maxChangesPerBatch - 1 - (installsPerRound + 2*swapsPerRound + shedsPerRound))
 
 // Options is what the operator supplies per router.
 type Options struct {
@@ -68,7 +69,7 @@ type Options struct {
 	// VolumeSource names the external per-prefix volume source (sFlow or
 	// IPFIX from another device). RouterOS Traffic-Flow does not see
 	// hardware-forwarded traffic, so without a source ranking falls back to
-	// path gain.
+	// path gain and the CPU-path ceiling is not budgeted: nothing measures it.
 	VolumeSource string
 }
 
@@ -98,7 +99,7 @@ func Profile(opts Options, src func() (Snapshot, bool)) (offload.Profile, error)
 			Reason: "defaults carry suppress-hw-offload=yes: misses go to the CPU and the full RIB",
 		},
 		Miss:       offload.CPUPunt,
-		Dimensions: []offload.Dimension{offload.FIBv4, offload.NextHops, offload.CPU},
+		Dimensions: dimensions(opts),
 		Cost:       offload.Cost{EntriesV4: 1, EntriesV6: ipv6Entries},
 		Reader:     newReader(opts, src),
 		Selection:  offload.CommunitySnippet,
@@ -111,18 +112,30 @@ func Profile(opts Options, src func() (Snapshot, bool)) (offload.Profile, error)
 	return p, p.Validate()
 }
 
+// dimensions are the budgeted dimensions: the CPU path only with a volume
+// source to measure it.
+func dimensions(opts Options) []offload.Dimension {
+	dims := []offload.Dimension{offload.FIBv4, offload.NextHops}
+	if opts.VolumeSource != "" {
+		dims = append(dims, offload.CPU)
+	}
+	return dims
+}
+
 // BudgetConfig is the budget for the profile. ipv6HW is the router's
 // ipv6-hw setting: IPv6 routes share the LPM pool when it is on, and with it
 // off none are budgeted, so the IPv6 headroom is 0.
-func BudgetConfig(recheck time.Duration, ipv6HW bool) offload.Config {
+func BudgetConfig(opts Options, recheck time.Duration, ipv6HW bool) offload.Config {
 	cfg := offload.Config{
 		Recheck:    recheck,
-		Dimensions: []offload.Dimension{offload.FIBv4, offload.NextHops, offload.CPU},
+		Dimensions: dimensions(opts),
 		Reserve: map[offload.Dimension]offload.Reserve{
 			offload.FIBv4:    {Pct: reservePct},
 			offload.NextHops: {Pct: 1 - nexthopWarn},
-			offload.CPU:      {Pct: reservePct},
 		},
+	}
+	if opts.VolumeSource != "" {
+		cfg.Reserve[offload.CPU] = offload.Reserve{Pct: reservePct}
 	}
 	if ipv6HW {
 		cfg.IPv6 = offload.IPv6Pool{Shared: true, Weight: ipv6Entries}
@@ -135,9 +148,10 @@ func BudgetConfig(recheck time.Duration, ipv6HW bool) offload.Config {
 // source.
 func PlannerConfig(opts Options, ipv6HW bool) offload.PlannerConfig {
 	cfg := offload.PlannerConfig{
-		MaxSwapsPerRound: swapsPerRound,
-		MaxShedPerRound:  shedsPerRound,
-		GainOnly:         opts.VolumeSource == "",
+		MaxSwapsPerRound:    swapsPerRound,
+		MaxShedPerRound:     shedsPerRound,
+		MaxInstallsPerRound: installsPerRound,
+		GainOnly:            opts.VolumeSource == "",
 	}
 	if ipv6HW {
 		cfg.IPv6 = offload.IPv6Pool{Shared: true, Weight: ipv6Entries}

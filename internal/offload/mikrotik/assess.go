@@ -2,6 +2,7 @@ package mikrotik
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/GrandArcher/Packeteer/internal/offload"
@@ -69,16 +70,9 @@ type Assessment struct {
 	MaxRun   offload.RunLevel
 	Freezes  []offload.Freeze
 	Findings []Finding
-}
-
-// Has reports whether a finding with code was raised.
-func (a Assessment) Has(code string) bool {
-	for _, f := range a.Findings {
-		if f.Code == code {
-			return true
-		}
-	}
-	return false
+	// IPv4Hosts is the host-entry count from the monitor. It is reported
+	// only: no host-table cap is published or read, so it is not budgeted.
+	IPv4Hosts int64
 }
 
 func (a *Assessment) add(code string, sev Severity, reason offload.FreezeReason, dim offload.Dimension, format string, args ...any) {
@@ -98,7 +92,7 @@ func (a *Assessment) add(code string, sev Severity, reason offload.FreezeReason,
 // Assess applies the version rules, the default-route policy, the pre-checks
 // and the thresholds to one reading. It does not need the budget readings.
 func Assess(l routeros.L3HW, opts Options) Assessment {
-	a := Assessment{MaxRun: offload.DryRun}
+	a := Assessment{MaxRun: offload.DryRun, IPv4Hosts: l.Monitor.IPv4Hosts}
 	if !l.Applicable {
 		a.MaxRun = offload.Refuse
 		a.add(CodeNotApplicable, Warn, "", "", "the router exposes no L3HW monitor (no switch chip, or a CHR)")
@@ -106,7 +100,7 @@ func Assess(l routeros.L3HW, opts Options) Assessment {
 	}
 	a.version(l.Version)
 	if opts.VolumeSource == "" {
-		a.add(CodeNoVolumeSource, Warn, "", "", "RouterOS Traffic-Flow does not see hardware-forwarded traffic and no external volume source is named: ranking by path gain")
+		a.add(CodeNoVolumeSource, Warn, "", "", "RouterOS Traffic-Flow does not see hardware-forwarded traffic and no external volume source is named: ranking by path gain, CPU path not budgeted")
 	}
 	a.defaults(l)
 	a.preChecks(l)
@@ -162,7 +156,7 @@ func (a *Assessment) preChecks(l routeros.L3HW) {
 		fail(CheckMangleMarks, "%d mark-routing mangle rule(s): marked traffic leaves the main table", l.MarkRoutingRules)
 	}
 	if bypass := l.ForwardFilterRules + l.NATRules + l.MangleRules - l.MarkRoutingRules; bypass > 0 {
-		fail(CheckForwardBypass, "%d forward filter, NAT or mangle rule(s): hardware-forwarded traffic bypasses them", bypass)
+		fail(CheckForwardBypass, "%d enabled forward filter, NAT or mangle rule(s): hardware-forwarded traffic bypasses them", bypass)
 	}
 	if n := countEnabled(l.Bridges); n > 1 {
 		fail(CheckMultiBridge, "%d enabled bridges: hardware offload needs one", n)
@@ -253,4 +247,18 @@ func Gate(res offload.Result, a Assessment) offload.Result {
 		return res
 	}
 	return offload.Result{Freezes: append(append([]offload.Freeze(nil), res.Freezes...), a.Freezes...)}
+}
+
+// DefaultsChanged reports whether the default routes differ between two
+// readings: a gateway, distance, local-pref, activity or suppression change,
+// or a route added or removed. The caller reports a change as both a
+// LastInstall and a LastShed in the planner input, so the planner settles for
+// the profile's timing before it trusts a reading.
+func DefaultsChanged(prev, cur routeros.L3HW) bool {
+	order := func(a, b routeros.DefaultRoute) int {
+		return strings.Compare(a.Family+"|"+a.Gateway+"|"+a.Protocol, b.Family+"|"+b.Gateway+"|"+b.Protocol)
+	}
+	p := slices.SortedFunc(slices.Values(prev.DefaultRoutes), order)
+	c := slices.SortedFunc(slices.Values(cur.DefaultRoutes), order)
+	return !slices.Equal(p, c)
 }
