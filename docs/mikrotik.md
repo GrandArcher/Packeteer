@@ -90,7 +90,7 @@ FRR, Junos, and IOS equivalents: [frr.md](frr.md), [junos.md](junos.md), [cisco.
 
 ## Hardware routing (L3HW) reader
 
-The `routeros` router check's login also feeds a read-only reader of RouterOS hardware routing state (#736, `Reader.ReadL3HW` in `internal/plugins/routercheck/routeros`). It reads and decides nothing yet: it returns typed readings for the planned `offload_aware` mode, which is off by default and not built. Point it only at a lab router or a router you chose; it writes nothing.
+The `routeros` router check's login also feeds a read-only reader of RouterOS hardware routing state (#736, `Reader.ReadL3HW` in `internal/plugins/routercheck/routeros`). It decides nothing: it returns typed readings for the opt-in `offload_aware` mode, which is off by default; its config block is parsed and checked but nothing reads it at runtime yet ([CONFIG](CONFIG.md#offload_aware)). Point it only at a lab router or a router you chose; it writes nothing.
 
 It sends GET requests, and `POST` only to `l3hw-settings/monitor` and `l3hw-settings/advanced/monitor` with the body `{"once":""}`. Every path is on a fixed list and anything else is refused in code. It reads:
 

@@ -75,7 +75,8 @@ type PlannerConfig struct {
 	IPv6 IPv6Pool
 }
 
-// withDefaults fills the knobs the issue gives a default.
+// withDefaults fills the knobs that have a default: DisplaceMargin and
+// MaxShedPerRound.
 func (c PlannerConfig) withDefaults() PlannerConfig {
 	if c.DisplaceMargin == nil {
 		m := DefaultDisplaceMargin
