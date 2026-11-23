@@ -63,7 +63,8 @@ const _ = uint(maxChangesPerBatch - 1 - (installsPerRound + 2*swapsPerRound + sh
 // Options is what the operator supplies per router.
 type Options struct {
 	// Model names the router, for its lane bandwidth and LPM target. Empty
-	// means unknown: the CPU dimension then has no reading and the budget
+	// means unknown: there is no LPM target, and with a VolumeSource named the
+	// CPU dimension has no lane bandwidth to measure against, so the budget
 	// freezes.
 	Model Model
 	// VolumeSource names the external per-prefix volume source (sFlow or

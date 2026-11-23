@@ -134,7 +134,7 @@ func (a *Assessment) defaults(l routeros.L3HW) {
 		switch {
 		case d.HFlag:
 			a.add(CodeDefaultInHW, Alarm, offload.FreezeDefaultPolicy, "",
-				"%s default route via %s is in hardware: it must carry suppress-hw-offload=yes", d.Family, d.Gateway)
+				"%s default route via %s has the H flag (eligible for hardware): it must carry suppress-hw-offload=yes", d.Family, d.Gateway)
 		case !d.SuppressHWOffload:
 			a.add(CodeDefaultEligible, Freeze, offload.FreezeDefaultPolicy, "",
 				"%s default route via %s does not carry suppress-hw-offload=yes", d.Family, d.Gateway)

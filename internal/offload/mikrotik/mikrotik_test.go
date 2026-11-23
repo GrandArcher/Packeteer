@@ -611,7 +611,7 @@ func TestInstallsStopAtTheCap(t *testing.T) {
 			installs++
 		}
 	}
-	if installs != 64 || installs >= 128 {
+	if installs != 64 {
 		t.Errorf("%d installs with 2000 free entries, want the cap 64", installs)
 	}
 }
