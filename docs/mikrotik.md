@@ -90,13 +90,13 @@ FRR, Junos, and IOS equivalents: [frr.md](frr.md), [junos.md](junos.md), [cisco.
 
 ## Hardware routing (L3HW) reader
 
-The `routeros` router check's login also feeds a read-only reader of RouterOS hardware routing state (#736, `Reader.ReadL3HW` in `internal/plugins/routercheck/routeros`). It reads and decides nothing yet: it returns typed readings for the planned `offload_aware` mode, which is off by default and not built. Point it only at a lab router or a router you chose; it writes nothing.
+The `routeros` router check's login also feeds a read-only reader of RouterOS hardware routing state (#736, `Reader.ReadL3HW` in `internal/plugins/routercheck/routeros`). It decides nothing itself: it returns typed readings for the opt-in `offload_aware` mode (off by default; the profile below is the first consumer, and nothing calls it yet). Point it only at a lab router or a router you chose; it writes nothing.
 
 It sends GET requests, and `POST` only to `l3hw-settings/monitor` and `l3hw-settings/advanced/monitor` with the body `{"once":""}`. Every path is on a fixed list and anything else is refused in code. It reads:
 
 - `/system/resource` (version), `/interface/ethernet/switch` and `.../port` (`l3-hw-offloading`), `l3hw-settings` (`ipv6-hw`, `fasttrack-hw`, `autorestart`) and `l3hw-settings/advanced` (`shwp-reset-counter`, `route-index-delay-min` and `-max`, `route-queue-limit-high` and `-low`)
 - the monitor counts: `ipv4-routes-total`, `-hw` and `-cpu`, `ipv4-shortest-hw-prefix`, the IPv6 counts, `nexthop-cap` and `nexthop-usage`; the advanced monitor adds `error-code` and `lpm-cap` and `lpm-usage`
-- bridges, VLAN interfaces, bonds, VRRP interfaces, routing rules, VRFs, enabled `mark-routing` mangle rules, and enabled `forward` filter rules (counted, not copied)
+- bridges, VLAN interfaces (with their parent `interface`), bonds (with `mode`), VRRP interfaces, routing rules, VRFs, enabled mangle rules (and how many are `mark-routing`), enabled `forward` filter rules, and enabled NAT rules (counted, not copied)
 - every `0.0.0.0/0` and `::/0` route, active or not: gateway, distance, protocol (`belongs-to`), `bgp-local-pref`, `suppress-hw-offload`, and the `H` flag
 
 How to read it:
@@ -118,6 +118,18 @@ The login comes from the same environment variables as the router check. RouterO
 `go run ./lab/checkl3hw -url https://192.0.2.254` prints the reading as JSON (login from `PACKETEER_ROUTER_READ_USER` and `PACKETEER_ROUTER_READ_PASSWORD`). Tests use a fake REST server with documented outputs: a CCR2216 with 942,338 routes and 942,326 in hardware, one with 37,729 in hardware at shortest prefix 30 and `lpm-cap` 27200, and a table of 174,000 routes with none in hardware at prefix 24 and next hops 8192 of 8192.
 
 Rollback: nothing is configured by the reader. Remove the user and group above if you made them; revert #736 to drop the code.
+
+## Offload profile mikrotik-l3hw-lpm
+
+Profile `mikrotik-l3hw-lpm` (#737, `internal/offload/mikrotik`) covers RouterOS L3HW on the indexed-LPM switch chips: CCR2216, CCR2116 and the CRS models that share them. It is opt-in with `offload_aware`, never changes `mode`, never writes router config and never touches a default route. Its maximum run level is `dry_run`: enforcing waits for the bench-gated v1.15 issue. Nothing calls it yet.
+
+- Default route: out of hardware. Defaults must carry `suppress-hw-offload=yes`; misses go to the CPU and the full RIB. A default whose `H` flag is set raises an alarm and freezes installs and sheds; a default without the flag set freezes too.
+- Budget dimensions: `lpm-usage` of `lpm-cap` (20% reserve; the CCR2216 aims at 100,000 routes, so a table above that reads as full), next hops (`nexthop-cap`, 8192 in public reports; warn at 90%, freeze at 100%) and the CPU path against the lane bandwidth (CCR2116 4x10G, CCR2216 4x25G, 20% reserve). The CPU-path rate comes from an external volume source, because Traffic-Flow does not see hardware-forwarded traffic; with no source named, ranking falls back to path gain. A shortest hardware prefix above 0 freezes. IPv6 shares the LPM pool only with `ipv6-hw` on (each route assumed to cost 2 entries until the bench measures it); with it off IPv6 gets no headroom. ECMP limits and host entries are not budgeted.
+- Pre-checks, each freezing while it fails: a VRF, a routing rule or a `mark-routing` mangle rule (only the main table is offloaded); forward filter, NAT or mangle rules (bypassed in hardware); more than one enabled bridge; a VLAN interface on a port or bond; `l3-hw-offloading` on some switch ports and off on others, or off on all; a bond not in `802.3ad` or `balance-xor`; a VRRP interface; an L3HW monitor state other than `ok` or a driver error code.
+- RouterOS versions: 7.2 and older refuse (undefined behavior on overflow); older than 7.10 report only (no monitor); 7.16 to 7.18 warn (field reports of BGP lock-ups); an unreadable version reports only.
+- Timing: an install or a removal is trusted after 15 s (`route-index-delay-max` of 10 s plus an allowance for the route queue). A planning round stays under 128 changes, the point where RouterOS re-indexes the table.
+
+Rollback: nothing is written to the router or the config. Revert #737 to drop the profile.
 
 ## Exchange peers
 

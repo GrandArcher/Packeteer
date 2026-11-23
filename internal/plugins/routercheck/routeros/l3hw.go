@@ -33,6 +33,7 @@ var l3hwGet = readonly.NewAllowlist(
 	`/ip/vrf`,
 	`/ip/firewall/mangle`,
 	`/ip/firewall/filter`,
+	`/ip/firewall/nat`,
 	`/ip/route\?dst-address=0\.0\.0\.0/0`,
 	`/ipv6/route\?dst-address=::/0`,
 )
@@ -68,7 +69,9 @@ type L3HW struct {
 	RoutingRules       int `json:"routing_rules"`
 	VRFs               int `json:"vrfs"`
 	MarkRoutingRules   int `json:"mark_routing_rules"`
+	MangleRules        int `json:"mangle_rules"`
 	ForwardFilterRules int `json:"forward_filter_rules"`
+	NATRules           int `json:"nat_rules"`
 	VRRPInterfaces     int `json:"vrrp_interfaces"`
 
 	// DefaultRoutes lists every 0.0.0.0/0 and ::/0 route, active or not.
@@ -146,6 +149,10 @@ type Iface struct {
 	Name     string `json:"name"`
 	Disabled bool   `json:"disabled"`
 	L3HW     bool   `json:"l3_hw_offloading"`
+	// Parent is the interface a VLAN interface sits on.
+	Parent string `json:"parent,omitempty"`
+	// Mode is the bonding mode of a bond.
+	Mode string `json:"mode,omitempty"`
 }
 
 // DefaultRoute is one 0.0.0.0/0 or ::/0 route.
@@ -277,10 +284,10 @@ func (r *Reader) readTopology(ctx context.Context, out *L3HW) error {
 			return authErr(err)
 		}
 		for _, x := range rows {
-			*l.dst = append(*l.dst, Iface{Name: x["name"], Disabled: yes(x["disabled"]), L3HW: yes(x["l3-hw-offloading"])})
+			*l.dst = append(*l.dst, Iface{Name: x["name"], Disabled: yes(x["disabled"]), L3HW: yes(x["l3-hw-offloading"]), Parent: x["interface"], Mode: x["mode"]})
 		}
 	}
-	var rules, vrfs, mangle, filter, vrrp []row
+	var rules, vrfs, mangle, filter, nat, vrrp []row
 	for _, l := range []struct {
 		path string
 		dst  *[]row
@@ -289,6 +296,7 @@ func (r *Reader) readTopology(ctx context.Context, out *L3HW) error {
 		{"/ip/vrf", &vrfs},
 		{"/ip/firewall/mangle", &mangle},
 		{"/ip/firewall/filter", &filter},
+		{"/ip/firewall/nat", &nat},
 		{"/interface/vrrp", &vrrp},
 	} {
 		if err := r.l3get(ctx, l.path, l.dst); err != nil {
@@ -296,6 +304,7 @@ func (r *Reader) readTopology(ctx context.Context, out *L3HW) error {
 		}
 	}
 	out.RoutingRules, out.VRFs, out.VRRPInterfaces = enabled(rules, nil), len(vrfs), len(vrrp)
+	out.MangleRules, out.NATRules = enabled(mangle, nil), enabled(nat, nil)
 	out.MarkRoutingRules = enabled(mangle, func(x row) bool { return x["action"] == "mark-routing" })
 	out.ForwardFilterRules = enabled(filter, func(x row) bool { return x["chain"] == "forward" })
 	return nil

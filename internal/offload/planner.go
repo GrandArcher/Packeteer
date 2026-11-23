@@ -73,6 +73,10 @@ type PlannerConfig struct {
 	MaxShedPerRound int
 	// IPv6 is how the budget pools IPv6 routes; it must match the Budget.
 	IPv6 IPv6Pool
+	// GainOnly ranks by gain even on a platform that punts a miss to the CPU.
+	// It is for a deployment with no trusted per-prefix volume source: the
+	// volumes would be empty or wrong.
+	GainOnly bool
 }
 
 // withDefaults fills the knobs the issue gives a default.
@@ -167,7 +171,11 @@ func NewPlanner(p Profile, cfg PlannerConfig) (*Planner, error) {
 	if p.Timing.InstallSeconds < 0 || p.Timing.AgeOutSeconds < 0 {
 		return nil, fmt.Errorf("offload: profile %q: timing must not be negative", p.ID)
 	}
-	return &Planner{cfg: cfg, timing: p.Timing, emphasis: emphasisFor(p.Miss)}, nil
+	emphasis := emphasisFor(p.Miss)
+	if cfg.GainOnly {
+		emphasis = GainEmphasis
+	}
+	return &Planner{cfg: cfg, timing: p.Timing, emphasis: emphasis}, nil
 }
 
 type ranked struct {

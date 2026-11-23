@@ -582,3 +582,24 @@ func TestVolumeEmphasisMarginUsesVolume(t *testing.T) {
 		})
 	}
 }
+
+func TestGainOnlyOverridesVolumeEmphasis(t *testing.T) {
+	prof := NoneProfile()
+	prof.Miss = CPUPunt
+	cfg := testCfg()
+	cfg.GainOnly = true
+	old := t0.Add(-time.Hour)
+	mk := func(p string, gain, vol float64, installed bool) Candidate {
+		return Candidate{Prefix: pfx(p), Cause: plugin.CausePerformance, Gain: gain, VolumeMbps: vol, Since: old, Installed: installed}
+	}
+	// With volume emphasis this challenger would lose (50 Mbps against 100);
+	// by gain it leads the installed fix by far more than the margin.
+	got := plan(t, newPlanner(t, prof, cfg), Input{
+		Now:        t0,
+		Candidates: []Candidate{mk("192.0.2.0/24", 1, 100, true), mk("198.51.100.0/24", 9999, 50, false)},
+		Budget:     full,
+	})
+	if a := actions(got); a["198.51.100.0/24"] != "swap" {
+		t.Fatalf("%v", a)
+	}
+}
