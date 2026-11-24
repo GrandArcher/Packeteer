@@ -93,13 +93,14 @@ func chip(version, monitor, advanced string) *l3hwRouter {
 		"POST " + pathAdvMon:          advanced,
 		"GET " + pathSwitch + "/port": `[{"name":"sfp-sfpplus1","l3-hw-offloading":"true"},{"name":"qsfp28-1-1","l3-hw-offloading":"false"}]`,
 		"GET /interface/bridge":       `[{"name":"bridge1","disabled":"false","l3-hw-offloading":"true"}]`,
-		"GET /interface/vlan":         `[{"name":"vlan100","disabled":"false","l3-hw-offloading":"true"},{"name":"vlan200","disabled":"true"}]`,
-		"GET /interface/bonding":      `[{"name":"bond1","disabled":"false"}]`,
+		"GET /interface/vlan":         `[{"name":"vlan100","disabled":"false","l3-hw-offloading":"true","interface":"bridge1"},{"name":"vlan200","disabled":"true"}]`,
+		"GET /interface/bonding":      `[{"name":"bond1","disabled":"false","mode":"802.3ad"}]`,
 		"GET /interface/vrrp":         `[{"name":"vrrp1"}]`,
 		"GET /routing/rule":           `[{"action":"lookup","table":"isp-b","disabled":"false"},{"action":"lookup","table":"old","disabled":"true"}]`,
 		"GET /ip/vrf":                 `[{"name":"mgmt"}]`,
 		"GET /ip/firewall/mangle":     `[{"chain":"prerouting","action":"mark-routing","disabled":"false"},{"chain":"prerouting","action":"mark-routing","disabled":"true"},{"chain":"forward","action":"mark-connection","disabled":"false"}]`,
 		"GET /ip/firewall/filter":     `[{"chain":"forward","action":"accept","disabled":"false"},{"chain":"input","action":"accept","disabled":"false"}]`,
+		"GET /ip/firewall/nat":        `[{"chain":"srcnat","action":"masquerade","disabled":"false"},{"chain":"srcnat","action":"accept","disabled":"true"}]`,
 		"GET " + pathRoute4: `[
 			{"dst-address":"0.0.0.0/0","gateway":"192.0.2.1","distance":"20","belongs-to":"BGP","bgp-local-pref":"200","active":"true","inactive":"false","hw-offloaded":"true","suppress-hw-offload":"false"},
 			{"dst-address":"0.0.0.0/0","gateway":"192.0.2.2","distance":"250","belongs-to":"Static route","active":"false","inactive":"true","hw-offloaded":"false","suppress-hw-offload":"true"},
@@ -127,7 +128,7 @@ func TestFullHardwareTable(t *testing.T) {
 		t.Fatalf("applicable/version = %v %q", got.Applicable, got.Version)
 	}
 	m := got.Monitor
-	if m.IPv4RoutesTotal != 942338 || m.IPv4RoutesHW != 942326 || m.IPv4RoutesCPU != 12 || m.IPv4ShortestHWPrefix != 0 || m.State != "ok" {
+	if m.IPv4RoutesTotal != 942338 || m.IPv4RoutesHW != 942326 || m.IPv4RoutesCPU != 12 || m.IPv4ShortestHWPrefix != 0 || m.IPv4Hosts != 87 || m.State != "ok" {
 		t.Errorf("monitor = %+v", m)
 	}
 	if !m.Partial() {
@@ -149,12 +150,12 @@ func TestFullHardwareTable(t *testing.T) {
 	if !slices.Equal(got.Ports, wantPorts) {
 		t.Errorf("ports = %+v", got.Ports)
 	}
-	if !slices.Equal(got.Bridges, []Iface{{"bridge1", false, true}}) ||
-		!slices.Equal(got.VLANs, []Iface{{"vlan100", false, true}, {"vlan200", true, false}}) ||
-		!slices.Equal(got.Bonds, []Iface{{"bond1", false, false}}) {
+	if !slices.Equal(got.Bridges, []Iface{{Name: "bridge1", L3HW: true}}) ||
+		!slices.Equal(got.VLANs, []Iface{{Name: "vlan100", L3HW: true, Parent: "bridge1"}, {Name: "vlan200", Disabled: true}}) ||
+		!slices.Equal(got.Bonds, []Iface{{Name: "bond1", Mode: "802.3ad"}}) {
 		t.Errorf("interfaces = %+v %+v %+v", got.Bridges, got.VLANs, got.Bonds)
 	}
-	if got.RoutingRules != 1 || got.VRFs != 1 || got.MarkRoutingRules != 1 || got.ForwardFilterRules != 1 || got.VRRPInterfaces != 1 {
+	if got.RoutingRules != 1 || got.VRFs != 1 || got.MarkRoutingRules != 1 || got.MangleRules != 2 || got.ForwardFilterRules != 1 || got.NATRules != 1 || got.VRRPInterfaces != 1 {
 		t.Errorf("policy counts = %+v", got)
 	}
 	if len(got.Unread) != 0 {
@@ -384,7 +385,7 @@ func TestOnlyGETsAndMonitorOncePOSTs(t *testing.T) {
 	if !slices.Equal(posts, want) {
 		t.Errorf("POSTs = %q, want %q", posts, want)
 	}
-	if len(reqs) != 17 {
+	if len(reqs) != 18 {
 		t.Errorf("%d requests: %q", len(reqs), reqs)
 	}
 }

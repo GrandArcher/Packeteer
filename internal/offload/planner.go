@@ -71,8 +71,16 @@ type PlannerConfig struct {
 	MaxSwapsPerMinute int
 	// MaxShedPerRound caps sheds in one round. 0 means DefaultMaxShedPerRound.
 	MaxShedPerRound int
+	// MaxInstallsPerRound caps installs in one round. 0 means no cap beyond
+	// the headroom. A platform that re-indexes after a number of changes sets
+	// it.
+	MaxInstallsPerRound int
 	// IPv6 is how the budget pools IPv6 routes; it must match the Budget.
 	IPv6 IPv6Pool
+	// GainOnly ranks by gain even on a platform that punts a miss to the CPU.
+	// It is for a deployment with no trusted per-prefix volume source: the
+	// volumes would be empty or wrong.
+	GainOnly bool
 }
 
 // withDefaults fills the knobs the issue gives a default.
@@ -99,6 +107,8 @@ func (c PlannerConfig) validate() error {
 		return errors.New("offload: max swaps per minute must not be negative")
 	case c.MaxShedPerRound < 0:
 		return errors.New("offload: max shed per round must not be negative")
+	case c.MaxInstallsPerRound < 0:
+		return errors.New("offload: max installs per round must not be negative")
 	case c.IPv6.Shared && c.IPv6.Weight < 1:
 		return errors.New("offload: shared IPv6 weight must be at least 1")
 	}
@@ -167,7 +177,11 @@ func NewPlanner(p Profile, cfg PlannerConfig) (*Planner, error) {
 	if p.Timing.InstallSeconds < 0 || p.Timing.AgeOutSeconds < 0 {
 		return nil, fmt.Errorf("offload: profile %q: timing must not be negative", p.ID)
 	}
-	return &Planner{cfg: cfg, timing: p.Timing, emphasis: emphasisFor(p.Miss)}, nil
+	emphasis := emphasisFor(p.Miss)
+	if cfg.GainOnly {
+		emphasis = GainEmphasis
+	}
+	return &Planner{cfg: cfg, timing: p.Timing, emphasis: emphasis}, nil
 }
 
 type ranked struct {
@@ -346,8 +360,14 @@ func (p *Planner) Plan(in Input) (Plan, error) {
 		swaps = min(swaps, max(0, p.cfg.MaxSwapsPerMinute-in.SwapsLastMinute))
 	}
 	swapped := map[netip.Prefix]bool{}
+	installs := 0
 	for _, c := range wanted {
+		if p.cfg.MaxInstallsPerRound > 0 && installs == p.cfg.MaxInstallsPerRound {
+			out.Decisions = append(out.Decisions, Decision{c.Prefix, Withhold, netip.Prefix{}, "install cap reached"})
+			continue
+		}
 		if rm.take(c.v6) {
+			installs++
 			out.Decisions = append(out.Decisions, Decision{c.Prefix, Install, netip.Prefix{}, "headroom"})
 			continue
 		}

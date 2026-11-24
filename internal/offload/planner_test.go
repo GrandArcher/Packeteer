@@ -582,3 +582,46 @@ func TestVolumeEmphasisMarginUsesVolume(t *testing.T) {
 		})
 	}
 }
+
+func TestGainOnlyOverridesVolumeEmphasis(t *testing.T) {
+	prof := NoneProfile()
+	prof.Miss = CPUPunt
+	cfg := testCfg()
+	cfg.GainOnly = true
+	old := t0.Add(-time.Hour)
+	mk := func(p string, gain, vol float64, installed bool) Candidate {
+		return Candidate{Prefix: pfx(p), Cause: plugin.CausePerformance, Gain: gain, VolumeMbps: vol, Since: old, Installed: installed}
+	}
+	// With volume emphasis this challenger would lose (50 Mbps against 100);
+	// by gain it leads the installed fix by far more than the margin.
+	got := plan(t, newPlanner(t, prof, cfg), Input{
+		Now:        t0,
+		Candidates: []Candidate{mk("192.0.2.0/24", 1, 100, true), mk("198.51.100.0/24", 9999, 50, false)},
+		Budget:     full,
+	})
+	if a := actions(got); a["198.51.100.0/24"] != "swap" {
+		t.Fatalf("%v", a)
+	}
+}
+
+func TestInstallsAreCappedPerRound(t *testing.T) {
+	cfg := testCfg()
+	cfg.MaxInstallsPerRound = 3
+	var cands []Candidate
+	for i := range 10 {
+		p := netip.PrefixFrom(netip.AddrFrom4([4]byte{198, 51, 100, byte(i)}), 32)
+		cands = append(cands, Candidate{Prefix: p, Cause: plugin.CausePerformance, Gain: float64(10 - i), Since: t0})
+	}
+	got := plan(t, newPlanner(t, NoneProfile(), cfg), Input{Now: t0, Candidates: cands, Budget: Result{HeadroomV4: 100}})
+	if n := count(got, Install); n != 3 {
+		t.Fatalf("%d installs, want the cap 3", n)
+	}
+	a := actions(got)
+	if a["198.51.100.0/32"] != "install" || a["198.51.100.2/32"] != "install" || a["198.51.100.3/32"] != "withhold" {
+		t.Errorf("the best three must install: %v", a)
+	}
+	cfg.MaxInstallsPerRound = -1
+	if _, err := NewPlanner(NoneProfile(), cfg); err == nil {
+		t.Error("a negative install cap was accepted")
+	}
+}
