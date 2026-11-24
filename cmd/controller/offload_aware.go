@@ -74,6 +74,9 @@ func newOffloadAware(cfg *config.Config, b blastSource, plugins *pluginhost.Set,
 		if err != nil {
 			return nil, fmt.Errorf("offload_aware router %s: %w", r.Neighbor, err)
 		}
+		if err := checkVolumeSource(plugins, r.VolumeSource); err != nil {
+			return nil, fmt.Errorf("offload_aware router %s: %w", r.Neighbor, err)
+		}
 		opts := mikrotik.OptionsOf(r)
 		er, err := oa.addRouter(r.Neighbor, opts, rd.ReadL3HW)
 		if err != nil {
@@ -82,6 +85,24 @@ func newOffloadAware(cfg *config.Config, b blastSource, plugins *pluginhost.Set,
 		oa.routers = append(oa.routers, er)
 	}
 	return oa, nil
+}
+
+// checkVolumeSource refuses a volume_source that cannot report per-prefix
+// traffic; the CPU dimension would otherwise freeze on every reading.
+func checkVolumeSource(plugins *pluginhost.Set, name string) error {
+	if name == "" {
+		return nil
+	}
+	for _, src := range plugins.SourcesSnapshot() {
+		if src.Name != name {
+			continue
+		}
+		if _, ok := src.Plugin.(plugin.VolumeSource); !ok {
+			return fmt.Errorf("volume_source %q (type %s) does not report per-prefix traffic", name, src.Type)
+		}
+		return nil
+	}
+	return fmt.Errorf("volume_source %q is not a running source", name)
 }
 
 func (oa *offloadAware) addRouter(neighbor string, opts mikrotik.Options, read func(context.Context) (routeros.L3HW, error)) (*offloadRouter, error) {
@@ -179,7 +200,12 @@ func (oa *offloadAware) Report() offload.DryRunReport {
 }
 
 func (oa *offloadAware) evaluate(r *offloadRouter, wanted []offload.Wanted, now time.Time) offload.RouterReport {
-	rates := oa.volumes(r.opts.VolumeSource)
+	// Without a named source, summing every source would show traffic that
+	// Traffic-Flow cannot see as a hardware share.
+	var rates map[netip.Prefix]float64
+	if r.opts.VolumeSource != "" {
+		rates = oa.volumes(r.opts.VolumeSource)
+	}
 	vol := offload.BuildVolume(r.opts.VolumeSource, rates, oa.learned)
 	r.mu.Lock()
 	in := mikrotik.Input{Now: now, Neighbor: r.neighbor, At: r.at, Err: r.err, Volume: vol}

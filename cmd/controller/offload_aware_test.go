@@ -19,6 +19,7 @@ import (
 	"github.com/GrandArcher/Packeteer/internal/plugins/routercheck/routeros"
 	"github.com/GrandArcher/Packeteer/internal/policy"
 	"github.com/GrandArcher/Packeteer/internal/probe"
+	"github.com/GrandArcher/Packeteer/pkg/plugin"
 )
 
 // labL3HW is a CCR2216 on RouterOS 7.24.2 that passes every pre-check, with
@@ -245,5 +246,48 @@ func TestNewOffloadAwareFromConfig(t *testing.T) {
 	}
 	if _, err := newOffloadAware(cfg, blastSource{}, nil, nil, noEnv, log); err == nil || !strings.Contains(err.Error(), "PK_L3HW_USER") {
 		t.Errorf("no login: %v", err)
+	}
+}
+
+type plainSrc struct{ plugin.Base }
+
+func (plainSrc) Targets(context.Context) ([]plugin.Target, error) { return nil, nil }
+
+// The named volume source must be a running source that reports per-prefix
+// traffic; a source that cannot would freeze the CPU dimension for good.
+func TestCheckVolumeSource(t *testing.T) {
+	set := &pluginhost.Set{Sources: []pluginhost.Instance[plugin.TargetSource]{
+		{Name: "lab-sflow", Type: "sflow", Plugin: &volSrc{}},
+		{Name: "lab-static", Type: "static", Plugin: plainSrc{}},
+	}}
+	if err := checkVolumeSource(set, ""); err != nil {
+		t.Errorf("empty: %v", err)
+	}
+	if err := checkVolumeSource(set, "lab-sflow"); err != nil {
+		t.Errorf("volume source: %v", err)
+	}
+	if err := checkVolumeSource(set, "lab-static"); err == nil || !strings.Contains(err.Error(), "does not report per-prefix traffic") {
+		t.Errorf("plain source: %v", err)
+	}
+	if err := checkVolumeSource(set, "missing"); err == nil || !strings.Contains(err.Error(), "not a running source") {
+		t.Errorf("missing: %v", err)
+	}
+}
+
+// With no volume_source no source is read, so the report cannot show a
+// hardware share from sources that never saw hardware traffic.
+func TestOffloadWithoutVolumeSourceReadsNoSource(t *testing.T) {
+	oa := &offloadAware{recheck: time.Minute, now: time.Now, learned: func(netip.Prefix) bool { return false },
+		volumes: func(source string) map[netip.Prefix]float64 {
+			t.Errorf("volumes read for source %q", source)
+			return map[netip.Prefix]float64{netip.MustParsePrefix("198.51.100.0/24"): 50}
+		}}
+	r, err := oa.addRouter("192.0.2.1", mikrotik.Options{Model: mikrotik.CCR2216}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vol := oa.evaluate(r, nil, time.Now()).Volume
+	if vol.Prefixes != 0 || vol.HardwareShareMin != nil || len(vol.BlindSpots) != 1 || vol.BlindSpots[0].Code != offload.BlindTrafficFlow {
+		t.Errorf("volume = %+v", vol)
 	}
 }

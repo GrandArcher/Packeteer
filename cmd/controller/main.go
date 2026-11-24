@@ -1013,7 +1013,7 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 			httpSrv.SetWhatIf(&whatIfSource{live: live, store: rs, check: preview.check, log: log, getenv: getenv})
 		}
 	}
-	if offAware != nil {
+	if offAware != nil && httpSrv != nil {
 		loopWG.Add(1)
 		go func() {
 			defer loopWG.Done()

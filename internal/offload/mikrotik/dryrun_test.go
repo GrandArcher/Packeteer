@@ -283,3 +283,23 @@ func TestDryRunWithoutVolumeSource(t *testing.T) {
 		t.Errorf("blind spots = %+v", rep.Volume.BlindSpots)
 	}
 }
+
+// A profile that cannot be rebuilt for the router's ipv6-hw setting still
+// returns a report the page can render: no null dimensions, fixes blocked.
+func TestDryRunRebuildFailureKeepsTheReportWhole(t *testing.T) {
+	e, err := NewEvaluator(labOpts, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.recheck = -time.Minute
+	l := healthy()
+	l.Settings.IPv6HW = !e.ipv6HW
+	snap := Snapshot{L3HW: l}
+	rep := e.Evaluate(Input{Now: dryNow, Neighbor: "192.0.2.1", Snap: &snap, At: dryNow, Wanted: []offload.Wanted{wantFix("198.51.100.0/24", 5)}})
+	if rep.Error == "" || rep.Dimensions == nil {
+		t.Fatalf("error %q dimensions %v", rep.Error, rep.Dimensions)
+	}
+	if got := states(rep)["198.51.100.0/24"]; got != offload.FixBlocked {
+		t.Errorf("fix state = %q", got)
+	}
+}

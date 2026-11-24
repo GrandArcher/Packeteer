@@ -30,10 +30,13 @@ func sampleOffload() offload.DryRunReport {
 	}}}
 }
 
-// #738: GET /api/offload is a viewer read, and says so when offload_aware is off.
+// #738: GET /api/offload is an operator read (it names the fixes inject would add), and says so when offload_aware is off.
 func TestOffloadEndpoint(t *testing.T) {
 	e := newUI(t)
-	rec, got := e.do(t, "GET", "/api/offload", plugin.RoleViewer, nil)
+	if rec, _ := e.do(t, "GET", "/api/offload", plugin.RoleViewer, nil); rec.Code != http.StatusForbidden {
+		t.Fatalf("viewer: %d", rec.Code)
+	}
+	rec, got := e.do(t, "GET", "/api/offload", plugin.RoleOperator, nil)
 	if rec.Code != http.StatusOK || got["available"] != false || got["report"] != nil {
 		t.Fatalf("without a source: %d %s", rec.Code, rec.Body)
 	}
@@ -42,7 +45,7 @@ func TestOffloadEndpoint(t *testing.T) {
 	}
 
 	e.srv.SetOffload(fakeOffload{rep: sampleOffload()})
-	rec, got = e.do(t, "GET", "/api/offload", plugin.RoleViewer, nil)
+	rec, got = e.do(t, "GET", "/api/offload", plugin.RoleOperator, nil)
 	rep, _ := got["report"].(map[string]any)
 	routers, _ := rep["routers"].([]any)
 	if rec.Code != http.StatusOK || got["available"] != true || rep["run"] != "dry_run" || len(routers) != 1 {

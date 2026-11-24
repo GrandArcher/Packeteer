@@ -10,7 +10,7 @@ import (
 
 // Verdicts classify one router in a report.
 const (
-	// VerdictFits: every wanted fix has room and nothing freezes.
+	// VerdictFits: nothing freezes and nothing is cut short; fixes may still be withheld for lack of room.
 	VerdictFits = "fits"
 	// VerdictPartial: the chip already pushed short prefixes to the CPU, and
 	// the default route rides the CPU path too.

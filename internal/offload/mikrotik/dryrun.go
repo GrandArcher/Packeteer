@@ -88,6 +88,8 @@ func (e *Evaluator) Evaluate(in Input) offload.RouterReport {
 		if snap.L3HW.Settings.IPv6HW != e.ipv6HW && snap.L3HW.Applicable {
 			if err := e.build(snap.L3HW.Settings.IPv6HW); err != nil {
 				rep.Error = err.Error()
+				rep.Dimensions = []offload.DimensionReport{}
+				rep.Fixes = offload.BuildFixes(in.Wanted, nil, offload.Plan{}, "the router profile could not be rebuilt")
 				return rep
 			}
 		}
