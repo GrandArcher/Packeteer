@@ -14,6 +14,10 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 - `internal/offload/mikrotik`: the `mikrotik-l3hw-lpm` profile (CCR2216/CCR2116): pre-checks, default-out-of-hardware freeze, version rules, budget config; dry_run at most; no caller yet (#737).
 - offload_aware dry run: per-router report of budget, pre-checks, version verdict and fix states (`GET /api/offload`, Blast radius, `packeteer_offload_*` metrics); reports only, in any mode (#738).
 
+### Fixed
+
+- Offload dry run: the `vrf` pre-check no longer freezes a RouterOS router that has only the main table; an extra VRF still freezes (#771).
+
 ## [1.13.0] - 2026-11-22
 
 v1.13 moves the upgrade test to v1.12.0 and updates dependencies; no new row (138 done), default `mode: observe`, inject off.
