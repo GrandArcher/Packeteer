@@ -37,7 +37,7 @@ var laneBps = map[Model]uint64{
 // lpm-cap. Only the CCR2216 has one.
 var lpmTarget = map[Model]uint64{CCR2216: 100_000}
 
-// Thresholds and reserves from the issue. A reserve is the part of a
+// Thresholds and reserves proposed in #737. A reserve is the part of a
 // dimension never handed out.
 const (
 	reservePct    = 0.20
@@ -87,7 +87,7 @@ func (o Options) validate() error {
 
 // Profile returns the profile reading from src, which returns the latest
 // snapshot or false when there is none. MaxRun is DryRun: enforcing waits
-// for the bench-gated v1.15 issue.
+// for the bench-gated enforce issue (#743).
 func Profile(opts Options, src func() (Snapshot, bool)) (offload.Profile, error) {
 	if err := opts.validate(); err != nil {
 		return offload.Profile{}, err
