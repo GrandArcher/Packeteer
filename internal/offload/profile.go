@@ -1,7 +1,7 @@
 // Package offload is the shared core of the opt-in offload_aware mode: the
 // per-platform Profile, the registry of profiles, and the pure check of how
 // far a profile may be run, the install budget and the shed and swap planner.
-// Nothing calls it from the decision path yet.
+// Only the dry-run report calls it (#738), never the decision path.
 package offload
 
 import (

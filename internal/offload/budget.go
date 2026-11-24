@@ -130,8 +130,8 @@ type Identity struct {
 // Freeze is one reason for a freeze and the dimension it came from. Dimension
 // is empty for a reason that is not about one dimension.
 type Freeze struct {
-	Reason    FreezeReason
-	Dimension Dimension
+	Reason    FreezeReason `json:"reason"`
+	Dimension Dimension    `json:"dimension,omitempty"`
 }
 
 // Result is one budget evaluation. When Freezes is not empty nothing may be
@@ -256,15 +256,26 @@ func (b *Budget) check(now time.Time, id Identity, d Dimension, s Sample, presen
 	return "", false
 }
 
+func reserveOf(res Reserve, total uint64) uint64 {
+	return max(uint64(math.Ceil(res.Pct*float64(total))), res.Abs)
+}
+
 func freeOf(r Reading, res Reserve) uint64 {
-	reserve := uint64(math.Ceil(res.Pct * float64(r.Total)))
-	if res.Abs > reserve {
-		reserve = res.Abs
-	}
+	reserve := reserveOf(res, r.Total)
 	if left := r.Total - r.Used; reserve < left {
 		return left - reserve
 	}
 	return 0
+}
+
+// Reserved is the part of a dimension with this total that is never handed out.
+func (b *Budget) Reserved(d Dimension, total uint64) uint64 {
+	return reserveOf(b.cfg.Reserve[d], total)
+}
+
+// Free is cap - used - reserve of a sane reading, never below 0.
+func (b *Budget) Free(d Dimension, r Reading) uint64 {
+	return freeOf(r, b.cfg.Reserve[d])
 }
 
 // headroom is the smallest per-route room over the dimensions a family uses.

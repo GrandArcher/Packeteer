@@ -12,6 +12,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 - Opt-in `offload_aware` config block (run `dry_run` by default, per-router profile): parsed and checked only, nothing reads it yet; the editor and federation push refuse `enforce` (#735).
 - `internal/offload`: pure shed and swap planner (rank key, displace margin, hold time, swap and shed caps, freeze and settling); nothing calls it yet (#734).
 - `internal/offload/mikrotik`: the `mikrotik-l3hw-lpm` profile (CCR2216/CCR2116): pre-checks, default-out-of-hardware freeze, version rules, budget config; dry_run at most; no caller yet (#737).
+- offload_aware dry run: per-router report of budget, pre-checks, version verdict and fix states (`GET /api/offload`, Blast radius section, `packeteer_offload_*` metrics); reports only, in every mode (#738).
 
 ## [1.13.0] - 2026-11-22
 

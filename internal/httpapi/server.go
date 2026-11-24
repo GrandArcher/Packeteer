@@ -207,6 +207,8 @@ type Server struct {
 	pbr atomic.Pointer[PolicyRouting]
 	// blast is the blast-radius preview (#227). Nil until SetBlast.
 	blast atomic.Pointer[BlastControl]
+	// offload is the offload_aware dry run (#738). Nil until SetOffload.
+	offload atomic.Pointer[OffloadControl]
 	// blastKey signs preview tokens; a restart invalidates them.
 	blastKey [32]byte
 	blastNow func() time.Time
@@ -524,6 +526,9 @@ func (s *Server) metricsText(ctx context.Context) []byte {
 	}
 	if s.srcErrs != nil {
 		_, _ = w.Write(SourceErrorMetrics(s.srcErrs()))
+	}
+	if o := s.offloadControl(); o != nil {
+		_, _ = w.Write(OffloadMetrics(o.Report()))
 	}
 	if p := s.preflightControl(); p != nil {
 		if rep, ok := p.Latest(); ok {

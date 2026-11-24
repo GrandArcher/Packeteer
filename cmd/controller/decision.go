@@ -534,6 +534,12 @@ func collectVolumes(ctx context.Context, plugins *pluginhost.Set) map[netip.Pref
 // collectVolumeRows is collectVolumes with the bytes and window kept. A
 // prefix with no rate is left out.
 func collectVolumeRows(ctx context.Context, plugins *pluginhost.Set) map[netip.Prefix]plugin.PrefixVolume {
+	return collectVolumeRowsOf(ctx, plugins, "")
+}
+
+// collectVolumeRowsOf reads only the source instance named only; an empty
+// name reads every source.
+func collectVolumeRowsOf(ctx context.Context, plugins *pluginhost.Set, only string) map[netip.Prefix]plugin.PrefixVolume {
 	if plugins == nil {
 		return nil
 	}
@@ -546,6 +552,9 @@ func collectVolumeRows(ctx context.Context, plugins *pluginhost.Set) map[netip.P
 	for _, src := range plugins.SourcesSnapshot() {
 		if ctx.Err() != nil {
 			return out
+		}
+		if only != "" && src.Name != only {
+			continue
 		}
 		vs, ok := src.Plugin.(plugin.VolumeSource)
 		if !ok {

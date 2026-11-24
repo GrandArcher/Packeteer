@@ -979,6 +979,12 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	preview := blastSource{live: live, decider: decider, ctl: ctl, view: view, plugins: plugins,
 		check: candidateChecker(getenv, httpUser), held: lw.Held,
 		reserved: func(p netip.Prefix) bool { return inb.Reserved(p) || mit.Holds(p) }}
+	offAware, err := newOffloadAware(cfg, preview, plugins, view, getenv, log)
+	if err != nil {
+		loopCancel()
+		log.Error("refusing to start", "err", err)
+		return 1
+	}
 	pins := pin.NewStore()
 	steerStore, steerType := steeringStoreOf(plugins)
 	// Without sign-in the API refuses steering changes with 403, so
@@ -993,6 +999,9 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 	if httpSrv != nil && cfg.IXP == nil {
 		httpSrv.SetPreflight(newPreflight(live, view, lw, plugins, pktLimiter, log))
 		httpSrv.SetBlast(preview)
+		if offAware != nil {
+			httpSrv.SetOffload(offAware)
+		}
 		httpSrv.SetPolicyRouting(&pbr.Manager{Run: hostIP, Entries: func() []pbr.Entry { return pbr.Entries(live.snapshot()) }})
 		pc := pinControl{store: pins, cfg: live.snapshot, log: log, poke: poke, save: steer.save,
 			port: func(p netip.Prefix, provider string) string { return decider.PortRefusal(p, provider, time.Now()) }}
@@ -1003,6 +1012,13 @@ func daemon(ctx context.Context, cfg *config.Config, plugins *pluginhost.Set, lo
 		if rs, ok := roundStoreOf(plugins); ok {
 			httpSrv.SetWhatIf(&whatIfSource{live: live, store: rs, check: preview.check, log: log, getenv: getenv})
 		}
+	}
+	if offAware != nil {
+		loopWG.Add(1)
+		go func() {
+			defer loopWG.Done()
+			offAware.Run(loopCtx)
+		}()
 	}
 	if irrChecker.Enabled() {
 		loopWG.Add(1)

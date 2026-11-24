@@ -153,6 +153,8 @@ type Decision struct {
 	Reason string
 }
 
+const invalidReason = "invalid or default route is never planned"
+
 // Plan is the result of a round, ordered by prefix. When Freezes is not empty
 // nothing is installed, swapped or shed.
 type Plan struct {
@@ -314,7 +316,7 @@ func (p *Planner) Plan(in Input) (Plan, error) {
 			if c.Installed {
 				a = Keep
 			}
-			out.Decisions = append(out.Decisions, Decision{c.Prefix, a, netip.Prefix{}, "invalid or default route is never planned"})
+			out.Decisions = append(out.Decisions, Decision{c.Prefix, a, netip.Prefix{}, invalidReason})
 		case c.Installed:
 			installed = append(installed, r)
 		default:
