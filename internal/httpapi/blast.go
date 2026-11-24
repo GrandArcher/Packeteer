@@ -73,7 +73,8 @@ func (s *Server) previewTokenValid(token, base string, candidate []byte) bool {
 	return hmac.Equal([]byte(token), []byte(s.previewToken(base, candidate, at)))
 }
 
-// handleBlast previews the running config under inject. It is read-only.
+// handleBlast previews the running config under inject. With offload_aware
+// on it also carries the offload dry run (#738). It is read-only.
 func (s *Server) handleBlast(w http.ResponseWriter, _ *http.Request) {
 	b := s.blastControl()
 	if b == nil {
@@ -84,7 +85,11 @@ func (s *Server) handleBlast(w http.ResponseWriter, _ *http.Request) {
 	if !s.blastReply(w, err) {
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"available": true, "report": rep})
+	body := map[string]any{"available": true, "report": rep}
+	if o := s.offloadControl(); o != nil {
+		body["offload"] = o.Report()
+	}
+	writeJSON(w, http.StatusOK, body)
 }
 
 // blastReply writes the error for a failed preview and reports whether

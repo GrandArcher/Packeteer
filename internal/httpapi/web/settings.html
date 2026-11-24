@@ -213,7 +213,7 @@
   <section>
     <details id="blast" class="fold">
     <summary><h2>Blast radius</h2></summary>
-    <p class="tag">What inject would put on the wire now, from the latest probe round and the learned routes, compared with what is on the wire today. It decides the latest round again on a copy of the state, so the live decisions and routes are not touched. Traffic comes from flow data when a flow source is on; a route without it is counted as unknown.</p>
+    <p class="tag">What inject would put on the wire now, from the latest probe round and the learned routes, compared with what is on the wire today. It decides the latest round again on a copy of the state, so the live decisions and routes are not touched. Traffic comes from flow data when a flow source is on; a route without it is counted as unknown. With <code>offload_aware</code> on, a hardware offload dry run follows: what each router's hardware table would take, installing nothing.</p>
     <div class="controls">
       <button type="button" id="bl-run">Preview inject now</button>
       <span id="bl-status" class="tag" role="status"></span>
