@@ -145,8 +145,10 @@ func (e *Evaluator) rankDefaults(in Input, l routeros.L3HW, settling bool, since
 	case attrs[attrLocalPref] && len(bgpDistances) > 1:
 		unordered = "BGP defaults with different distances: bgp-local-pref only orders routes of one distance, so no order is proposed"
 	}
-	if unordered != "" && d.Note == "" {
-		d.Note = unordered
+	if unordered != "" {
+		if d.Note == "" {
+			d.Note = unordered
+		}
 		for i := range d.Routes {
 			d.Routes[i].Rank = 0
 		}

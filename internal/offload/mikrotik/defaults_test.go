@@ -140,6 +140,50 @@ func TestDefaultsUnorderableMixesProposeNothing(t *testing.T) {
 	}
 }
 
+// A mix that cannot be ordered clears the ranks, and so the failover plans,
+// also while another note holds the proposal: an unmeasured provider, or the
+// settling window after a default changed.
+func TestDefaultsUnorderableMixClearsRanksUnderOtherNotes(t *testing.T) {
+	mixed := func() routeros.L3HW {
+		l := defaultsLab()
+		l.DefaultRoutes[2] = routeros.DefaultRoute{Family: "ipv4", Gateway: "192.0.2.2", Distance: 20, Protocol: "BGP", LocalPref: 100, Inactive: true, SuppressHWOffload: true}
+		return l
+	}
+	check := func(t *testing.T, d *offload.DefaultsReport) {
+		t.Helper()
+		if d.Snippet != "" || d.Note == "" || len(d.Failovers) != 0 {
+			t.Fatalf("defaults = %+v", d)
+		}
+		for _, r := range d.Routes {
+			if r.Rank != 0 || r.Proposed != 0 {
+				t.Errorf("route %+v is ranked or proposed", r)
+			}
+		}
+	}
+	t.Run("unmeasured provider", func(t *testing.T) {
+		snap := Snapshot{L3HW: mixed(), CPUPathBps: 2_000_000_000, CPUPathKnown: true}
+		rep := labEvaluator(t).Evaluate(Input{Now: dryNow.Add(time.Second), Neighbor: "192.0.2.254", Snap: &snap, At: dryNow,
+			Wanted: []offload.Wanted{wantFix("198.51.100.0/24", 80)}, Volume: offload.VolumeReport{Source: labOpts.VolumeSource},
+			Quality: quality()[:2], NextHops: nextHops})
+		if !strings.Contains(rep.Defaults.Note, "no measurement") {
+			t.Errorf("note = %q", rep.Defaults.Note)
+		}
+		check(t, rep.Defaults)
+	})
+	t.Run("settling", func(t *testing.T) {
+		e := labEvaluator(t)
+		poll(t, e, dryNow, mixed(), wantFix("198.51.100.0/24", 80))
+		moved := mixed()
+		moved.DefaultRoutes[0].Active, moved.DefaultRoutes[3].Active = false, true
+		moved.DefaultRoutes[3].Inactive, moved.DefaultRoutes[0].Inactive = false, true
+		d := poll(t, e, dryNow.Add(time.Second), moved, wantFix("198.51.100.0/24", 80)).Defaults
+		if !d.Settling {
+			t.Fatalf("not settling: %+v", d)
+		}
+		check(t, d)
+	})
+}
+
 // The ranking follows the measured score, and each default gets the
 // attribute its protocol uses: distance for a static route, local-pref for BGP.
 func TestDefaultsRanksAndProposesPerProtocol(t *testing.T) {
