@@ -143,6 +143,10 @@ type Result struct {
 	// HeadroomV4 and HeadroomV6 are how many more routes of each family may be
 	// installed: the smallest free across the dimensions that family uses.
 	HeadroomV4, HeadroomV6 uint64
+	// HeadroomHost is how many more host entries may be installed: the
+	// smallest free across the dimensions other than the FIB ones, because a
+	// host entry takes no FIB entry.
+	HeadroomHost uint64
 	// ShedOK is true only when every reading is trusted and some dimension has
 	// no free entries left.
 	ShedOK bool
@@ -228,6 +232,7 @@ func (b *Budget) Evaluate(now time.Time, id Identity, samples map[Dimension]Samp
 	res := Result{Free: free}
 	res.HeadroomV4 = b.headroom(free, false)
 	res.HeadroomV6 = b.headroom(free, true)
+	res.HeadroomHost = b.hostHeadroom(free)
 	for _, f := range free {
 		if f == 0 {
 			res.ShedOK = true
@@ -281,6 +286,27 @@ func (b *Budget) Free(d Dimension, r Reading) uint64 {
 // headroom is the smallest per-route room over the dimensions a family uses.
 // A family with no FIB dimension of its own to draw on gets 0. CPU has no
 // per-route unit, so it only gates: no free CPU means no installs.
+// hostHeadroom is the room left once the FIB dimensions are set aside. With
+// none left to count it is 0, as the FIB headroom is without its dimension.
+func (b *Budget) hostHeadroom(free map[Dimension]uint64) uint64 {
+	lowest, counted := uint64(math.MaxUint64), false
+	for _, d := range b.cfg.Dimensions {
+		switch f := free[d]; {
+		case d == CPU:
+			if f == 0 {
+				return 0
+			}
+		case d == FIBv4 || d == FIBv6:
+		default:
+			lowest, counted = min(lowest, f), true
+		}
+	}
+	if !counted {
+		return 0
+	}
+	return lowest
+}
+
 func (b *Budget) headroom(free map[Dimension]uint64, v6 bool) uint64 {
 	fib := FIBv4
 	if v6 && !b.cfg.IPv6.Shared {

@@ -116,16 +116,13 @@ func (e *Evaluator) Evaluate(in Input) offload.RouterReport {
 
 	software := map[netip.Prefix]string{}
 	var cands []offload.Candidate
-	var hosts []netip.Prefix
 	for _, w := range in.Wanted {
-		switch {
-		case w.Prefix.Addr().Is6() && !e.ipv6HW:
+		if w.Prefix.Addr().Is6() && !e.ipv6HW {
 			software[w.Prefix] = "IPv6 is not offloaded: ipv6-hw is off, so the CPU carries it"
-		case isHostEntry(w.Prefix):
-			hosts = append(hosts, w.Prefix)
-		default:
-			cands = append(cands, w.Candidate)
+			continue
 		}
+		w.HostEntry = isHostEntry(w.Prefix)
+		cands = append(cands, w.Candidate)
 	}
 	blocked := ""
 	var plan offload.Plan
@@ -141,24 +138,12 @@ func (e *Evaluator) Evaluate(in Input) offload.RouterReport {
 			blocked, rep.Error = "the plan failed", err.Error()
 		}
 	}
-	// A host entry has no published cap, so it takes no budget; it is still
-	// held back by whatever freezes the plan.
-	for _, h := range hosts {
-		d := offload.Decision{Prefix: h, Action: offload.Install, Reason: hostReason}
-		if len(plan.Freezes) > 0 {
-			d.Action, d.Reason = offload.Withhold, "frozen"
-		}
-		plan.Decisions = append(plan.Decisions, d)
-	}
 	rep.Fixes = offload.BuildFixes(in.Wanted, software, plan, blocked)
 	return rep
 }
 
-// hostReason is the fix reason for an IPv4 /32: RouterOS 7.25.2 on the
-// CCR2216 installs it in ipv4-hosts and leaves lpm-usage unchanged.
-const hostReason = "IPv4 /32 goes to the host table (ipv4-hosts), not LPM; no host cap is published, so it is not budgeted"
-
-// isHostEntry reports whether the chip keeps p in the host table.
+// isHostEntry reports whether the chip keeps p in the host table (ipv4-hosts):
+// RouterOS 7.25.2 on the CCR2216 raises it for an IPv4 /32 and leaves lpm-usage.
 func isHostEntry(p netip.Prefix) bool {
 	return p.Addr().Is4() && p.Bits() == 32
 }

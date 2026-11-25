@@ -207,7 +207,7 @@ func TestDryRunIPv4HostEntriesAreNotLPM(t *testing.T) {
 		t.Errorf("states = %v", got)
 	}
 	for _, f := range rep.Fixes {
-		if strings.HasSuffix(f.Prefix, "/32") && !strings.Contains(f.Reason, "ipv4-hosts") {
+		if strings.HasSuffix(f.Prefix, "/32") && !strings.Contains(f.Reason, "no FIB entry") {
 			t.Errorf("%s reason = %q", f.Prefix, f.Reason)
 		}
 	}
@@ -228,6 +228,33 @@ func TestDryRunFullLPMStillTakesHostEntries(t *testing.T) {
 	got := states(rep)
 	if got["198.51.100.7/32"] != offload.FixOffload || got["198.51.100.0/24"] != offload.FixWithhold || got["192.0.2.0/25"] != offload.FixWithhold {
 		t.Errorf("states = %v", got)
+	}
+}
+
+// A host entry takes no LPM, but it still takes a next hop and an install
+// slot: past the next-hop reserve or the per-round install cap it is withheld.
+func TestDryRunHostEntriesKeepTheOtherLimits(t *testing.T) {
+	l := healthy()
+	l.Monitor.NexthopUsage = 7400 // above the 90% reserve, below full
+	rep := dryRun(t, labOpts, l, wantFix("198.51.100.7/32", 50), wantFix("198.51.100.0/24", 10))
+	got := states(rep)
+	if rep.Verdict != offload.VerdictFits || got["198.51.100.7/32"] != offload.FixWithhold || got["198.51.100.0/24"] != offload.FixWithhold {
+		t.Errorf("verdict %q states %v", rep.Verdict, got)
+	}
+
+	var wanted []offload.Wanted
+	for i := range installsPerRound + 6 {
+		wanted = append(wanted, wantFix(fmt.Sprintf("198.51.100.%d/32", i), float64(1000-i)))
+	}
+	rep = dryRun(t, labOpts, healthy(), wanted...)
+	offloaded := 0
+	for _, f := range rep.Fixes {
+		if f.State == offload.FixOffload {
+			offloaded++
+		}
+	}
+	if offloaded != installsPerRound || states(rep)["198.51.100.0/32"] != offload.FixOffload || states(rep)["198.51.100.69/32"] != offload.FixWithhold {
+		t.Errorf("%d offloaded, want %d: %v", offloaded, installsPerRound, states(rep))
 	}
 }
 

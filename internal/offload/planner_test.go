@@ -302,6 +302,75 @@ func TestFreezeAndSettlingInstallAndShedNothing(t *testing.T) {
 	})
 }
 
+func hostFix(p string, gain float64) Candidate {
+	c := wantFix(p, gain)
+	c.HostEntry = true
+	return c
+}
+
+// A host entry draws on the host headroom, not the FIB's: with the FIB full
+// it installs, and each install also uses up the room the other fixes share.
+func TestHostEntriesDrawOnTheirOwnHeadroom(t *testing.T) {
+	pl := newPlanner(t, NoneProfile(), testCfg())
+	got := plan(t, pl, Input{
+		Now: t0,
+		Candidates: []Candidate{
+			hostFix("192.0.2.1/32", 3), hostFix("192.0.2.2/32", 2), hostFix("192.0.2.3/32", 1),
+			wantFix("198.51.100.0/24", 9),
+		},
+		Budget: Result{HeadroomV4: 0, HeadroomHost: 2},
+	})
+	want := map[string]string{
+		"192.0.2.1/32": "install", "192.0.2.2/32": "install", "192.0.2.3/32": "withhold",
+		"198.51.100.0/24": "withhold",
+	}
+	if !reflect.DeepEqual(actions(got), want) {
+		t.Fatalf("%v", actions(got))
+	}
+
+	// Shared next-hop room: a host entry ahead of a route leaves one less for it.
+	got = plan(t, pl, Input{
+		Now:        t0,
+		Candidates: []Candidate{hostFix("192.0.2.1/32", 3), wantFix("198.51.100.0/24", 1), wantFix("203.0.113.0/24", 2)},
+		Budget:     Result{HeadroomV4: 5, HeadroomHost: 2},
+	})
+	want = map[string]string{"192.0.2.1/32": "install", "198.51.100.0/24": "withhold", "203.0.113.0/24": "install"}
+	if !reflect.DeepEqual(actions(got), want) {
+		t.Fatalf("%v", actions(got))
+	}
+}
+
+// Under FIB pressure an installed host entry is not shed (it takes no FIB
+// entry) while an installed route is, and a host entry is never a swap victim
+// for a route: removing it frees no FIB entry.
+func TestHostEntriesAreNotShedForFIBPressure(t *testing.T) {
+	old := t0.Add(-time.Hour)
+	host := installedFix("192.0.2.1/32", 1, old)
+	host.HostEntry = true
+	pl := newPlanner(t, NoneProfile(), testCfg())
+	got := plan(t, pl, Input{
+		Now:        t0,
+		Candidates: []Candidate{host, installedFix("198.51.100.0/24", 2, old), hostFix("192.0.2.2/32", 100)},
+		Budget:     Result{HeadroomV4: 0, HeadroomHost: 5, ShedOK: true},
+	})
+	want := map[string]string{"192.0.2.1/32": "keep", "198.51.100.0/24": "shed", "192.0.2.2/32": "install"}
+	if !reflect.DeepEqual(actions(got), want) {
+		t.Errorf("%v", actions(got))
+	}
+
+	// No room anywhere: the wanted route displaces the installed route, not
+	// the lower-ranked installed host entry.
+	got = plan(t, pl, Input{
+		Now:        t0,
+		Candidates: []Candidate{host, installedFix("198.51.100.0/24", 2, old), wantFix("203.0.113.0/24", 100)},
+		Budget:     Result{HeadroomV4: 0, HeadroomHost: 1},
+	})
+	want = map[string]string{"192.0.2.1/32": "keep", "198.51.100.0/24": "out", "203.0.113.0/24": "swap"}
+	if !reflect.DeepEqual(actions(got), want) {
+		t.Errorf("%v", actions(got))
+	}
+}
+
 func TestInstallByRankWithinHeadroom(t *testing.T) {
 	pl := newPlanner(t, NoneProfile(), testCfg())
 	got := plan(t, pl, Input{
