@@ -18,11 +18,10 @@ var update = flag.Bool("update", false, "rewrite the golden files")
 
 // nextHops are the providers behind the lab defaults.
 var nextHops = map[netip.Addr]string{
-	netip.MustParseAddr("192.0.2.1"):    "transit-a",
-	netip.MustParseAddr("2001:db8::1"):  "transit-a",
-	netip.MustParseAddr("192.0.2.2"):    "transit-b",
-	netip.MustParseAddr("192.0.2.3"):    "transit-c",
-	netip.MustParseAddr("198.51.100.9"): "transit-d",
+	netip.MustParseAddr("192.0.2.1"):   "transit-a",
+	netip.MustParseAddr("2001:db8::1"): "transit-a",
+	netip.MustParseAddr("192.0.2.2"):   "transit-b",
+	netip.MustParseAddr("192.0.2.3"):   "transit-c",
 }
 
 // defaultsLab is a router with three providers on its defaults: transit-a is

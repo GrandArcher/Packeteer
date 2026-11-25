@@ -25,7 +25,7 @@ type Evaluator struct {
 
 	// ranker holds the order of the default providers, and lastRank its last
 	// result. prev is the last new reading, seenAt when it was taken, and
-	// changedAt the reading that showed the active default change.
+	// changedAt the reading that showed the default routes change.
 	ranker    *offload.Ranker
 	lastRank  []offload.RankedProvider
 	prev      *routeros.L3HW

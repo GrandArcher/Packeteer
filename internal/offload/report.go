@@ -142,7 +142,7 @@ type Failover struct {
 // becoming active would change. It is advice: the snippet is generated for
 // review and nothing is applied to the router.
 type DefaultsReport struct {
-	// Settling is true after the active default changed, until a reading is
+	// Settling is true after the default routes changed, until a reading is
 	// taken once the settle time has passed. The ranking is held and no
 	// snippet is offered meanwhile.
 	Settling      bool             `json:"settling"`

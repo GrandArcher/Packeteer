@@ -29,7 +29,7 @@ const (
 )
 
 // trackDefaults notes a new reading of the router and reports whether the
-// active default changed recently: from the reading that showed the change
+// default routes changed recently: from the reading that showed the change
 // until one taken after the settle time. A reading seen again is not new.
 func (e *Evaluator) trackDefaults(at time.Time, l routeros.L3HW) (settling bool, since time.Time) {
 	if l.Applicable && !at.Equal(e.seenAt) {
@@ -91,7 +91,7 @@ func (e *Evaluator) rankDefaults(in Input, l routeros.L3HW, settling bool, since
 	case settling:
 		d.SettlingSince = &since
 		d.Providers = append(d.Providers, e.lastRank...)
-		d.Note = "the active default changed: the ranking is held and no snippet is offered until a reading is taken after the settle time"
+		d.Note = "the default routes changed: the ranking is held and no snippet is offered until a reading is taken after the settle time"
 	case len(providers) == 0:
 		d.Note = "no default route has a provider's next_hop as its gateway"
 	case len(providers) > maxRanked:
