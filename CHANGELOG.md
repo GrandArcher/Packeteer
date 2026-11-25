@@ -13,7 +13,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 - `internal/offload`: pure shed and swap planner (rank key, displace margin, hold time, swap and shed caps, freeze and settling); nothing calls it yet (#734).
 - `internal/offload/mikrotik`: the `mikrotik-l3hw-lpm` profile (CCR2216/CCR2116): pre-checks, default-out-of-hardware freeze, version rules, budget config; dry_run at most; no caller yet (#737).
 - offload_aware dry run: per-router report of budget, pre-checks, version verdict and fix states (`GET /api/offload`, Blast radius, `packeteer_offload_*` metrics); reports only, in any mode (#738).
-- offload_aware: ranks a router's default routes by volume-weighted loss/RTT, offers a review-only distance or local-pref snippet and failover plans, and freezes while the active default settles (#739).
+- offload_aware: ranks a router's defaults by volume-weighted loss/RTT, with a review-only distance or local-pref snippet, failover plans, and a freeze while the active default settles (#739).
 
 ### Fixed
 
