@@ -97,7 +97,7 @@ func chip(version, monitor, advanced string) *l3hwRouter {
 		"GET /interface/bonding":      `[{"name":"bond1","disabled":"false","mode":"802.3ad"}]`,
 		"GET /interface/vrrp":         `[{"name":"vrrp1"}]`,
 		"GET /routing/rule":           `[{"action":"lookup","table":"isp-b","disabled":"false"},{"action":"lookup","table":"old","disabled":"true"}]`,
-		"GET /ip/vrf":                 `[{"name":"mgmt"}]`,
+		"GET /ip/vrf":                 `[{"name":"main","interfaces":"all"},{"name":"mgmt"}]`,
 		"GET /ip/firewall/mangle":     `[{"chain":"prerouting","action":"mark-routing","disabled":"false"},{"chain":"prerouting","action":"mark-routing","disabled":"true"},{"chain":"forward","action":"mark-connection","disabled":"false"}]`,
 		"GET /ip/firewall/filter":     `[{"chain":"forward","action":"accept","disabled":"false"},{"chain":"input","action":"accept","disabled":"false"}]`,
 		"GET /ip/firewall/nat":        `[{"chain":"srcnat","action":"masquerade","disabled":"false"},{"chain":"srcnat","action":"accept","disabled":"true"}]`,
@@ -160,6 +160,30 @@ func TestFullHardwareTable(t *testing.T) {
 	}
 	if len(got.Unread) != 0 {
 		t.Errorf("unread = %v", got.Unread)
+	}
+}
+
+func TestVRFCountExcludesMainTable(t *testing.T) {
+	for name, tc := range map[string]struct {
+		body string
+		want int
+	}{
+		"main only":          {`[{"name":"main","interfaces":"all"}]`, 0},
+		"no rows":            {`[]`, 0},
+		"main and one extra": {`[{"name":"main"},{"name":"mgmt"}]`, 1},
+		"extra only":         {`[{"name":"mgmt"},{"name":"cust-a"}]`, 2},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := chip("7.25.2", fullHW, advLPM)
+			f.bodies["GET /ip/vrf"] = tc.body
+			got, err := f.reader(t).ReadL3HW(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.VRFs != tc.want {
+				t.Errorf("VRFs = %d, want %d", got.VRFs, tc.want)
+			}
+		})
 	}
 }
 
