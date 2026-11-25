@@ -1,0 +1,21 @@
+# Packeteer default-route ranking for RouterOS 7. Generated for review: nothing is applied.
+# Check the commands against your RouterOS release first.
+# Providers ranked by volume-weighted measured quality, lower score first. The order changes
+# only past a 25% margin and then holds for 15m0s.
+# Every default keeps suppress-hw-offload=yes: misses go to the CPU, backups included.
+# Packeteer never changes a default route, its distance or its local-pref.
+
+# 1. transit-b via 192.0.2.2: score 12.00, loss 0.10%, rtt 18.0 ms (now bgp-local-pref 100)
+# BGP default: add it to the input filter chain of the connection to transit-b (rename the chain).
+/routing filter rule add chain=transit-b-in place-before=0 \
+    rule="if (dst == 0.0.0.0/0) { set bgp-local-pref 200; set suppress-hw-offload yes }"
+
+# 2. transit-c via 192.0.2.3: score 20.25, loss 0.50%, rtt 30.0 ms (now bgp-local-pref 100)
+# BGP default: add it to the input filter chain of the connection to transit-c (rename the chain).
+/routing filter rule add chain=transit-c-in place-before=0 \
+    rule="if (dst == 0.0.0.0/0) { set bgp-local-pref 190; set suppress-hw-offload yes }"
+
+# 3. transit-a via 192.0.2.1: score 42.50, loss 1.25%, rtt 61.5 ms (now bgp-local-pref 100)
+# BGP default: add it to the input filter chain of the connection to transit-a (rename the chain).
+/routing filter rule add chain=transit-a-in place-before=0 \
+    rule="if (dst == 0.0.0.0/0) { set bgp-local-pref 180; set suppress-hw-offload yes }"

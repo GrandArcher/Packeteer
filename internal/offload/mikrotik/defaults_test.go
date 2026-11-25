@@ -24,16 +24,26 @@ var nextHops = map[netip.Addr]string{
 	netip.MustParseAddr("192.0.2.3"):   "transit-c",
 }
 
-// defaultsLab is a router with three providers on its defaults: transit-a is
-// a static default (IPv4 and IPv6) and active, transit-b a BGP default and
-// transit-c a static backup.
+// defaultsLab is a router with three providers on static defaults: transit-a
+// (IPv4 and IPv6) is active, transit-b and transit-c are backups.
 func defaultsLab() routeros.L3HW {
 	l := healthy()
 	l.DefaultRoutes = []routeros.DefaultRoute{
 		{Family: "ipv4", Gateway: "192.0.2.1", Distance: 1, Protocol: "Static route", Active: true, SuppressHWOffload: true},
 		{Family: "ipv6", Gateway: "2001:db8::1", Distance: 1, Protocol: "Static route", Active: true, SuppressHWOffload: true},
-		{Family: "ipv4", Gateway: "192.0.2.2", Distance: 20, Protocol: "BGP", LocalPref: 100, Inactive: true, SuppressHWOffload: true},
+		{Family: "ipv4", Gateway: "192.0.2.2", Distance: 5, Protocol: "Static route", Inactive: true, SuppressHWOffload: true},
 		{Family: "ipv4", Gateway: "192.0.2.3", Distance: 2, Protocol: "Static route", Inactive: true, SuppressHWOffload: true},
+	}
+	return l
+}
+
+// bgpLab has the same three providers on BGP defaults of one distance.
+func bgpLab() routeros.L3HW {
+	l := healthy()
+	l.DefaultRoutes = []routeros.DefaultRoute{
+		{Family: "ipv4", Gateway: "192.0.2.1", Distance: 20, Protocol: "BGP", LocalPref: 100, Active: true, SuppressHWOffload: true},
+		{Family: "ipv4", Gateway: "192.0.2.2", Distance: 20, Protocol: "BGP", LocalPref: 100, Inactive: true, SuppressHWOffload: true},
+		{Family: "ipv4", Gateway: "192.0.2.3", Distance: 20, Protocol: "BGP", LocalPref: 100, Inactive: true, SuppressHWOffload: true},
 	}
 	return l
 }
@@ -90,43 +100,92 @@ func TestDefaultsSnippetGolden(t *testing.T) {
 		t.Fatalf("defaults = %+v", d)
 	}
 	goldenFile(t, "defaults", d.Snippet)
+
+	d = poll(t, labEvaluator(t), dryNow, bgpLab()).Defaults
+	if d == nil || d.Settling || d.Note != "" {
+		t.Fatalf("bgp defaults = %+v", d)
+	}
+	goldenFile(t, "defaults-bgp", d.Snippet)
+}
+
+// RouterOS compares distance across protocols before bgp-local-pref, so a
+// ranking over static and BGP defaults, or over BGP defaults of different
+// distances, cannot be carried out by a snippet: nothing is proposed, the
+// routes carry no rank and no failover plan follows an order the router
+// would not take.
+func TestDefaultsUnorderableMixesProposeNothing(t *testing.T) {
+	mixed := defaultsLab()
+	mixed.DefaultRoutes[2] = routeros.DefaultRoute{Family: "ipv4", Gateway: "192.0.2.2", Distance: 20, Protocol: "BGP", LocalPref: 100, Inactive: true, SuppressHWOffload: true}
+	distances := bgpLab()
+	distances.DefaultRoutes[2].Distance = 200
+	for name, tc := range map[string]struct {
+		lab  routeros.L3HW
+		note string
+	}{
+		"static and bgp": {mixed, "different protocols"},
+		"bgp distances":  {distances, "different distances"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rep := poll(t, labEvaluator(t), dryNow, tc.lab, wantFix("198.51.100.0/24", 80))
+			d := rep.Defaults
+			if d.Snippet != "" || !strings.Contains(d.Note, tc.note) || len(d.Failovers) != 0 {
+				t.Fatalf("defaults = %+v", d)
+			}
+			for _, r := range d.Routes {
+				if r.Proposed != 0 || r.Rank != 0 {
+					t.Errorf("route %+v is proposed or ranked", r)
+				}
+			}
+		})
+	}
 }
 
 // The ranking follows the measured score, and each default gets the
 // attribute its protocol uses: distance for a static route, local-pref for BGP.
 func TestDefaultsRanksAndProposesPerProtocol(t *testing.T) {
-	d := poll(t, labEvaluator(t), dryNow, defaultsLab()).Defaults
-	var order []string
-	for _, p := range d.Providers {
-		order = append(order, p.Provider)
-	}
-	if !slices.Equal(order, []string{"transit-b", "transit-c", "transit-a"}) {
-		t.Fatalf("order = %v", order)
-	}
 	type want struct {
 		attr          string
 		rank          int
 		current, prop int64
 	}
-	got := map[string]want{}
-	for _, r := range d.Routes {
-		got[r.Family+" "+r.Gateway] = want{r.Attribute, r.Rank, r.Current, r.Proposed}
-	}
-	exp := map[string]want{
-		"ipv4 192.0.2.1":   {"distance", 3, 1, 3},
-		"ipv6 2001:db8::1": {"distance", 3, 1, 3},
-		"ipv4 192.0.2.2":   {"bgp-local-pref", 1, 100, 200},
-		"ipv4 192.0.2.3":   {"distance", 2, 2, 2},
-	}
-	for k, w := range exp {
-		if got[k] != w {
-			t.Errorf("%s = %+v, want %+v", k, got[k], w)
-		}
-	}
-	for _, line := range []string{"suppress-hw-offload=yes", "Generated for review: nothing is applied"} {
-		if !strings.Contains(d.Snippet, line) {
-			t.Errorf("snippet lacks %q", line)
-		}
+	for name, tc := range map[string]struct {
+		lab routeros.L3HW
+		exp map[string]want
+	}{
+		"static": {defaultsLab(), map[string]want{
+			"ipv4 192.0.2.1":   {"distance", 3, 1, 3},
+			"ipv6 2001:db8::1": {"distance", 3, 1, 3},
+			"ipv4 192.0.2.2":   {"distance", 1, 5, 1},
+			"ipv4 192.0.2.3":   {"distance", 2, 2, 2},
+		}},
+		"bgp": {bgpLab(), map[string]want{
+			"ipv4 192.0.2.1": {"bgp-local-pref", 3, 100, 180},
+			"ipv4 192.0.2.2": {"bgp-local-pref", 1, 100, 200},
+			"ipv4 192.0.2.3": {"bgp-local-pref", 2, 100, 190},
+		}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := poll(t, labEvaluator(t), dryNow, tc.lab).Defaults
+			var order []string
+			for _, p := range d.Providers {
+				order = append(order, p.Provider)
+			}
+			if !slices.Equal(order, []string{"transit-b", "transit-c", "transit-a"}) {
+				t.Fatalf("order = %v", order)
+			}
+			got := map[string]want{}
+			for _, r := range d.Routes {
+				got[r.Family+" "+r.Gateway] = want{r.Attribute, r.Rank, r.Current, r.Proposed}
+			}
+			for k, w := range tc.exp {
+				if got[k] != w {
+					t.Errorf("%s = %+v, want %+v", k, got[k], w)
+				}
+			}
+			if !strings.Contains(d.Snippet, "Generated for review: nothing is applied") {
+				t.Errorf("snippet lacks its header:\n%s", d.Snippet)
+			}
+		})
 	}
 }
 
@@ -182,7 +241,7 @@ func TestDefaultsRankingHysteresisAndCooldown(t *testing.T) {
 	if got := first(run(dryNow, 10, 12, 30)); got != "transit-a" {
 		t.Fatalf("first = %s", got)
 	}
-	// transit-b is 8.3% ahead of transit-a's 10: inside the margin.
+	// transit-b is 8% ahead of transit-a's 10: inside the margin.
 	if got := first(run(dryNow.Add(time.Minute), 10, 9.2, 30)); got != "transit-a" {
 		t.Errorf("small lead: first = %s", got)
 	}
@@ -313,22 +372,34 @@ func TestNoFailoverPlansWithoutAPlan(t *testing.T) {
 	}
 }
 
-// Backups stay on the CPU path: the snippet writes suppress-hw-offload=yes on
-// every default it names, and never offers to clear it.
+// Backups stay on the CPU path: the snippet writes suppress-hw-offload on
+// every default it names (on the route, or in the BGP filter rule), and never
+// offers to clear it.
 func TestSnippetKeepsEveryDefaultOnTheCPU(t *testing.T) {
-	d := poll(t, labEvaluator(t), dryNow, defaultsLab()).Defaults
-	var cmds int
-	for _, line := range strings.Split(d.Snippet, "\n") {
-		if strings.HasPrefix(line, "#") || strings.TrimSpace(line) == "" || strings.HasPrefix(line, "    rule=") {
-			continue
-		}
-		cmds++
-		if !strings.Contains(line, "suppress-hw-offload=yes") && !strings.HasPrefix(line, "/routing filter rule add") {
-			t.Errorf("command without suppress-hw-offload=yes: %s", line)
-		}
-	}
-	if cmds != 4 || strings.Contains(d.Snippet, "suppress-hw-offload=no") || strings.Contains(d.Snippet, "suppress-hw-offload no") {
-		t.Errorf("%d commands:\n%s", cmds, d.Snippet)
+	for name, tc := range map[string]struct {
+		lab    routeros.L3HW
+		cmds   int
+		suffix string
+	}{
+		"static": {defaultsLab(), 4, " suppress-hw-offload=yes"},
+		"bgp":    {bgpLab(), 3, "set suppress-hw-offload yes }\""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			d := poll(t, labEvaluator(t), dryNow, tc.lab).Defaults
+			var cmds int
+			for _, line := range strings.Split(d.Snippet, "\n") {
+				if strings.HasPrefix(line, "#") || strings.TrimSpace(line) == "" || strings.HasPrefix(line, "/routing filter rule add") {
+					continue
+				}
+				cmds++
+				if !strings.HasSuffix(line, tc.suffix) {
+					t.Errorf("command without suppress-hw-offload: %s", line)
+				}
+			}
+			if cmds != tc.cmds || strings.Contains(d.Snippet, "suppress-hw-offload=no") || strings.Contains(d.Snippet, "suppress-hw-offload no") {
+				t.Errorf("%d commands:\n%s", cmds, d.Snippet)
+			}
+		})
 	}
 }
 

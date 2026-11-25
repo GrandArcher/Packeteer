@@ -108,6 +108,8 @@ func (e *Evaluator) rankDefaults(in Input, l routeros.L3HW, settling bool, since
 			d.Note = "provider " + p.Provider + " has no measurement: nothing is proposed"
 		}
 	}
+	attrs := map[string]bool{}
+	bgpDistances := map[int64]bool{}
 	for i, r := range l.DefaultRoutes {
 		x := &d.Routes[i]
 		p, ok := rank[x.Provider]
@@ -120,6 +122,7 @@ func (e *Evaluator) rankDefaults(in Input, l routeros.L3HW, settling bool, since
 		}
 		x.Rank = p.Rank
 		x.Attribute = attribute(r.Protocol)
+		attrs[x.Attribute] = true
 		if x.Attribute == "" {
 			x.Note = "protocol " + r.Protocol + ": no proposal"
 			continue
@@ -127,9 +130,32 @@ func (e *Evaluator) rankDefaults(in Input, l routeros.L3HW, settling bool, since
 		x.Current = r.Distance
 		if x.Attribute == attrLocalPref {
 			x.Current = r.LocalPref
+			bgpDistances[r.Distance] = true
 		}
-		if d.Note == "" {
-			x.Proposed = proposed(x.Attribute, p.Rank)
+	}
+	// RouterOS prefers the lower distance across protocols, and bgp-local-pref
+	// only orders BGP routes of one distance. A snippet carries out the ranking
+	// only when one attribute decides every ranked default; otherwise the
+	// ranks are dropped too, so no failover plan follows an order the router
+	// would not take.
+	var unordered string
+	switch {
+	case len(attrs) > 1:
+		unordered = "ranked defaults of different protocols: RouterOS compares distance across protocols before bgp-local-pref, so no order is proposed"
+	case attrs[attrLocalPref] && len(bgpDistances) > 1:
+		unordered = "BGP defaults with different distances: bgp-local-pref only orders routes of one distance, so no order is proposed"
+	}
+	if unordered != "" && d.Note == "" {
+		d.Note = unordered
+		for i := range d.Routes {
+			d.Routes[i].Rank = 0
+		}
+	}
+	if d.Note == "" {
+		for i := range d.Routes {
+			if x := &d.Routes[i]; x.Attribute != "" {
+				x.Proposed = proposed(x.Attribute, x.Rank)
+			}
 		}
 	}
 	if d.Note == "" {
@@ -140,6 +166,7 @@ func (e *Evaluator) rankDefaults(in Input, l routeros.L3HW, settling bool, since
 
 // Snippet is the RouterOS commands that give each ranked default its
 // proposed distance (static) or bgp-local-pref (BGP), best provider first.
+// rankDefaults offers it only when one of the two decides every ranked default.
 // Every default keeps suppress-hw-offload=yes, so backups stay on the CPU
 // path. It is text for review; Packeteer never sends it to a router. Empty
 // when no route has a proposal.
