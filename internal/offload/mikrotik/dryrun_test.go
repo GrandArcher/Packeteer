@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/netip"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -138,7 +139,7 @@ func TestDryRunMatchesThePlanner(t *testing.T) {
 	var wanted []offload.Wanted
 	var cands []offload.Candidate
 	for i := range 20 {
-		w := wantFix(fmt.Sprintf("198.51.100.%d/32", i), float64(100+i))
+		w := wantFix(fmt.Sprintf("198.51.100.%d/30", 4*i), float64(100+i))
 		wanted = append(wanted, w)
 		cands = append(cands, w.Candidate)
 	}
@@ -177,11 +178,69 @@ func TestDryRunMatchesThePlanner(t *testing.T) {
 		t.Errorf("report states %v\nplanner states %v", got, want)
 	}
 	// The highest volumes win under a CPU punt.
-	if got := states(rep)["198.51.100.19/32"]; got != offload.FixOffload {
+	if got := states(rep)["198.51.100.76/30"]; got != offload.FixOffload {
 		t.Errorf("busiest fix = %q", got)
 	}
-	if got := states(rep)["198.51.100.0/32"]; got != offload.FixWithhold {
+	if got := states(rep)["198.51.100.0/30"]; got != offload.FixWithhold {
 		t.Errorf("quietest fix = %q", got)
+	}
+}
+
+// An IPv4 /32 goes to the host table: it takes no LPM headroom, so it is
+// offloaded with the LPM dimension full, and it does not use up the room a
+// non-/32 fix needs.
+func TestDryRunIPv4HostEntriesAreNotLPM(t *testing.T) {
+	l := healthy()
+	l.Advanced.LPMUsage = 79999 // 1 entry of headroom
+	l.Monitor.IPv4Hosts = 4
+	rep := dryRun(t, labOpts, l,
+		wantFix("198.51.100.1/32", 50), wantFix("198.51.100.2/32", 60), wantFix("198.51.100.3/32", 70),
+		wantFix("198.51.100.0/24", 10), wantFix("203.0.113.0/24", 5))
+	got := states(rep)
+	for _, p := range []string{"198.51.100.1/32", "198.51.100.2/32", "198.51.100.3/32"} {
+		if got[p] != offload.FixOffload {
+			t.Errorf("%s = %q, want offload", p, got[p])
+		}
+	}
+	// The one entry of headroom goes to the /24 with the larger volume.
+	if got["198.51.100.0/24"] != offload.FixOffload || got["203.0.113.0/24"] != offload.FixWithhold {
+		t.Errorf("states = %v", got)
+	}
+	for _, f := range rep.Fixes {
+		if strings.HasSuffix(f.Prefix, "/32") && !strings.Contains(f.Reason, "ipv4-hosts") {
+			t.Errorf("%s reason = %q", f.Prefix, f.Reason)
+		}
+	}
+	if lpm := dimension(rep, offload.FIBv4); lpm.Used != 79999 {
+		t.Errorf("lpm = %+v", lpm)
+	}
+	if rep.Counters == nil || rep.Counters.Hosts != 4 {
+		t.Errorf("counters = %+v", rep.Counters)
+	}
+}
+
+// Only /32s ask for the host table, so a table with no LPM room still takes
+// them while every non-/32 is withheld.
+func TestDryRunFullLPMStillTakesHostEntries(t *testing.T) {
+	l := healthy()
+	l.Advanced.LPMUsage = 80000
+	rep := dryRun(t, labOpts, l, wantFix("198.51.100.7/32", 50), wantFix("198.51.100.0/24", 10), wantFix("192.0.2.0/25", 10))
+	got := states(rep)
+	if got["198.51.100.7/32"] != offload.FixOffload || got["198.51.100.0/24"] != offload.FixWithhold || got["192.0.2.0/25"] != offload.FixWithhold {
+		t.Errorf("states = %v", got)
+	}
+}
+
+// A freeze holds a host entry back like any other fix.
+func TestDryRunHostEntriesFollowFreezes(t *testing.T) {
+	l := healthy()
+	l.VRFs = 1
+	rep := dryRun(t, labOpts, l, wantFix("198.51.100.7/32", 50))
+	if got := states(rep)["198.51.100.7/32"]; got != offload.FixBlocked {
+		t.Errorf("state = %q, want blocked", got)
+	}
+	if rep := dryRun(t, labOpts, healthy(), wantFix("2001:db8::1/128", 5)); states(rep)["2001:db8::1/128"] != offload.FixOffload {
+		t.Errorf("an IPv6 /128 is not an IPv4 host entry: %v", states(rep))
 	}
 }
 
