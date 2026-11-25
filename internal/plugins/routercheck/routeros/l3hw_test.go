@@ -217,6 +217,25 @@ func TestShortestHWPrefix30IsPartial(t *testing.T) {
 	}
 }
 
+// RouterOS 7.25.2 on a CCR2216 answers both monitors without a state key.
+func TestMonitorWithoutStateField(t *testing.T) {
+	const (
+		mon = `[{"ipv4-hosts":"4","ipv4-routes-cpu":"21","ipv4-routes-hw":"6","ipv4-routes-total":"27","ipv4-shortest-hw-prefix":"0","nexthop-cap":"8192","nexthop-usage":"87","route-queue-size":"0"}]`
+		adv = `[{"ipv4-hosts":"4","lpm-bank-cap":"1360","lpm-cap":"27200","lpm-usage":"9","nexthop-cap":"8192","nexthop-usage":"87","route-queue-size":"0"}]`
+	)
+	got, err := chip("7.25.2", mon, adv).reader(t).ReadL3HW(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := got.Monitor
+	if m.State != "" || m.IPv4RoutesHW != 6 || m.IPv4Hosts != 4 || m.NexthopCap != 8192 {
+		t.Errorf("monitor = %+v", m)
+	}
+	if got.Advanced == nil || got.Advanced.ErrorCode != "" || !got.Advanced.HasLPM || got.Advanced.LPMCap != 27200 || got.Advanced.LPMUsage != 9 {
+		t.Errorf("advanced = %+v", got.Advanced)
+	}
+}
+
 func TestNexthopExhaustionWithNothingInHardware(t *testing.T) {
 	got, err := chip("7.17.2", nhFull, `[{"state":"ok"}]`).reader(t).ReadL3HW(context.Background())
 	if err != nil {

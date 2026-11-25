@@ -180,12 +180,25 @@ func (a *Assessment) preChecks(l routeros.L3HW) {
 	if l.VRRPInterfaces > 0 {
 		fail(CheckVRRP, "%d VRRP interface(s): VRRP is not supported with hardware offload", l.VRRPInterfaces)
 	}
-	if l.Monitor.State != "ok" {
-		fail(CheckL3HWDisabled, "L3HW monitor state is %q", l.Monitor.State)
+	// RouterOS 7.25.2 has no state field on the CCR2216. An absent state is
+	// not "disabled" while the counters show the chip is offloading.
+	switch st := l.Monitor.State; {
+	case st == "" && !chipActive(l):
+		fail(CheckL3HWDisabled, "L3HW monitor has no state field and shows no hardware routes, hosts or LPM capacity")
+	case st != "" && st != "ok":
+		fail(CheckL3HWDisabled, "L3HW monitor state is %q", st)
 	}
 	if adv := l.Advanced; adv != nil && adv.ErrorCode != "" && adv.ErrorCode != "0" {
 		fail(CheckL3HWDisabled, "L3HW driver error code %s", adv.ErrorCode)
 	}
+}
+
+// chipActive reports readings only an enabled chip produces: routes or host
+// entries in hardware, or LPM capacity from the advanced monitor.
+func chipActive(l routeros.L3HW) bool {
+	m := l.Monitor
+	return m.IPv4RoutesHW > 0 || m.IPv6RoutesHW > 0 || m.IPv4Hosts > 0 ||
+		(l.Advanced != nil && l.Advanced.HasLPM && l.Advanced.LPMCap > 0)
 }
 
 func countEnabled(ifs []routeros.Iface) int {
