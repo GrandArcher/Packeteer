@@ -121,6 +121,7 @@ func (e *Evaluator) Evaluate(in Input) offload.RouterReport {
 			software[w.Prefix] = "IPv6 is not offloaded: ipv6-hw is off, so the CPU carries it"
 			continue
 		}
+		w.HostEntry = isHostEntry(w.Prefix)
 		cands = append(cands, w.Candidate)
 	}
 	blocked := ""
@@ -139,6 +140,12 @@ func (e *Evaluator) Evaluate(in Input) offload.RouterReport {
 	}
 	rep.Fixes = offload.BuildFixes(in.Wanted, software, plan, blocked)
 	return rep
+}
+
+// isHostEntry reports whether the chip keeps p in the host table (ipv4-hosts):
+// RouterOS 7.25.2 on the CCR2216 raises it for an IPv4 /32 and leaves lpm-usage.
+func isHostEntry(p netip.Prefix) bool {
+	return p.Addr().Is4() && p.Bits() == 32
 }
 
 // verdict classifies the router: next hops used up first, then a table the

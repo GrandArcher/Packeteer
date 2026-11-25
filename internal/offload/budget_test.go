@@ -138,6 +138,7 @@ func TestFreeAndHeadroom(t *testing.T) {
 		samples map[Dimension]Sample
 		free    map[Dimension]uint64
 		v4, v6  uint64
+		host    uint64
 		shed    bool
 	}{
 		{
@@ -192,6 +193,7 @@ func TestFreeAndHeadroom(t *testing.T) {
 			},
 			free: map[Dimension]uint64{FIBv4: 1000, NextHops: 10, ECMPGroups: 64},
 			v4:   10,
+			host: 10,
 		},
 		{
 			name: "cpu has headroom: it gates but does not bound",
@@ -224,6 +226,7 @@ func TestFreeAndHeadroom(t *testing.T) {
 			free: map[Dimension]uint64{FIBv4: 900, FIBv6: 50, NextHops: 300},
 			v4:   300,
 			v6:   50,
+			host: 300,
 		},
 		{
 			name: "separate IPv6 pool full does not stop IPv4",
@@ -256,6 +259,7 @@ func TestFreeAndHeadroom(t *testing.T) {
 			free: map[Dimension]uint64{FIBv4: 1000, NextHops: 5},
 			v4:   5,
 			v6:   5,
+			host: 5,
 		},
 		{
 			name:    "no IPv6 dimension means no IPv6 installs",
@@ -263,6 +267,29 @@ func TestFreeAndHeadroom(t *testing.T) {
 			samples: map[Dimension]Sample{FIBv4: sample(0, 1000, t0), NextHops: sample(0, 100, t0)},
 			free:    map[Dimension]uint64{FIBv4: 1000, NextHops: 100},
 			v4:      100,
+			host:    100,
+		},
+		{
+			name: "a full FIB leaves room for host entries",
+			cfg:  Config{Dimensions: []Dimension{FIBv4, NextHops}},
+			samples: map[Dimension]Sample{
+				FIBv4:    sample(1000, 1000, t0),
+				NextHops: sample(60, 100, t0),
+			},
+			free: map[Dimension]uint64{FIBv4: 0, NextHops: 40},
+			host: 40,
+			shed: true,
+		},
+		{
+			name: "cpu without headroom blocks host entries",
+			cfg:  Config{Dimensions: []Dimension{FIBv4, NextHops, CPU}, Reserve: map[Dimension]Reserve{CPU: {Abs: 20}}},
+			samples: map[Dimension]Sample{
+				FIBv4:    sample(0, 1000, t0),
+				NextHops: sample(0, 100, t0),
+				CPU:      sample(80, 100, t0),
+			},
+			free: map[Dimension]uint64{FIBv4: 1000, NextHops: 100, CPU: 0},
+			shed: true,
 		},
 		{
 			name:    "no IPv4 dimension means no IPv4 installs",
@@ -283,6 +310,9 @@ func TestFreeAndHeadroom(t *testing.T) {
 			}
 			if res.HeadroomV4 != c.v4 || res.HeadroomV6 != c.v6 {
 				t.Errorf("headroom v4/v6 = %d/%d, want %d/%d", res.HeadroomV4, res.HeadroomV6, c.v4, c.v6)
+			}
+			if res.HeadroomHost != c.host {
+				t.Errorf("host headroom = %d, want %d", res.HeadroomHost, c.host)
 			}
 			if res.ShedOK != c.shed {
 				t.Errorf("ShedOK = %v, want %v", res.ShedOK, c.shed)
