@@ -39,11 +39,17 @@ func (e *Evaluator) trackDefaults(at time.Time, l routeros.L3HW) (settling bool,
 		cur := l
 		e.prev, e.seenAt = &cur, at
 	}
-	window := time.Duration(max(e.profile.Timing.InstallSeconds, e.profile.Timing.AgeOutSeconds)) * time.Second
+	window := time.Duration(e.settleSeconds()) * time.Second
 	if e.changedAt.IsZero() || !at.Before(e.changedAt.Add(window)) {
 		return false, time.Time{}
 	}
 	return true, e.changedAt
+}
+
+// settleSeconds is how long a changed default takes to be forwarded in
+// hardware, or its removal to age out: the longer of the profile's timings.
+func (e *Evaluator) settleSeconds() int {
+	return max(e.profile.Timing.InstallSeconds, e.profile.Timing.AgeOutSeconds)
 }
 
 // attribute is what a proposal sets on a default of the given RouterOS
@@ -193,16 +199,18 @@ func chainName(s string) string {
 // the active one. Providers ahead of it, and the one active now, are taken as
 // lost: Decide holds no steer to a provider that is down. res carries no
 // settling freeze, because that window is what the plan waits out first.
-func (e *Evaluator) failovers(d *offload.DefaultsReport, in Input, res offload.Result, blocked string, base []offload.Fix) []offload.Failover {
+func (e *Evaluator) failovers(d *offload.DefaultsReport, in Input, res offload.Result) []offload.Failover {
 	var active []string
 	for _, r := range d.Routes {
 		if r.Active && r.Provider != "" && !slices.Contains(active, r.Provider) {
 			active = append(active, r.Provider)
 		}
 	}
-	settle := max(e.profile.Timing.InstallSeconds, e.profile.Timing.AgeOutSeconds)
+	// Freed counts against the plan with no settling freeze: the entries the
+	// fixes hold once the router has settled.
 	state := map[string]offload.FixState{}
-	for _, f := range base {
+	baseFixes, _ := e.fixStates(in.Now, in.Wanted, res, "")
+	for _, f := range baseFixes {
 		state[f.Prefix] = f.State
 	}
 	out := []offload.Failover{}
@@ -219,7 +227,7 @@ func (e *Evaluator) failovers(d *offload.DefaultsReport, in Input, res offload.R
 			}
 		}
 		slices.Sort(lost)
-		f := offload.Failover{Backup: r.Provider, Gateway: r.Gateway, Rank: r.Rank, Lost: lost, SettleSeconds: settle}
+		f := offload.Failover{Backup: r.Provider, Gateway: r.Gateway, Rank: r.Rank, Lost: lost, SettleSeconds: e.settleSeconds()}
 		var left []offload.Wanted
 		for _, w := range in.Wanted {
 			if slices.Contains(lost, w.Provider) {
@@ -231,7 +239,7 @@ func (e *Evaluator) failovers(d *offload.DefaultsReport, in Input, res offload.R
 			}
 			left = append(left, w)
 		}
-		fixes, _ := e.fixStates(in.Now, left, res, blocked)
+		fixes, _ := e.fixStates(in.Now, left, res, "")
 		for _, x := range fixes {
 			switch x.State {
 			case offload.FixOffload:

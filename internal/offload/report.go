@@ -128,8 +128,8 @@ type Failover struct {
 	// default changes. The new default is forwarded after the router's
 	// route-index delay and queue: that gap is not verified.
 	SettleSeconds int `json:"settle_seconds"`
-	// Dropped fixes steer to a lost provider; Freed of them held a hardware
-	// entry in the current plan.
+	// Dropped fixes steer to a lost provider; Freed of them would hold a
+	// hardware entry once the router has settled.
 	Dropped  int `json:"dropped"`
 	Freed    int `json:"freed"`
 	Offload  int `json:"offload"`

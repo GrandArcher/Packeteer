@@ -155,7 +155,7 @@ func (e *Evaluator) Evaluate(in Input) offload.RouterReport {
 	if ok && snap.L3HW.Applicable {
 		rep.Defaults = e.rankDefaults(in, snap.L3HW, settling, since)
 		if blocked == "" && perr == "" {
-			rep.Defaults.Failovers = e.failovers(rep.Defaults, in, planRes, blocked, rep.Fixes)
+			rep.Defaults.Failovers = e.failovers(rep.Defaults, in, planRes)
 		}
 	}
 	return rep

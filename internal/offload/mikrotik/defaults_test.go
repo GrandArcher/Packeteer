@@ -244,6 +244,13 @@ func TestActiveDefaultChangeFreezesUntilAFreshReading(t *testing.T) {
 	if !slices.Equal(backups, []string{"transit-a", "transit-b"}) {
 		t.Errorf("failover backups = %v", backups)
 	}
+	// The fix steers to transit-b, which is lost for transit-a's failover: its
+	// slot is freed in the plan for the settled router, though it is frozen now.
+	for _, f := range d.Failovers {
+		if f.Backup == "transit-a" && (f.Dropped != 1 || f.Freed != 1) {
+			t.Errorf("transit-a failover while settling = %+v", f)
+		}
+	}
 	// The same reading again, and a reading inside the settle time, stay frozen.
 	if rep = poll(t, e, changed, moved, wanted...); !rep.Defaults.Settling {
 		t.Error("the same reading unfroze")
