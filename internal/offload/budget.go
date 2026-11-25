@@ -283,9 +283,6 @@ func (b *Budget) Free(d Dimension, r Reading) uint64 {
 	return freeOf(r, b.cfg.Reserve[d])
 }
 
-// headroom is the smallest per-route room over the dimensions a family uses.
-// A family with no FIB dimension of its own to draw on gets 0. CPU has no
-// per-route unit, so it only gates: no free CPU means no installs.
 // hostHeadroom is the room left once the FIB dimensions are set aside. With
 // none left to count it is 0, as the FIB headroom is without its dimension.
 func (b *Budget) hostHeadroom(free map[Dimension]uint64) uint64 {
@@ -307,6 +304,9 @@ func (b *Budget) hostHeadroom(free map[Dimension]uint64) uint64 {
 	return lowest
 }
 
+// headroom is the smallest per-route room over the dimensions a family uses.
+// A family with no FIB dimension of its own to draw on gets 0. CPU has no
+// per-route unit, so it only gates: no free CPU means no installs.
 func (b *Budget) headroom(free map[Dimension]uint64, v6 bool) uint64 {
 	fib := FIBv4
 	if v6 && !b.cfg.IPv6.Shared {

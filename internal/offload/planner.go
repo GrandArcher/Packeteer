@@ -435,9 +435,10 @@ func (p *Planner) lead(r ranked) float64 {
 	return r.weight
 }
 
-// victim is the lowest-ranked installed fix of the challenger's family that
-// is past hold time. A host entry is displaced only by a host entry. The margin is tested against it alone: any higher-ranked
-// fix has at least as large a lead metric, so needs more.
+// victim is the lowest-ranked installed fix of the challenger's family (and,
+// for a host entry, only another host entry) that is past hold time. The
+// margin is tested against it alone: any higher-ranked fix has at least as
+// large a lead metric, so needs more.
 func (p *Planner) victim(now time.Time, c ranked, installed []ranked, shed, taken map[netip.Prefix]bool) (ranked, string, bool) {
 	why := "no installed fix of this family to displace"
 	for _, v := range installed {
