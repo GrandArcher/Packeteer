@@ -3,6 +3,7 @@ package mikrotik
 import (
 	"context"
 	"net/netip"
+	"slices"
 	"sync"
 	"time"
 
@@ -21,6 +22,15 @@ type Evaluator struct {
 	ipv6HW  bool
 	budget  *offload.Budget
 	planner *offload.Planner
+
+	// ranker holds the order of the default providers, and lastRank its last
+	// result. prev is the last new reading, seenAt when it was taken, and
+	// changedAt the reading that showed the active default change.
+	ranker    *offload.Ranker
+	lastRank  []offload.RankedProvider
+	prev      *routeros.L3HW
+	seenAt    time.Time
+	changedAt time.Time
 }
 
 // NewEvaluator returns an evaluator polled every recheck.
@@ -29,7 +39,11 @@ func NewEvaluator(opts Options, recheck time.Duration) (*Evaluator, error) {
 	if err != nil {
 		return nil, err
 	}
-	e := &Evaluator{opts: opts, profile: p, recheck: recheck}
+	rk, err := offload.NewRanker(offload.RankerConfig{Margin: rankMargin, Cooldown: rankCooldown})
+	if err != nil {
+		return nil, err
+	}
+	e := &Evaluator{opts: opts, profile: p, recheck: recheck, ranker: rk}
 	if err := e.build(false); err != nil {
 		return nil, err
 	}
@@ -63,6 +77,11 @@ type Input struct {
 	// Wanted are the fixes Decide wants, none of them in hardware yet.
 	Wanted []offload.Wanted
 	Volume offload.VolumeReport
+	// Quality is each provider's volume-weighted measured quality, and
+	// NextHops maps a default route's gateway to the provider whose next_hop
+	// it is. Both feed the ranking of the defaults.
+	Quality  []offload.ProviderQuality
+	NextHops map[netip.Addr]string
 }
 
 // Evaluate reports what installing the wanted fixes would do on this router.
@@ -109,14 +128,46 @@ func (e *Evaluator) Evaluate(in Input) offload.RouterReport {
 			rep.Findings = append(rep.Findings, offload.Finding{Code: f.Code, Severity: string(f.Severity), Detail: f.Detail})
 		}
 	}
+	planRes := res
+	settling, since := false, time.Time{}
+	if ok {
+		if settling, since = e.trackDefaults(in.At, snap.L3HW); settling {
+			res = offload.Result{Freezes: append(slices.Clone(res.Freezes), offload.Freeze{Reason: offload.FreezeSettling})}
+		}
+	}
 	rep.Dimensions = offload.Dimensions(e.budget, in.Now, dimensions(e.opts), samples, res.Freezes)
 	rep.Freezes = append(rep.Freezes, res.Freezes...)
 	rep.Level = min(offload.DryRun, a.MaxRun).String()
 	rep.Verdict = verdict(ok, snap.L3HW, res)
 
+	blocked := ""
+	switch {
+	case !ok:
+		blocked = "no reading of the router yet"
+	case a.MaxRun < offload.DryRun:
+		blocked = "run level " + a.MaxRun.String() + ": nothing is planned on this router"
+	}
+	var perr string
+	rep.Fixes, perr = e.fixStates(in.Now, in.Wanted, res, blocked)
+	if perr != "" {
+		rep.Error = perr
+	}
+	if ok && snap.L3HW.Applicable {
+		rep.Defaults = e.rankDefaults(in, snap.L3HW, settling, since)
+		if blocked == "" && perr == "" {
+			rep.Defaults.Failovers = e.failovers(rep.Defaults, in, planRes, blocked, rep.Fixes)
+		}
+	}
+	return rep
+}
+
+// fixStates plans the wanted fixes on res and gives each fix's state. A
+// non-empty blocked says the plan is not run and every fix is blocked; the
+// second result is the plan's error, which blocks them too.
+func (e *Evaluator) fixStates(now time.Time, wanted []offload.Wanted, res offload.Result, blocked string) ([]offload.Fix, string) {
 	software := map[netip.Prefix]string{}
 	var cands []offload.Candidate
-	for _, w := range in.Wanted {
+	for _, w := range wanted {
 		if w.Prefix.Addr().Is6() && !e.ipv6HW {
 			software[w.Prefix] = "IPv6 is not offloaded: ipv6-hw is off, so the CPU carries it"
 			continue
@@ -124,22 +175,15 @@ func (e *Evaluator) Evaluate(in Input) offload.RouterReport {
 		w.HostEntry = isHostEntry(w.Prefix)
 		cands = append(cands, w.Candidate)
 	}
-	blocked := ""
 	var plan offload.Plan
-	switch {
-	case !ok:
-		blocked = "no reading of the router yet"
-	case a.MaxRun < offload.DryRun:
-		blocked = "run level " + a.MaxRun.String() + ": nothing is planned on this router"
-	default:
+	errText := ""
+	if blocked == "" {
 		var err error
-		plan, err = e.planner.Plan(offload.Input{Now: in.Now, Candidates: cands, Budget: res})
-		if err != nil {
-			blocked, rep.Error = "the plan failed", err.Error()
+		if plan, err = e.planner.Plan(offload.Input{Now: now, Candidates: cands, Budget: res}); err != nil {
+			blocked, errText = "the plan failed", err.Error()
 		}
 	}
-	rep.Fixes = offload.BuildFixes(in.Wanted, software, plan, blocked)
-	return rep
+	return offload.BuildFixes(wanted, software, plan, blocked), errText
 }
 
 // isHostEntry reports whether the chip keeps p in the host table (ipv4-hosts):
