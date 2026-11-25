@@ -17,6 +17,7 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 ### Fixed
 
 - Offload dry run: the `vrf` pre-check no longer freezes a RouterOS router that has only the main table; an extra VRF still freezes (#771).
+- Offload dry run: a RouterOS 7.25.2 L3HW monitor with no `state` field no longer freezes as `l3hw_disabled` while the chip is offloading; a bad state or error code still does (#772).
 
 ## [1.13.0] - 2026-11-22
 
