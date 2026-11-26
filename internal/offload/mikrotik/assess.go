@@ -137,7 +137,8 @@ func (a *Assessment) version(raw string) {
 }
 
 // defaults enforces the out-of-hardware default policy. A default that is
-// in hardware captured suppressed more-specifics in a field report (G1).
+// in hardware captured suppressed more-specifics in a field report (CCR2216,
+// RouterOS 7.24.2; #737).
 func (a *Assessment) defaults(l routeros.L3HW) {
 	for _, d := range l.DefaultRoutes {
 		switch {
