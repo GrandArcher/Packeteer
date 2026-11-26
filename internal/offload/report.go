@@ -97,6 +97,63 @@ func BuildFixes(wanted []Wanted, software map[netip.Prefix]string, plan Plan, bl
 	return fixes
 }
 
+// DefaultRank is one default route read from the router and its place in the
+// ranking. Nothing here is written to the router.
+type DefaultRank struct {
+	Family   string `json:"family"`
+	Gateway  string `json:"gateway"`
+	Protocol string `json:"protocol"`
+	Active   bool   `json:"active"`
+	// Provider is the provider whose next_hop is the gateway; empty when none
+	// is, and then the route is not ranked.
+	Provider string `json:"provider,omitempty"`
+	Rank     int    `json:"rank,omitempty"`
+	// Attribute is what a proposal would set: distance for a static route,
+	// bgp-local-pref for a BGP one. Empty with no proposal.
+	Attribute string `json:"attribute,omitempty"`
+	Current   int64  `json:"current"`
+	Proposed  int64  `json:"proposed,omitempty"`
+	Note      string `json:"note,omitempty"`
+}
+
+// Failover is what changes if a backup default becomes the active one, when
+// the providers ahead of it are lost. Fixes that steer to a lost provider are
+// no longer wanted; the rest are planned again on the same budget.
+type Failover struct {
+	Backup  string   `json:"backup"`
+	Gateway string   `json:"gateway"`
+	Rank    int      `json:"rank"`
+	Lost    []string `json:"lost"`
+	// SettleSeconds is how long installs and sheds wait after the active
+	// default changes. The new default is forwarded after the router's
+	// route-index delay and queue: that gap is not verified.
+	SettleSeconds int `json:"settle_seconds"`
+	// Dropped fixes steer to a lost provider; Freed of them would hold a
+	// hardware entry once the router has settled.
+	Dropped  int `json:"dropped"`
+	Freed    int `json:"freed"`
+	Offload  int `json:"offload"`
+	Software int `json:"software"`
+	Withhold int `json:"withhold"`
+	Blocked  int `json:"blocked"`
+}
+
+// DefaultsReport ranks the router's default routes and says what a backup
+// becoming active would change. It is advice: the snippet is generated for
+// review and nothing is applied to the router.
+type DefaultsReport struct {
+	// Settling is true after the default routes changed, until a reading is
+	// taken once the settle time has passed. The ranking is held and no
+	// snippet is offered meanwhile.
+	Settling      bool             `json:"settling"`
+	SettlingSince *time.Time       `json:"settling_since,omitempty"`
+	Providers     []RankedProvider `json:"providers"`
+	Routes        []DefaultRank    `json:"routes"`
+	Failovers     []Failover       `json:"failovers"`
+	Snippet       string           `json:"snippet,omitempty"`
+	Note          string           `json:"note,omitempty"`
+}
+
 // DimensionReport is one budget dimension: what the router reads, what is
 // kept back and what is left to hand out, and how old the reading is.
 type DimensionReport struct {
@@ -255,6 +312,8 @@ type RouterReport struct {
 	Freezes        []Freeze          `json:"freezes"`
 	Fixes          []Fix             `json:"fixes"`
 	Volume         VolumeReport      `json:"volume"`
+	// Defaults is nil until the router has been read.
+	Defaults *DefaultsReport `json:"defaults,omitempty"`
 	// ReadAt is when the router was last read; nil before the first read.
 	ReadAt *time.Time `json:"read_at,omitempty"`
 	// Error is why there is no reading, or why the plan failed.

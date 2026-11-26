@@ -32,6 +32,10 @@ type offloadAware struct {
 	recheck time.Duration
 	// wanted are the fixes inject would hold under the running config.
 	wanted func() []offload.Wanted
+	// quality is every provider's measurement of every prefix in the latest
+	// round, and nextHops maps a gateway to the provider with that next_hop.
+	quality  func() []offload.QualitySample
+	nextHops func() map[netip.Addr]string
 	// volumes is the traffic rate per prefix of the named source instance;
 	// an empty name reads every source.
 	volumes func(source string) map[netip.Prefix]float64
@@ -66,6 +70,7 @@ func newOffloadAware(cfg *config.Config, b blastSource, plugins *pluginhost.Set,
 	}
 	oa := &offloadAware{recheck: o.Recheck, now: time.Now, log: log,
 		wanted:  b.offloadWanted,
+		quality: b.qualitySamples, nextHops: b.nextHops,
 		volumes: func(source string) map[netip.Prefix]float64 { return volumeRates(plugins, source) },
 		learned: learnedByBGP(view, b.ctl.Injected),
 	}
@@ -217,6 +222,12 @@ func (oa *offloadAware) evaluate(r *offloadRouter, wanted []offload.Wanted, now 
 		in.Snap = &s
 	}
 	r.mu.Unlock()
+	if oa.quality != nil {
+		in.Quality = offload.WeighQuality(oa.quality(), rates)
+	}
+	if oa.nextHops != nil {
+		in.NextHops = oa.nextHops()
+	}
 	for _, w := range wanted {
 		if mbps, ok := rates[w.Prefix]; ok && r.opts.VolumeSource != "" {
 			w.VolumeMbps = mbps
@@ -257,6 +268,37 @@ func (b blastSource) offloadWanted() []offload.Wanted {
 			Candidate: offload.Candidate{Prefix: im.Prefix, Cause: im.Cause, Gain: policy.ImprovementGain(cands[im.Prefix], im), Since: im.Since},
 			Provider:  im.Provider,
 		})
+	}
+	return out
+}
+
+// qualitySamples are the usable measurements of the latest round: for each
+// decided prefix, what each provider measured. It reads only.
+func (b blastSource) qualitySamples() []offload.QualitySample {
+	decisions, _ := b.decider.Decisions()
+	var out []offload.QualitySample
+	for _, d := range decisions {
+		for _, c := range d.Candidates {
+			if c.Usable {
+				out = append(out, offload.QualitySample{Prefix: d.Prefix, Provider: c.Provider, Score: c.Score, LossPct: c.LossPct, RTT: c.RTTAvg})
+			}
+		}
+	}
+	return out
+}
+
+// nextHops maps each provider's next_hop to its name: the gateway of a
+// default route that provider's path would carry.
+func (b blastSource) nextHops() map[netip.Addr]string {
+	run := b.live.snapshot()
+	if run == nil {
+		return nil
+	}
+	out := map[netip.Addr]string{}
+	for _, p := range run.Providers {
+		if a, err := netip.ParseAddr(p.NextHop); err == nil {
+			out[a] = p.Name
+		}
 	}
 	return out
 }

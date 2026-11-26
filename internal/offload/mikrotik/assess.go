@@ -292,9 +292,8 @@ func Gate(res offload.Result, a Assessment) offload.Result {
 
 // DefaultsChanged reports whether the default routes differ between two
 // readings: a gateway, distance, local-pref, activity or suppression change,
-// or a route added or removed. The caller reports a change as both a
-// LastInstall and a LastShed in the planner input, so the planner settles for
-// the profile's timing before it trusts a reading.
+// or a route added or removed. The evaluator then freezes installs and sheds
+// as settling until a reading is taken after the profile's timing.
 func DefaultsChanged(prev, cur routeros.L3HW) bool {
 	// The key holds every compared field so equal sets sort the same way.
 	order := func(a, b routeros.DefaultRoute) int {
