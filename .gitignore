@@ -9,3 +9,6 @@ realtable-result.json
 
 # Browser driver dependencies of lab/e2e-firstrun.sh (#587)
 /lab/e2e-gui/node_modules/
+
+# Runner review scratch (gh pr diff copies); never commit
+/.review/

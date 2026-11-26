@@ -33,6 +33,7 @@ var l3hwGet = readonly.NewAllowlist(
 	`/ip/vrf`,
 	`/ip/firewall/mangle`,
 	`/ip/firewall/filter`,
+	`/ip/firewall/nat`,
 	`/ip/route\?dst-address=0\.0\.0\.0/0`,
 	`/ipv6/route\?dst-address=::/0`,
 )
@@ -66,9 +67,11 @@ type L3HW struct {
 	Bonds   []Iface `json:"bonds,omitempty"`
 
 	RoutingRules       int `json:"routing_rules"`
-	VRFs               int `json:"vrfs"`
+	VRFs               int `json:"vrfs"` // extra VRFs, the main table excluded
 	MarkRoutingRules   int `json:"mark_routing_rules"`
+	MangleRules        int `json:"mangle_rules"`
 	ForwardFilterRules int `json:"forward_filter_rules"`
+	NATRules           int `json:"nat_rules"`
 	VRRPInterfaces     int `json:"vrrp_interfaces"`
 
 	// DefaultRoutes lists every 0.0.0.0/0 and ::/0 route, active or not.
@@ -87,6 +90,7 @@ type Monitor struct {
 	IPv4RoutesHW         int64  `json:"ipv4_routes_hw"`
 	IPv4RoutesCPU        int64  `json:"ipv4_routes_cpu"`
 	IPv4ShortestHWPrefix int64  `json:"ipv4_shortest_hw_prefix"`
+	IPv4Hosts            int64  `json:"ipv4_hosts"`
 	IPv6RoutesTotal      int64  `json:"ipv6_routes_total"`
 	IPv6RoutesHW         int64  `json:"ipv6_routes_hw"`
 	IPv6RoutesCPU        int64  `json:"ipv6_routes_cpu"`
@@ -146,6 +150,10 @@ type Iface struct {
 	Name     string `json:"name"`
 	Disabled bool   `json:"disabled"`
 	L3HW     bool   `json:"l3_hw_offloading"`
+	// Parent is the interface a VLAN interface sits on.
+	Parent string `json:"parent,omitempty"`
+	// Mode is the bonding mode of a bond.
+	Mode string `json:"mode,omitempty"`
 }
 
 // DefaultRoute is one 0.0.0.0/0 or ::/0 route.
@@ -277,10 +285,10 @@ func (r *Reader) readTopology(ctx context.Context, out *L3HW) error {
 			return authErr(err)
 		}
 		for _, x := range rows {
-			*l.dst = append(*l.dst, Iface{Name: x["name"], Disabled: yes(x["disabled"]), L3HW: yes(x["l3-hw-offloading"])})
+			*l.dst = append(*l.dst, Iface{Name: x["name"], Disabled: yes(x["disabled"]), L3HW: yes(x["l3-hw-offloading"]), Parent: x["interface"], Mode: x["mode"]})
 		}
 	}
-	var rules, vrfs, mangle, filter, vrrp []row
+	var rules, vrfs, mangle, filter, nat, vrrp []row
 	for _, l := range []struct {
 		path string
 		dst  *[]row
@@ -289,16 +297,30 @@ func (r *Reader) readTopology(ctx context.Context, out *L3HW) error {
 		{"/ip/vrf", &vrfs},
 		{"/ip/firewall/mangle", &mangle},
 		{"/ip/firewall/filter", &filter},
+		{"/ip/firewall/nat", &nat},
 		{"/interface/vrrp", &vrrp},
 	} {
 		if err := r.l3get(ctx, l.path, l.dst); err != nil {
 			return authErr(err)
 		}
 	}
-	out.RoutingRules, out.VRFs, out.VRRPInterfaces = enabled(rules, nil), len(vrfs), len(vrrp)
+	out.RoutingRules, out.VRFs, out.VRRPInterfaces = enabled(rules, nil), extraVRFs(vrfs), len(vrrp)
+	out.MangleRules, out.NATRules = enabled(mangle, nil), enabled(nat, nil)
 	out.MarkRoutingRules = enabled(mangle, func(x row) bool { return x["action"] == "mark-routing" })
 	out.ForwardFilterRules = enabled(filter, func(x row) bool { return x["chain"] == "forward" })
 	return nil
+}
+
+// extraVRFs counts the VRFs other than the main table. RouterOS 7 lists the
+// main table as a row named "main" in /ip/vrf; it is not an extra table.
+func extraVRFs(rows []row) int {
+	n := 0
+	for _, x := range rows {
+		if x["name"] != "main" {
+			n++
+		}
+	}
+	return n
 }
 
 // enabled counts the rows that are not disabled and pass keep.
@@ -423,8 +445,8 @@ func nums(x row, keys []string, dst []*int64) error {
 func parseMonitor(x row) (Monitor, error) {
 	m := Monitor{State: x["state"]}
 	err := nums(x,
-		[]string{"ipv4-routes-total", "ipv4-routes-hw", "ipv4-routes-cpu", "ipv4-shortest-hw-prefix", "ipv6-routes-total", "ipv6-routes-hw", "ipv6-routes-cpu", "nexthop-cap", "nexthop-usage"},
-		[]*int64{&m.IPv4RoutesTotal, &m.IPv4RoutesHW, &m.IPv4RoutesCPU, &m.IPv4ShortestHWPrefix, &m.IPv6RoutesTotal, &m.IPv6RoutesHW, &m.IPv6RoutesCPU, &m.NexthopCap, &m.NexthopUsage})
+		[]string{"ipv4-routes-total", "ipv4-routes-hw", "ipv4-routes-cpu", "ipv4-shortest-hw-prefix", "ipv4-hosts", "ipv6-routes-total", "ipv6-routes-hw", "ipv6-routes-cpu", "nexthop-cap", "nexthop-usage"},
+		[]*int64{&m.IPv4RoutesTotal, &m.IPv4RoutesHW, &m.IPv4RoutesCPU, &m.IPv4ShortestHWPrefix, &m.IPv4Hosts, &m.IPv6RoutesTotal, &m.IPv6RoutesHW, &m.IPv6RoutesCPU, &m.NexthopCap, &m.NexthopUsage})
 	if err != nil {
 		return Monitor{}, fmt.Errorf("l3hw monitor: %w", err)
 	}

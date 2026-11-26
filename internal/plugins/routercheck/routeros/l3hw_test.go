@@ -93,13 +93,14 @@ func chip(version, monitor, advanced string) *l3hwRouter {
 		"POST " + pathAdvMon:          advanced,
 		"GET " + pathSwitch + "/port": `[{"name":"sfp-sfpplus1","l3-hw-offloading":"true"},{"name":"qsfp28-1-1","l3-hw-offloading":"false"}]`,
 		"GET /interface/bridge":       `[{"name":"bridge1","disabled":"false","l3-hw-offloading":"true"}]`,
-		"GET /interface/vlan":         `[{"name":"vlan100","disabled":"false","l3-hw-offloading":"true"},{"name":"vlan200","disabled":"true"}]`,
-		"GET /interface/bonding":      `[{"name":"bond1","disabled":"false"}]`,
+		"GET /interface/vlan":         `[{"name":"vlan100","disabled":"false","l3-hw-offloading":"true","interface":"bridge1"},{"name":"vlan200","disabled":"true"}]`,
+		"GET /interface/bonding":      `[{"name":"bond1","disabled":"false","mode":"802.3ad"}]`,
 		"GET /interface/vrrp":         `[{"name":"vrrp1"}]`,
 		"GET /routing/rule":           `[{"action":"lookup","table":"isp-b","disabled":"false"},{"action":"lookup","table":"old","disabled":"true"}]`,
-		"GET /ip/vrf":                 `[{"name":"mgmt"}]`,
+		"GET /ip/vrf":                 `[{"name":"main","interfaces":"all"},{"name":"mgmt"}]`,
 		"GET /ip/firewall/mangle":     `[{"chain":"prerouting","action":"mark-routing","disabled":"false"},{"chain":"prerouting","action":"mark-routing","disabled":"true"},{"chain":"forward","action":"mark-connection","disabled":"false"}]`,
 		"GET /ip/firewall/filter":     `[{"chain":"forward","action":"accept","disabled":"false"},{"chain":"input","action":"accept","disabled":"false"}]`,
+		"GET /ip/firewall/nat":        `[{"chain":"srcnat","action":"masquerade","disabled":"false"},{"chain":"srcnat","action":"accept","disabled":"true"}]`,
 		"GET " + pathRoute4: `[
 			{"dst-address":"0.0.0.0/0","gateway":"192.0.2.1","distance":"20","belongs-to":"BGP","bgp-local-pref":"200","active":"true","inactive":"false","hw-offloaded":"true","suppress-hw-offload":"false"},
 			{"dst-address":"0.0.0.0/0","gateway":"192.0.2.2","distance":"250","belongs-to":"Static route","active":"false","inactive":"true","hw-offloaded":"false","suppress-hw-offload":"true"},
@@ -127,7 +128,7 @@ func TestFullHardwareTable(t *testing.T) {
 		t.Fatalf("applicable/version = %v %q", got.Applicable, got.Version)
 	}
 	m := got.Monitor
-	if m.IPv4RoutesTotal != 942338 || m.IPv4RoutesHW != 942326 || m.IPv4RoutesCPU != 12 || m.IPv4ShortestHWPrefix != 0 || m.State != "ok" {
+	if m.IPv4RoutesTotal != 942338 || m.IPv4RoutesHW != 942326 || m.IPv4RoutesCPU != 12 || m.IPv4ShortestHWPrefix != 0 || m.IPv4Hosts != 87 || m.State != "ok" {
 		t.Errorf("monitor = %+v", m)
 	}
 	if !m.Partial() {
@@ -149,16 +150,40 @@ func TestFullHardwareTable(t *testing.T) {
 	if !slices.Equal(got.Ports, wantPorts) {
 		t.Errorf("ports = %+v", got.Ports)
 	}
-	if !slices.Equal(got.Bridges, []Iface{{"bridge1", false, true}}) ||
-		!slices.Equal(got.VLANs, []Iface{{"vlan100", false, true}, {"vlan200", true, false}}) ||
-		!slices.Equal(got.Bonds, []Iface{{"bond1", false, false}}) {
+	if !slices.Equal(got.Bridges, []Iface{{Name: "bridge1", L3HW: true}}) ||
+		!slices.Equal(got.VLANs, []Iface{{Name: "vlan100", L3HW: true, Parent: "bridge1"}, {Name: "vlan200", Disabled: true}}) ||
+		!slices.Equal(got.Bonds, []Iface{{Name: "bond1", Mode: "802.3ad"}}) {
 		t.Errorf("interfaces = %+v %+v %+v", got.Bridges, got.VLANs, got.Bonds)
 	}
-	if got.RoutingRules != 1 || got.VRFs != 1 || got.MarkRoutingRules != 1 || got.ForwardFilterRules != 1 || got.VRRPInterfaces != 1 {
+	if got.RoutingRules != 1 || got.VRFs != 1 || got.MarkRoutingRules != 1 || got.MangleRules != 2 || got.ForwardFilterRules != 1 || got.NATRules != 1 || got.VRRPInterfaces != 1 {
 		t.Errorf("policy counts = %+v", got)
 	}
 	if len(got.Unread) != 0 {
 		t.Errorf("unread = %v", got.Unread)
+	}
+}
+
+func TestVRFCountExcludesMainTable(t *testing.T) {
+	for name, tc := range map[string]struct {
+		body string
+		want int
+	}{
+		"main only":          {`[{"name":"main","interfaces":"all"}]`, 0},
+		"no rows":            {`[]`, 0},
+		"main and one extra": {`[{"name":"main"},{"name":"mgmt"}]`, 1},
+		"extra only":         {`[{"name":"mgmt"},{"name":"cust-a"}]`, 2},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := chip("7.25.2", fullHW, advLPM)
+			f.bodies["GET /ip/vrf"] = tc.body
+			got, err := f.reader(t).ReadL3HW(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.VRFs != tc.want {
+				t.Errorf("VRFs = %d, want %d", got.VRFs, tc.want)
+			}
+		})
 	}
 }
 
@@ -189,6 +214,25 @@ func TestShortestHWPrefix30IsPartial(t *testing.T) {
 	}
 	if got.Advanced.LPMCap != 27200 {
 		t.Errorf("lpm-cap = %d", got.Advanced.LPMCap)
+	}
+}
+
+// RouterOS 7.25.2 on a CCR2216 answers both monitors without a state key.
+func TestMonitorWithoutStateField(t *testing.T) {
+	const (
+		mon = `[{"ipv4-hosts":"4","ipv4-routes-cpu":"21","ipv4-routes-hw":"6","ipv4-routes-total":"27","ipv4-shortest-hw-prefix":"0","nexthop-cap":"8192","nexthop-usage":"87","route-queue-size":"0"}]`
+		adv = `[{"ipv4-hosts":"4","lpm-bank-cap":"1360","lpm-cap":"27200","lpm-usage":"9","nexthop-cap":"8192","nexthop-usage":"87","route-queue-size":"0"}]`
+	)
+	got, err := chip("7.25.2", mon, adv).reader(t).ReadL3HW(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := got.Monitor
+	if m.State != "" || m.IPv4RoutesHW != 6 || m.IPv4Hosts != 4 || m.NexthopCap != 8192 {
+		t.Errorf("monitor = %+v", m)
+	}
+	if got.Advanced == nil || got.Advanced.ErrorCode != "" || !got.Advanced.HasLPM || got.Advanced.LPMCap != 27200 || got.Advanced.LPMUsage != 9 {
+		t.Errorf("advanced = %+v", got.Advanced)
 	}
 }
 
@@ -384,7 +428,7 @@ func TestOnlyGETsAndMonitorOncePOSTs(t *testing.T) {
 	if !slices.Equal(posts, want) {
 		t.Errorf("POSTs = %q, want %q", posts, want)
 	}
-	if len(reqs) != 17 {
+	if len(reqs) != 18 {
 		t.Errorf("%d requests: %q", len(reqs), reqs)
 	}
 }

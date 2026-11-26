@@ -26,7 +26,7 @@ func trimToCap(st State, decIdx map[netip.Prefix]*Decision, byPrefix map[netip.P
 	}
 	items := make([]item, 0, len(st.Improvements))
 	for p, imp := range st.Improvements {
-		items = append(items, item{p: p, rank: rankOf(imp, policies), gain: improvementGain(byPrefix[p], imp)})
+		items = append(items, item{p: p, rank: rankOf(imp, policies), gain: ImprovementGain(byPrefix[p], imp)})
 	}
 	sort.Slice(items, func(i, j int) bool {
 		if items[i].rank != items[j].rank {
@@ -73,10 +73,10 @@ func rankOf(imp Improvement, policies map[netip.Prefix]plugin.PolicyVerdict) int
 	return rankPerformance
 }
 
-// improvementGain is the native score minus the current provider's score.
+// ImprovementGain is the native score minus the current provider's score.
 // A missing measurement is no gain, so that improvement is retired ahead
 // of one that is still clearly better.
-func improvementGain(cands []Candidate, imp Improvement) float64 {
+func ImprovementGain(cands []Candidate, imp Improvement) float64 {
 	var nat, cur float64
 	var haveNat, haveCur bool
 	for _, c := range cands {

@@ -90,13 +90,13 @@ FRR, Junos, and IOS equivalents: [frr.md](frr.md), [junos.md](junos.md), [cisco.
 
 ## Hardware routing (L3HW) reader
 
-The `routeros` router check's login also feeds a read-only reader of RouterOS hardware routing state (#736, `Reader.ReadL3HW` in `internal/plugins/routercheck/routeros`). It decides nothing: it returns typed readings for the opt-in `offload_aware` mode, which is off by default; its config block is parsed and checked but nothing reads it at runtime yet ([CONFIG](CONFIG.md#offload_aware)). Point it only at a lab router or a router you chose; it writes nothing.
+The `routeros` router check's login also feeds a read-only reader of RouterOS hardware routing state (#736, `Reader.ReadL3HW` in `internal/plugins/routercheck/routeros`). It decides nothing itself: it returns typed readings for the opt-in `offload_aware` mode (off by default; the profile below is the first consumer; it polls the reader every `offload_aware.recheck` for the dry-run report). Point it only at a lab router or a router you chose; it writes nothing.
 
 It sends GET requests, and `POST` only to `l3hw-settings/monitor` and `l3hw-settings/advanced/monitor` with the body `{"once":""}`. Every path is on a fixed list and anything else is refused in code. It reads:
 
 - `/system/resource` (version), `/interface/ethernet/switch` and `.../port` (`l3-hw-offloading`), `l3hw-settings` (`ipv6-hw`, `fasttrack-hw`, `autorestart`) and `l3hw-settings/advanced` (`shwp-reset-counter`, `route-index-delay-min` and `-max`, `route-queue-limit-high` and `-low`)
-- the monitor counts: `ipv4-routes-total`, `-hw` and `-cpu`, `ipv4-shortest-hw-prefix`, the IPv6 counts, `nexthop-cap` and `nexthop-usage`; the advanced monitor adds `error-code` and `lpm-cap` and `lpm-usage`
-- bridges, VLAN interfaces, bonds, VRRP interfaces, routing rules, VRFs, enabled `mark-routing` mangle rules, and enabled `forward` filter rules (counted, not copied)
+- the monitor counts: `ipv4-routes-total`, `-hw` and `-cpu`, `ipv4-shortest-hw-prefix`, `ipv4-hosts`, the IPv6 counts, `nexthop-cap` and `nexthop-usage`; the advanced monitor adds `error-code` and `lpm-cap` and `lpm-usage`
+- bridges, VLAN interfaces (with their parent `interface`), bonds (with `mode`), VRRP interfaces, routing rules, VRFs other than the `main` table, enabled mangle rules (and how many are `mark-routing`), enabled `forward` filter rules, and enabled NAT rules (counted, not copied)
 - every `0.0.0.0/0` and `::/0` route, active or not: gateway, distance, protocol (`belongs-to`), `bgp-local-pref`, `suppress-hw-offload`, and the `H` flag
 
 How to read it:
@@ -118,6 +118,38 @@ The login comes from the same environment variables as the router check. RouterO
 `go run ./lab/checkl3hw -url https://192.0.2.254` prints the reading as JSON (login from `PACKETEER_ROUTER_READ_USER` and `PACKETEER_ROUTER_READ_PASSWORD`). Tests use a fake REST server with documented outputs: a CCR2216 with 942,338 routes and 942,326 in hardware, one with 37,729 in hardware at shortest prefix 30 and `lpm-cap` 27200, and a table of 174,000 routes with none in hardware at prefix 24 and next hops 8192 of 8192.
 
 Rollback: nothing is configured by the reader. Remove the user and group above if you made them; revert #736 to drop the code.
+
+## Offload profile mikrotik-l3hw-lpm
+
+Profile `mikrotik-l3hw-lpm` (#737, `internal/offload/mikrotik`) covers RouterOS L3HW on the indexed-LPM switch chips: CCR2216, CCR2116 and the CRS models that share them. It is opt-in with `offload_aware`, never changes `mode`, never writes router config and never touches a default route. Its maximum run level is `dry_run`: enforcing waits for the bench-gated v1.15 issue. At `dry_run` it only reports ([below](#offload-dry-run-report)).
+
+- Default route: out of hardware. Defaults must carry `suppress-hw-offload=yes`; misses go to the CPU and the full RIB. A default whose `H` flag is set raises an alarm and freezes installs and sheds; a default that does not carry `suppress-hw-offload=yes` freezes too. When a default changes (`DefaultsChanged`), the caller reports it as both an install and a shed (`LastInstall` and `LastShed` in the planner input), and the planner settles for the timing below before it trusts a reading.
+- Budget dimensions: `lpm-usage` of `lpm-cap` (20% reserve; the CCR2216 aims at 100,000 routes, so a table above that reads as full), next hops (`nexthop-cap`, 8192 in public reports; warn at 90%, freeze at 100%; the 10% reserve also stops installs at 90% and lets the planner shed the lowest-ranked fixes while usage stays above it) and the CPU path against the lane bandwidth (CCR2116 4x10G, CCR2216 4x25G, 20% reserve). The CPU-path rate comes from an external volume source, because Traffic-Flow does not see hardware-forwarded traffic. With no source named, ranking falls back to path gain and the CPU path is not budgeted, since nothing measures it; with a source named but no rate yet, the budget freezes. A shortest hardware prefix above 0 freezes. IPv6 shares the LPM pool only with `ipv6-hw` on (each route assumed to cost 2 entries until the bench measures it); with it off IPv6 gets no headroom. The host-entry count (`ipv4-hosts`) is reported but not budgeted, and the ECMP limit is unknown; neither has a published cap, so neither is read as one. An IPv4 /32 is a host entry, not an LPM route (RouterOS 7.25.2 on the CCR2216 raises `ipv4-hosts` and leaves `lpm-usage` unchanged), so a /32 fix is not charged to the LPM dimension; only other prefix lengths use LPM headroom. A /32 is not shed when the LPM is full and is displaced only by another /32.
+- Pre-checks, each freezing while it fails: a VRF other than `main`, a routing rule or a `mark-routing` mangle rule (only the main table is offloaded); enabled forward filter, NAT or mangle rules, in any mangle chain (bypassed in hardware); more than one enabled bridge; a VLAN interface on a port or bond; `l3-hw-offloading` on some switch ports and off on others, or off on all; a bond not in `802.3ad` or `balance-xor`; a VRRP interface; an L3HW monitor state other than `ok`, or a driver error code. A monitor with no `state` field (RouterOS 7.25.2 on the CCR2216 has none) passes while hardware routes, host entries or `lpm-cap` show the chip is offloading, and freezes when none of them does.
+- RouterOS versions: 7.2 and older refuse (undefined behavior on overflow); older than 7.10 report only (no monitor, so the version is read without one); 7.16 to 7.18 warn (field reports of BGP lock-ups); an unreadable version reports only (refused when there is no monitor).
+- Timing: an install or a removal is trusted after 15 s (`route-index-delay-max` of 10 s plus an allowance for the route queue). A router whose `route-index-delay-max` is above 10 s, or set to a value that cannot be parsed, freezes; an advanced menu that could not be read is listed as unread and does not freeze. A planning round stays under 128 changes, the point where RouterOS re-indexes the table: at most 64 installs, 16 swaps (two changes each) and 16 sheds.
+
+Rollback: nothing is written to the router or the config. Revert #737 to drop the profile.
+
+## Offload dry-run report
+
+With `offload_aware.enabled: true` and `profile: mikrotik-l3hw-lpm` (#738), Packeteer reads each listed router every `recheck` with the L3HW reader above and builds a report of what the router's hardware table would take if the fixes `inject` wants were installed. It works in `observe`, `suggest` and `inject`, and only reports: it announces nothing, installs nothing, writes nothing to a router and never edits a default route. The fixes are the improvements Decide holds when the latest round is decided again under inject on a copy of the state, minus those the announcer would refuse (not in the learned RIB, leak-watch hold, inbound or mitigation reservation), so the report and the Blast radius preview name the same prefixes. Fixes are prefixes in the learned RIB, plus sub-ranges the opt-in `synthesize` block would announce under its #122 rails. A router with no `offload_aware` entry is not read and is not in the report.
+
+Read it at `GET /api/offload` ([API.md](API.md)), in the Blast radius panel of Settings, and in `/metrics` (`packeteer_offload_*`). Per router it shows:
+
+- **Verdict.** `fits` (no freeze, nothing cut short), `partial offload, default on CPU` (`ipv4-shortest-hw-prefix` above 0: the chip already pushed short prefixes, the default included, to the CPU), `nexthop exhausted` (`nexthop-usage` at `nexthop-cap`), `frozen` (any other freeze), or no reading.
+- **Profile, status and run level.** The level is the lower of `dry_run` and what the RouterOS version allows; a version that refuses or reports only blocks every fix.
+- **Default policy and whether it is met.** Met when every default route read carries `suppress-hw-offload=yes` and has no `H` flag.
+- **Dimensions.** Used, cap, reserve and free for the LPM, next hops and, with a volume source, the CPU path, each with the age of its reading and why it is not trusted (missing, stale or insane).
+- **Counters.** Routes in hardware and on the CPU, host entries (`hosts`, from `ipv4-hosts`, never added to the LPM usage), the shortest hardware prefix and the route queue limits.
+- **Pre-check findings, version verdict and freezes.**
+- **Each fix's state.** `offload`: the planner would install it (an IPv4 /32 is planned like any other fix but takes no LPM headroom: it still counts against the next-hop reserve, the CPU-path check and the install cap). `withhold`: no headroom or an install cap this round. `blocked`: a freeze, the run level, or no reading stops it. `software`: the platform does not offload it (an IPv6 fix while `ipv6-hw` is off), so the CPU carries it. The planner state comes from the same budget and planner configs the profile ships, with nothing installed yet, so the first round is shown.
+- **Volume source and blind spots.** The report names `volume_source`. Without one, it says that RouterOS Traffic-Flow does not see hardware-forwarded traffic, so fixes rank by path gain and the CPU path is not budgeted. A named source that reports no traffic is a blind spot too, and the CPU dimension then has no reading.
+- **Hardware-forwarded share.** Traffic to destinations no learned BGP route covers (connected, IGP, static; a learned default does not count) is already forwarded in hardware: `hardware_share_min` is that share of the source's total, a lower bound because some BGP routes are in hardware too. The rest, `bgp_mbps`, is the upper bound of the CPU path and is what the CPU dimension reads.
+
+Not shown: a `covered_by_default` fix state. This profile keeps the default route out of hardware, so no default covers a fix. A reading that fails keeps the last snapshot, which the budget calls stale after three rechecks.
+
+Rollback: set `offload_aware.enabled: false` (restart) or remove the block. Nothing was written to a router, so there is nothing to undo there.
 
 ## Exchange peers
 

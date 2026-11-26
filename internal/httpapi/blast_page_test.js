@@ -72,7 +72,8 @@ var ui = fs.readFileSync(path.join(__dirname, "web", "ui.js"), "utf8");
 var settings = fs.readFileSync(path.join(__dirname, "web", "settings.js"), "utf8");
 ["el", "clear"].forEach(function (n) { vm.runInContext(fn(ui, n), context); });
 vm.runInContext("var blastToken = ''; var maxListedChanges = 8;", context);
-["showTarget", "blastRoute", "blastShift", "renderBlast", "loadBlast", "previewCandidate", "putConfig", "changeValue", "changeList", "closeReview", "reviewCandidate"].forEach(function (n) {
+vm.runInContext(settings.slice(settings.indexOf("var offloadVerdicts"), settings.indexOf("function offloadDimension(")), context);
+["showTarget", "blastRoute", "blastShift", "renderBlast", "offloadDimension", "offloadVolume", "renderOffloadRouter", "renderOffload", "loadBlast", "previewCandidate", "putConfig", "changeValue", "changeList", "closeReview", "reviewCandidate"].forEach(function (n) {
   vm.runInContext(fn(settings, n), context);
 });
 
@@ -124,8 +125,49 @@ calm.providers = [];
 context.renderBlast(calm);
 assert(text(els["bl-body"]).indexOf("Warnings (0)") >= 0 && els["bl-body"].children.length > 0, "no warnings is said");
 
-replies.push(Promise.resolve({available: true, report: report}));
+// The offload_aware dry run (#738) is a section of the panel: the verdict,
+// each dimension with its reading age, the volume source and what it cannot
+// see, the hardware-forwarded share, and each fix's state. It only reports.
+var offload = {run: "dry_run", routers: [{
+  neighbor: "192.0.2.1", profile: "mikrotik-l3hw-lpm", status: "partial", run: "dry_run", level: "dry_run",
+  verdict: "partial_default_on_cpu", version: "7.24.2", version_verdict: "ok",
+  default: {policy: "out_of_hw", reason: "defaults carry suppress-hw-offload=yes", met: true},
+  dimensions: [{dimension: "fib_v4", known: true, used: 27200, cap: 27200, reserve: 5440, free: 0, reading_age_seconds: 12.4},
+    {dimension: "cpu", known: false, used: 0, cap: 0, reserve: 0, free: 0, problem: "missing"}],
+  counters: {ipv4_routes_hw: 37729, ipv4_routes_cpu: 904609, shortest_hw_prefix: 30},
+  findings: [{code: "shwp_above_zero", severity: "freeze", detail: "shortest hardware prefix is /30"}],
+  freezes: [{reason: "pre_check_failed"}, {reason: "missing", dimension: "cpu"}],
+  volume: {source: "", prefixes: 0, total_mbps: 0, igp_mbps: 0, bgp_mbps: 0,
+    blind_spots: [{code: "traffic_flow_blind", message: "RouterOS Traffic-Flow does not see hardware-forwarded traffic"}]},
+  fixes: [{prefix: "198.51.100.0/24", provider: "transit-b", state: "blocked", reason: "frozen"}]
+}, {
+  neighbor: "192.0.2.2", profile: "mikrotik-l3hw-lpm", status: "partial", run: "dry_run", level: "dry_run", verdict: "fits",
+  default: {policy: "out_of_hw", reason: "r"}, dimensions: [], findings: [], freezes: [],
+  volume: {source: "lab-sflow", prefixes: 2, total_mbps: 100, igp_mbps: 20, bgp_mbps: 80, hardware_share_min: 0.2, blind_spots: []},
+  fixes: []
+}]};
+context.renderBlast(report);
+context.renderOffload(offload);
+body = text(els["bl-body"]);
+assert(body.indexOf("Would be announced (1)") >= 0 && body.indexOf("Hardware offload dry run (2 routers)") >= 0, "the section follows the blast report: " + body);
+assert(body.indexOf("192.0.2.1 mikrotik-l3hw-lpm (partial): partial offload, default on CPU") >= 0 && body.indexOf("192.0.2.2 mikrotik-l3hw-lpm (partial): fits") >= 0, "verdicts: " + body);
+assert(body.indexOf("fib_v4: 27200 of 27200 used, 5440 reserved, 0 free, read 12 s ago") >= 0, "dimension with its reading age: " + body);
+assert(body.indexOf("cpu: no reading (missing)") >= 0 && body.indexOf("Frozen: missing (cpu)") >= 0, "an unread dimension and the freeze: " + body);
+assert(body.indexOf("Blind spot: RouterOS Traffic-Flow does not see hardware-forwarded traffic") >= 0 && body.indexOf("No volume source") >= 0, "the Traffic-Flow blind spot is said: " + body);
+assert(body.indexOf("Volume source lab-sflow: 2 prefixes, 100.0 Mbps; at least 20% is already hardware-forwarded (20.0 Mbps to connected or IGP routes)") >= 0, "volume source and hardware share: " + body);
+assert(body.indexOf("198.51.100.0/24 via transit-b: blocked (frozen)") >= 0 && body.indexOf("Default route policy out_of_hw: defaults carry suppress-hw-offload=yes (met)") >= 0, "fix state and default policy: " + body);
+assert(body.indexOf("Nothing is installed or changed on a router") >= 0, "the section says it only reports: " + body);
+
+replies.push(Promise.resolve({available: true, report: report, offload: offload}));
 context.loadBlast().then(function () {
+  assert(text(els["bl-body"]).indexOf("Hardware offload dry run (2 routers)") >= 0, "loadBlast shows the offload section: " + text(els["bl-body"]));
+  replies.push(Promise.resolve({available: true, report: report}));
+  return context.loadBlast();
+}).then(function () {
+  assert(text(els["bl-body"]).indexOf("Hardware offload") < 0, "no section without offload_aware");
+  replies.push(Promise.resolve({available: true, report: report}));
+  return context.loadBlast();
+}).then(function () {
   assert(calls[0].method === "GET" && calls[0].url === "/api/blast", "load call: " + JSON.stringify(calls[0]));
   assert(els["bl-status"].textContent === "As of 2026-01-02T03:04:05Z.", "status: " + els["bl-status"].textContent);
   replies.push(Promise.resolve({available: false}));

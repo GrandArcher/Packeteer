@@ -302,6 +302,75 @@ func TestFreezeAndSettlingInstallAndShedNothing(t *testing.T) {
 	})
 }
 
+func hostFix(p string, gain float64) Candidate {
+	c := wantFix(p, gain)
+	c.HostEntry = true
+	return c
+}
+
+// A host entry draws on the host headroom, not the FIB's: with the FIB full
+// it installs, and each install also uses up the room the other fixes share.
+func TestHostEntriesDrawOnTheirOwnHeadroom(t *testing.T) {
+	pl := newPlanner(t, NoneProfile(), testCfg())
+	got := plan(t, pl, Input{
+		Now: t0,
+		Candidates: []Candidate{
+			hostFix("192.0.2.1/32", 3), hostFix("192.0.2.2/32", 2), hostFix("192.0.2.3/32", 1),
+			wantFix("198.51.100.0/24", 9),
+		},
+		Budget: Result{HeadroomV4: 0, HeadroomHost: 2},
+	})
+	want := map[string]string{
+		"192.0.2.1/32": "install", "192.0.2.2/32": "install", "192.0.2.3/32": "withhold",
+		"198.51.100.0/24": "withhold",
+	}
+	if !reflect.DeepEqual(actions(got), want) {
+		t.Fatalf("%v", actions(got))
+	}
+
+	// Shared next-hop room: a host entry ahead of a route leaves one less for it.
+	got = plan(t, pl, Input{
+		Now:        t0,
+		Candidates: []Candidate{hostFix("192.0.2.1/32", 3), wantFix("198.51.100.0/24", 1), wantFix("203.0.113.0/24", 2)},
+		Budget:     Result{HeadroomV4: 5, HeadroomHost: 2},
+	})
+	want = map[string]string{"192.0.2.1/32": "install", "198.51.100.0/24": "withhold", "203.0.113.0/24": "install"}
+	if !reflect.DeepEqual(actions(got), want) {
+		t.Fatalf("%v", actions(got))
+	}
+}
+
+// Under FIB pressure an installed host entry is not shed (it takes no FIB
+// entry) while an installed route is, and a host entry is never a swap victim
+// for a route: removing it frees no FIB entry.
+func TestHostEntriesAreNotShedForFIBPressure(t *testing.T) {
+	old := t0.Add(-time.Hour)
+	host := installedFix("192.0.2.1/32", 1, old)
+	host.HostEntry = true
+	pl := newPlanner(t, NoneProfile(), testCfg())
+	got := plan(t, pl, Input{
+		Now:        t0,
+		Candidates: []Candidate{host, installedFix("198.51.100.0/24", 2, old), hostFix("192.0.2.2/32", 100)},
+		Budget:     Result{HeadroomV4: 0, HeadroomHost: 5, ShedOK: true},
+	})
+	want := map[string]string{"192.0.2.1/32": "keep", "198.51.100.0/24": "shed", "192.0.2.2/32": "install"}
+	if !reflect.DeepEqual(actions(got), want) {
+		t.Errorf("%v", actions(got))
+	}
+
+	// No room anywhere: the wanted route displaces the installed route, not
+	// the lower-ranked installed host entry.
+	got = plan(t, pl, Input{
+		Now:        t0,
+		Candidates: []Candidate{host, installedFix("198.51.100.0/24", 2, old), wantFix("203.0.113.0/24", 100)},
+		Budget:     Result{HeadroomV4: 0, HeadroomHost: 1},
+	})
+	want = map[string]string{"192.0.2.1/32": "keep", "198.51.100.0/24": "out", "203.0.113.0/24": "swap"}
+	if !reflect.DeepEqual(actions(got), want) {
+		t.Errorf("%v", actions(got))
+	}
+}
+
 func TestInstallByRankWithinHeadroom(t *testing.T) {
 	pl := newPlanner(t, NoneProfile(), testCfg())
 	got := plan(t, pl, Input{
@@ -580,5 +649,48 @@ func TestVolumeEmphasisMarginUsesVolume(t *testing.T) {
 				t.Fatalf("%v", a)
 			}
 		})
+	}
+}
+
+func TestGainOnlyOverridesVolumeEmphasis(t *testing.T) {
+	prof := NoneProfile()
+	prof.Miss = CPUPunt
+	cfg := testCfg()
+	cfg.GainOnly = true
+	old := t0.Add(-time.Hour)
+	mk := func(p string, gain, vol float64, installed bool) Candidate {
+		return Candidate{Prefix: pfx(p), Cause: plugin.CausePerformance, Gain: gain, VolumeMbps: vol, Since: old, Installed: installed}
+	}
+	// With volume emphasis this challenger would lose (50 Mbps against 100);
+	// by gain it leads the installed fix by far more than the margin.
+	got := plan(t, newPlanner(t, prof, cfg), Input{
+		Now:        t0,
+		Candidates: []Candidate{mk("192.0.2.0/24", 1, 100, true), mk("198.51.100.0/24", 9999, 50, false)},
+		Budget:     full,
+	})
+	if a := actions(got); a["198.51.100.0/24"] != "swap" {
+		t.Fatalf("%v", a)
+	}
+}
+
+func TestInstallsAreCappedPerRound(t *testing.T) {
+	cfg := testCfg()
+	cfg.MaxInstallsPerRound = 3
+	var cands []Candidate
+	for i := range 10 {
+		p := netip.PrefixFrom(netip.AddrFrom4([4]byte{198, 51, 100, byte(i)}), 32)
+		cands = append(cands, Candidate{Prefix: p, Cause: plugin.CausePerformance, Gain: float64(10 - i), Since: t0})
+	}
+	got := plan(t, newPlanner(t, NoneProfile(), cfg), Input{Now: t0, Candidates: cands, Budget: Result{HeadroomV4: 100}})
+	if n := count(got, Install); n != 3 {
+		t.Fatalf("%d installs, want the cap 3", n)
+	}
+	a := actions(got)
+	if a["198.51.100.0/32"] != "install" || a["198.51.100.2/32"] != "install" || a["198.51.100.3/32"] != "withhold" {
+		t.Errorf("the best three must install: %v", a)
+	}
+	cfg.MaxInstallsPerRound = -1
+	if _, err := NewPlanner(NoneProfile(), cfg); err == nil {
+		t.Error("a negative install cap was accepted")
 	}
 }

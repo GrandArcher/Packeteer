@@ -71,8 +71,16 @@ type PlannerConfig struct {
 	MaxSwapsPerMinute int
 	// MaxShedPerRound caps sheds in one round. 0 means DefaultMaxShedPerRound.
 	MaxShedPerRound int
+	// MaxInstallsPerRound caps installs in one round. 0 means no cap beyond
+	// the headroom. A platform that re-indexes after a number of changes sets
+	// it.
+	MaxInstallsPerRound int
 	// IPv6 is how the budget pools IPv6 routes; it must match the Budget.
 	IPv6 IPv6Pool
+	// GainOnly ranks by gain even on a platform that punts a miss to the CPU.
+	// It is for a deployment with no trusted per-prefix volume source: the
+	// volumes would be empty or wrong.
+	GainOnly bool
 }
 
 // withDefaults fills the knobs that have a default: DisplaceMargin and
@@ -100,6 +108,8 @@ func (c PlannerConfig) validate() error {
 		return errors.New("offload: max swaps per minute must not be negative")
 	case c.MaxShedPerRound < 0:
 		return errors.New("offload: max shed per round must not be negative")
+	case c.MaxInstallsPerRound < 0:
+		return errors.New("offload: max installs per round must not be negative")
 	case c.IPv6.Shared && c.IPv6.Weight < 1:
 		return errors.New("offload: shared IPv6 weight must be at least 1")
 	}
@@ -116,6 +126,10 @@ type Candidate struct {
 	// was first wanted. Older ranks higher on a tie.
 	Since     time.Time
 	Installed bool
+	// HostEntry is a route the platform keeps outside the FIB dimension (an
+	// IPv4 /32 in a host table). It draws on the other dimensions only, and
+	// only another host entry can displace it.
+	HostEntry bool
 }
 
 // Input is one planning round.
@@ -144,6 +158,8 @@ type Decision struct {
 	Reason string
 }
 
+const invalidReason = "invalid or default route is never planned"
+
 // Plan is the result of a round, ordered by prefix. When Freezes is not empty
 // nothing is installed, swapped or shed.
 type Plan struct {
@@ -168,7 +184,11 @@ func NewPlanner(p Profile, cfg PlannerConfig) (*Planner, error) {
 	if p.Timing.InstallSeconds < 0 || p.Timing.AgeOutSeconds < 0 {
 		return nil, fmt.Errorf("offload: profile %q: timing must not be negative", p.ID)
 	}
-	return &Planner{cfg: cfg, timing: p.Timing, emphasis: emphasisFor(p.Miss)}, nil
+	emphasis := emphasisFor(p.Miss)
+	if cfg.GainOnly {
+		emphasis = GainEmphasis
+	}
+	return &Planner{cfg: cfg, timing: p.Timing, emphasis: emphasis}, nil
 }
 
 type ranked struct {
@@ -238,26 +258,37 @@ func (p *Planner) better(a, b ranked) bool {
 }
 
 // room is the routes of each family that may still be installed. With a
-// shared IPv6 pool both families draw on the IPv4 entries.
+// shared IPv6 pool both families draw on the IPv4 entries. A host entry uses
+// no FIB entry, so host is the headroom left by the other dimensions: every
+// install uses some of it, and a host entry also shrinks the FIB rooms to it.
 type room struct {
-	v4, v6 uint64
-	pool   IPv6Pool
+	v4, v6, host uint64
+	pool         IPv6Pool
 }
 
-func (r *room) take(v6 bool) bool {
-	if v6 {
+func (r *room) take(v6, host bool) bool {
+	switch {
+	case host:
+		if r.host == 0 {
+			return false
+		}
+		r.host--
+		r.v4, r.v6 = min(r.v4, r.host), min(r.v6, r.host)
+	case v6:
 		if r.v6 == 0 {
 			return false
 		}
 		r.v6--
+		r.host -= min(r.host, 1)
 		if r.pool.Shared {
 			r.v4 -= min(r.v4, r.pool.Weight)
 		}
-	} else {
+	default:
 		if r.v4 == 0 {
 			return false
 		}
 		r.v4--
+		r.host -= min(r.host, 1)
 	}
 	if r.pool.Shared {
 		r.v6 = min(r.v6, r.v4/r.pool.Weight)
@@ -301,7 +332,7 @@ func (p *Planner) Plan(in Input) (Plan, error) {
 			if c.Installed {
 				a = Keep
 			}
-			out.Decisions = append(out.Decisions, Decision{c.Prefix, a, netip.Prefix{}, "invalid or default route is never planned"})
+			out.Decisions = append(out.Decisions, Decision{c.Prefix, a, netip.Prefix{}, invalidReason})
 		case c.Installed:
 			installed = append(installed, r)
 		default:
@@ -330,7 +361,7 @@ func (p *Planner) Plan(in Input) (Plan, error) {
 	if in.Budget.ShedOK {
 		for _, r := range installed {
 			// A family with room left is not the one under pressure.
-			if (r.v6 && in.Budget.HeadroomV6 > 0) || (!r.v6 && in.Budget.HeadroomV4 > 0) {
+			if p.roomLeft(in.Budget, r) {
 				continue
 			}
 			if len(shed) == p.cfg.MaxShedPerRound {
@@ -341,15 +372,25 @@ func (p *Planner) Plan(in Input) (Plan, error) {
 		}
 	}
 
-	rm := room{v4: in.Budget.HeadroomV4, v6: in.Budget.HeadroomV6, pool: p.cfg.IPv6}
+	rm := room{v4: in.Budget.HeadroomV4, v6: in.Budget.HeadroomV6, host: in.Budget.HeadroomHost, pool: p.cfg.IPv6}
 	swaps := p.cfg.MaxSwapsPerRound
 	if p.cfg.MaxSwapsPerMinute > 0 {
 		swaps = min(swaps, max(0, p.cfg.MaxSwapsPerMinute-in.SwapsLastMinute))
 	}
 	swapped := map[netip.Prefix]bool{}
+	installs := 0
 	for _, c := range wanted {
-		if rm.take(c.v6) {
-			out.Decisions = append(out.Decisions, Decision{c.Prefix, Install, netip.Prefix{}, "headroom"})
+		if p.cfg.MaxInstallsPerRound > 0 && installs == p.cfg.MaxInstallsPerRound {
+			out.Decisions = append(out.Decisions, Decision{c.Prefix, Withhold, netip.Prefix{}, "install cap reached"})
+			continue
+		}
+		if rm.take(c.v6, c.HostEntry) {
+			installs++
+			reason := "headroom"
+			if c.HostEntry {
+				reason = "headroom, no FIB entry"
+			}
+			out.Decisions = append(out.Decisions, Decision{c.Prefix, Install, netip.Prefix{}, reason})
 			continue
 		}
 		d := Decision{c.Prefix, Withhold, netip.Prefix{}, "no headroom"}
@@ -375,6 +416,18 @@ func (p *Planner) Plan(in Input) (Plan, error) {
 	return out, nil
 }
 
+// roomLeft reports whether the budget has room for another route of r's
+// class, so r is not the one under pressure.
+func (p *Planner) roomLeft(b Result, r ranked) bool {
+	switch {
+	case r.HostEntry:
+		return b.HeadroomHost > 0
+	case r.v6:
+		return b.HeadroomV6 > 0
+	}
+	return b.HeadroomV4 > 0
+}
+
 // lead is the metric the rank key leads with, so the margin and the rank agree.
 func (p *Planner) lead(r ranked) float64 {
 	if p.emphasis == VolumeEmphasis {
@@ -383,13 +436,14 @@ func (p *Planner) lead(r ranked) float64 {
 	return r.weight
 }
 
-// victim is the lowest-ranked installed fix of the challenger's family that
-// is past hold time. The margin is tested against it alone: any higher-ranked
-// fix has at least as large a lead metric, so needs more.
+// victim is the lowest-ranked installed fix of the challenger's family (and,
+// for a host entry, only another host entry) that is past hold time. The
+// margin is tested against it alone: any higher-ranked fix has at least as
+// large a lead metric, so needs more.
 func (p *Planner) victim(now time.Time, c ranked, installed []ranked, shed, taken map[netip.Prefix]bool) (ranked, string, bool) {
 	why := "no installed fix of this family to displace"
 	for _, v := range installed {
-		if v.v6 != c.v6 || shed[v.Prefix] || taken[v.Prefix] {
+		if v.v6 != c.v6 || v.HostEntry != c.HostEntry || shed[v.Prefix] || taken[v.Prefix] {
 			continue
 		}
 		if v.Since.IsZero() || now.Sub(v.Since) < p.cfg.HoldTime {
