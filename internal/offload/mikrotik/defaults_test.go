@@ -262,6 +262,48 @@ func TestDefaultsProposeNothingWithoutEvidence(t *testing.T) {
 	}
 }
 
+// A zone is part of a gateway: the same link-local address can sit on several
+// links, so a zoned IPv6 gateway matches only a next_hop with that zone. An
+// IPv4 gateway with an interface does not parse and is never matched.
+func TestDefaultsZonedGatewayMatchesOnlyTheSameZone(t *testing.T) {
+	l := defaultsLab()
+	l.DefaultRoutes[1].Gateway = "2001:db8::1%ether1"
+	l.DefaultRoutes = append(l.DefaultRoutes, routeros.DefaultRoute{Family: "ipv4", Gateway: "192.0.2.1%ether1",
+		Distance: 9, Protocol: "Static route", Inactive: true, SuppressHWOffload: true})
+	zoned := map[netip.Addr]string{netip.MustParseAddr("2001:db8::1%ether1"): "transit-a"}
+	for addr, provider := range nextHops {
+		zoned[addr] = provider
+	}
+	for name, tc := range map[string]struct {
+		hops       map[netip.Addr]string
+		v6Provider string
+	}{
+		"zone-less next_hop": {nextHops, ""},
+		"same zone":          {zoned, "transit-a"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			snap := Snapshot{L3HW: l}
+			d := labEvaluator(t).Evaluate(Input{Now: dryNow, At: dryNow, Snap: &snap, NextHops: tc.hops, Quality: quality()}).Defaults
+			v4, v6, v4zoned := d.Routes[0], d.Routes[1], d.Routes[4]
+			if v4.Provider != "transit-a" || v4.Rank == 0 {
+				t.Fatalf("plain IPv4 gateway not ranked: %+v", v4)
+			}
+			if v6.Gateway != "2001:db8::1%ether1" || v6.Provider != tc.v6Provider {
+				t.Errorf("zoned IPv6 gateway: %+v, want provider %q", v6, tc.v6Provider)
+			}
+			if tc.v6Provider == "" && v6.Rank != 0 {
+				t.Errorf("unmatched zoned gateway is ranked: %+v", v6)
+			}
+			if tc.v6Provider != "" && v6.Rank != v4.Rank {
+				t.Errorf("zoned gateway rank %d, want the rank of transit-a %d", v6.Rank, v4.Rank)
+			}
+			if v4zoned.Provider != "" || v4zoned.Rank != 0 {
+				t.Errorf("IPv4 addr%%iface gateway is ranked: %+v", v4zoned)
+			}
+		})
+	}
+}
+
 // With no default that is a provider's, there is nothing to rank.
 func TestDefaultsNoProviderBehindAnyDefault(t *testing.T) {
 	snap := Snapshot{L3HW: defaultsLab()}

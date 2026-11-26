@@ -80,7 +80,7 @@ func (e *Evaluator) rankDefaults(in Input, l routeros.L3HW, settling bool, since
 	for _, r := range l.DefaultRoutes {
 		x := offload.DefaultRank{Family: r.Family, Gateway: r.Gateway, Protocol: r.Protocol, Active: r.Active}
 		if a, err := netip.ParseAddr(r.Gateway); err == nil {
-			x.Provider = in.NextHops[a.WithZone("")]
+			x.Provider = in.NextHops[a]
 		}
 		if x.Provider != "" && !slices.Contains(providers, x.Provider) {
 			providers = append(providers, x.Provider)
