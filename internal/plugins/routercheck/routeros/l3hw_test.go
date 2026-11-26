@@ -97,7 +97,7 @@ func chip(version, monitor, advanced string) *l3hwRouter {
 		"GET /interface/bonding":      `[{"name":"bond1","disabled":"false","mode":"802.3ad"}]`,
 		"GET /interface/vrrp":         `[{"name":"vrrp1"}]`,
 		"GET /routing/rule":           `[{"action":"lookup","table":"isp-b","disabled":"false"},{"action":"lookup","table":"old","disabled":"true"}]`,
-		"GET /ip/vrf":                 `[{"name":"mgmt"}]`,
+		"GET /ip/vrf":                 `[{"name":"main","interfaces":"all"},{"name":"mgmt"}]`,
 		"GET /ip/firewall/mangle":     `[{"chain":"prerouting","action":"mark-routing","disabled":"false"},{"chain":"prerouting","action":"mark-routing","disabled":"true"},{"chain":"forward","action":"mark-connection","disabled":"false"}]`,
 		"GET /ip/firewall/filter":     `[{"chain":"forward","action":"accept","disabled":"false"},{"chain":"input","action":"accept","disabled":"false"}]`,
 		"GET /ip/firewall/nat":        `[{"chain":"srcnat","action":"masquerade","disabled":"false"},{"chain":"srcnat","action":"accept","disabled":"true"}]`,
@@ -163,6 +163,30 @@ func TestFullHardwareTable(t *testing.T) {
 	}
 }
 
+func TestVRFCountExcludesMainTable(t *testing.T) {
+	for name, tc := range map[string]struct {
+		body string
+		want int
+	}{
+		"main only":          {`[{"name":"main","interfaces":"all"}]`, 0},
+		"no rows":            {`[]`, 0},
+		"main and one extra": {`[{"name":"main"},{"name":"mgmt"}]`, 1},
+		"extra only":         {`[{"name":"mgmt"},{"name":"cust-a"}]`, 2},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := chip("7.25.2", fullHW, advLPM)
+			f.bodies["GET /ip/vrf"] = tc.body
+			got, err := f.reader(t).ReadL3HW(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.VRFs != tc.want {
+				t.Errorf("VRFs = %d, want %d", got.VRFs, tc.want)
+			}
+		})
+	}
+}
+
 func TestDefaultRoutesActiveAndInactive(t *testing.T) {
 	got, err := chip("7.24.2", fullHW, advLPM).reader(t).ReadL3HW(context.Background())
 	if err != nil {
@@ -190,6 +214,25 @@ func TestShortestHWPrefix30IsPartial(t *testing.T) {
 	}
 	if got.Advanced.LPMCap != 27200 {
 		t.Errorf("lpm-cap = %d", got.Advanced.LPMCap)
+	}
+}
+
+// RouterOS 7.25.2 on a CCR2216 answers both monitors without a state key.
+func TestMonitorWithoutStateField(t *testing.T) {
+	const (
+		mon = `[{"ipv4-hosts":"4","ipv4-routes-cpu":"21","ipv4-routes-hw":"6","ipv4-routes-total":"27","ipv4-shortest-hw-prefix":"0","nexthop-cap":"8192","nexthop-usage":"87","route-queue-size":"0"}]`
+		adv = `[{"ipv4-hosts":"4","lpm-bank-cap":"1360","lpm-cap":"27200","lpm-usage":"9","nexthop-cap":"8192","nexthop-usage":"87","route-queue-size":"0"}]`
+	)
+	got, err := chip("7.25.2", mon, adv).reader(t).ReadL3HW(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := got.Monitor
+	if m.State != "" || m.IPv4RoutesHW != 6 || m.IPv4Hosts != 4 || m.NexthopCap != 8192 {
+		t.Errorf("monitor = %+v", m)
+	}
+	if got.Advanced == nil || got.Advanced.ErrorCode != "" || !got.Advanced.HasLPM || got.Advanced.LPMCap != 27200 || got.Advanced.LPMUsage != 9 {
+		t.Errorf("advanced = %+v", got.Advanced)
 	}
 }
 

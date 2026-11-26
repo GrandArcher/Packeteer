@@ -134,6 +134,31 @@ func TestPreCheckVariants(t *testing.T) {
 		{"balance-xor bond is fine", func(l *routeros.L3HW) { l.Bonds[0].Mode = "balance-xor" }, nil},
 		{"l3hw off on every port", func(l *routeros.L3HW) { l.Ports[1].L3HW, l.Ports[2].L3HW = false, false }, []string{CheckL3HWDisabled}},
 		{"monitor not ok", func(l *routeros.L3HW) { l.Monitor.State = "disabled" }, []string{CheckL3HWDisabled}},
+		{"state ok", func(l *routeros.L3HW) { l.Monitor.State = "ok" }, nil},
+		{"7.25.2 monitor: no state, routes and hosts in hardware", func(l *routeros.L3HW) {
+			l.Monitor = routeros.Monitor{
+				IPv4RoutesTotal: 27, IPv4RoutesHW: 6, IPv4RoutesCPU: 21, IPv4Hosts: 4,
+				NexthopCap: 8192, NexthopUsage: 87,
+			}
+			l.Advanced = &routeros.AdvancedMonitor{HasLPM: true, LPMCap: 27200, LPMUsage: 9}
+		}, nil},
+		{"no state, hosts only", func(l *routeros.L3HW) {
+			l.Monitor = routeros.Monitor{IPv4Hosts: 4, NexthopCap: 8192}
+			l.Advanced = nil
+		}, nil},
+		{"no state, LPM capacity only", func(l *routeros.L3HW) {
+			l.Monitor = routeros.Monitor{NexthopCap: 8192}
+			l.Advanced = &routeros.AdvancedMonitor{HasLPM: true, LPMCap: 27200}
+		}, nil},
+		{"no state and no sign of hardware offload", func(l *routeros.L3HW) {
+			l.Monitor = routeros.Monitor{IPv4RoutesTotal: 27, IPv4RoutesCPU: 27, NexthopCap: 8192}
+			l.Advanced = &routeros.AdvancedMonitor{}
+		}, []string{CheckL3HWDisabled}},
+		{"no state with a driver error code", func(l *routeros.L3HW) {
+			l.Monitor.State = ""
+			l.Advanced.ErrorCode = "13"
+		}, []string{CheckL3HWDisabled}},
+		{"bad state with hardware routes", func(l *routeros.L3HW) { l.Monitor.State = "error" }, []string{CheckL3HWDisabled}},
 		{"empty error code", func(l *routeros.L3HW) { l.Advanced.ErrorCode = "" }, nil},
 		{"no advanced monitor", func(l *routeros.L3HW) { l.Advanced = nil }, nil},
 	}

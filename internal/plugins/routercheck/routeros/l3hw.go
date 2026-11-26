@@ -67,7 +67,7 @@ type L3HW struct {
 	Bonds   []Iface `json:"bonds,omitempty"`
 
 	RoutingRules       int `json:"routing_rules"`
-	VRFs               int `json:"vrfs"`
+	VRFs               int `json:"vrfs"` // extra VRFs, the main table excluded
 	MarkRoutingRules   int `json:"mark_routing_rules"`
 	MangleRules        int `json:"mangle_rules"`
 	ForwardFilterRules int `json:"forward_filter_rules"`
@@ -304,11 +304,23 @@ func (r *Reader) readTopology(ctx context.Context, out *L3HW) error {
 			return authErr(err)
 		}
 	}
-	out.RoutingRules, out.VRFs, out.VRRPInterfaces = enabled(rules, nil), len(vrfs), len(vrrp)
+	out.RoutingRules, out.VRFs, out.VRRPInterfaces = enabled(rules, nil), extraVRFs(vrfs), len(vrrp)
 	out.MangleRules, out.NATRules = enabled(mangle, nil), enabled(nat, nil)
 	out.MarkRoutingRules = enabled(mangle, func(x row) bool { return x["action"] == "mark-routing" })
 	out.ForwardFilterRules = enabled(filter, func(x row) bool { return x["chain"] == "forward" })
 	return nil
+}
+
+// extraVRFs counts the VRFs other than the main table. RouterOS 7 lists the
+// main table as a row named "main" in /ip/vrf; it is not an extra table.
+func extraVRFs(rows []row) int {
+	n := 0
+	for _, x := range rows {
+		if x["name"] != "main" {
+			n++
+		}
+	}
+	return n
 }
 
 // enabled counts the rows that are not disabled and pass keep.

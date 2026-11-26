@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"net/netip"
+	"slices"
 	"time"
 
 	"github.com/GrandArcher/Packeteer/internal/offload"
@@ -23,6 +24,7 @@ const (
 	MaxOffloadReservePct     = 50
 	MaxOffloadCapacity       = 100_000_000
 	OffloadReaderStatic      = "static"
+	OffloadReaderRouterOS    = "routeros"
 )
 
 // offloadProfiles resolves router profiles. Tests replace it to register a
@@ -30,12 +32,26 @@ const (
 // platforms that stop at report or refuse.
 var offloadProfiles = offload.NewRegistry()
 
-var offloadReaders = map[string]bool{OffloadReaderStatic: true, "routeros": true, "snmp": true}
+// offloadChecks holds each registered profile's check of its routers' own
+// settings (model, login), run while the block is enabled.
+var offloadChecks = map[string]func(OffloadRouter) error{}
 
-// OffloadAware is the opt-in hardware-offload-aware mode (#735). Only
-// parsing and validation exist: nothing reads the block at runtime yet. Nil
-// or disabled is off. A profile never changes mode: enforce still needs
-// mode: inject.
+var offloadReaders = map[string]bool{OffloadReaderStatic: true, OffloadReaderRouterOS: true, "snmp": true}
+
+// RegisterOffloadProfile adds a profile to the shipped registry, with the
+// check of the router settings that profile needs. A profile package calls
+// it from init.
+func RegisterOffloadProfile(p offload.Profile, check func(OffloadRouter) error) {
+	if err := offloadProfiles.Register(p); err != nil {
+		panic(err)
+	}
+	offloadChecks[p.ID] = check
+}
+
+// OffloadAware is the opt-in hardware-offload-aware mode (#735). Nil or
+// disabled is off. At dry_run it reads the routers and reports what it would
+// do (#738) and changes nothing. A profile never changes mode: enforce still
+// needs mode: inject.
 type OffloadAware struct {
 	Enabled bool `yaml:"enabled"`
 	// Run is dry_run (the default) or enforce.
@@ -56,7 +72,9 @@ type OffloadRouter struct {
 	// Reader is how the offloaded-route count is read: static, routeros, or
 	// snmp. Empty is static.
 	Reader string `yaml:"reader"`
-	// Capacity is the router's hardware route capacity, in routes.
+	// Capacity is the router's hardware route capacity, in routes. It is
+	// required for the static reader; the routeros reader reads it from the
+	// router.
 	Capacity int `yaml:"capacity"`
 	// ReservePct is the share of Capacity kept free. Zero is the default.
 	ReservePct int `yaml:"reserve_pct"`
@@ -66,6 +84,20 @@ type OffloadRouter struct {
 	// IPv6Offload says the router offloads IPv6 routes. MikroTik's ipv6-hw
 	// is off by default, so this is false unless set.
 	IPv6Offload bool `yaml:"ipv6_offload"`
+	// Model names the router's switch chip for the profile, for example
+	// ccr2216. Empty is unknown.
+	Model string `yaml:"model,omitempty"`
+	// VolumeSource names a sources entry that reports per-prefix traffic
+	// from a device that sees hardware-forwarded traffic (sFlow or IPFIX).
+	// Empty means none: RouterOS Traffic-Flow does not see that traffic.
+	VolumeSource string `yaml:"volume_source,omitempty"`
+	// URL, UsernameEnv, PasswordEnv and CAFile are the RouterOS REST login of
+	// the routeros reader, as in preflight.router_check. The credentials are
+	// read from the named environment variables, never from the file.
+	URL         string `yaml:"url,omitempty"`
+	UsernameEnv string `yaml:"username_env,omitempty"`
+	PasswordEnv string `yaml:"password_env,omitempty"`
+	CAFile      string `yaml:"ca_file,omitempty"`
 }
 
 // OffloadEnforcing reports whether offload_aware is on at run: enforce.
@@ -152,11 +184,19 @@ func (c *Config) validateOffloadAware(add func(string, ...any)) {
 		if !offloadReaders[r.Reader] {
 			add("%s.reader: unknown reader %q", p, r.Reader)
 		}
-		if r.Capacity < 1 || r.Capacity > MaxOffloadCapacity {
-			add("%s.capacity %d must be between 1 and %d", p, r.Capacity, MaxOffloadCapacity)
+		if r.Reader == OffloadReaderStatic && r.Capacity < 1 || r.Capacity < 0 || r.Capacity > MaxOffloadCapacity {
+			add("%s.capacity %d must be between 1 and %d (0 only with a reader that reads it from the router)", p, r.Capacity, MaxOffloadCapacity)
 		}
 		if r.ReservePct < 1 || r.ReservePct > MaxOffloadReservePct {
 			add("%s.reserve_pct %d must be between 1 and %d (0 is the default %d)", p, r.ReservePct, MaxOffloadReservePct, DefaultOffloadReservePct)
+		}
+		if r.VolumeSource != "" && !slices.ContainsFunc(c.Sources, func(s PluginSpec) bool { return s.InstanceName() == r.VolumeSource }) {
+			add("%s.volume_source: %q is not a sources entry", p, r.VolumeSource)
+		}
+		if check := offloadChecks[r.Profile]; check != nil && o.Enabled {
+			if err := check(r); err != nil {
+				add("%s: %v", p, err)
+			}
 		}
 		if r.OffloadCommunity != "" {
 			if _, err := CommunityText(r.OffloadCommunity); err != nil {

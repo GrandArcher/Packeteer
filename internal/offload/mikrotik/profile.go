@@ -3,7 +3,7 @@
 // share them). It describes the platform, reads its budget dimensions from
 // an L3HW reading and assesses the pre-checks. It reads and decides; it
 // writes nothing to the router and never touches a default route.
-// Nothing calls it from the decision path yet.
+// Only the dry-run report calls it (#738), never the decision path.
 package mikrotik
 
 import (

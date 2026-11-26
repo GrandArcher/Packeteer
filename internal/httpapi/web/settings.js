@@ -2678,6 +2678,58 @@ function renderBlast(rep, root) {
   root.appendChild(wl);
 }
 
+var offloadVerdicts = {
+  fits: "fits",
+  partial_default_on_cpu: "partial offload, default on CPU",
+  nexthop_exhausted: "nexthop exhausted",
+  frozen: "frozen",
+  unavailable: "no reading"
+};
+
+function offloadDimension(d) {
+  if (!d.known) return d.dimension + ": no reading" + (d.problem ? " (" + d.problem + ")" : "");
+  var text = d.dimension + ": " + d.used + " of " + d.cap + " used, " + d.reserve + " reserved, " + d.free + " free";
+  if (d.reading_age_seconds !== undefined) text += ", read " + Math.round(d.reading_age_seconds) + " s ago";
+  return text + (d.problem ? " (" + d.problem + ")" : "");
+}
+
+function offloadVolume(v) {
+  var text = v.source ? "Volume source " + v.source + ": " + v.prefixes + " prefixes, " + v.total_mbps.toFixed(1) + " Mbps" : "No volume source";
+  if (v.hardware_share_min !== undefined) text += "; at least " + Math.round(v.hardware_share_min * 100) + "% is already hardware-forwarded (" + v.igp_mbps.toFixed(1) + " Mbps to connected or IGP routes)";
+  return text;
+}
+
+function renderOffloadRouter(r, root) {
+  root.appendChild(el("h4", "", r.neighbor + " " + r.profile + " (" + r.status + "): " + (offloadVerdicts[r.verdict] || r.verdict)));
+  var ul = el("ul");
+  var def = "Default route policy " + r.default.policy + ": " + r.default.reason;
+  if (r.default.met !== undefined) def += r.default.met ? " (met)" : " (NOT met: " + r.default.detail + ")";
+  ul.appendChild(el("li", "", def));
+  ul.appendChild(el("li", "", "Run level " + r.level + " of " + r.run + (r.version ? ", RouterOS " + r.version + " (" + r.version_verdict + ")" : "")));
+  r.dimensions.forEach(function (d) { ul.appendChild(el("li", "", offloadDimension(d))); });
+  if (r.counters) ul.appendChild(el("li", "", "Routes in hardware " + r.counters.ipv4_routes_hw + ", on the CPU " + r.counters.ipv4_routes_cpu + ", shortest hardware prefix /" + r.counters.shortest_hw_prefix));
+  r.findings.forEach(function (f) { ul.appendChild(el("li", "", f.severity + " " + f.code + ": " + f.detail)); });
+  r.freezes.forEach(function (f) { ul.appendChild(el("li", "", "Frozen: " + f.reason + (f.dimension ? " (" + f.dimension + ")" : ""))); });
+  if (r.error) ul.appendChild(el("li", "", "Error: " + r.error));
+  ul.appendChild(el("li", "", offloadVolume(r.volume)));
+  r.volume.blind_spots.forEach(function (b) { ul.appendChild(el("li", "", "Blind spot: " + b.message)); });
+  root.appendChild(ul);
+  var fl = el("ul");
+  r.fixes.forEach(function (f) {
+    fl.appendChild(el("li", "", f.prefix + " via " + f.provider + ": " + f.state + " (" + f.reason + ")"));
+  });
+  if (r.fixes.length) root.appendChild(fl);
+}
+
+// renderOffload appends the offload_aware dry run (#738) to the panel. It
+// only reports: nothing is installed on a router.
+function renderOffload(off, root) {
+  root = root || byId("bl-body");
+  root.appendChild(el("h3", "", "Hardware offload dry run (" + off.routers.length + " routers)"));
+  root.appendChild(el("p", "tag", "What the router's hardware routing table would take if these fixes were installed. Nothing is installed or changed on a router."));
+  off.routers.forEach(function (r) { renderOffloadRouter(r, root); });
+}
+
 function loadBlast() {
   byId("bl-status").textContent = "Deciding the latest round again...";
   return api("GET", "/api/blast").then(function (data) {
@@ -2687,6 +2739,7 @@ function loadBlast() {
     }
     byId("bl-status").textContent = "As of " + data.report.at + ".";
     renderBlast(data.report);
+    if (data.offload) renderOffload(data.offload);
   }, function (err) { byId("bl-status").textContent = explain(err); });
 }
 
