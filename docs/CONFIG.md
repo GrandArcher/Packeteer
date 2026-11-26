@@ -964,7 +964,7 @@ Keys of a `routers` row:
 | `reader` | `static` | `static`, `routeros`, or `snmp`. Only `routeros` reads a router today, and `mikrotik-l3hw-lpm` needs it. |
 | `capacity` | none | The router's hardware route capacity, 1 to 100000000. Required with `reader: static`; the `routeros` reader reads it from the router and `0` is allowed. |
 | `reserve_pct` | `10` | Share of `capacity` kept free. 1 to 50; 0 is the default. |
-| `offload_community` | none | Optional standard or large community that marks a route for offload. |
+| `offload_community` | none | Optional standard or large community that marks a route for offload. It must differ from `packeteer_community`. With the block enabled, `packeteer -snippet mikrotik` adds the `suppress-hw-offload` rules keyed on it ([mikrotik.md](mikrotik.md#hardware-offload-selection-snippet)); the community never leaves the router. |
 | `ipv6_offload` | `false` | The router offloads IPv6 routes. MikroTik's `ipv6-hw` is off by default. |
 | `model` | none | `mikrotik-l3hw-lpm`: `ccr2116` or `ccr2216`, for the CPU-path lane bandwidth and the LPM target. Empty is unknown. |
 | `volume_source` | none | The name of a `sources` entry that reports per-prefix traffic from a device that sees hardware-forwarded traffic (sFlow or IPFIX). Empty means none: RouterOS Traffic-Flow does not see that traffic, so fixes rank by path gain. |

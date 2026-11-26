@@ -330,9 +330,10 @@ func (c checker) imports(cn conn) plugin.FilterFinding {
 				default:
 					return plugin.FilterFinding{Verdict: plugin.VerdictFail, Detail: fmt.Sprintf("%s: chain %s accepts routes without %s (rule %d).", where, cn.in, c.q.Community, r.n), Fix: fix}
 				}
-			case s.kind == "if" && mentions(s.cond) && !c.ours(s.cond):
+			case s.kind == "if" && s.action != "" && mentions(s.cond) && !c.ours(s.cond):
 				// A reject on a community condition the check does not
-				// parse can be what keeps a later accept correct.
+				// parse can be what keeps a later accept correct. A block
+				// that only sets an attribute decides nothing.
 				return c.unread(where, cn.in, r.n)
 			case s.kind == "if" || s.kind == "set":
 			default:

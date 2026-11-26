@@ -15,6 +15,8 @@ All notable changes to Packeteer are documented here. Versions are Git tags on `
 - offload_aware dry run: per-router report of budget, pre-checks, version verdict and fix states (`GET /api/offload`, Blast radius, `packeteer_offload_*` metrics); reports only, in any mode (#738).
 - offload_aware: ranks a router's defaults by volume-weighted loss/RTT, with a review-only distance or local-pref snippet, failover plans, and a freeze while the active default settles (#739).
 
+- `packeteer -snippet mikrotik`: with offload_aware and an offload_community, RouterOS rules set suppress-hw-offload by that community and keep it off eBGP; review only, CHR-tested (#740).
+
 ### Fixed
 
 - Offload dry run: the `vrf` pre-check no longer freezes a RouterOS router that has only the main table; an extra VRF still freezes (#771).
