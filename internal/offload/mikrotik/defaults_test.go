@@ -262,7 +262,7 @@ func TestDefaultsProposeNothingWithoutEvidence(t *testing.T) {
 	}
 }
 
-// A zone is part of a gateway: the same link-local address can sit on several
+// A zone is part of a gateway: the same address can sit on several
 // links, so a zoned IPv6 gateway matches only a next_hop with that zone. An
 // IPv4 gateway with an interface does not parse and is never matched.
 func TestDefaultsZonedGatewayMatchesOnlyTheSameZone(t *testing.T) {
