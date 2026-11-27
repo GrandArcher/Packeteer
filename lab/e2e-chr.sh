@@ -87,6 +87,8 @@ pk_logs() {
 dump() {
 	echo "---- CHR routes ----" >&2
 	rest '/routing/route' 2>/dev/null | jq -c '.[] | select(."dst-address" | test("^(198\\.51\\.100|203\\.0\\.113)"))' >&2 || true
+	echo "---- CHR ip routes (suppress-hw-offload) ----" >&2
+	rest '/ip/route' 2>/dev/null | jq -c '.[] | select(."dst-address" | test("^(198\\.51\\.100|203\\.0\\.113)"))' >&2 || true
 	echo "---- CHR BGP sessions ----" >&2
 	rest '/routing/bgp/session' 2>/dev/null | jq -c '.[] | {name, "remote.address", established, "hold-time", "last-stopped"}' >&2 || true
 	echo "---- CHR log ----" >&2
@@ -492,16 +494,26 @@ offload_peer() {
 	peer_pids+=("$offload_pid")
 }
 
-# flip_route prints the attribute and community state of the route from the
-# speaker: suppressed/plain, hw/offload, filtered, or absent.
+# flip_route prints the state of the speaker's route: suppressed/plain,
+# hw/offload, filtered, or absent. /routing/route has the communities and
+# the filtered flag; suppress-hw-offload is read from /ip/route, as the
+# router check reads it.
 flip_route() {
 	routes || return 1
-	jq -r --arg p "$flip_net" --arg c "$offload_community" '
+	rest '/ip/route' -o "$work/ip-routes.json" 2>/dev/null && jq -e 'type == "array"' "$work/ip-routes.json" >/dev/null 2>&1 || return 1
+	local base suppressed
+	base=$(jq -r --arg p "$flip_net" --arg c "$offload_community" '
 		[.[] | select(."dst-address" == $p and .gateway == "192.0.2.30")] as $r |
 		if ($r | length) != 1 then "absent"
 		elif ($r[0].filtered // "false") == "true" then "filtered"
-		else ($r[0] | (if (."suppress-hw-offload" // "false") == "true" then "suppressed" else "hw" end) + "/" +
-			(if ((."bgp.communities" // "") | contains($c)) then "offload" else "plain" end)) end' "$work/routes.json"
+		else if ((($r[0]."bgp.communities" // "") | contains($c))) then "offload" else "plain" end end' "$work/routes.json")
+	case "$base" in absent | filtered) echo "$base"; return 0 ;; esac
+	suppressed=$(jq -r --arg p "$flip_net" '
+		[.[] | select(."dst-address" == $p and .gateway == "192.0.2.30")] as $r |
+		if ($r | length) != 1 then "absent"
+		elif ($r[0]."suppress-hw-offload" // "false") == "true" then "suppressed" else "hw" end' "$work/ip-routes.json")
+	[ "$suppressed" = absent ] && { echo absent; return 0; }
+	echo "${suppressed}/${base}"
 }
 flip_is() {
 	[ "$(flip_route)" = "$1" ]
