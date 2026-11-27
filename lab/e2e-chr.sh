@@ -511,7 +511,7 @@ flip_route() {
 	suppressed=$(jq -r --arg p "$flip_net" '
 		[.[] | select(."dst-address" == $p and .gateway == "192.0.2.30")] as $r |
 		if ($r | length) != 1 then "absent"
-		elif ($r[0]."suppress-hw-offload" // "false") == "true" then "suppressed" else "hw" end' "$work/ip-routes.json")
+		elif (($r[0]."suppress-hw-offload" // "false") | . == "true" or . == "yes") then "suppressed" else "hw" end' "$work/ip-routes.json")
 	[ "$suppressed" = absent ] && { echo absent; return 0; }
 	echo "${suppressed}/${base}"
 }
