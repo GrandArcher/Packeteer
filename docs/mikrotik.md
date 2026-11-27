@@ -163,6 +163,20 @@ With `offload_aware` on, the `mikrotik-l3hw-lpm` report ranks the router's defau
 
 Rollback: nothing is configured or written. Revert #739 to drop it.
 
+## Hardware offload selection snippet
+
+With `offload_aware.enabled: true` and an `offload_community` on a router entry (#740), `packeteer -snippet mikrotik` (and Settings, `POST /api/snippets`) adds RouterOS filter rules that turn the community into the hardware decision. The text is for operator review: Packeteer never applies it and never writes router config. Without the setting, or with `offload_aware` off, the snippet is unchanged, and no other vendor's snippet changes.
+
+- **Packeteer routes.** Two rules on `packeteer-in`, before the accept: a route with the Packeteer community gets `set suppress-hw-offload yes`, and one that also carries `offload_community` gets `set suppress-hw-offload no`. Both only set the attribute; the accept and reject decide as before, so a route with the offload community but not the Packeteer community is still rejected. RouterOS fills hardware by install order, so which routes are marked is the decision.
+- **Defaults.** A rule for `ebgp-in` (rename it to the input chain of each transit connection): `if (dst == 0.0.0.0/0) { set suppress-hw-offload yes }`, and the same for `::/0` when the session or a provider is IPv6. A static default needs `suppress-hw-offload=yes` on the route itself.
+- **Never exported.** `ebgp-out` rejects the offload community, as it does the Packeteer community, so the filter does not rely on `no-export` alone.
+
+`offload_community` must differ from `packeteer_community`: with the same value every Packeteer route would ask for hardware, and the loader refuses it. A large community is matched with `bgp-large-communities`, independently of the Packeteer community's kind. The `routeros` router check follows these rules: a rule that only sets an attribute decides nothing, so `import_filter` still passes.
+
+The CHR job ([Tested in CI](#tested-in-ci-chr-in-qemu)) applies [lab/chr/offload.rsc](../lab/chr/offload.rsc), which a snippet test keeps equal to the generated rules. It shows the route's `suppress-hw-offload` follow the community when it is added and removed on a lab iBGP speaker, and that an eBGP route carrying the community reaches the collector before the rules and not after. Documentation prefixes and ASNs only.
+
+Rollback: remove the rules from the router, or set `offload_community` empty and print the snippet again. Revert #740 to drop the generator.
+
 ## Exchange peers
 
 Exchange peers (`exchanges`, #27) are used only when Packeteer sees each peer's own path for the prefix, which needs the router to send every path (BGP add-path) or a BMP feed. Check that your RouterOS version offers one of them toward Packeteer. Without it, the route check keeps every exchange peer unusable (fail closed); transits still work. The peering LAN itself is not a probe target (#145). Per-peer probe sources are in [policy-routing.md](policy-routing.md#internet-exchange-peers).

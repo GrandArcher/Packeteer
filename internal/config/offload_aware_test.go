@@ -174,6 +174,7 @@ func TestOffloadAwareValidation(t *testing.T) {
 		{"reserve negative", offloadYAML("  enabled: true\n") + "      reserve_pct: -5\n", "reserve_pct -5 must be between 1 and 50"},
 		{"reserve too big", offloadYAML("  enabled: true\n") + "      reserve_pct: 51\n", "reserve_pct 51 must be between 1 and 50"},
 		{"bad community", offloadYAML("  enabled: true\n") + "      offload_community: nope\n", "offload_community"},
+		{"same as packeteer_community", offloadYAML("  enabled: true\n") + "      offload_community: \"64512:666\"\n", "must differ from packeteer_community"},
 		{"unknown key", offloadYAML("  enabled: true\n  bogus: 1\n"), "bogus"},
 		{"unknown router key", offloadYAML("  enabled: true\n") + "      bogus: 1\n", "bogus"},
 	}

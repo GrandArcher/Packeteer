@@ -199,8 +199,11 @@ func (c *Config) validateOffloadAware(add func(string, ...any)) {
 			}
 		}
 		if r.OffloadCommunity != "" {
-			if _, err := CommunityText(r.OffloadCommunity); err != nil {
+			oc, err := CommunityText(r.OffloadCommunity)
+			if err != nil {
 				add("%s.offload_community: %v", p, err)
+			} else if pk, err := CommunityText(c.PacketeerCommunity); err == nil && pk == oc {
+				add("%s.offload_community must differ from packeteer_community, or every Packeteer route asks for hardware", p)
 			}
 		}
 	}

@@ -51,6 +51,10 @@ type Params struct {
 	// Community is packeteer_community in canonical form: asn:value, or a
 	// large community global:data1:data2.
 	Community string
+	// OffloadCommunity is the router's offload_community in canonical form
+	// while offload_aware is enabled, else empty. Only the mikrotik template
+	// reads it.
+	OffloadCommunity string
 	// AddPath is true when the neighbor asks the router for add-path.
 	AddPath bool
 	// IPv6 is true when the session or a provider is IPv6.
@@ -64,6 +68,14 @@ type Params struct {
 
 // Large reports whether Community is a large community (RFC 8092).
 func (p Params) Large() bool { return strings.Count(p.Community, ":") == 2 }
+
+// OffloadAttr is the RouterOS filter attribute that holds OffloadCommunity.
+func (p Params) OffloadAttr() string {
+	if strings.Count(p.OffloadCommunity, ":") == 2 {
+		return "bgp-large-communities"
+	}
+	return "bgp-communities"
+}
 
 // BirdMatch is the BIRD condition that matches Community.
 func (p Params) BirdMatch() string {
@@ -148,14 +160,43 @@ func ForConfig(cfg *config.Config) ([]Params, error) {
 		if err != nil {
 			return nil, fmt.Errorf("the router needs Packeteer's address, and %q is not an IP address: fix the Router ID in setup step 1, or router_id and the neighbor's local_address in the file", self)
 		}
+		offload, err := offloadCommunity(cfg, router, community)
+		if err != nil {
+			return nil, err
+		}
 		p := Params{
-			ASN: cfg.ASN, Router: router.Unmap().String(), Packeteer: pk.Unmap().String(), Community: community,
+			OffloadCommunity: offload,
+			ASN:              cfg.ASN, Router: router.Unmap().String(), Packeteer: pk.Unmap().String(), Community: community,
 			AddPath: n.AddPath, IPv6: v6 || router.Is6() && !router.Is4In6(),
 		}
 		p.FlowHost, p.FlowPort = p.collector(listen)
 		out = append(out, p)
 	}
 	return out, nil
+}
+
+// offloadCommunity is the offload_community of the offload_aware router
+// entry for this neighbor, in canonical form; empty when offload_aware is
+// off or the entry sets none.
+func offloadCommunity(cfg *config.Config, router netip.Addr, packeteer string) (string, error) {
+	o := cfg.OffloadAware
+	if o == nil || !o.Enabled {
+		return "", nil
+	}
+	for _, r := range o.Routers {
+		if a, err := netip.ParseAddr(r.Neighbor); err != nil || a.Unmap() != router.Unmap() || r.OffloadCommunity == "" {
+			continue
+		}
+		c, err := config.CommunityText(r.OffloadCommunity)
+		if err != nil {
+			return "", fmt.Errorf("offload_aware offload_community for %s: %w", router, err)
+		}
+		if c == packeteer {
+			return "", fmt.Errorf("offload_aware offload_community for %s is the packeteer_community: every Packeteer route would ask for hardware", router)
+		}
+		return c, nil
+	}
+	return "", nil
 }
 
 // allHaveLocalAddress reports whether every neighbor sets local_address; with

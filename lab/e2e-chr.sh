@@ -71,6 +71,11 @@ rest() {
 	curl -sS -m 10 -u admin: -H 'content-type: application/json' "$@" "http://127.0.0.1:${rest_port}/rest${path}"
 }
 
+# chr_script TEXT runs RouterOS commands on the CHR.
+chr_script() {
+	rest '/execute' -X POST -d "$(jq -n --arg s "$1" '{script: $s, "as-string": true}')" >/dev/null
+}
+
 pk_logs() {
 	if [ -n "${PACKETEER_BIN:-}" ]; then
 		cat "$work/packeteer.log" 2>/dev/null || true
@@ -82,6 +87,8 @@ pk_logs() {
 dump() {
 	echo "---- CHR routes ----" >&2
 	rest '/routing/route' 2>/dev/null | jq -c '.[] | select(."dst-address" | test("^(198\\.51\\.100|203\\.0\\.113)"))' >&2 || true
+	echo "---- CHR ip routes (suppress-hw-offload) ----" >&2
+	rest '/ip/route' 2>/dev/null | jq -c '.[] | select(."dst-address" | test("^(198\\.51\\.100|203\\.0\\.113)"))' >&2 || true
 	echo "---- CHR BGP sessions ----" >&2
 	rest '/routing/bgp/session' 2>/dev/null | jq -c '.[] | {name, "remote.address", established, "hold-time", "last-stopped"}' >&2 || true
 	echo "---- CHR log ----" >&2
@@ -438,12 +445,102 @@ pk_wait
 wait_for "collector gets the native path back after the crash" 30 collector_has_native
 routes && invariants
 
+# ---- offload community (#740) ----
+# The router side of offload_aware, applied from lab/chr/offload.rsc (the
+# text of `packeteer -snippet mikrotik`, kept identical by the snippet
+# tests): a Packeteer route gets suppress-hw-offload=yes, and no while it
+# also carries 64512:777. Packeteer itself is stopped; two lab speakers
+# stand in for it, the way lab/chr/edge.rsc's untagged speaker does. The
+# community is never exported: an eBGP-learned route carrying it is
+# re-advertised to the collector until the rules are applied, and not after.
+offload_community=64512:777
+flip_net=203.0.113.128/25
+ebgp_net=203.0.113.192/26
+log "offload community: control, an eBGP route with ${offload_community} reaches the collector"
+sudo ip addr add 192.0.2.40/32 dev "$tap"
+chr_script '/routing bgp connection add name=offload-ebgp instance=edge local.address=192.0.2.254 local.role=ebgp remote.address=192.0.2.40 remote.as=64499 hold-time=9s output.filter-chain=ebgp-out'
+peer offload-ebgp -asn 64499 -router-id 192.0.2.40 -local 192.0.2.40 -announce "$ebgp_net" -community "$offload_community"
+wait_for "CHR session to 192.0.2.40" 60 session_up 192.0.2.40
+collector_has() {
+	grep -q "^$1 " "$work/collector.routes" 2>/dev/null
+}
+wait_for "collector learns ${ebgp_net} before the offload rules" 30 collector_has "$ebgp_net"
+
+log "applying lab/chr/offload.rsc"
+rest '/execute' -X POST -d "$(jq -Rs '{script: ., "as-string": true}' lab/chr/offload.rsc)" | tee "$work/apply-offload.json"
+echo
+jq -e '.ret == ""' "$work/apply-offload.json" >/dev/null || fail "offload.rsc did not apply cleanly"
+rest '/routing/filter/rule' -o "$work/filter-rules.json"
+jq -e 'any(.[]; .chain == "ebgp-in") and all(.[]; (.invalid // "false") != "true")' "$work/filter-rules.json" >/dev/null ||
+	fail "RouterOS marks an offload rule invalid, or the ebgp-in default rule is missing"
+collector_lost() {
+	! collector_has "$ebgp_net"
+}
+wait_for "collector no longer receives ${ebgp_net}" 30 collector_lost
+log "the offload community stays on the router: ${ebgp_net} is rejected toward eBGP"
+
+# The untagged speaker goes; a speaker with the Packeteer community, and
+# then with the offload community added and removed, takes its address.
+kill "${peer_pids[3]}" 2>/dev/null || true
+offload_pid=
+offload_peer() {
+	if [ -n "$offload_pid" ]; then
+		kill "$offload_pid" 2>/dev/null || true
+		wait "$offload_pid" 2>/dev/null || true
+	fi
+	"$work/chrpeer" -peer 192.0.2.254 -peer-asn 64512 -routes "$work/ibgp-offload.routes" \
+		-asn 64512 -router-id 192.0.2.30 -local 192.0.2.30 -announce "$flip_net" -community "$1" >"$work/peer-ibgp-offload.log" 2>&1 &
+	offload_pid=$!
+	peer_pids+=("$offload_pid")
+}
+
+# flip_route prints the state of the speaker's route: suppressed/plain,
+# hw/offload, filtered, or absent. /routing/route has the communities and
+# the filtered flag; suppress-hw-offload is read from /ip/route, as the
+# router check reads it.
+flip_route() {
+	routes || return 1
+	rest '/ip/route' -o "$work/ip-routes.json" 2>/dev/null && jq -e 'type == "array"' "$work/ip-routes.json" >/dev/null 2>&1 || return 1
+	local base suppressed
+	base=$(jq -r --arg p "$flip_net" --arg c "$offload_community" '
+		[.[] | select(."dst-address" == $p and .gateway == "192.0.2.30")] as $r |
+		if ($r | length) != 1 then "absent"
+		elif ($r[0].filtered // "false") == "true" then "filtered"
+		else if ((($r[0]."bgp.communities" // "") | contains($c))) then "offload" else "plain" end end' "$work/routes.json")
+	case "$base" in absent | filtered) echo "$base"; return 0 ;; esac
+	suppressed=$(jq -r --arg p "$flip_net" '
+		[.[] | select(."dst-address" == $p and .gateway == "192.0.2.30")] as $r |
+		if ($r | length) != 1 then "absent"
+		elif (($r[0]."suppress-hw-offload" // "false") | . == "true" or . == "yes") then "suppressed" else "hw" end' "$work/ip-routes.json")
+	[ "$suppressed" = absent ] && { echo absent; return 0; }
+	echo "${suppressed}/${base}"
+}
+flip_is() {
+	[ "$(flip_route)" = "$1" ]
+}
+never_exported() {
+	if grep -q -e "$offload_community" -e "^${flip_net} " "$work/collector.routes" "$work/transit-a.routes" "$work/transit-b.routes"; then
+		fail "the offload community or ${flip_net} reached an eBGP peer"
+	fi
+}
+
+log "Packeteer community only: suppress-hw-offload yes"
+offload_peer 64512:666
+wait_for "route ${flip_net} suppressed without the offload community" 60 flip_is suppressed/plain
+never_exported
+log "offload community added: suppress-hw-offload no"
+offload_peer "64512:666,${offload_community}"
+wait_for "route ${flip_net} offloadable with the offload community" 60 flip_is hw/offload
+never_exported
+log "offload community removed: suppress-hw-offload yes again"
+offload_peer 64512:666
+wait_for "route ${flip_net} suppressed again" 60 flip_is suppressed/plain
+never_exported
+log "offload community: attribute flips with the community and never leaves the router"
+
 # ---- read-only router check (#637) ----
 log "read-only router check: routeros, observe, read-group user"
 reader_pw=$(openssl rand -hex 16)
-chr_script() {
-	rest '/execute' -X POST -d "$(jq -n --arg s "$1" '{script: $s, "as-string": true}')" >/dev/null
-}
 chr_script "/user add name=pk-reader group=read password=\"${reader_pw}\""
 rest '/user' | jq -e 'any(.[]; .name == "pk-reader" and .group == "read")' >/dev/null || fail "read-group user not created"
 export PACKETEER_ROUTER_READ_USER=pk-reader PACKETEER_ROUTER_READ_PASSWORD="$reader_pw"

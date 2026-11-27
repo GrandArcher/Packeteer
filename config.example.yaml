@@ -460,7 +460,7 @@ scorer:
 #       url: https://192.0.2.254        # RouterOS REST, read-only account
 #       username_env: PACKETEER_ROUTER_READ_USER
 #       password_env: PACKETEER_ROUTER_READ_PASSWORD
-#       offload_community: "64512:777"
+#       offload_community: "64512:777"  # differs from packeteer_community; packeteer -snippet mikrotik adds the suppress-hw-offload rules
 #       ipv6_offload: false
 #
 # RPKI origin validation (off by default; docs/CONFIG.md#rpki). Read-only
